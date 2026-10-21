@@ -22,6 +22,12 @@ pnpm desktop        # （可选）另开一个终端，打开 Electron 桌面窗
 
 > 第一次运行 `pnpm desktop` 会下载 Electron 程序（约 100 MB，下载后会校验 SHA-256）。如果从 GitHub 下载很慢，可以临时用镜像：PowerShell 里先执行 `$env:ELECTRON_MIRROR='https://npmmirror.com/mirrors/electron/'` 再运行。
 
+### 登录与接入模型
+
+- **登录**：打开 Web 端，输入任意邮箱获取验证码。本地不会真的发邮件，验证码在 Mailpit 收件箱 http://127.0.0.1:8025 里看。新邮箱第一次登录即注册，几秒内到账 $30 额度。
+- **接入模型**：在 `services/model-gateway/.env` 里填上 `OPENROUTER_API_KEY=sk-or-...`，然后重启 `pnpm dev`。这个文件不进 git，Key 不要贴到聊天或提交里。没填 Key 时页面能正常打开，发消息会提示「模型服务还没有配置好」。
+- **计费**：每次调用先冻结一笔预估金额，完成后按 OpenRouter 报告的实际花费 × `BILLING_PRICE_MULTIPLIER`（billing 的配置，默认 1.0）扣除，多冻结的部分退回。规则见 [ADR 0002](docs/adr/0002-auth-billing-chat-loop.md)。
+
 需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 9 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。
 
 ## 服务

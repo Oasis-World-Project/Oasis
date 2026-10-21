@@ -35,6 +35,7 @@
   --shadow-edge-strong: var(--oasis-glass-edge-strong);
   --shadow-avatar-ring: var(--oasis-avatar-ring);
   --shadow-plaza-edge: var(--oasis-plaza-gold-edge);
+  --shadow-pearl: var(--oasis-pearl-ring);
 }
 
 /* 应用底色：浅灰丁香 + 四团柔光；在 [data-light] 下随群换光 */
@@ -45,6 +46,12 @@
     radial-gradient(45% 50% at 60% 100%, var(--oasis-glow-3), transparent 70%),
     radial-gradient(40% 50% at 0% 90%, var(--oasis-glow-4), transparent 70%), var(--oasis-ground);
   color: var(--oasis-ink);
+}
+
+/* AI 头像的珍珠白材质 */
+@utility pearl {
+  background: var(--oasis-pearl);
+  box-shadow: var(--oasis-pearl-ring);
 }
 
 /* 磨砂玻璃窗口 */

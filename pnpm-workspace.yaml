@@ -10,9 +10,12 @@ engineStrict: true
 # 各工作区共用的依赖版本，package.json 里写 "catalog:" 引用，保证全仓同一版本
 catalog:
   '@fastify/http-proxy': 11.6.5
+  '@nats-io/jetstream': 3.4.0
   '@nats-io/transport-node': 3.4.0
   '@types/node': 24.19.2
   '@types/pg': 8.23.1
+  dbmate: 2.37.0
+  drizzle-orm: 0.45.4
   fastify: 5.12.7
   pg: 8.23.1
   pino: 10.4.0

@@ -32,8 +32,10 @@ x-node-build: &node-build
     GIT_COMMIT: ${GIT_COMMIT:-unknown}
 
 x-runtime-env: &runtime-env
+  HOST: 0.0.0.0
   LOG_LEVEL: info
   SHUTDOWN_DRAIN_MS: 2000
+  MIGRATE_ON_START: 'true'
 
 x-nats-env: &nats-env
   NATS_URL: nats://nats:4222
@@ -158,6 +160,7 @@ services:
       CONVERSATION_URL: http://conversation:4104
       TASK_URL: http://task:4105
       CANVAS_URL: http://canvas:4106
+      GATEWAY_ALLOWED_ORIGINS: http://127.0.0.1:5173,http://localhost:5173
     ports:
       - 127.0.0.1:${GATEWAY_HOST_PORT:-8080}:8080
 
@@ -172,7 +175,12 @@ services:
     environment:
       <<: [*runtime-env, *nats-env]
       PORT: 4101
-      DATABASE_URL: postgres://svc_identity:${IDENTITY_DB_PASSWORD:?}@postgres:5432/identity
+      DATABASE_URL: postgres://svc_identity:${IDENTITY_DB_PASSWORD:?}@postgres:5432/identity?sslmode=disable
+      SMTP_URL: smtp://mailpit:1025
+      MAIL_FROM: Oasis <no-reply@oasis.local>
+      AUTH_CODE_PEPPER: ${AUTH_CODE_PEPPER:?}
+      # 本地是 http，会话 Cookie 不能要求 HTTPS
+      COOKIE_SECURE: 'false'
     depends_on: *data-deps
 
   billing:
@@ -186,7 +194,7 @@ services:
     environment:
       <<: [*runtime-env, *nats-env]
       PORT: 4102
-      DATABASE_URL: postgres://svc_billing:${BILLING_DB_PASSWORD:?}@postgres:5432/billing
+      DATABASE_URL: postgres://svc_billing:${BILLING_DB_PASSWORD:?}@postgres:5432/billing?sslmode=disable
     depends_on: *data-deps
 
   agent:
@@ -200,7 +208,7 @@ services:
     environment:
       <<: [*runtime-env, *nats-env]
       PORT: 4103
-      DATABASE_URL: postgres://svc_agent:${AGENT_DB_PASSWORD:?}@postgres:5432/agent
+      DATABASE_URL: postgres://svc_agent:${AGENT_DB_PASSWORD:?}@postgres:5432/agent?sslmode=disable
     depends_on: *data-deps
 
   conversation:
@@ -214,7 +222,9 @@ services:
     environment:
       <<: [*runtime-env, *nats-env]
       PORT: 4104
-      DATABASE_URL: postgres://svc_conversation:${CONVERSATION_DB_PASSWORD:?}@postgres:5432/conversation
+      DATABASE_URL: postgres://svc_conversation:${CONVERSATION_DB_PASSWORD:?}@postgres:5432/conversation?sslmode=disable
+      AGENT_URL: http://agent:4103
+      MODEL_GATEWAY_URL: http://model-gateway:4108
     depends_on: *data-deps
 
   task:
@@ -228,7 +238,7 @@ services:
     environment:
       <<: [*runtime-env, *nats-env]
       PORT: 4105
-      DATABASE_URL: postgres://svc_task:${TASK_DB_PASSWORD:?}@postgres:5432/task
+      DATABASE_URL: postgres://svc_task:${TASK_DB_PASSWORD:?}@postgres:5432/task?sslmode=disable
     depends_on: *data-deps
 
   canvas:
@@ -242,7 +252,7 @@ services:
     environment:
       <<: [*runtime-env, *nats-env]
       PORT: 4106
-      DATABASE_URL: postgres://svc_canvas:${CANVAS_DB_PASSWORD:?}@postgres:5432/canvas
+      DATABASE_URL: postgres://svc_canvas:${CANVAS_DB_PASSWORD:?}@postgres:5432/canvas?sslmode=disable
     depends_on: *data-deps
 
   harness:
@@ -256,11 +266,15 @@ services:
     environment:
       <<: [*runtime-env, *nats-env]
       PORT: 4107
-      DATABASE_URL: postgres://svc_harness:${HARNESS_DB_PASSWORD:?}@postgres:5432/harness
+      DATABASE_URL: postgres://svc_harness:${HARNESS_DB_PASSWORD:?}@postgres:5432/harness?sslmode=disable
     depends_on: *data-deps
 
   model-gateway:
     <<: *node-service
+    # OpenRouter Key 只写在 services/model-gateway/.env 里；其余配置由下面的 environment 覆盖
+    env_file:
+      - path: ../../services/model-gateway/.env
+        required: false
     image: oasis/model-gateway:${OASIS_IMAGE_TAG:-local}
     build:
       <<: *node-build
@@ -270,7 +284,8 @@ services:
     environment:
       <<: [*runtime-env, *nats-env]
       PORT: 4108
-      DATABASE_URL: postgres://svc_model_gateway:${MODEL_GATEWAY_DB_PASSWORD:?}@postgres:5432/model_gateway
+      DATABASE_URL: postgres://svc_model_gateway:${MODEL_GATEWAY_DB_PASSWORD:?}@postgres:5432/model_gateway?sslmode=disable
+      BILLING_URL: http://billing:4102
     depends_on: *data-deps
 
 volumes:

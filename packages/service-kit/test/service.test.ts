@@ -1,7 +1,13 @@
 import { ErrorBody, ReadyBody } from '@oasis/contracts/common';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { ConfigError, createService, type ServiceResource } from '../src/index.ts';
+import {
+  ConfigError,
+  createService,
+  HttpError,
+  parseWith,
+  type ServiceResource,
+} from '../src/index.ts';
 
 const BASE_ENV = { PORT: '0', LOG_LEVEL: 'silent' };
 
@@ -54,7 +60,7 @@ describe('探针与通用接口', () => {
       {
         name: 't',
         env: {},
-        resources: async () => [fakeResource('postgres'), fakeResource('nats')],
+        resources: async () => ({ postgres: fakeResource('postgres'), nats: fakeResource('nats') }),
       },
       BASE_ENV,
     );
@@ -71,7 +77,10 @@ describe('探针与通用接口', () => {
       {
         name: 't',
         env: {},
-        resources: async () => [fakeResource('postgres'), fakeResource('nats', { ok: false })],
+        resources: async () => ({
+          postgres: fakeResource('postgres'),
+          nats: fakeResource('nats', { ok: false }),
+        }),
       },
       BASE_ENV,
     );
@@ -116,6 +125,26 @@ describe('错误格式', () => {
   });
 });
 
+describe('主动抛出的 5xx', () => {
+  it('HttpError 的 code 和提示原样返回', async () => {
+    const service = await createService(
+      {
+        name: 't',
+        env: {},
+        routes: (app) => {
+          app.get('/v1/down', async () => {
+            throw new HttpError(503, 'provider_not_configured', '模型服务还没有配置好');
+          });
+        },
+      },
+      BASE_ENV,
+    );
+    const res = await service.app.inject('/v1/down');
+    expect(res.statusCode).toBe(503);
+    expect(ErrorBody.parse(res.json()).error.code).toBe('provider_not_configured');
+  });
+});
+
 describe('优雅关闭', () => {
   it('关闭期间 /ready 返回 503，依赖按创建顺序的倒序关闭', async () => {
     const closed: string[] = [];
@@ -123,10 +152,10 @@ describe('优雅关闭', () => {
       {
         name: 't',
         env: {},
-        resources: async () => [
-          fakeResource('postgres', { closed }),
-          fakeResource('nats', { closed }),
-        ],
+        resources: async () => ({
+          postgres: fakeResource('postgres', { closed }),
+          nats: fakeResource('nats', { closed }),
+        }),
       },
       { ...BASE_ENV, SHUTDOWN_DRAIN_MS: '50' },
     );
@@ -140,10 +169,46 @@ describe('优雅关闭', () => {
   it('重复调用 stop 只关闭一次', async () => {
     const closed: string[] = [];
     const service = await createService(
-      { name: 't', env: {}, resources: async () => [fakeResource('postgres', { closed })] },
+      {
+        name: 't',
+        env: {},
+        resources: async () => ({ postgres: fakeResource('postgres', { closed }) }),
+      },
       BASE_ENV,
     );
     await Promise.all([service.stop(), service.stop()]);
     expect(closed).toEqual(['postgres']);
+  });
+});
+
+describe('业务错误', () => {
+  it('HttpError 的 4xx 原样返回 code 和 message', async () => {
+    const service = await createService(
+      {
+        name: 't',
+        env: {},
+        routes: (app) => {
+          app.post('/v1/things', async (request) => {
+            parseWith(z.object({ name: z.string().min(2) }), request.body);
+            throw new HttpError(409, 'conflict', '已经有了');
+          });
+        },
+      },
+      BASE_ENV,
+    );
+    const invalid = await service.app.inject({
+      method: 'POST',
+      url: '/v1/things',
+      payload: { name: 'x' },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(ErrorBody.parse(invalid.json()).error.code).toBe('invalid_request');
+    const conflict = await service.app.inject({
+      method: 'POST',
+      url: '/v1/things',
+      payload: { name: 'xy' },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().error).toMatchObject({ code: 'conflict', message: '已经有了' });
   });
 });

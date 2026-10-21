@@ -10,6 +10,8 @@ const baseEnv = {
   SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).default(0),
   /** 优雅关闭的总时限，超时强制退出。 */
   SHUTDOWN_GRACE_MS: z.coerce.number().int().min(1000).default(10_000),
+  /** 启动前执行本服务的数据库迁移（本地开发和 compose 打开；上 K8s 后改为单独的迁移任务） */
+  MIGRATE_ON_START: z.stringbool().default(false),
   SERVICE_VERSION: z.string().min(1).default('0.0.0-dev'),
   GIT_COMMIT: z.string().min(1).default('unknown'),
 };

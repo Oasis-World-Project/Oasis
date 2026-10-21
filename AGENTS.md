@@ -47,6 +47,12 @@
     - 新依赖在第一次真正用到时才装（TanStack Query、Zustand、Radix 等），不预装。
     - 字体随应用打包（@fontsource），不引用外部字体服务。
     - Electron：保持 contextIsolation、sandbox、禁用 nodeIntegration；需要给页面开放能力时，只能通过 preload 暴露明确的接口。
+13. **登录、额度与事件**（详见 `docs/adr/0002-auth-billing-chat-loop.md`）：
+    - 鉴权只在 gateway 做。业务服务一律用 service-kit 的 `requireUserId` / `requirePayerId` 读 `x-oasis-user-id` / `x-oasis-payer-id`，不自己解析 Cookie。
+    - 金额一律用微美元整数（`*Micro` 字段），不用浮点存钱。
+    - 任何模型或工具调用都必须经过 model-gateway 的「冻结 → 结算 / 退回」，并在 `x-oasis-payer-id` 里写明谁付钱。
+    - 跨服务的事件一律走 outbox（`startOutboxRelay`）+ 持久消费者（`startEventConsumer`）。消费者必须幂等，事件类型写在 `packages/contracts/src/events.ts`。
+    - 密钥（`*_PASSWORD`、`*_SECRET_KEY`、`*_ACCESS_KEY`、`*_PEPPER`、`OPENROUTER_API_KEY`）只放在本地 `.env`，不进 git，不写进日志，也不要贴到聊天里。
 
 ## C. 本项目对通用规范的调整（用户 2026-10-21 确认）
 

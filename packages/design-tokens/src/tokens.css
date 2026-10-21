@@ -46,6 +46,10 @@
   /* 真人头像：柔色圆形 + 首字，外圈一道白描边 */
   --oasis-person-me: #f2c6d4;
   --oasis-avatar-ring: 0 0 0 2px rgb(255 255 255 / 0.9);
+
+  /* AI 头像：珍珠白立体形状 + 各自光色（光色来自模型目录数据） */
+  --oasis-pearl: linear-gradient(150deg, #ffffff 20%, #ececf3);
+  --oasis-pearl-ring: inset 0 0 0 1px rgb(255 255 255 / 0.95), 0 2px 8px rgb(70 64 90 / 0.14);
 }
 
 /* 群主题光：每个群一种光，切群时整屏换光（PRD G-05） */

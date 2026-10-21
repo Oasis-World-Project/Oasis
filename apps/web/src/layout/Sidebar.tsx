@@ -1,5 +1,6 @@
 // 左侧收起式侧栏，结构照原型 v6：字标 → 拉群/搜索 → 四个主入口 → 群聊 → 私聊 → 底部「我」。
 // 不显示未读数字或红点（PRD G-02）。
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import {
   Globe,
@@ -14,14 +15,16 @@ import {
   Search,
   type LucideIcon,
 } from 'lucide-react';
+import { dmsQuery, meQuery, walletQuery } from '../api/queries.ts';
+import { useModelMap } from '../api/use-model-map.ts';
+import { AiAvatar, PersonAvatar } from '../ui/Avatar.tsx';
+import { formatUsd, usedPercent } from '../ui/format.ts';
 import { useSidebarState } from './use-sidebar-state.ts';
 
 interface NavEntry {
   to: '/' | '/ais' | '/plaza' | '/canvas' | '/groups' | '/dms';
   label: string;
   icon: LucideIcon;
-  /** 展开时这一项下面的空列表说明 */
-  emptyHint?: string;
 }
 
 const MAIN_ENTRIES: NavEntry[] = [
@@ -31,10 +34,9 @@ const MAIN_ENTRIES: NavEntry[] = [
   { to: '/canvas', label: '画布', icon: Image },
 ];
 
-const CHAT_ENTRIES: NavEntry[] = [
-  { to: '/groups', label: '群聊', icon: MessagesSquare, emptyHint: '还没有群' },
-  { to: '/dms', label: '私聊', icon: MessageCircle, emptyHint: '还没有私聊' },
-];
+const GROUPS_ENTRY: NavEntry = { to: '/groups', label: '群聊', icon: MessagesSquare };
+const DMS_ENTRY: NavEntry = { to: '/dms', label: '私聊', icon: MessageCircle };
+const SIDEBAR_DM_LIMIT = 8;
 
 const ITEM_BASE =
   'flex h-[42px] items-center rounded-item text-ink no-underline transition-colors hover:bg-glass-strong aria-[current=page]:bg-glass-active aria-[current=page]:font-medium aria-[current=page]:shadow-raised';
@@ -122,36 +124,93 @@ export function Sidebar() {
       {!open && <span aria-hidden="true" className="my-2 h-px w-7 bg-hairline" />}
 
       <div className={open ? 'mt-4 flex flex-col gap-0.5' : 'flex flex-col items-center gap-1'}>
-        {CHAT_ENTRIES.map((entry) => (
-          <div key={entry.to} className="flex flex-col">
-            <NavLink entry={entry} open={open} />
-            {open && entry.emptyHint && (
-              <span className="px-3 pb-2 pl-[43px] text-xs text-ink-muted">{entry.emptyHint}</span>
-            )}
-          </div>
-        ))}
+        <NavLink entry={GROUPS_ENTRY} open={open} />
+        {open && <span className="px-3 pb-2 pl-[43px] text-xs text-ink-muted">还没有群</span>}
+        <NavLink entry={DMS_ENTRY} open={open} />
+        <DmList open={open} />
       </div>
 
       <span className="min-h-3 flex-1" />
 
-      <Link
-        to="/me"
-        aria-label={open ? undefined : '我'}
-        title={open ? undefined : '我'}
-        className={`flex items-center text-ink no-underline aria-[current=page]:shadow-raised ${
-          open
-            ? 'gap-2.5 rounded-[22px] bg-glass-strong p-2.5 shadow-edge-strong aria-[current=page]:bg-glass-active'
-            : 'justify-center rounded-full'
-        }`}
-      >
-        <span
-          aria-hidden="true"
-          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-person-me text-sm font-medium shadow-avatar-ring"
-        >
-          我
-        </span>
-        {open && <span className="text-[13.5px] font-medium">我</span>}
-      </Link>
+      <MeCard open={open} />
     </nav>
+  );
+}
+
+function DmList({ open }: { open: boolean }) {
+  const { data: dms = [] } = useQuery(dmsQuery);
+  const models = useModelMap();
+  if (dms.length === 0) {
+    return open ? (
+      <span className="px-3 pb-2 pl-[43px] text-xs text-ink-muted">还没有私聊</span>
+    ) : null;
+  }
+  return (
+    <>
+      {dms.slice(0, SIDEBAR_DM_LIMIT).map((dm) => {
+        const model = dm.modelKey ? models.get(dm.modelKey) : undefined;
+        return (
+          <Link
+            key={dm.id}
+            to="/dms/$conversationId"
+            params={{ conversationId: dm.id }}
+            aria-label={open ? undefined : dm.title}
+            title={open ? undefined : dm.title}
+            className={
+              open ? `${ITEM_BASE} gap-2.5 px-2.5` : `${ITEM_BASE} w-[44px] justify-center`
+            }
+          >
+            {model ? (
+              <AiAvatar mono={model.mono} glow={model.glow} size={26} />
+            ) : (
+              <PersonAvatar label={dm.title} size={26} />
+            )}
+            {open && <span className="min-w-0 flex-1 truncate">{dm.title}</span>}
+          </Link>
+        );
+      })}
+    </>
+  );
+}
+
+function MeCard({ open }: { open: boolean }) {
+  const { data: me } = useQuery(meQuery);
+  const { data: wallet } = useQuery(walletQuery);
+  const label = me?.email ?? '我';
+  const used = wallet ? usedPercent(wallet.availableMicro, wallet.grantedMicro) : 0;
+  return (
+    <Link
+      to="/me"
+      aria-label={open ? undefined : '我'}
+      title={open ? undefined : '我'}
+      className={`flex items-center text-ink no-underline aria-[current=page]:shadow-raised ${
+        open
+          ? 'gap-2.5 rounded-[22px] bg-glass-strong p-2.5 shadow-edge-strong aria-[current=page]:bg-glass-active'
+          : 'justify-center rounded-full'
+      }`}
+    >
+      <PersonAvatar label={label} />
+      {open && (
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="flex items-baseline justify-between gap-2">
+            <span className="text-[13.5px] font-medium">我</span>
+            {wallet && (
+              <span className="font-display text-[11px] text-ink-muted">
+                {formatUsd(wallet.availableMicro)}
+              </span>
+            )}
+          </span>
+          {wallet && (
+            <span
+              role="img"
+              aria-label={`额度已用 ${used}%，剩余 ${formatUsd(wallet.availableMicro)}`}
+              className="h-1 overflow-hidden rounded-full bg-hairline"
+            >
+              <span className="block h-full rounded-full bg-accent" style={{ width: `${used}%` }} />
+            </span>
+          )}
+        </span>
+      )}
+    </Link>
   );
 }

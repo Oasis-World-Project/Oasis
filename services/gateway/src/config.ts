@@ -21,6 +21,22 @@ export const gatewayEnv = {
   CONVERSATION_URL: z.url(),
   TASK_URL: z.url(),
   CANVAS_URL: z.url(),
-} satisfies Record<(typeof PUBLIC_SERVICES)[keyof typeof PUBLIC_SERVICES], z.ZodType>;
+  /** 允许发起改数据请求的页面来源（逗号分隔），用于防跨站请求伪造 */
+  GATEWAY_ALLOWED_ORIGINS: z
+    .string()
+    .min(1)
+    .transform(
+      (value) =>
+        new Set(
+          value
+            .split(',')
+            .map((origin) => origin.trim())
+            .filter(Boolean),
+        ),
+    ),
+  /** 会话校验结果在 gateway 里缓存多久 */
+  SESSION_CACHE_TTL_MS: z.coerce.number().int().min(0).default(30_000),
+} satisfies Record<(typeof PUBLIC_SERVICES)[keyof typeof PUBLIC_SERVICES], z.ZodType> &
+  Record<string, z.ZodType>;
 
 export type GatewayConfig = ConfigOf<typeof gatewayEnv>;

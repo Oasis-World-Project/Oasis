@@ -5,20 +5,30 @@
   "description": "账号与登录（邮箱验证码），注册后发出 user.registered 事件",
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "migrations"
   ],
   "scripts": {
     "dev": "node --env-file-if-exists=.env --watch src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@oasis/service-kit": "workspace:*"
+    "@oasis/contracts": "workspace:*",
+    "@oasis/service-kit": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "nodemailer": "10.1.7",
+    "pg": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@oasis/tsconfig": "workspace:*",
     "@types/node": "catalog:",
-    "typescript": "catalog:"
+    "@types/nodemailer": "8.0.2",
+    "@types/pg": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

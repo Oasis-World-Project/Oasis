@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ErrorBody, HealthBody, MetaBody, ReadyBody } from '@oasis/contracts/common';
 import Fastify, { LogController, type FastifyError } from 'fastify';
+import { HttpError } from './http-error.ts';
 import type { Logger } from './logger.ts';
 import type { ServiceResource } from './resource.ts';
 
@@ -61,7 +62,17 @@ export function createHttpServer(options: HttpServerOptions) {
       error.statusCode !== undefined && error.statusCode >= 400 ? error.statusCode : 500;
     if (status >= 500) {
       request.log.error({ err: error }, '请求处理失败');
-      reply.code(status).send(errorBody('internal_error', '服务内部错误', request.id));
+      // 代码里主动抛出的 HttpError 写的是可以给用户看的 code 和提示，原样返回；其余异常不外泄细节
+      const known = error instanceof HttpError;
+      reply
+        .code(status)
+        .send(
+          errorBody(
+            known ? error.code : 'internal_error',
+            known ? error.message : '服务内部错误',
+            request.id,
+          ),
+        );
       return;
     }
     reply.code(status).send(errorBody(error.code ?? 'bad_request', error.message, request.id));

@@ -20,8 +20,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@nats-io/jetstream": "catalog:",
     "@nats-io/transport-node": "catalog:",
     "@oasis/contracts": "workspace:*",
+    "dbmate": "catalog:",
     "fastify": "catalog:",
     "pg": "catalog:",
     "pino": "catalog:",
