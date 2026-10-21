@@ -1,0 +1,15 @@
+# 镜像构建上下文只需要源码和锁文件
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.tmp
+.claude
+.vscode
+docs
+infra
+apps

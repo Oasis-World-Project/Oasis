@@ -13,8 +13,10 @@
 
 | 命令 | 作用 |
 |---|---|
-| `pnpm env:init` | 由 `.env.example` 生成本地 `.env`（随机密码） |
-| `pnpm infra:up` / `infra:down` / `infra:ps` | 启动 / 停止 / 查看本地中间件 |
+| `pnpm env:init` | 生成根目录和每个服务的本地 `.env`（随机密码） |
+| `pnpm infra:up` / `infra:down` / `infra:ps` | 启动中间件 / 停止全部容器 / 查看 |
+| `pnpm dev` | 9 个服务作为本机进程运行（Node 24 原生执行 TS，改代码自动重启） |
+| `pnpm stack:up` / `stack:logs` | 中间件 + 9 个服务全部在容器里跑（集成验证）/ 看日志 |
 | `pnpm lint` · `pnpm typecheck` · `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、依赖方向、死代码、重复率、迁移检查 |
 | `pnpm cleanup` | 任务收尾清理并报告释放空间（`--build`、`--docker` 可选） |
@@ -29,12 +31,13 @@
 6. **配置外置**：配置全部来自环境变量，每个服务提供 `.env.example`；禁止硬编码地址、端口、密钥；禁止 `if (env === 'local')` 一类分支。
 7. **运行时**：结构化 JSON 日志输出到 stdout；每个服务暴露 `/health` 和 `/ready`；收到 SIGTERM 后处理完在途请求再退出。
 8. **数据库迁移**：dbmate 纯 SQL。文件头写 `-- phase: expand|migrate|contract`，必须有 `-- migrate:down`；expand 迁移必须写 `-- contract-plan:`。`pnpm check:engineering` 会检查这几项。
-9. **依赖版本**：一律精确版本（pnpm `saveExact`）。
+9. **依赖版本**：一律精确版本（pnpm `saveExact`）；多个工作区共用的依赖写进 `pnpm-workspace.yaml` 的 `catalog`，package.json 里用 `"catalog:"` 引用。
 10. **镜像命名（没有例外）**：本项目构建和运行的每一个镜像都命名为 `oasis/<组件>:<标签>`，组件名小写（Docker 不允许大写），包括自研服务、中间件、以后 harness 的任务沙箱。
     - 第三方镜像不直接使用：在 `infra/images/<组件>/Dockerfile` 里 `FROM` 官方镜像（锁定版本）做一层薄包装，标签沿用上游版本号，例如 `oasis/postgres:18.6`。
     - compose 里每个服务必须同时写 `image: oasis/...`、`build:` 和 `pull_policy: build`：只在本地构建，绝不从镜像仓库拉取，因为 Docker Hub 上的 `oasis` 命名空间不归我们。
     - 脚本里的 `docker build` 必须带 `-t oasis/<组件>:<标签>`。
     - `pnpm check:engineering` 的 images 检查和 pre-commit 钩子会强制执行这一条。
+11. **服务骨架**：每个服务都用 `@oasis/service-kit` 的 `startService` 启动，不自己写监听、探针、信号处理。统一接口：`/health`、`/ready`、`/v1/meta`；业务接口放 `/v1/*`，服务间接口放 `/internal/*`（gateway 不转发）。端口：gateway 8080，其余 4101–4108（见 README）。Node 服务的镜像统一用 `infra/images/node-service/Dockerfile` 按 `SERVICE` 参数构建。相对导入写 `.ts` 后缀，只用可擦除的 TS 语法（不用 enum、namespace、参数属性）。
 
 ## C. 本项目对通用规范的调整（用户 2026-10-21 确认）
 

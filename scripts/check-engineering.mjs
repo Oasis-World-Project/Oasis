@@ -58,7 +58,7 @@ function checkNaming() {
 function checkImages() {
   const problems = [];
   for (const file of files.filter((f) => COMPOSE_FILE.test(f))) {
-    const doc = parseYaml(readFileSync(path.join(ROOT, file), 'utf8')) ?? {};
+    const doc = parseYaml(readFileSync(path.join(ROOT, file), 'utf8'), { merge: true }) ?? {};
     for (const [name, svc] of Object.entries(doc.services ?? {})) {
       const image = typeof svc?.image === 'string' ? svc.image.replace(/\$\{[^}]*\}/g, 'x') : '';
       if (!OASIS_IMAGE.test(image)) {

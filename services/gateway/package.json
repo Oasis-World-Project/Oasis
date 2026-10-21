@@ -1,0 +1,30 @@
+{
+  "name": "@oasis/gateway",
+  "version": "0.0.0",
+  "private": true,
+  "description": "唯一对外入口：把 /api/<服务>/v1/* 转发到内部服务；登录校验、限流、WebSocket 推送都在这里",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --watch src/main.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/http-proxy": "catalog:",
+    "@oasis/service-kit": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@oasis/tsconfig": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "@oasis/contracts": "workspace:*",
+    "fastify": "catalog:",
+    "vitest": "catalog:"
+  }
+}

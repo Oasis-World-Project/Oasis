@@ -10,9 +10,28 @@
 
 ```bash
 pnpm install        # 安装依赖，同时装好 git 钩子
-pnpm env:init       # 生成本地 .env（随机密码）
+pnpm env:init       # 生成根目录和每个服务的 .env（随机密码）
 pnpm infra:up       # 启动 PostgreSQL、Valkey、NATS、SeaweedFS、Mailpit，等到全部健康
+pnpm dev            # 9 个服务作为本机进程运行，改代码自动重启
 ```
+
+需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 9 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。
+
+## 服务
+
+| 服务 | 端口 | 职责 | 对外 |
+|---|---|---|---|
+| gateway | 8080 | 唯一对外入口：`/api/<服务>/v1/*` → `<服务>/v1/*` | ✅ |
+| identity | 4101 | 账号与登录（邮箱验证码） | 经 gateway |
+| billing | 4102 | 额度钱包：注册送 $30、预扣与结算、用量 | 经 gateway |
+| agent | 4103 | 模型目录、AI 人设、自带 Key | 经 gateway |
+| conversation | 4104 | 群聊与私聊、@、发言方式、Jev 调度 | 经 gateway |
+| task | 4105 | 任务、工作流、节点状态机 | 经 gateway |
+| canvas | 4106 | 成果、批注、文件 | 经 gateway |
+| harness | 4107 | Agent 运行时（唯一接触 DeepSeek Harness） | 仅内部 |
+| model-gateway | 4108 | 所有模型调用的唯一出口，计量上报 billing | 仅内部 |
+
+每个服务都有 `/health`（进程存活）、`/ready`（依赖可用）、`/v1/meta`（服务名、版本、提交号）。业务接口放在 `/v1/*`，只给服务之间调用的放在 `/internal/*`（gateway 不转发）。
 
 所有镜像都在本地构建，统一命名为 `oasis/<组件>:<标签>`（规则见 AGENTS.md B.10）。
 
@@ -29,7 +48,7 @@ pnpm infra:up       # 启动 PostgreSQL、Valkey、NATS、SeaweedFS、Mailpit，
 ```
 apps/       web（React）、desktop（Electron 壳）
 services/   9 个微服务，各自独立数据库
-packages/   契约、基础设施库、设计令牌、tsconfig
+packages/   contracts（契约）、service-kit（服务启动底座）、tsconfig；设计令牌在第 3 阶段加入
 infra/      本地编排（docker compose）
 scripts/    工程检查、清理、环境初始化
 docs/       工程方向、架构决策记录（ADR）
@@ -42,4 +61,5 @@ docs/       工程方向、架构决策记录（ADR）
 | `pnpm lint` / `pnpm typecheck` / `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、依赖方向、死代码、重复率、数据库迁移检查 |
 | `pnpm cleanup` | 清理临时产物并报告释放的空间 |
-| `pnpm infra:ps` / `pnpm infra:down` | 查看 / 停止中间件 |
+| `pnpm infra:ps` / `pnpm infra:down` | 查看 / 停止全部容器 |
+| `pnpm stack:up` / `pnpm stack:logs` | 容器里跑全套 / 看日志 |

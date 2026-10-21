@@ -7,6 +7,9 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "types": ["node"],
+    // 开发时用 Node 24 原生执行 .ts：只允许可擦除的 TS 语法，相对导入写 .ts，构建时改写成 .js
+    "erasableSyntaxOnly": true,
+    "rewriteRelativeImportExtensions": true,
     "declaration": true,
     "sourceMap": true
   }

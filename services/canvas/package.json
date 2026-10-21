@@ -1,0 +1,24 @@
+{
+  "name": "@oasis/canvas",
+  "version": "0.0.0",
+  "private": true,
+  "description": "画布：成果、批注、文件（存对象存储），每个成果只留最新一版",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --watch src/main.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@oasis/service-kit": "workspace:*"
+  },
+  "devDependencies": {
+    "@oasis/tsconfig": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

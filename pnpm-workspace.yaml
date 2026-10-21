@@ -6,6 +6,19 @@ packages:
 # 依赖一律锁定精确版本（dsh 处于开发者预览期，尤其不能漂移）
 saveExact: true
 engineStrict: true
+
+# 各工作区共用的依赖版本，package.json 里写 "catalog:" 引用，保证全仓同一版本
+catalog:
+  '@fastify/http-proxy': 11.6.5
+  '@nats-io/transport-node': 3.4.0
+  '@types/node': 24.19.2
+  '@types/pg': 8.23.1
+  fastify: 5.12.7
+  pg: 8.23.1
+  pino: 10.4.0
+  typescript: 6.0.3
+  vitest: 5.0.5
+  zod: 4.6.7
 # 只放行确认可信的依赖安装脚本（pnpm 11 默认全部拦截）
 allowBuilds:
   lefthook: true

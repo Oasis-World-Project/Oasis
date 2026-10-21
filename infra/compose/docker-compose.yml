@@ -1,9 +1,50 @@
-# Oasis 本地中间件。用法：pnpm infra:up（读取仓库根目录的 .env）。业务服务在第 2 阶段加入。
+# Oasis 本地编排。统一通过 scripts/compose.mjs 调用：
+#   pnpm infra:up   只起中间件（日常开发：服务在本机进程里跑，热重载）
+#   pnpm stack:up   中间件 + 9 个服务全部在容器里跑（集成验证）
+#   pnpm infra:down 全部停掉
 #
 # 镜像命名规则（AGENTS.md B.10）：本项目运行的每个镜像都叫 oasis/<组件>:<标签>，没有例外。
 # 中间件用 infra/images/<组件>/Dockerfile 薄包装官方镜像（上游版本在 Dockerfile 里锁定）。
 # pull_policy: build 保证只在本地构建，绝不从镜像仓库拉取同名镜像（Docker Hub 上的 oasis 命名空间不归我们）。
 name: oasis
+
+# ---------- 9 个 Node 服务共用的片段 ----------
+x-node-service: &node-service
+  pull_policy: build
+  profiles: [services]
+  restart: unless-stopped
+  stop_grace_period: 15s
+  healthcheck:
+    test:
+      - CMD
+      - node
+      - -e
+      - "fetch('http://127.0.0.1:'+process.env.PORT+'/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+    interval: 5s
+    timeout: 3s
+    retries: 20
+    start_period: 10s
+
+x-node-build: &node-build
+  context: ../..
+  dockerfile: infra/images/node-service/Dockerfile
+  args: &node-build-args
+    GIT_COMMIT: ${GIT_COMMIT:-unknown}
+
+x-runtime-env: &runtime-env
+  LOG_LEVEL: info
+  SHUTDOWN_DRAIN_MS: 2000
+
+x-nats-env: &nats-env
+  NATS_URL: nats://nats:4222
+  NATS_USER: ${NATS_USER:?}
+  NATS_PASSWORD: ${NATS_PASSWORD:?}
+
+x-data-deps: &data-deps
+  postgres:
+    condition: service_healthy
+  nats:
+    condition: service_healthy
 
 services:
   postgres:
@@ -97,6 +138,140 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # ---------- 服务（profile: services）----------
+  # 唯一对外的服务；不依赖上游先启动，某个上游挂了只影响它自己的路由
+  gateway:
+    <<: *node-service
+    image: oasis/gateway:${OASIS_IMAGE_TAG:-local}
+    build:
+      <<: *node-build
+      args:
+        <<: *node-build-args
+        SERVICE: gateway
+    environment:
+      <<: *runtime-env
+      PORT: 8080
+      IDENTITY_URL: http://identity:4101
+      BILLING_URL: http://billing:4102
+      AGENT_URL: http://agent:4103
+      CONVERSATION_URL: http://conversation:4104
+      TASK_URL: http://task:4105
+      CANVAS_URL: http://canvas:4106
+    ports:
+      - 127.0.0.1:${GATEWAY_HOST_PORT:-8080}:8080
+
+  identity:
+    <<: *node-service
+    image: oasis/identity:${OASIS_IMAGE_TAG:-local}
+    build:
+      <<: *node-build
+      args:
+        <<: *node-build-args
+        SERVICE: identity
+    environment:
+      <<: [*runtime-env, *nats-env]
+      PORT: 4101
+      DATABASE_URL: postgres://svc_identity:${IDENTITY_DB_PASSWORD:?}@postgres:5432/identity
+    depends_on: *data-deps
+
+  billing:
+    <<: *node-service
+    image: oasis/billing:${OASIS_IMAGE_TAG:-local}
+    build:
+      <<: *node-build
+      args:
+        <<: *node-build-args
+        SERVICE: billing
+    environment:
+      <<: [*runtime-env, *nats-env]
+      PORT: 4102
+      DATABASE_URL: postgres://svc_billing:${BILLING_DB_PASSWORD:?}@postgres:5432/billing
+    depends_on: *data-deps
+
+  agent:
+    <<: *node-service
+    image: oasis/agent:${OASIS_IMAGE_TAG:-local}
+    build:
+      <<: *node-build
+      args:
+        <<: *node-build-args
+        SERVICE: agent
+    environment:
+      <<: [*runtime-env, *nats-env]
+      PORT: 4103
+      DATABASE_URL: postgres://svc_agent:${AGENT_DB_PASSWORD:?}@postgres:5432/agent
+    depends_on: *data-deps
+
+  conversation:
+    <<: *node-service
+    image: oasis/conversation:${OASIS_IMAGE_TAG:-local}
+    build:
+      <<: *node-build
+      args:
+        <<: *node-build-args
+        SERVICE: conversation
+    environment:
+      <<: [*runtime-env, *nats-env]
+      PORT: 4104
+      DATABASE_URL: postgres://svc_conversation:${CONVERSATION_DB_PASSWORD:?}@postgres:5432/conversation
+    depends_on: *data-deps
+
+  task:
+    <<: *node-service
+    image: oasis/task:${OASIS_IMAGE_TAG:-local}
+    build:
+      <<: *node-build
+      args:
+        <<: *node-build-args
+        SERVICE: task
+    environment:
+      <<: [*runtime-env, *nats-env]
+      PORT: 4105
+      DATABASE_URL: postgres://svc_task:${TASK_DB_PASSWORD:?}@postgres:5432/task
+    depends_on: *data-deps
+
+  canvas:
+    <<: *node-service
+    image: oasis/canvas:${OASIS_IMAGE_TAG:-local}
+    build:
+      <<: *node-build
+      args:
+        <<: *node-build-args
+        SERVICE: canvas
+    environment:
+      <<: [*runtime-env, *nats-env]
+      PORT: 4106
+      DATABASE_URL: postgres://svc_canvas:${CANVAS_DB_PASSWORD:?}@postgres:5432/canvas
+    depends_on: *data-deps
+
+  harness:
+    <<: *node-service
+    image: oasis/harness:${OASIS_IMAGE_TAG:-local}
+    build:
+      <<: *node-build
+      args:
+        <<: *node-build-args
+        SERVICE: harness
+    environment:
+      <<: [*runtime-env, *nats-env]
+      PORT: 4107
+      DATABASE_URL: postgres://svc_harness:${HARNESS_DB_PASSWORD:?}@postgres:5432/harness
+    depends_on: *data-deps
+
+  model-gateway:
+    <<: *node-service
+    image: oasis/model-gateway:${OASIS_IMAGE_TAG:-local}
+    build:
+      <<: *node-build
+      args:
+        <<: *node-build-args
+        SERVICE: model-gateway
+    environment:
+      <<: [*runtime-env, *nats-env]
+      PORT: 4108
+      DATABASE_URL: postgres://svc_model_gateway:${MODEL_GATEWAY_DB_PASSWORD:?}@postgres:5432/model_gateway
+    depends_on: *data-deps
 
 volumes:
   postgres-data:

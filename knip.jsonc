@@ -10,16 +10,9 @@
       "entry": [],
       "project": [],
     },
-    "services/*": {
-      "entry": ["src/main.ts"],
-      "project": ["src/**/*.ts"],
-    },
-    "packages/*": {
-      "entry": ["src/index.ts"],
-      "project": ["src/**/*.ts"],
-    },
-    "apps/*": {
-      "project": ["src/**/*.{ts,tsx}"],
+    // exports 用了 "./*" 通配，knip 推不出对应的源码入口
+    "packages/contracts": {
+      "entry": ["src/*.ts"],
     },
   },
 }
