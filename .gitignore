@@ -1,0 +1,33 @@
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+out/
+release/
+.turbo/
+.vite/
+*.tsbuildinfo
+
+# 测试与检查产物
+coverage/
+.eslintcache
+
+# 临时产物（scripts/cleanup-task.mjs 会清理）
+.tmp/
+*.tmp
+*.log
+__pycache__/
+.pytest_cache/
+
+# 本地配置与密钥：只提交 .env.example
+.env
+.env.*
+!.env.example
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.claude/settings.local.json

@@ -1,0 +1,98 @@
+# Oasis 本地中间件。用法：pnpm infra:up（读取仓库根目录的 .env）。
+# 业务服务在第 2 阶段加入本文件。镜像版本全部锁定。
+name: oasis
+
+services:
+  postgres:
+    image: postgres:18.6-trixie
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?}
+      POSTGRES_DB: postgres
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:?}
+      BILLING_DB_PASSWORD: ${BILLING_DB_PASSWORD:?}
+      AGENT_DB_PASSWORD: ${AGENT_DB_PASSWORD:?}
+      CONVERSATION_DB_PASSWORD: ${CONVERSATION_DB_PASSWORD:?}
+      TASK_DB_PASSWORD: ${TASK_DB_PASSWORD:?}
+      CANVAS_DB_PASSWORD: ${CANVAS_DB_PASSWORD:?}
+      HARNESS_DB_PASSWORD: ${HARNESS_DB_PASSWORD:?}
+      MODEL_GATEWAY_DB_PASSWORD: ${MODEL_GATEWAY_DB_PASSWORD:?}
+    ports:
+      - 127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    stop_grace_period: 30s
+
+  valkey:
+    image: valkey/valkey:9.1.2-alpine
+    environment:
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD:?}
+    command: ['sh', '-c', 'exec valkey-server --appendonly yes --requirepass "$$VALKEY_PASSWORD"']
+    ports:
+      - 127.0.0.1:${VALKEY_HOST_PORT:-6379}:6379
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'valkey-cli -a "$$VALKEY_PASSWORD" --no-auth-warning ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nats:
+    image: nats:2.15.1-alpine
+    environment:
+      NATS_USER: ${NATS_USER:?}
+      NATS_PASSWORD: ${NATS_PASSWORD:?}
+    command: ['-c', '/etc/nats/nats.conf']
+    ports:
+      - 127.0.0.1:${NATS_HOST_PORT:-4222}:4222
+      - 127.0.0.1:${NATS_MONITOR_HOST_PORT:-8222}:8222
+    volumes:
+      - ./nats/nats.conf:/etc/nats/nats.conf:ro
+      - nats-data:/data
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'wget -q -O /dev/null "http://127.0.0.1:8222/healthz?js-enabled-only=true"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.47
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?}
+    entrypoint: ['/bin/sh', '/etc/seaweedfs/start.sh']
+    ports:
+      - 127.0.0.1:${S3_HOST_PORT:-8333}:8333
+    volumes:
+      - ./seaweedfs/start.sh:/etc/seaweedfs/start.sh:ro
+      - seaweedfs-data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8333/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  mailpit:
+    image: axllent/mailpit:v1.31.6
+    ports:
+      - 127.0.0.1:${MAILPIT_SMTP_HOST_PORT:-1025}:1025
+      - 127.0.0.1:${MAILPIT_UI_HOST_PORT:-8025}:8025
+    healthcheck:
+      test: ['CMD', '/mailpit', 'readyz']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres-data:
+  valkey-data:
+  nats-data:
+  seaweedfs-data:

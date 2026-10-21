@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - services/*
+  - packages/*
+
+# 依赖一律锁定精确版本（dsh 处于开发者预览期，尤其不能漂移）
+saveExact: true
+engineStrict: true
+# 只放行确认可信的依赖安装脚本（pnpm 11 默认全部拦截）
+allowBuilds:
+  lefthook: true

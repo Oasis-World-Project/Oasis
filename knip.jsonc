@@ -1,0 +1,25 @@
+{
+  // 这两个工具由 scripts/check-engineering.mjs 通过 `pnpm exec` 动态调用，knip 静态分析看不到
+  "ignoreDependencies": ["dependency-cruiser", "jscpd"],
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs"],
+    },
+    // 只有 JSON 配置，没有源码入口
+    "packages/tsconfig": {
+      "entry": [],
+      "project": [],
+    },
+    "services/*": {
+      "entry": ["src/main.ts"],
+      "project": ["src/**/*.ts"],
+    },
+    "packages/*": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"],
+    },
+    "apps/*": {
+      "project": ["src/**/*.{ts,tsx}"],
+    },
+  },
+}

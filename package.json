@@ -1,0 +1,40 @@
+{
+  "name": "oasis",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "eslint --max-warnings=0 .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "env:init": "node scripts/init-env.mjs",
+    "infra:up": "docker compose --env-file .env -f infra/compose/docker-compose.yml up -d --wait",
+    "infra:down": "docker compose --env-file .env -f infra/compose/docker-compose.yml down",
+    "infra:ps": "docker compose --env-file .env -f infra/compose/docker-compose.yml ps",
+    "check:engineering": "node scripts/check-engineering.mjs",
+    "cleanup": "node scripts/cleanup-task.mjs",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "dependency-cruiser": "18.7.0",
+    "eslint": "10.13.0",
+    "eslint-plugin-sonarjs": "4.2.2",
+    "globals": "17.13.0",
+    "jscpd": "5.4.1",
+    "knip": "6.42.1",
+    "lefthook": "2.2.2",
+    "prettier": "3.9.10",
+    "turbo": "2.11.9",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0"
+  }
+}

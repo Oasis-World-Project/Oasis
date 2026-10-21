@@ -1,0 +1,13 @@
+{
+  "threshold": 3,
+  "minTokens": 60,
+  "reporters": ["console"],
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/migrations/**",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ],
+  "gitignore": true
+}

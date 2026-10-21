@@ -1,0 +1,19 @@
+# Git 钩子：项目不上 CI，规则靠钩子兜底（工程规范 §7）。
+pre-commit:
+  parallel: true
+  commands:
+    naming:
+      run: node scripts/check-engineering.mjs --only naming,migrations
+    lint:
+      glob: '*.{js,mjs,cjs,ts,tsx}'
+      run: pnpm exec eslint --max-warnings=0 {staged_files}
+    format:
+      glob: '*.{js,mjs,cjs,ts,tsx,json,yml,yaml,css}'
+      run: pnpm exec prettier --check {staged_files}
+
+pre-push:
+  commands:
+    engineering:
+      run: node scripts/check-engineering.mjs
+    typecheck:
+      run: pnpm typecheck
