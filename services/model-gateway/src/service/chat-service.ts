@@ -18,6 +18,17 @@ export interface PreparedCall {
 
 const decoder = () => new TextDecoder();
 
+/** 把上游拒绝的原因归成几类，让用户看到能照着做的提示；细节只进日志和调用记录。 */
+function upstreamError(status: number, detail: string): HttpError {
+  if (status === 403 && /not available in your region/i.test(detail)) {
+    return new HttpError(502, 'provider_region_unavailable', '这个模型在当前网络所在的地区用不了');
+  }
+  if (status === 429) {
+    return new HttpError(503, 'provider_busy', '模型服务现在太忙，请稍后再试');
+  }
+  return new HttpError(502, 'provider_error', '模型服务返回了错误，请稍后再试');
+}
+
 export function createChatService(deps: {
   provider: ProviderClient;
   billing: ServiceClient;
@@ -124,7 +135,7 @@ export function createChatService(deps: {
         const detail = (await response.text().catch(() => '')).slice(0, 500);
         await release(call, `上游返回 ${response.status}：${detail}`);
         logger.warn({ status: response.status, detail, model: call.body.model }, '上游拒绝了请求');
-        throw new HttpError(502, 'provider_error', '模型服务返回了错误，请稍后再试');
+        throw upstreamError(response.status, detail);
       }
       return response;
     },

@@ -54,4 +54,5 @@
 
 - 新增密钥 `AUTH_CODE_PEPPER`：由 `pnpm env:init` 生成，换掉它会让所有未用的验证码失效。
 - OpenRouter Key 只放在 `services/model-gateway/.env`（`OPENROUTER_API_KEY`），不进 git，也不出现在日志里。没有 Key 时模型调用返回 503 `provider_not_configured`。
+- 上游拒绝的原因归成几类返回：地区限制（`provider_region_unavailable`）、限流（`provider_busy`）、其他（`provider_error`），界面据此给出不同提示；原始错误只写进日志和调用记录。2026-10-22 在开发机网络上实测：12 个可用型号里 8 个正常，Claude、GPT、Gemini 被地区限制，Mistral 偶尔被 OpenRouter 共享池限流。
 - Turborepo 用严格环境变量模式：`pnpm dev` 只把 `.env` 文件里的配置交给服务，在终端里临时 `set` 的变量不会传进去。本地临时覆盖配置要用 `pnpm turbo run dev --env-mode=loose`。

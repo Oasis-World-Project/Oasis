@@ -32,12 +32,13 @@ billing.post('/internal/holds/:id/release', async (_request, reply) => {
 
 /** 假的 OpenRouter：流式返回两段内容和最后的用量。 */
 let upstreamStatus = 200;
+let upstreamMessage = 'boom';
 let upstreamBodies: Record<string, unknown>[] = [];
 const openrouter = Fastify();
 openrouter.post('/chat/completions', async (request, reply) => {
   upstreamBodies.push(request.body as Record<string, unknown>);
   if (upstreamStatus !== 200)
-    return reply.code(upstreamStatus).send({ error: { message: 'boom' } });
+    return reply.code(upstreamStatus).send({ error: { message: upstreamMessage } });
   reply.header('content-type', 'text/event-stream');
   return [
     ': OPENROUTER PROCESSING\n\n',
@@ -77,6 +78,7 @@ beforeEach(() => {
   finished.length = 0;
   upstreamBodies = [];
   upstreamStatus = 200;
+  upstreamMessage = 'boom';
   balanceEnough = true;
 });
 
@@ -130,6 +132,23 @@ describe('一次模型调用', () => {
     expect((err as HttpError).code).toBe('provider_error');
     expect(billingCalls.map((c) => c.path)).toEqual(['/internal/holds', 'release']);
     expect(finished[0]).toMatchObject({ status: 'failed', chargedMicro: 0 });
+  });
+
+  it('上游的地区限制和限流给出对应的错误码', async () => {
+    upstreamStatus = 403;
+    upstreamMessage = 'This model is not available in your region.';
+    const blocked = await chat.prepare({ payerId: PAYER, requestId: 'req-4', body: request });
+    const regionErr = await chat
+      .open(blocked, new AbortController().signal)
+      .catch((e: unknown) => e);
+    expect((regionErr as HttpError).code).toBe('provider_region_unavailable');
+
+    upstreamStatus = 429;
+    upstreamMessage = 'Provider returned error';
+    const busy = await chat.prepare({ payerId: PAYER, requestId: 'req-5', body: request });
+    const busyErr = await chat.open(busy, new AbortController().signal).catch((e: unknown) => e);
+    expect((busyErr as HttpError).code).toBe('provider_busy');
+    expect(finished.every((f) => f.chargedMicro === 0)).toBe(true);
   });
 
   it('没有配置 API Key 时直接 503', async () => {

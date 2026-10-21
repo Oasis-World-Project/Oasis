@@ -12,6 +12,8 @@ const FRIENDLY_ERRORS: Record<string, string> = {
   provider_not_configured: '模型服务还没有配置好',
   provider_unavailable: '模型服务暂时连不上，请稍后再试',
   provider_error: '模型服务出错了，请稍后再试',
+  provider_region_unavailable: '这个 AI 在当前网络所在的地区用不了，换一个 AI 试试',
+  provider_busy: '这个 AI 现在太忙了，过一会儿再试',
   model_unavailable: '这个 AI 还没有接入',
   stream_interrupted: '回复中断了，已保留收到的部分',
 };

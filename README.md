@@ -26,6 +26,7 @@ pnpm desktop        # （可选）另开一个终端，打开 Electron 桌面窗
 
 - **登录**：打开 Web 端，输入任意邮箱获取验证码。本地不会真的发邮件，验证码在 Mailpit 收件箱 http://127.0.0.1:8025 里看。新邮箱第一次登录即注册，几秒内到账 $30 额度。
 - **接入模型**：在 `services/model-gateway/.env` 里填上 `OPENROUTER_API_KEY=sk-or-...`，然后重启 `pnpm dev`。这个文件不进 git，Key 不要贴到聊天或提交里。没填 Key 时页面能正常打开，发消息会提示「模型服务还没有配置好」。
+- **地区限制**：OpenRouter 按发出请求的网络判断地区。部分模型（目前是 Claude、GPT、Gemini）在一些地区用不了，界面会提示「这个 AI 在当前网络所在的地区用不了」，这次调用不扣钱。换到这些模型支持的网络，或者部署到海外服务器上就能用。
 - **计费**：每次调用先冻结一笔预估金额，完成后按 OpenRouter 报告的实际花费 × `BILLING_PRICE_MULTIPLIER`（billing 的配置，默认 1.0）扣除，多冻结的部分退回。规则见 [ADR 0002](docs/adr/0002-auth-billing-chat-loop.md)。
 
 需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 9 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。
