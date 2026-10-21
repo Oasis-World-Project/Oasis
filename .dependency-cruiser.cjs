@@ -67,7 +67,12 @@ module.exports = {
         path: '^(apps|services|packages)/[^/]+/src/',
         pathNot: '\\.(test|spec)\\.(ts|tsx)$',
       },
-      to: { dependencyTypes: ['npm-dev'], dependencyTypesNot: ['type-only'] },
+      to: {
+        dependencyTypes: ['npm-dev'],
+        dependencyTypesNot: ['type-only'],
+        // electron 按惯例放在 devDependencies：运行时由 Electron 自己提供，打包时内置
+        pathNot: 'node_modules/electron/',
+      },
     },
   ],
   options: {

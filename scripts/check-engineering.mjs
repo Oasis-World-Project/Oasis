@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 工程规范 §7 的确定性检查入口：命名、镜像命名、依赖方向、死代码/未用依赖、重复率、数据库迁移。
-// 用法：node scripts/check-engineering.mjs [--only naming,images,deps,dead,dup,migrations]
+// 用法：node scripts/check-engineering.mjs [--only naming,images,tokens,deps,dead,dup,migrations]
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -15,6 +15,9 @@ const IS_WINDOWS = process.platform === 'win32';
 const OASIS_IMAGE = /^oasis\/[a-z0-9]+(?:[._-][a-z0-9]+)*:[\w][\w.-]{0,127}$/;
 const COMPOSE_FILE = /(^|\/)(docker-)?compose[^/]*\.ya?ml$/;
 const DOCKER_BUILD = /docker\s+(?:buildx\s+)?build\b[^\n]*/g;
+// AGENTS.md B.12：前端颜色只来自设计令牌，应用代码里不写裸色值
+const RAW_COLOR = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch)\(/;
+const TOKEN_CHECKED = /^apps\/web\/src\/.+\.(tsx?|css)$/;
 
 function run(cmd, args, { capture = false } = {}) {
   const options = {
@@ -93,6 +96,20 @@ function checkImages() {
   return problems.length === 0;
 }
 
+function checkTokens() {
+  const problems = [];
+  for (const file of files.filter((f) => TOKEN_CHECKED.test(f))) {
+    readFileSync(path.join(ROOT, file), 'utf8')
+      .split('\n')
+      .forEach((line, i) => {
+        if (RAW_COLOR.test(line))
+          problems.push(`${file}:${i + 1}：请改用设计令牌 → ${line.trim()}`);
+      });
+  }
+  for (const p of problems) console.error(`  ${p}`);
+  return problems.length === 0;
+}
+
 function checkMigrations() {
   const migrations = files.filter((f) => /^services\/[^/]+\/migrations\/.+\.sql$/.test(f));
   let ok = true;
@@ -118,6 +135,7 @@ function checkMigrations() {
 const CHECKS = {
   naming: { label: '版本后缀命名', fn: checkNaming },
   images: { label: '镜像命名 oasis/', fn: checkImages },
+  tokens: { label: '前端只用设计令牌', fn: checkTokens },
   migrations: { label: '数据库迁移 Expand/Contract', fn: checkMigrations },
   deps: {
     label: '依赖方向与循环依赖（dependency-cruiser）',

@@ -15,10 +15,11 @@
 |---|---|
 | `pnpm env:init` | 生成根目录和每个服务的本地 `.env`（随机密码） |
 | `pnpm infra:up` / `infra:down` / `infra:ps` | 启动中间件 / 停止全部容器 / 查看 |
-| `pnpm dev` | 9 个服务作为本机进程运行（Node 24 原生执行 TS，改代码自动重启） |
+| `pnpm dev` | 9 个服务 + Web（Vite，http://127.0.0.1:5173）在本机运行，改代码自动重启 / 热更新 |
+| `pnpm desktop` | 打开 Electron 桌面窗口（加载上面的 Web 地址，需先 `pnpm dev`） |
 | `pnpm stack:up` / `stack:logs` | 中间件 + 9 个服务全部在容器里跑（集成验证）/ 看日志 |
 | `pnpm lint` · `pnpm typecheck` · `pnpm test` | 静态检查、类型检查、测试 |
-| `pnpm check:engineering` | 命名、镜像命名、依赖方向、死代码、重复率、迁移检查 |
+| `pnpm check:engineering` | 命名、镜像命名、设计令牌、依赖方向、死代码、重复率、迁移检查 |
 | `pnpm cleanup` | 任务收尾清理并报告释放空间（`--build`、`--docker` 可选） |
 
 ## B. 架构约定
@@ -38,6 +39,14 @@
     - 脚本里的 `docker build` 必须带 `-t oasis/<组件>:<标签>`。
     - `pnpm check:engineering` 的 images 检查和 pre-commit 钩子会强制执行这一条。
 11. **服务骨架**：每个服务都用 `@oasis/service-kit` 的 `startService` 启动，不自己写监听、探针、信号处理。统一接口：`/health`、`/ready`、`/v1/meta`；业务接口放 `/v1/*`，服务间接口放 `/internal/*`（gateway 不转发）。端口：gateway 8080，其余 4101–4108（见 README）。Node 服务的镜像统一用 `infra/images/node-service/Dockerfile` 按 `SERVICE` 参数构建。相对导入写 `.ts` 后缀，只用可擦除的 TS 语法（不用 enum、namespace、参数属性）。
+12. **前端约定**：
+    - 颜色、阴影、圆角、字体一律来自 `@oasis/design-tokens`（CSS 变量 + Tailwind 主题），`apps/web/src` 里不写裸色值（`#xxx`、`rgb()` 等）；缺少的令牌先加进 `packages/design-tokens`。`pnpm check:engineering` 的 tokens 检查和 pre-commit 钩子会拦截。
+    - 应用主体是「珍珠雾面」，广场和游戏是「午夜蓝 + 金线」（`data-theme="plaza"`），群主题光用 `data-light="coral|mint|sky|honey"`。
+    - 侧栏 7 个入口就是全部一级页面；群聊、私聊不显示未读数字或红点（PRD G-02）。
+    - 前端只通过 gateway 的 `/api/*` 访问后端；开发时由 Vite 转发。
+    - 新依赖在第一次真正用到时才装（TanStack Query、Zustand、Radix 等），不预装。
+    - 字体随应用打包（@fontsource），不引用外部字体服务。
+    - Electron：保持 contextIsolation、sandbox、禁用 nodeIntegration；需要给页面开放能力时，只能通过 preload 暴露明确的接口。
 
 ## C. 本项目对通用规范的调整（用户 2026-10-21 确认）
 

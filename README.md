@@ -12,8 +12,15 @@
 pnpm install        # 安装依赖，同时装好 git 钩子
 pnpm env:init       # 生成根目录和每个服务的 .env（随机密码）
 pnpm infra:up       # 启动 PostgreSQL、Valkey、NATS、SeaweedFS、Mailpit，等到全部健康
-pnpm dev            # 9 个服务作为本机进程运行，改代码自动重启
+pnpm dev            # 9 个服务 + Web 端在本机运行，改代码自动重启 / 热更新
+pnpm desktop        # （可选）另开一个终端，打开 Electron 桌面窗口
 ```
+
+打开 http://127.0.0.1:5173 就是 Web 端；gateway 在 http://127.0.0.1:8080 。
+
+停止：在跑 `pnpm dev` 的终端按 `Ctrl + C`（服务会优雅退出）；中间件用 `pnpm infra:down` 停掉，数据保留在 Docker 数据卷里，下次 `pnpm infra:up` 接着用。
+
+> 第一次运行 `pnpm desktop` 会下载 Electron 程序（约 100 MB，下载后会校验 SHA-256）。如果从 GitHub 下载很慢，可以临时用镜像：PowerShell 里先执行 `$env:ELECTRON_MIRROR='https://npmmirror.com/mirrors/electron/'` 再运行。
 
 需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 9 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。
 
@@ -46,9 +53,9 @@ pnpm dev            # 9 个服务作为本机进程运行，改代码自动重�
 ## 目录
 
 ```
-apps/       web（React）、desktop（Electron 壳）
+apps/       web（React 19 + Vite + TanStack Router + Tailwind v4）、desktop（Electron 壳）
 services/   9 个微服务，各自独立数据库
-packages/   contracts（契约）、service-kit（服务启动底座）、tsconfig；设计令牌在第 3 阶段加入
+packages/   contracts（契约）、service-kit（服务启动底座）、design-tokens（设计令牌）、tsconfig
 infra/      本地编排（docker compose）
 scripts/    工程检查、清理、环境初始化
 docs/       工程方向、架构决策记录（ADR）
@@ -59,7 +66,7 @@ docs/       工程方向、架构决策记录（ADR）
 | 命令 | 作用 |
 |---|---|
 | `pnpm lint` / `pnpm typecheck` / `pnpm test` | 静态检查、类型检查、测试 |
-| `pnpm check:engineering` | 命名、镜像命名、依赖方向、死代码、重复率、数据库迁移检查 |
+| `pnpm check:engineering` | 命名、镜像命名、设计令牌、依赖方向、死代码、重复率、数据库迁移检查 |
 | `pnpm cleanup` | 清理临时产物并报告释放的空间 |
 | `pnpm infra:ps` / `pnpm infra:down` | 查看 / 停止全部容器 |
 | `pnpm stack:up` / `pnpm stack:logs` | 容器里跑全套 / 看日志 |

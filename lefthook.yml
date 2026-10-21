@@ -3,7 +3,7 @@ pre-commit:
   parallel: true
   commands:
     naming:
-      run: node scripts/check-engineering.mjs --only naming,images,migrations
+      run: node scripts/check-engineering.mjs --only naming,images,tokens,migrations
     lint:
       glob: '*.{js,mjs,cjs,ts,tsx}'
       run: pnpm exec eslint --max-warnings=0 {staged_files}

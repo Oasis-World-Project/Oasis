@@ -9,6 +9,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "desktop": "pnpm --filter @oasis/desktop start",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "lint": "eslint --max-warnings=0 .",
@@ -29,6 +30,7 @@
     "@types/node": "24.19.2",
     "dependency-cruiser": "18.7.0",
     "eslint": "10.13.0",
+    "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-sonarjs": "4.2.2",
     "globals": "17.13.0",
     "jscpd": "5.4.1",

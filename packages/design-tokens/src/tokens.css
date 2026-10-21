@@ -1,0 +1,81 @@
+/*
+ * Oasis 设计令牌，取值来自原型 v6。
+ * 应用主体是「珍珠雾面」：浅灰丁香底 + 柔光 + 磨砂玻璃 + 唯一点睛色珊瑚；
+ * 广场和游戏是「午夜蓝 + 金线」。这里只定义 CSS 变量，Tailwind 映射见 theme.css。
+ */
+:root {
+  /* 文字 */
+  --oasis-ink: #262734;
+  --oasis-ink-muted: #545767;
+  --oasis-hairline: rgb(38 39 52 / 0.12);
+
+  /* 唯一点睛色：发送、@、进度环、开关 */
+  --oasis-accent: #ee5d43;
+  --oasis-on-accent: #ffffff;
+
+  /* 主操作按钮（拉群等）用墨色实底 */
+  --oasis-solid: #262734;
+  --oasis-on-solid: #ffffff;
+
+  /* 底色：浅灰丁香上叠四团柔光 */
+  --oasis-ground: #dedde7;
+  --oasis-glow-1: rgb(255 150 128 / 0.42);
+  --oasis-glow-2: rgb(140 182 250 / 0.4);
+  --oasis-glow-3: rgb(246 200 120 / 0.34);
+  --oasis-glow-4: rgb(190 182 232 / 0.55);
+
+  /* 磨砂玻璃：所有窗口、弹层、气泡共用一种材质 */
+  --oasis-glass: rgb(255 255 255 / 0.42);
+  --oasis-glass-strong: rgb(255 255 255 / 0.6);
+  --oasis-glass-active: rgb(255 255 255 / 0.9);
+  --oasis-glass-blur: 30px;
+  --oasis-glass-edge: inset 0 0 0 1px rgb(255 255 255 / 0.75);
+  --oasis-glass-edge-strong: inset 0 0 0 1px rgb(255 255 255 / 0.9);
+  --oasis-shadow-panel: 0 24px 60px rgb(70 64 90 / 0.1);
+  --oasis-shadow-raised: 0 4px 14px rgb(70 64 90 / 0.12);
+
+  /* 圆角：窗口 / 卡片 / 一行可点的条目（高 42px 的胶囊） */
+  --oasis-radius-panel: 32px;
+  --oasis-radius-card: 26px;
+  --oasis-radius-item: 21px;
+
+  /* 字体：正文和标题用 Noto Sans SC（标题 300 细体），数字和 oasis 字标用 Unbounded */
+  --oasis-font-sans: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --oasis-font-display: 'Unbounded Variable', 'Unbounded', var(--oasis-font-sans);
+
+  /* 真人头像：柔色圆形 + 首字，外圈一道白描边 */
+  --oasis-person-me: #f2c6d4;
+  --oasis-avatar-ring: 0 0 0 2px rgb(255 255 255 / 0.9);
+}
+
+/* 群主题光：每个群一种光，切群时整屏换光（PRD G-05） */
+[data-light='coral'] {
+  --oasis-light: #ff9680;
+  --oasis-light-tint: rgb(255 150 128 / 0.22);
+}
+[data-light='mint'] {
+  --oasis-light: #78d6ba;
+  --oasis-light-tint: rgb(120 214 186 / 0.22);
+}
+[data-light='sky'] {
+  --oasis-light: #8cb6fa;
+  --oasis-light-tint: rgb(140 182 250 / 0.22);
+}
+[data-light='honey'] {
+  --oasis-light: #f6c878;
+  --oasis-light-tint: rgb(246 200 120 / 0.24);
+}
+[data-light] {
+  --oasis-glow-1: color-mix(in srgb, var(--oasis-light) 46%, transparent);
+  --oasis-glow-2: color-mix(in srgb, var(--oasis-light) 30%, transparent);
+}
+
+/* 广场与游戏：午夜蓝 + 金线 */
+[data-theme='plaza'] {
+  --oasis-plaza-night: #0d0c1e;
+  --oasis-plaza-gold: #d8b46a;
+  --oasis-plaza-parchment: #f3eedf;
+  --oasis-plaza-wolf: #c2455a;
+  --oasis-plaza-gold-edge: inset 0 0 0 1px rgb(216 180 106 / 0.55);
+  --oasis-font-serif: 'Cinzel', 'Noto Serif SC', 'Songti SC', serif;
+}

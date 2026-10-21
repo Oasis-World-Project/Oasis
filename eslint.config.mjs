@@ -1,6 +1,7 @@
 // 全仓统一的 ESLint 配置（工程规范 §4、§7）。
 import js from '@eslint/js';
 import { defineConfig } from 'eslint/config';
+import reactHooks from 'eslint-plugin-react-hooks';
 import sonarjs from 'eslint-plugin-sonarjs';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
@@ -23,6 +24,11 @@ export default defineConfig(
       // 服务日志统一走结构化 logger 输出到 stdout（项目工程方向 §2.2）
       'no-console': 'error',
     },
+  },
+  {
+    files: ['apps/web/**/*.{ts,tsx}'],
+    extends: [reactHooks.configs.flat.recommended],
+    languageOptions: { globals: globals.browser },
   },
   {
     files: ['scripts/**', '**/*.config.{js,mjs,cjs,ts}', '.dependency-cruiser.cjs'],

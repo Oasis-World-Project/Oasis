@@ -1,0 +1,19 @@
+{
+  "name": "@oasis/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Oasis 桌面端：加载 Web 外壳的 Electron 窗口（安装包在后续阶段）",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "tsc -p tsconfig.build.json && electron .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@oasis/tsconfig": "workspace:*",
+    "@types/node": "catalog:",
+    "electron": "44.9.1",
+    "typescript": "catalog:"
+  }
+}

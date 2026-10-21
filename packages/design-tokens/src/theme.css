@@ -1,0 +1,55 @@
+/*
+ * 把 tokens.css 的变量映射成 Tailwind v4 主题，并提供两种材质工具类。
+ * 用法：在应用的 CSS 里先 @import 'tailwindcss'，再 @import 本文件。
+ */
+@import './tokens.css';
+
+@theme inline {
+  --color-ink: var(--oasis-ink);
+  --color-ink-muted: var(--oasis-ink-muted);
+  --color-hairline: var(--oasis-hairline);
+  --color-accent: var(--oasis-accent);
+  --color-on-accent: var(--oasis-on-accent);
+  --color-solid: var(--oasis-solid);
+  --color-on-solid: var(--oasis-on-solid);
+  --color-ground: var(--oasis-ground);
+  --color-glass: var(--oasis-glass);
+  --color-glass-strong: var(--oasis-glass-strong);
+  --color-glass-active: var(--oasis-glass-active);
+  --color-person-me: var(--oasis-person-me);
+  --color-plaza-night: var(--oasis-plaza-night);
+  --color-plaza-gold: var(--oasis-plaza-gold);
+  --color-plaza-parchment: var(--oasis-plaza-parchment);
+
+  --font-sans: var(--oasis-font-sans);
+  --font-display: var(--oasis-font-display);
+  --font-serif: var(--oasis-font-serif);
+
+  --radius-panel: var(--oasis-radius-panel);
+  --radius-card: var(--oasis-radius-card);
+  --radius-item: var(--oasis-radius-item);
+
+  --shadow-panel: var(--oasis-shadow-panel);
+  --shadow-raised: var(--oasis-shadow-raised);
+  --shadow-edge: var(--oasis-glass-edge);
+  --shadow-edge-strong: var(--oasis-glass-edge-strong);
+  --shadow-avatar-ring: var(--oasis-avatar-ring);
+  --shadow-plaza-edge: var(--oasis-plaza-gold-edge);
+}
+
+/* 应用底色：浅灰丁香 + 四团柔光；在 [data-light] 下随群换光 */
+@utility oasis-ground {
+  background:
+    radial-gradient(40% 45% at 30% 6%, var(--oasis-glow-1), transparent 72%),
+    radial-gradient(38% 50% at 98% 30%, var(--oasis-glow-2), transparent 70%),
+    radial-gradient(45% 50% at 60% 100%, var(--oasis-glow-3), transparent 70%),
+    radial-gradient(40% 50% at 0% 90%, var(--oasis-glow-4), transparent 70%), var(--oasis-ground);
+  color: var(--oasis-ink);
+}
+
+/* 磨砂玻璃窗口 */
+@utility glass {
+  background: var(--oasis-glass);
+  backdrop-filter: blur(var(--oasis-glass-blur)) saturate(160%);
+  box-shadow: var(--oasis-glass-edge), var(--oasis-shadow-panel);
+}

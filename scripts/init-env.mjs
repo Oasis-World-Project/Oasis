@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 生成本地开发用的 .env：
 //   1. 仓库根目录：由 .env.example 生成，空着的密码和密钥填入随机值；
-//   2. 每个服务：由 services/<服务>/.env.example 生成，${变量} 换成根目录 .env 里的值。
+//   2. 每个服务和应用：由 services/*、apps/* 下的 .env.example 生成，${变量} 换成根目录 .env 里的值。
 // 已存在的 .env 一律不覆盖；需要重建时先手动删除。
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -33,21 +33,25 @@ if (existsSync(rootEnv)) {
 }
 
 const vars = parseEnv(readFileSync(rootEnv, 'utf8'));
-const servicesDir = path.join(ROOT, 'services');
-for (const name of readdirSync(servicesDir)) {
-  const example = path.join(servicesDir, name, '.env.example');
-  const target = path.join(servicesDir, name, '.env');
-  if (!existsSync(example)) continue;
-  if (existsSync(target)) {
-    console.log(`services/${name}/.env 已存在，保留不动。`);
-    continue;
-  }
-  const text = readFileSync(example, 'utf8').replace(/\$\{([A-Z0-9_]+)\}/g, (_, key) => {
-    if (vars[key] === undefined || vars[key] === '') {
-      throw new Error(`services/${name}/.env.example 引用了根目录 .env 里没有的变量 ${key}`);
+for (const group of ['services', 'apps']) {
+  const groupDir = path.join(ROOT, group);
+  if (!existsSync(groupDir)) continue;
+  for (const name of readdirSync(groupDir)) {
+    const rel = `${group}/${name}`;
+    const example = path.join(groupDir, name, '.env.example');
+    const target = path.join(groupDir, name, '.env');
+    if (!existsSync(example)) continue;
+    if (existsSync(target)) {
+      console.log(`${rel}/.env 已存在，保留不动。`);
+      continue;
     }
-    return vars[key];
-  });
-  writeFileSync(target, text);
-  console.log(`已生成 services/${name}/.env`);
+    const text = readFileSync(example, 'utf8').replace(/\$\{([A-Z0-9_]+)\}/g, (_, key) => {
+      if (vars[key] === undefined || vars[key] === '') {
+        throw new Error(`${rel}/.env.example 引用了根目录 .env 里没有的变量 ${key}`);
+      }
+      return vars[key];
+    });
+    writeFileSync(target, text);
+    console.log(`已生成 ${rel}/.env`);
+  }
 }

@@ -1,0 +1,27 @@
+@import 'tailwindcss';
+@import '@oasis/design-tokens/theme.css';
+
+/* 字体打包进应用（不走 Google Fonts），桌面端离线也能正常显示 */
+@import '@fontsource/noto-sans-sc/300.css';
+@import '@fontsource/noto-sans-sc/400.css';
+@import '@fontsource/noto-sans-sc/500.css';
+@import '@fontsource-variable/unbounded';
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+  body {
+    margin: 0;
+    font-family: var(--oasis-font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--oasis-accent);
+    outline-offset: 2px;
+  }
+}

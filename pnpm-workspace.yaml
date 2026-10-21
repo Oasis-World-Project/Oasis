@@ -17,8 +17,15 @@ catalog:
   pg: 8.23.1
   pino: 10.4.0
   typescript: 6.0.3
+  vite: 8.3.4
   vitest: 5.0.5
   zod: 4.6.7
 # 只放行确认可信的依赖安装脚本（pnpm 11 默认全部拦截）
 allowBuilds:
+  # Electron 的程序文件在第一次启动时才下载（pnpm desktop），安装阶段不需要跑它的脚本
+  electron: false
   lefthook: true
+
+# vitest 也依赖 vite：统一成 catalog 里的同一个版本，避免一个仓库里出现两个 vite
+overrides:
+  vite: 'catalog:'
