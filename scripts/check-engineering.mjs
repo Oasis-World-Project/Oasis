@@ -1,15 +1,20 @@
 #!/usr/bin/env node
-// 工程规范 §7 的确定性检查入口：命名、依赖方向、死代码/未用依赖、重复率、数据库迁移。
-// 用法：node scripts/check-engineering.mjs [--only naming,deps,dead,dup,migrations]
+// 工程规范 §7 的确定性检查入口：命名、镜像命名、依赖方向、死代码/未用依赖、重复率、数据库迁移。
+// 用法：node scripts/check-engineering.mjs [--only naming,images,deps,dead,dup,migrations]
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const SOURCE_ROOTS = ['apps', 'services', 'packages'];
 const SOURCE_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const FORBIDDEN_SUFFIX = /[_.-](v\d+|new|old|backup|bak|copy|refactored)$/i;
 const IS_WINDOWS = process.platform === 'win32';
+// AGENTS.md B.10：本项目运行的每个镜像都叫 oasis/<组件>:<标签>
+const OASIS_IMAGE = /^oasis\/[a-z0-9]+(?:[._-][a-z0-9]+)*:[\w][\w.-]{0,127}$/;
+const COMPOSE_FILE = /(^|\/)(docker-)?compose[^/]*\.ya?ml$/;
+const DOCKER_BUILD = /docker\s+(?:buildx\s+)?build\b[^\n]*/g;
 
 function run(cmd, args, { capture = false } = {}) {
   const options = {
@@ -50,6 +55,44 @@ function checkNaming() {
   return offenders.size === 0;
 }
 
+function checkImages() {
+  const problems = [];
+  for (const file of files.filter((f) => COMPOSE_FILE.test(f))) {
+    const doc = parseYaml(readFileSync(path.join(ROOT, file), 'utf8')) ?? {};
+    for (const [name, svc] of Object.entries(doc.services ?? {})) {
+      const image = typeof svc?.image === 'string' ? svc.image.replace(/\$\{[^}]*\}/g, 'x') : '';
+      if (!OASIS_IMAGE.test(image)) {
+        problems.push(
+          `${file} › ${name}：镜像必须命名为 oasis/<组件>:<标签>（当前：${svc?.image ?? '未设置'}）`,
+        );
+      }
+      if (svc?.build === undefined) {
+        problems.push(
+          `${file} › ${name}：必须有 build（第三方镜像用 infra/images/<组件>/Dockerfile 包装）`,
+        );
+      }
+      if (svc?.pull_policy !== 'build') {
+        problems.push(
+          `${file} › ${name}：必须设置 pull_policy: build，禁止从镜像仓库拉取 oasis/ 同名镜像`,
+        );
+      }
+    }
+  }
+  const scripts = files.filter(
+    (f) => /\.(mjs|cjs|js|ts|sh|ps1|json)$/.test(f) && f !== 'scripts/check-engineering.mjs',
+  );
+  for (const file of scripts) {
+    for (const [command] of readFileSync(path.join(ROOT, file), 'utf8').matchAll(DOCKER_BUILD)) {
+      const tag = command.match(/(?:-t|--tag)[\s=]+["']?([^\s"']+)/)?.[1] ?? '';
+      if (!OASIS_IMAGE.test(tag.replace(/\$\{?\w+\}?/g, 'x'))) {
+        problems.push(`${file}：docker build 必须用 -t oasis/<组件>:<标签>（${command.trim()}）`);
+      }
+    }
+  }
+  for (const p of problems) console.error(`  ${p}`);
+  return problems.length === 0;
+}
+
 function checkMigrations() {
   const migrations = files.filter((f) => /^services\/[^/]+\/migrations\/.+\.sql$/.test(f));
   let ok = true;
@@ -74,6 +117,7 @@ function checkMigrations() {
 
 const CHECKS = {
   naming: { label: '版本后缀命名', fn: checkNaming },
+  images: { label: '镜像命名 oasis/', fn: checkImages },
   migrations: { label: '数据库迁移 Expand/Contract', fn: checkMigrations },
   deps: {
     label: '依赖方向与循环依赖（dependency-cruiser）',

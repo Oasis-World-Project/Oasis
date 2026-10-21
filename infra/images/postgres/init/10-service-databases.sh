@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 只在数据库卷首次初始化时运行：为每个服务建独立账号和独立 database，并收回其他账号的连接权限。
-# 以后新增服务：先把服务名加进 SERVICES，再用 `pnpm infra:down -v` 重建本地卷（会清空本地数据）。
+# 以后新增服务：先把服务名加进 SERVICES，再用 `pnpm infra:down -v` 和 `pnpm infra:up` 重建镜像和本地卷（会清空本地数据）。
 set -euo pipefail
 
 SERVICES=(identity billing agent conversation task canvas harness model_gateway)

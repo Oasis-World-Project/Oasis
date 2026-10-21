@@ -14,6 +14,8 @@ pnpm env:init       # 生成本地 .env（随机密码）
 pnpm infra:up       # 启动 PostgreSQL、Valkey、NATS、SeaweedFS、Mailpit，等到全部健康
 ```
 
+所有镜像都在本地构建，统一命名为 `oasis/<组件>:<标签>`（规则见 AGENTS.md B.10）。
+
 | 中间件 | 本机地址 |
 |---|---|
 | PostgreSQL 18 | `127.0.0.1:5432`，每个服务一个库（`identity`、`billing`…），账号 `svc_<服务名>` |
@@ -38,6 +40,6 @@ docs/       工程方向、架构决策记录（ADR）
 | 命令 | 作用 |
 |---|---|
 | `pnpm lint` / `pnpm typecheck` / `pnpm test` | 静态检查、类型检查、测试 |
-| `pnpm check:engineering` | 命名、依赖方向、死代码、重复率、数据库迁移检查 |
+| `pnpm check:engineering` | 命名、镜像命名、依赖方向、死代码、重复率、数据库迁移检查 |
 | `pnpm cleanup` | 清理临时产物并报告释放的空间 |
 | `pnpm infra:ps` / `pnpm infra:down` | 查看 / 停止中间件 |

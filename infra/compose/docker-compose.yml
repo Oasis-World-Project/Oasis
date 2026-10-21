@@ -1,10 +1,15 @@
-# Oasis 本地中间件。用法：pnpm infra:up（读取仓库根目录的 .env）。
-# 业务服务在第 2 阶段加入本文件。镜像版本全部锁定。
+# Oasis 本地中间件。用法：pnpm infra:up（读取仓库根目录的 .env）。业务服务在第 2 阶段加入。
+#
+# 镜像命名规则（AGENTS.md B.10）：本项目运行的每个镜像都叫 oasis/<组件>:<标签>，没有例外。
+# 中间件用 infra/images/<组件>/Dockerfile 薄包装官方镜像（上游版本在 Dockerfile 里锁定）。
+# pull_policy: build 保证只在本地构建，绝不从镜像仓库拉取同名镜像（Docker Hub 上的 oasis 命名空间不归我们）。
 name: oasis
 
 services:
   postgres:
-    image: postgres:18.6-trixie
+    image: oasis/postgres:18.6
+    build: ../images/postgres
+    pull_policy: build
     environment:
       POSTGRES_USER: ${POSTGRES_SUPERUSER:?}
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?}
@@ -21,7 +26,6 @@ services:
       - 127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432
     volumes:
       - postgres-data:/var/lib/postgresql
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d postgres']
       interval: 5s
@@ -30,10 +34,11 @@ services:
     stop_grace_period: 30s
 
   valkey:
-    image: valkey/valkey:9.1.2-alpine
+    image: oasis/valkey:9.1.2
+    build: ../images/valkey
+    pull_policy: build
     environment:
       VALKEY_PASSWORD: ${VALKEY_PASSWORD:?}
-    command: ['sh', '-c', 'exec valkey-server --appendonly yes --requirepass "$$VALKEY_PASSWORD"']
     ports:
       - 127.0.0.1:${VALKEY_HOST_PORT:-6379}:6379
     volumes:
@@ -45,16 +50,16 @@ services:
       retries: 20
 
   nats:
-    image: nats:2.15.1-alpine
+    image: oasis/nats:2.15.1
+    build: ../images/nats
+    pull_policy: build
     environment:
       NATS_USER: ${NATS_USER:?}
       NATS_PASSWORD: ${NATS_PASSWORD:?}
-    command: ['-c', '/etc/nats/nats.conf']
     ports:
       - 127.0.0.1:${NATS_HOST_PORT:-4222}:4222
       - 127.0.0.1:${NATS_MONITOR_HOST_PORT:-8222}:8222
     volumes:
-      - ./nats/nats.conf:/etc/nats/nats.conf:ro
       - nats-data:/data
     healthcheck:
       test:
@@ -64,15 +69,15 @@ services:
       retries: 20
 
   seaweedfs:
-    image: chrislusf/seaweedfs:4.47
+    image: oasis/seaweedfs:4.47
+    build: ../images/seaweedfs
+    pull_policy: build
     environment:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?}
-    entrypoint: ['/bin/sh', '/etc/seaweedfs/start.sh']
     ports:
       - 127.0.0.1:${S3_HOST_PORT:-8333}:8333
     volumes:
-      - ./seaweedfs/start.sh:/etc/seaweedfs/start.sh:ro
       - seaweedfs-data:/data
     healthcheck:
       test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8333/healthz']
@@ -81,7 +86,9 @@ services:
       retries: 30
 
   mailpit:
-    image: axllent/mailpit:v1.31.6
+    image: oasis/mailpit:1.31.6
+    build: ../images/mailpit
+    pull_policy: build
     ports:
       - 127.0.0.1:${MAILPIT_SMTP_HOST_PORT:-1025}:1025
       - 127.0.0.1:${MAILPIT_UI_HOST_PORT:-8025}:8025
