@@ -127,6 +127,12 @@ describe('估算花费', () => {
       edges: [],
     };
     // (1000 + 2×40000 + (2×2 + 1) × 1000) × 1.2
-    expect(estimatePlan(plan, { workRun: 1_000, speechRun: 1_000 }, tools)).toBe(103_200);
+    expect(estimatePlan(plan, { workRun: 1_000, speechRun: 1_000, computeRun: 0 }, tools)).toBe(
+      103_200,
+    );
+    // 每次运行再加 100 的算力：一共 6 次运行
+    expect(estimatePlan(plan, { workRun: 1_000, speechRun: 1_000, computeRun: 100 }, tools)).toBe(
+      103_920,
+    );
   });
 });

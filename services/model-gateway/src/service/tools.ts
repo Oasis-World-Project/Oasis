@@ -380,10 +380,10 @@ export const TOOLS: ToolDef[] = [
     key: 'video.generate',
     name: '生成视频',
     description:
-      '按文字描述生成一段短视频（几秒到十几秒，商品展示、宣传片段、场景镜头……），存成 MP4。要等几分钟。',
+      '按文字描述生成一段短视频（几秒到十几秒，商品展示、宣传片段、场景镜头……），存成 MP4。',
     usage:
       'oasis-tool video.generate --prompt "画面描述" [--duration 5] [--resolution 720p] [--aspect_ratio 16:9] --out out/视频.mp4（没等到就按提示运行 oasis-tool wait <任务号>）',
-    unit: '秒',
+    unit: '段（约 5 秒）',
     estimateMicro: 500_000,
     holdMicro: (args) => (Number(args.duration) || 5) * 250_000,
     long: true,

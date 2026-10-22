@@ -1,7 +1,8 @@
 // 规划（ADR 0005 §4）：任务从用户确认的任务单开始 → 规划员（一次 harness 运行）把方案写进 out/plan.json
 // → 规划门检查 → 没过就接着原会话改，次数用完交给用户 → 通过就建节点和连线、算预估、开跑。
 import { randomUUID } from 'node:crypto';
-import { Catalog, type CatalogEntry } from '@oasis/contracts/agent';
+import { Catalog, PlaybookList, type CatalogEntry, type Playbook } from '@oasis/contracts/agent';
+import { OASIS_HEADERS } from '@oasis/contracts/common';
 import type { RunFinishedData } from '@oasis/contracts/events';
 import { RunBody } from '@oasis/contracts/harness';
 import { ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
@@ -28,12 +29,20 @@ export interface PlanningConfig {
   maxNodes: number;
   /** 规划员最多跑几次（含规划门退回后的修改） */
   maxAttempts: number;
+  /** 判断任务属于哪类场景用的决策模型（Jev） */
+  decisionModel: string;
   rates: EstimateRates;
   budgetMultiplier: number;
 }
 
 const RUN_FINAL = ['succeeded', 'failed', 'cancelled', 'stopped'];
 const Unavailable = z.object({ models: z.array(z.string()) });
+const Answers = z.object({
+  answers: z.record(z.string(), z.object({ noul: z.number().optional() }).loose()),
+});
+/** 「属于这类」的概率至少这么高才附上这份手册；最多附两份 */
+const PLAYBOOK_THRESHOLD = 0.5;
+const MAX_PLAYBOOKS = 2;
 
 /** 微美元 → 给用户看的金额 */
 export function dollars(micro: number): string {
@@ -79,6 +88,49 @@ export function createPlanning(deps: {
       });
   }
 
+  /**
+   * 这个任务属于哪几类场景：每份手册问 Jev 一个「是否属于」（几乎不花钱，计入任务），
+   * 挑出概率够高的。查不到手册或 Jev 出错就不附，规划照常进行。
+   */
+  async function playbooksFor(task: PlannerJob['task']): Promise<Playbook[]> {
+    try {
+      const { playbooks } = await deps.agent.json('GET', '/internal/playbooks', {
+        schema: PlaybookList,
+      });
+      if (playbooks.length === 0) return [];
+      const sheet = task.sheet!;
+      const state = [
+        `任务：${task.brief}`,
+        `交付物：${sheet.deliverables.map((d) => `${d.name}（${d.form}）`).join('、')}`,
+        `怎么算做好：${sheet.criteria.join('；')}`,
+      ];
+      const questions = Object.fromEntries(
+        playbooks.map((p, i) => [
+          `p${i}`,
+          {
+            type: 'noul',
+            instructions: `这个任务的交付物里有没有这一类：${p.name}（${p.when}）`,
+            criteria: { true: `有${p.name}的交付物`, false: `没有${p.name}的交付物` },
+          },
+        ]),
+      );
+      const { answers } = await deps.modelGateway.json('POST', '/internal/v1/decisions', {
+        body: { model: config.decisionModel, state, questions },
+        headers: { [OASIS_HEADERS.payerId]: task.payerId, [OASIS_HEADERS.taskId]: task.id },
+        schema: Answers,
+      });
+      return playbooks
+        .map((p, i) => ({ p, score: answers[`p${i}`]?.noul ?? 0 }))
+        .filter((x) => x.score >= PLAYBOOK_THRESHOLD)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, MAX_PLAYBOOKS)
+        .map((x) => x.p);
+    } catch (err) {
+      logger.warn({ err, taskId: task.id }, '挑经验手册失败，这次不附手册');
+      return [];
+    }
+  }
+
   /** 在事务里开一次规划员运行（从头排，或接着上一次改） */
   async function open(snapshot: Snapshot, w: Writer, fx: Effects, revise?: PlannerJob['revise']) {
     const runId = randomUUID();
@@ -102,6 +154,7 @@ export function createPlanning(deps: {
             sheet: task.sheet!,
             catalog: await catalog(),
             tools: await tools(),
+            playbooks: await playbooksFor(task),
             limits: { maxNodes: config.maxNodes, defaultModel: config.defaultModel },
           });
       await harness.json('POST', '/internal/runs', {

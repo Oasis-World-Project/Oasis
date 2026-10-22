@@ -6,7 +6,8 @@
   "type": "module",
   "files": [
     "dist",
-    "migrations"
+    "migrations",
+    "playbooks"
   ],
   "scripts": {
     "dev": "node --env-file-if-exists=.env --watch src/main.ts",

@@ -31,13 +31,17 @@ pnpm desktop        # （可选）另开一个终端，打开 Electron 桌面窗
 
 ### Agent 运行（harness）
 
-每次 agent 运行，harness 都会通过本机 Docker 起一个沙箱容器，里面跑精确锁定版本的 DeepSeek Harness（dsh）。第一次用之前先构建沙箱镜像（约 1.4 GB，需要能访问 npm）：
+每次 agent 运行，harness 都会通过本机 Docker 起一个沙箱容器，里面跑精确锁定版本的 DeepSeek Harness（dsh）。第一次用之前先构建沙箱镜像（约 1.7 GB，含 Python 和中文字体；需要能访问 npm 和 Debian 软件源）：
 
 ```bash
 pnpm sandbox:build
 ```
 
-- 沙箱容器在内部网络 `oasis-sandbox` 里，**不通外网**，只能访问 `pnpm infra:up` 起的沙箱入口代理 `sandbox-ingress`。代理只放行「调模型」和「Jev 决策」两条路径，转给 model-gateway 的 `/run/v1/*`，凭每次运行专用的临时 Key 计费；访问其他任何地址都会失败。
+- 沙箱容器在内部网络 `oasis-sandbox` 里，**不通外网**，只能访问 `pnpm infra:up` 起的两个代理：
+  - 入口代理 `sandbox-ingress`：只放行「调模型」「Jev 决策」「工具」（沙箱里的 `oasis-tool` 命令：生图、视频、配音、转写、联网搜索……）几条路径，转给 model-gateway 的 `/run/v1/*`，凭每次运行专用的临时 Key 计费。
+  - 出口代理 `sandbox-egress`：只放行软件包仓库，让节点里的 AI 能 `npm install`、`pip install`。仓库地址和放行的域名在根目录 `.env`（`SANDBOX_NPM_REGISTRY`、`SANDBOX_PIP_INDEX_URL`、`SANDBOX_EGRESS_ALLOW_HOSTS`）：开发机在国内，默认用国内镜像站；部署到海外后换回官方源。
+  - 访问其他任何地址都会失败。设计见 [ADR 0006](docs/adr/0006-tools-and-capability-gateway.md)。
+- 算力按沙箱运行时长 × CPU 核数计费（model-gateway 的 `COMPUTE_PRICE_MICRO_PER_CORE_HOUR`，默认每核每小时 $0.015；设为 0 就不计费）。
 - 本机开发时 model-gateway 跑在宿主机上，入口代理经 `host.docker.internal:4108` 访问它。Docker Desktop（Windows / macOS）上默认配置就能通（2026-10-22 在 Windows 上实测）；在 Linux 宿主机上要把 `services/model-gateway/.env` 里的 `HOST` 改成 `0.0.0.0`（这会让局域网也能访问 4108，只在自己电脑上这样做）。
 - harness 的 `/ready` 会检查 Docker、沙箱镜像和网络是否都在。设计见 [ADR 0003](docs/adr/0003-task-workflow.md)。
 
@@ -68,7 +72,7 @@ pnpm sandbox:build
 | NATS 2.15（JetStream） | `127.0.0.1:4222`，监控页 http://127.0.0.1:8222 |
 | SeaweedFS（S3） | http://127.0.0.1:8333 |
 | Mailpit | SMTP `127.0.0.1:1025`，收件箱 http://127.0.0.1:8025 |
-| 沙箱入口代理 | 只在内部网络 `oasis-sandbox` 里，宿主机访问不到 |
+| 沙箱入口代理、出口代理 | 只在内部网络 `oasis-sandbox` 里，宿主机访问不到 |
 
 ## 目录
 

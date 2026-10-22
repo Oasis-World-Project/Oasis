@@ -224,6 +224,24 @@ harness.get('/internal/models/catalog', async () => ({
     },
   ],
 }));
+/** 假 agent：经验手册；假 model-gateway：Jev 判断属于哪类（「图片类」算是） */
+const decisions: { headers: Record<string, unknown>; body: Record<string, unknown> }[] = [];
+harness.get('/internal/playbooks', async () => ({
+  playbooks: [
+    { key: 'documents', name: '文档类', when: '文字', content: '# 文档类\n文档的经验' },
+    { key: 'images', name: '图片类', when: '图片', content: '# 图片类\n图片的经验' },
+  ],
+}));
+harness.post('/internal/v1/decisions', async (request) => {
+  decisions.push({
+    headers: request.headers,
+    body: request.body as Record<string, unknown>,
+  });
+  return {
+    answers: { p0: { type: 'noul', noul: 0.2 }, p1: { type: 'noul', noul: 0.9 } },
+    usage: { input_tokens: 1, output_tokens: 1, cost: 0 },
+  };
+});
 /** 假 model-gateway：在当前网络用不了的模型 */
 let unavailable: string[] = [];
 harness.get('/internal/v1/models/unavailable', async () => ({ models: unavailable }));
@@ -324,7 +342,8 @@ beforeEach(() => {
       defaultModel: 'deepseek/x',
       maxNodes: 4,
       maxAttempts: 2,
-      rates: { workRun: 3_000, speechRun: 3_000 },
+      decisionModel: 'typesafe/jev',
+      rates: { workRun: 3_000, speechRun: 3_000, computeRun: 0 },
     },
     logger: pino({ level: 'silent' }),
   });
@@ -926,6 +945,11 @@ describe('规划（从任务单开始）', () => {
     expect(planner?.prompt).toContain('「首页文案」');
     expect(planner?.prompt).toContain('deepseek/x（DeepSeek');
     expect(planner?.prompt).toContain('最多 4 个节点');
+    // 经验手册：Jev 判断属于图片类（计入这个任务），只附图片类的
+    expect(planner?.prompt).toContain('【这类任务的经验】');
+    expect(planner?.prompt).toContain('图片的经验');
+    expect(planner?.prompt).not.toContain('文档的经验');
+    expect(decisions.at(-1)?.headers['x-oasis-task-id']).toBe(task.id);
 
     await plannerDone(goodPlan);
     const detail = await service.get(OWNER, task.id);

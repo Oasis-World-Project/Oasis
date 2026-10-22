@@ -104,6 +104,7 @@ const settled: EventEnvelope[] = [];
 let blocked: string[] = [];
 const repo: CallsRepo = {
   start: async () => {},
+  get: async () => undefined,
   regionBlockedModels: async () => blocked,
   async finish(_id, outcome, event) {
     finished.push(outcome);

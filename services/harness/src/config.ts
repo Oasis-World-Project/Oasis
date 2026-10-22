@@ -18,8 +18,17 @@ export const harnessEnv = {
   SANDBOX_IMAGE: z.string().default('oasis/harness-sandbox-base:0.2.1-rc.2'),
   /** 沙箱所在的内部网络：不通外网，只能访问沙箱入口代理 */
   SANDBOX_NETWORK: z.string().default('oasis-sandbox'),
-  /** 沙箱里的 dsh 调模型用的地址（入口代理，只放行 chat completions 和决策两条路径） */
+  /** 沙箱里的 dsh 调模型、oasis-tool 调工具用的地址（入口代理，只放行几条 /run/v1/* 路径） */
   SANDBOX_MODEL_BASE_URL: z.url().default('http://sandbox-ingress:8080/v1'),
+  /** 沙箱装软件包时走的出口代理（只放行软件包仓库）；留空就不给沙箱任何出站通路 */
+  SANDBOX_EGRESS_PROXY: z
+    .string()
+    .default('http://sandbox-egress:8888')
+    .transform((value) => value || undefined)
+    .pipe(z.url().optional()),
+  /** 沙箱里 npm、pip 用的仓库；默认官方源，开发机在根目录 .env 里换成国内镜像站 */
+  SANDBOX_NPM_REGISTRY: z.url().default('https://registry.npmjs.org/'),
+  SANDBOX_PIP_INDEX_URL: z.url().default('https://pypi.org/simple'),
   SANDBOX_CPUS: z.coerce.number().positive().max(64).default(2),
   SANDBOX_MEMORY_MB: positiveInt.default(2048),
   SANDBOX_PIDS_LIMIT: positiveInt.default(512),

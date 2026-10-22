@@ -3,12 +3,15 @@ import { fileURLToPath } from 'node:url';
 import { postgresAndEventBus, startService } from '@oasis/service-kit';
 import { registerRoutes } from './api/routes.ts';
 import { createModelRepo } from './repo/model-repo.ts';
+import { loadPlaybooks } from './repo/playbooks.ts';
 import { createModelService } from './service/model-service.ts';
+
+const playbooks = await loadPlaybooks(fileURLToPath(new URL('../playbooks', import.meta.url)));
 
 await startService({
   name: 'agent',
   ...postgresAndEventBus,
   migrationsDir: fileURLToPath(new URL('../migrations', import.meta.url)),
   routes: (app, { resources }) =>
-    registerRoutes(app, createModelService(createModelRepo(resources.postgres.pool))),
+    registerRoutes(app, createModelService(createModelRepo(resources.postgres.pool)), playbooks),
 });

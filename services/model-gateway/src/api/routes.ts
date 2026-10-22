@@ -1,6 +1,8 @@
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import {
   ChatCompletionRequest,
+  ComputeHoldBody,
+  ComputeSettleBody,
   CreateRunKeyBody,
   DecisionRequest,
   ToolCallBody,
@@ -9,6 +11,7 @@ import { parseWith, requirePayerId, type ServiceApp } from '@oasis/service-kit';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { ChatService } from '../service/chat-service.ts';
+import type { ComputeService } from '../service/compute-service.ts';
 import type { DecisionService } from '../service/decision-service.ts';
 import type { Caller } from '../service/metering.ts';
 import type { RunKeyService } from '../service/run-key-service.ts';
@@ -17,6 +20,7 @@ import type { ToolService } from '../service/tool-service.ts';
 const KeyIdParams = z.object({ keyId: z.uuid() });
 const ToolParams = z.object({ key: z.string().min(1).max(50) });
 const JobParams = z.object({ jobId: z.uuid() });
+const CallIdParams = z.object({ callId: z.uuid() });
 /** 工具的参数里可能带着要转写的录音（base64），放宽请求体上限（入口代理是 50MB） */
 const TOOL_BODY = { bodyLimit: 40 * 1024 * 1024 };
 const Attribution = z.object({
@@ -52,6 +56,7 @@ export function registerRoutes(
     decisions: DecisionService;
     runKeys: RunKeyService;
     tools: ToolService;
+    compute: ComputeService;
     /** 在当前网络用不了的模型 */
     unavailableModels: () => Promise<string[]>;
   },
@@ -113,6 +118,17 @@ export function registerRoutes(
   app.get('/internal/v1/tools/jobs/:jobId', (request, reply) =>
     toolJob(internalCaller(request), request, reply),
   );
+
+  /** 算力（harness 用）：开沙箱前冻结，销毁后按实际时长结算 */
+  app.post('/internal/v1/compute', async (request, reply) => {
+    const body = parseWith(ComputeHoldBody, request.body);
+    return reply.code(201).send(await services.compute.hold({ ...body, requestId: request.id }));
+  });
+  app.post('/internal/v1/compute/:callId/settle', async (request, reply) => {
+    const { callId } = parseWith(CallIdParams, request.params);
+    await services.compute.settle(callId, parseWith(ComputeSettleBody, request.body));
+    return reply.code(204).send();
+  });
 
   /** 在当前网络用不了的模型（task 的规划员挑模型时排除它们） */
   app.get('/internal/v1/models/unavailable', async () => ({

@@ -23,16 +23,44 @@ const PROVIDER = 'oasis';
 export const isSessionLock = (path: string) => path.endsWith('.lock');
 
 /** 沙箱的环境变量。runKey 是密钥，调用方不得记进日志。 */
+/** 沙箱装软件包的通路：出口代理和仓库地址（ADR 0006 §7） */
+export interface SandboxPackages {
+  /** 出口代理；没有时沙箱完全不能出站 */
+  egressProxy: string | undefined;
+  npmRegistry: string;
+  pipIndexUrl: string;
+}
+
 export function sandboxEnv(input: {
   modelBaseUrl: string;
   runKey: string;
   model: string;
+  packages: SandboxPackages;
 }): Record<string, string> {
+  const { egressProxy, npmRegistry, pipIndexUrl } = input.packages;
+  // 调模型、工具的入口代理不走出口代理
+  const noProxy = [new URL(input.modelBaseUrl).hostname, 'localhost', '127.0.0.1'].join(',');
   return {
     OASIS_MODEL_BASE_URL: input.modelBaseUrl,
     OASIS_RUN_KEY: input.runKey,
+    // dsh 运行命令时会去掉名字像密钥的环境变量（含 KEY、TOKEN……），oasis-tool 拿不到 OASIS_RUN_KEY；
+    // 这把临时 Key 本来就是给这次运行里的 AI 用工具的，所以用一个不会被去掉的名字再给一份
+    OASIS_TOOL_AUTH: input.runKey,
     OASIS_MODEL: input.model,
     OASIS_MODELS: JSON.stringify([{ id: input.model, name: input.model }]),
+    ...(egressProxy
+      ? {
+          HTTP_PROXY: egressProxy,
+          HTTPS_PROXY: egressProxy,
+          http_proxy: egressProxy,
+          https_proxy: egressProxy,
+          NO_PROXY: noProxy,
+          no_proxy: noProxy,
+          npm_config_registry: npmRegistry,
+          PIP_INDEX_URL: pipIndexUrl,
+          UV_DEFAULT_INDEX: pipIndexUrl,
+        }
+      : {}),
   };
 }
 

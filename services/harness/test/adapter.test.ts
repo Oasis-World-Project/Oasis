@@ -81,9 +81,23 @@ describe('dsh 事件翻译', () => {
     expect(String(translated?.data.arguments).length).toBeLessThan(4_100);
   });
 
-  it('沙箱环境变量：模型列表只有这次运行用的型号', () => {
-    const env = sandboxEnv({ modelBaseUrl: 'http://ingress/v1', runKey: 'k', model: 'deepseek/x' });
+  it('沙箱环境变量：模型列表只有这次运行用的型号；没有出口代理就不给装包的通路', () => {
+    const packages = {
+      egressProxy: undefined,
+      npmRegistry: 'https://r/',
+      pipIndexUrl: 'https://p/simple',
+    };
+    const env = sandboxEnv({
+      modelBaseUrl: 'http://ingress/v1',
+      runKey: 'k',
+      model: 'deepseek/x',
+      packages,
+    });
     expect(JSON.parse(env.OASIS_MODELS ?? '')).toEqual([{ id: 'deepseek/x', name: 'deepseek/x' }]);
+    // dsh 运行命令时会去掉 OASIS_RUN_KEY，oasis-tool 用这一份
+    expect(env.OASIS_TOOL_AUTH).toBe('k');
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.npm_config_registry).toBeUndefined();
   });
 });
 

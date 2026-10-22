@@ -1,6 +1,6 @@
 // 规划员（ADR 0005 §4）的纯函数部分：给规划员的说明、规划门（检查它写的 out/plan.json）、按方案估算花费。
 // 规划员只排方案；方案对不对由代码检查，花费由代码按经验单价算，不让 AI 估。
-import type { CatalogEntry } from '@oasis/contracts/agent';
+import type { CatalogEntry, Playbook } from '@oasis/contracts/agent';
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { NodeKey, WorkflowPlan, type TaskSheet } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
@@ -27,6 +27,8 @@ export function plannerPrompt(input: {
   catalog: CatalogEntry[];
   /** 现在能用的外部工具 */
   tools: ToolEntry[];
+  /** 这类任务的经验手册（按任务单挑的，可以为空） */
+  playbooks: Pick<Playbook, 'content'>[];
   limits: PlannerLimits;
 }): string {
   const models = input.catalog
@@ -92,6 +94,11 @@ export function plannerPrompt(input: {
       '- goal 写清楚这个节点要做什么、产出写成什么文件；节点里的 AI 不会再问用户问题。',
       '- key 只用英文字母、数字、下划线、短横线。',
     ].join('\n'),
+    ...(input.playbooks.length
+      ? [
+          `【这类任务的经验】（参考，不是硬规定；和任务单冲突时以任务单为准）\n\n${input.playbooks.map((p) => p.content).join('\n\n---\n\n')}`,
+        ]
+      : []),
     `【交付】把方案写成 out/${PLAN_FILE}（只放 JSON），格式照下面的例子：\n${JSON.stringify(example, null, 2)}\n\n写完用一两句话说明你的安排。`,
   ].join('\n\n');
 }
@@ -171,10 +178,13 @@ export interface EstimateRates {
   workRun: number;
   /** 讨论里一次发言或汇总 */
   speechRun: number;
+  /** 每次运行（干活、发言、汇总都是一次沙箱运行）的算力 */
+  computeRun: number;
 }
 
 /**
- * 按方案估算花费：每个干活节点一次、讨论按发言次数 + 汇总，加上工具（预计次数 × 目录里的单价），
+ * 按方案估算花费：每个干活节点一次、讨论按发言次数 + 汇总（每次运行都加上算力），
+ * 加上工具（预计次数 × 目录里的单价），
  * 再留两成给重做和关卡退回
  */
 export function estimatePlan(
@@ -184,10 +194,11 @@ export function estimatePlan(
 ): number {
   const price = new Map(tools.map((t) => [t.key, t.estimateMicro]));
   const total = plan.nodes.reduce((sum, n) => {
-    if (n.kind === 'discussion')
-      return sum + (n.participants.length * n.rounds + 1) * rates.speechRun;
+    if (n.kind === 'discussion') {
+      return sum + (n.participants.length * n.rounds + 1) * (rates.speechRun + rates.computeRun);
+    }
     const toolCost = n.tools.reduce((s, t) => s + t.uses * (price.get(t.key) ?? 0), 0);
-    return sum + rates.workRun + toolCost;
+    return sum + rates.workRun + rates.computeRun + toolCost;
   }, 0);
   return Math.ceil(total * 1.2);
 }

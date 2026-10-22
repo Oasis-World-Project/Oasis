@@ -32,6 +32,8 @@ export const taskEnv = {
   /** 估算单价（微美元）：干活节点跑一次、讨论里一次发言或汇总（5.2 实测，以后用记账数据校准） */
   ESTIMATE_WORK_RUN_MICRO: z.coerce.number().int().positive().default(3_000),
   ESTIMATE_SPEECH_RUN_MICRO: z.coerce.number().int().positive().default(3_000),
+  /** 每次运行的沙箱算力（2 核 × 约 5 分钟 × $0.015/核时）；算力不计费时设为 0 */
+  ESTIMATE_COMPUTE_RUN_MICRO: z.coerce.number().int().nonnegative().default(2_500),
   /** 多久对账一次运行中的节点（防止 harness 的结束事件丢失） */
   RECONCILE_INTERVAL_MS: z.coerce.number().int().min(5_000).default(60_000),
 };

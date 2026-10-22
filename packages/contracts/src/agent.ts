@@ -52,3 +52,20 @@ export const CatalogEntry = z.object({
 });
 export type CatalogEntry = z.infer<typeof CatalogEntry>;
 export const Catalog = z.object({ models: z.array(CatalogEntry) });
+
+/**
+ * 场景经验手册（ADR 0006 §8）：每类场景一份 Markdown——这类任务一般怎么分工、用哪些工具、
+ * 交付物长什么样、常见的坑。规划员开工前按任务单挑一份附进说明。
+ */
+export const Playbook = z.object({
+  /** 文件名，如 images */
+  key: z.string(),
+  /** 第一行的标题，如「图片类」 */
+  name: z.string(),
+  /** 「适用」那一行：什么样的任务算这一类（给 Jev 判断用） */
+  when: z.string(),
+  /** 全文 */
+  content: z.string(),
+});
+export type Playbook = z.infer<typeof Playbook>;
+export const PlaybookList = z.object({ playbooks: z.array(Playbook) });

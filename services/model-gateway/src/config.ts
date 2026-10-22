@@ -60,6 +60,8 @@ export const modelGatewayEnv = {
   TOOL_JEV_MODEL: z.string().min(1).default('typesafe/jev-1.14'),
   /** 配音拿不到实际花费时每个字估多少（微美元） */
   TOOL_SPEECH_MICRO_PER_CHAR: z.coerce.number().int().nonnegative().default(20),
+  /** 沙箱算力每核每小时多少钱（微美元；按云服务器成本价约 $0.015）。为 0 时不计费 */
+  COMPUTE_PRICE_MICRO_PER_CORE_HOUR: z.coerce.number().int().nonnegative().default(15_000),
   /** 查不到价格时按这个金额冻结（$0.20） */
   FALLBACK_HOLD_MICRO: z.coerce.number().int().positive().default(200_000),
 };

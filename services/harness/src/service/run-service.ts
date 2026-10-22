@@ -6,13 +6,14 @@
 import { randomUUID } from 'node:crypto';
 import { RunFinished } from '@oasis/contracts/events';
 import type { RunBody, RunEventBody, RunTextsBody, StartRunBody } from '@oasis/contracts/harness';
-import { RunKeyCreated } from '@oasis/contracts/model-gateway';
+import { ComputeHold, RunKeyCreated } from '@oasis/contracts/model-gateway';
 import { createEnvelope, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import {
   connectAgent,
   isSessionLock,
   SANDBOX_PATHS,
   sandboxEnv,
+  type SandboxPackages,
   type AgentConnection,
 } from '../adapter/dsh.ts';
 import type { Executor, Sandbox } from '../executor/executor.ts';
@@ -133,8 +134,11 @@ export function createRunService(deps: {
   store: ObjectStore;
   modelGateway: ServiceClient;
   modelBaseUrl: string;
+  packages: SandboxPackages;
   maxConcurrent: number;
   timeoutMs: number;
+  /** 沙箱的 CPU 核数（算力按 时长 × 核数 计费） */
+  cores: number;
   outputMaxBytes: number;
   serviceName: string;
   logger: Logger;
@@ -230,6 +234,9 @@ export function createRunService(deps: {
     const release = await gate.acquire();
     let sandbox: Sandbox | undefined;
     let keyId: string | undefined;
+    // 算力计费：开沙箱前冻结，销毁后按沙箱实际存在的时长结算（单价为 0 时没有 callId）
+    let computeCallId: string | null = null;
+    let sandboxSince: number | undefined;
     const timer = setTimeout(
       () =>
         run.abort.abort(
@@ -267,6 +274,18 @@ export function createRunService(deps: {
       });
       keyId = key.keyId;
       await repo.update(id, { runKeyId: keyId });
+      ({ callId: computeCallId } = await deps.modelGateway.json('POST', '/internal/v1/compute', {
+        body: {
+          runId: id,
+          payerId: row.payerId,
+          taskId: row.taskId,
+          nodeId: row.nodeId,
+          cores: deps.cores,
+          maxMs: deps.timeoutMs,
+        },
+        requestId: id,
+        schema: ComputeHold,
+      }));
       stopped();
 
       const restored = await continuation(row);
@@ -277,9 +296,15 @@ export function createRunService(deps: {
         // 保证 out/ 目录存在且属于沙箱用户
         { path: `out/${KEEP_FILE}`, content: Buffer.alloc(0) },
       ];
+      sandboxSince = Date.now();
       sandbox = await executor.start({
         runId: id,
-        env: sandboxEnv({ modelBaseUrl: deps.modelBaseUrl, runKey: key.key, model: row.model }),
+        env: sandboxEnv({
+          modelBaseUrl: deps.modelBaseUrl,
+          runKey: key.key,
+          model: row.model,
+          packages: deps.packages,
+        }),
         files: [
           { dir: SANDBOX_PATHS.workdir, tar: await packFiles(files) },
           ...(restored.dshHome.length > 0
@@ -367,6 +392,15 @@ export function createRunService(deps: {
         await deps.modelGateway
           .json('POST', `/internal/run-keys/${keyId}/revoke`, { body: {}, requestId: id })
           .catch((err: unknown) => logger.warn({ err, runId: id }, '作废临时 Key 失败，等它过期'));
+      }
+      if (computeCallId) {
+        const elapsedMs = sandboxSince === undefined ? 0 : Date.now() - sandboxSince;
+        await deps.modelGateway
+          .json('POST', `/internal/v1/compute/${computeCallId}/settle`, {
+            body: { cores: deps.cores, elapsedMs },
+            requestId: id,
+          })
+          .catch((err: unknown) => logger.warn({ err, runId: id }, '算力结算失败，冻结将过期退回'));
       }
       release();
     }

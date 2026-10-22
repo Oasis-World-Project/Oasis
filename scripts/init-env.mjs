@@ -28,7 +28,8 @@ function render(lines, { fillSecrets, vars, rel }) {
     if (fillSecrets && m[2] === '' && SECRET_KEY.test(m[1]))
       return `${m[1]}=${randomBytes(18).toString('hex')}`;
     return line.replace(/\$\{([A-Z0-9_]+)\}/g, (_, key) => {
-      if (!vars || vars[key] === undefined || vars[key] === '') {
+      // 根目录里有这一项但空着（如没填的 TAVILY_API_KEY）就照样留空；没有这一项多半是写错了名字
+      if (!vars || vars[key] === undefined) {
         throw new Error(`${rel}/.env.example 引用了根目录 .env 里没有的变量 ${key}`);
       }
       return vars[key];

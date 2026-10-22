@@ -23,8 +23,11 @@ export type CallOutcome = Pick<
   | 'error'
 >;
 
+export type Call = typeof calls.$inferSelect;
+
 export interface CallsRepo {
   start(call: NewCall): Promise<void>;
+  get(id: string): Promise<Call | undefined>;
   /** 写结局；有事件时在同一个事务里写进发件箱 */
   finish(id: string, outcome: CallOutcome, event?: EventEnvelope): Promise<void>;
   /** 最近一次聊天或工具调用因为「地区不可用」失败的模型（之后没再成功过） */
@@ -36,6 +39,10 @@ export function createCallsRepo(pool: pg.Pool): CallsRepo {
   return {
     async start(call) {
       await db.insert(calls).values({ ...call, status: 'running' });
+    },
+    async get(id) {
+      const [row] = await db.select().from(calls).where(eq(calls.id, id));
+      return row;
     },
     async regionBlockedModels() {
       const result = await db.execute<{ model: string }>(sql`

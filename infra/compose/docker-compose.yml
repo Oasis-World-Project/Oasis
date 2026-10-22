@@ -141,8 +141,8 @@ services:
       timeout: 3s
       retries: 20
 
-  # 沙箱入口代理（ADR 0003 §6）：沙箱容器在内部网络 oasis-sandbox 里，不通外网，只能访问它；
-  # 它只放行 chat completions 和 Jev 决策两条路径，转到 model-gateway 的 /run/v1/*。
+  # 沙箱入口代理（ADR 0003 §6）：沙箱容器在内部网络 oasis-sandbox 里，不通外网，只能访问它和出口代理；
+  # 它只放行 chat completions、Jev 决策和工具（ADR 0006）几条路径，转到 model-gateway 的 /run/v1/*。
   # 本机开发时 model-gateway 跑在宿主机上，经 host.docker.internal 访问；pnpm stack:up 时改为容器里的 model-gateway。
   sandbox-ingress:
     image: oasis/sandbox-ingress:1.29.3
@@ -155,6 +155,21 @@ services:
     networks: [default, sandbox]
     healthcheck:
       test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # 沙箱出口代理（ADR 0006 §7）：沙箱装软件包时经它出去，只放行白名单里的软件包仓库（域名），其余一律拒绝。
+  # 开发机在国内，默认用国内镜像站；部署到海外后在 .env 里换回官方源（见根目录 .env.example）。
+  sandbox-egress:
+    image: oasis/sandbox-egress:1.11.2
+    build: ../images/sandbox-egress
+    pull_policy: build
+    environment:
+      SANDBOX_EGRESS_ALLOW_HOSTS: ${SANDBOX_EGRESS_ALLOW_HOSTS:-registry.npmjs.org,pypi.org,files.pythonhosted.org}
+    networks: [default, sandbox]
+    healthcheck:
+      test: ['CMD-SHELL', 'nc -z 127.0.0.1 8888']
       interval: 5s
       timeout: 3s
       retries: 20
@@ -294,6 +309,8 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?}
       DOCKER_SOCKET: /var/run/docker.sock
+      SANDBOX_NPM_REGISTRY: ${SANDBOX_NPM_REGISTRY:-https://registry.npmjs.org/}
+      SANDBOX_PIP_INDEX_URL: ${SANDBOX_PIP_INDEX_URL:-https://pypi.org/simple}
     # harness 要通过宿主机的 Docker 起沙箱容器（权限较大，只给 harness）。
     # socket 的属组在 Linux 上一般是 docker 组，用 DOCKER_SOCKET_GID 指定；Docker Desktop 上是 0。
     volumes:
@@ -305,6 +322,8 @@ services:
       seaweedfs:
         condition: service_healthy
       sandbox-ingress:
+        condition: service_healthy
+      sandbox-egress:
         condition: service_healthy
 
   model-gateway:

@@ -86,7 +86,8 @@ const say = (text: string) => process.stdout.write(`${text}\n`);
 
 async function request(path: string, init: RequestInit = {}): Promise<unknown> {
   const base = process.env.OASIS_MODEL_BASE_URL;
-  const key = process.env.OASIS_RUN_KEY;
+  // 在 dsh 的命令里只有 OASIS_TOOL_AUTH（OASIS_RUN_KEY 会被 dsh 去掉）
+  const key = process.env.OASIS_TOOL_AUTH ?? process.env.OASIS_RUN_KEY;
   if (!base || !key) throw new Error('这里不是 Oasis 的沙箱，用不了 oasis-tool');
   const response = await fetch(`${base.replace(/\/$/, '')}${path}`, {
     ...init,
@@ -170,6 +171,11 @@ export async function main(argv: string[]): Promise<void> {
 
 // 作为命令运行时（测试里只导入上面的函数）
 if (import.meta.main) {
+  // 输出被提前关掉（如 oasis-tool list | head）不算出错
+  process.stdout.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EPIPE') process.exit(0);
+    throw err;
+  });
   main(process.argv.slice(2)).catch((err: unknown) => {
     process.stderr.write(`oasis-tool 出错：${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);

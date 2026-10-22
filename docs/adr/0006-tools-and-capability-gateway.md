@@ -32,6 +32,7 @@
   `oasis-tool image.generate --prompt "……" --size 1920x1080 --out out/首屏效果图.png`
 - 不写 dsh 插件：工具和 dsh 解耦，换掉 dsh 也照样能用（「dsh 是可拆装的底座」）。
 - `oasis-tool` 只能连入口代理，带着本次运行的临时 Key；入口代理多放行一条路径 `/v1/tools/*`，转给 model-gateway。沙箱仍然碰不到任何服务的 `/internal`，也不直接连外网。
+- dsh 运行命令时会去掉名字像密钥的环境变量（名字里有 KEY、PASSWORD、SECRET、TOKEN），`OASIS_RUN_KEY` 到不了命令里。这把临时 Key 本来就是给这次运行里的 AI 用的（只能调模型和工具，花费记在这次运行上，运行结束即作废），所以 harness 另用 `OASIS_TOOL_AUTH` 再给一份，`oasis-tool` 读它（5.4 联调时发现）。
 - 生成的文件（图片、音频、视频）由 model-gateway 取回，原样传给 `oasis-tool`，写到 AI 指定的位置。
 
 ### 3. 能力网关（model-gateway）
@@ -55,22 +56,25 @@
 - 节点的说明里只列它被分到的工具名，并让它先运行 `oasis-tool list` 看用法（用法以目录为准，不在两处维护）。用户也可以在节点开跑前改它的工具。
 - 预估：每个工具在目录里有「一次大约多少钱」，规划员给每个节点估计会用几次，代码汇总进预估（仍然由代码算，不让 AI 估钱）。
 
-### 6. 算力计费（harness → billing）
+### 6. 算力计费（harness → model-gateway → billing）
 
-- harness 按容器实际运行时长 × CPU 核数 × 单价计费。单价 `COMPUTE_PRICE_MICRO_PER_CORE_HOUR` 默认按云服务器成本价，约每核每小时 $0.015；开发时可设为 0（为 0 就不计费）。
-- 开容器时按最长运行时间冻结，结束时按实际时长结算；也发一个花费事件，计入任务和节点。
+- harness 按沙箱容器实际存在的时长 × CPU 核数 × 单价计费。单价 `COMPUTE_PRICE_MICRO_PER_CORE_HOUR`（model-gateway）默认按云服务器成本价，每核每小时 $0.015；开发时可设为 0（为 0 就不冻结也不结算）。
+- 开容器前按最长运行时间冻结（`POST /internal/v1/compute`），容器销毁后按实际时长结算（`POST /internal/v1/compute/:callId/settle`）。
+- 实现时改为经 model-gateway 计量（原草案写的是 harness 直接找 billing）：冻结、结算、调用记录（`kind = compute`）、计入任务的 `model-gateway.call.settled` 事件都复用同一套，不在 harness 里再写一份。
+- task 的预估每次运行加上算力（`ESTIMATE_COMPUTE_RUN_MICRO`，默认 $0.0025 ≈ 2 核 × 5 分钟）。
 - 5.7 的预览环境、5.9 的云 GPU 用同一套。
 
 ### 7. 出口代理和软件包镜像
 
-- 新增出口代理 `oasis/sandbox-egress`：只放行软件包仓库（npm、PyPI），其他一律拒绝。
-- 仓库地址写在配置里。开发机（国内）用国内镜像站，部署到海外后换回官方源，只改配置（已记入「上线前要改的配置」）。
-- 沙箱里的 npm、pip 自动指向这些地址，AI 不用操心。
+- 新增出口代理 `oasis/sandbox-egress`（tinyproxy）：只放行 `SANDBOX_EGRESS_ALLOW_HOSTS` 里的域名（精确匹配），HTTPS 隧道只能连 443，其他一律拒绝。它和入口代理一样同时在内部网络和外网上。
+- 仓库地址写在根目录 `.env`：`SANDBOX_NPM_REGISTRY`、`SANDBOX_PIP_INDEX_URL`、`SANDBOX_EGRESS_ALLOW_HOSTS`。开发机（国内）用 npmmirror 和清华 PyPI 镜像，部署到海外后换回官方源，只改这三项（已记入「上线前要改的配置」）。代码和 compose 的默认值是官方源。
+- 沙箱镜像里装好 Python 3（含 pip、venv）和中文字体（Noto CJK）：节点里的 AI 常用 Python 处理文档和图片（python-docx、Pillow 排中文字）。镜像因此大了约 250MB。
+- harness 给沙箱设好 `HTTPS_PROXY`、`npm_config_registry`、`PIP_INDEX_URL`、`UV_DEFAULT_INDEX`，入口代理在 `NO_PROXY` 里；AI 照常 `npm install`、`pip install` 就行。`SANDBOX_EGRESS_PROXY` 留空时沙箱完全不能出站。
 
 ### 8. 场景经验手册
 
-- agent 里存一组经验手册（Markdown），每类场景一份：这类任务一般怎么分工、用哪些工具、交付物长什么样、常见的坑。
-- 规划员开工前用 Jev 判断任务单属于哪类场景（Choice 问题，几乎不花钱），把对应的手册附进说明。
+- agent 里存一组经验手册（`services/agent/playbooks/*.md`，第一行「# 名称」，第二行「> 适用：……」），每类场景一份：这类任务一般怎么分工、用哪些工具、交付物长什么样、常见的坑。task 经 `GET /internal/playbooks` 读取。
+- 规划员开工前用 Jev 判断任务单属于哪几类场景，把对应的手册附进说明。实现时从一个 Choice 问题改为每份手册一个「是否属于」（一次调用，几乎不花钱，计入任务）：一个任务常常同时有文字和图片（如「首页文案 + 首屏效果图」），只选一类会漏掉另一类。概率 ≥ 0.5 的附上，最多两份；查不到或出错就不附，规划照常进行。
 - 5.4 先写好机制和第一批手册（文档类、图片类）；之后每批场景（5.6–5.10）补齐各自的手册。
 
 ## 子步骤

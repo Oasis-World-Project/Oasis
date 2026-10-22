@@ -71,6 +71,34 @@ export const RunKeyCreated = z.object({
 });
 export type RunKeyCreated = z.infer<typeof RunKeyCreated>;
 
+// ---- 算力（ADR 0006 §6）：harness 开沙箱前冻结、结束后按实际时长结算，和模型、工具走同一套计量 ----
+
+/** 开沙箱前冻结：按最长运行时间算 */
+export const ComputeHoldBody = z.object({
+  runId: z.uuid(),
+  payerId: z.uuid(),
+  taskId: z.uuid().nullable(),
+  nodeId: z.uuid().nullable(),
+  /** 沙箱的 CPU 核数 */
+  cores: z.number().positive().max(64),
+  /** 最长运行多久（毫秒） */
+  maxMs: z
+    .number()
+    .int()
+    .positive()
+    .max(24 * 3600_000),
+});
+export type ComputeHoldBody = z.infer<typeof ComputeHoldBody>;
+
+/** 冻结的结果；算力单价为 0（不计费）时 callId 为 null，之后也不用结算 */
+export const ComputeHold = z.object({ callId: z.uuid().nullable() });
+
+/** 沙箱销毁后按实际时长结算 */
+export const ComputeSettleBody = z.object({
+  cores: z.number().positive().max(64),
+  elapsedMs: z.number().int().nonnegative(),
+});
+
 // ---- 工具（ADR 0006）：生图、配音、转写、联网搜索、网页抓取、Jev 判断……都经 model-gateway 计量 ----
 
 /** 目录里的一个工具：给规划员和节点里的 AI 看 */

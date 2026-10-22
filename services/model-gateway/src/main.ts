@@ -21,6 +21,7 @@ import { createCallsRepo } from './repo/calls-repo.ts';
 import { createRunKeysRepo } from './repo/run-keys-repo.ts';
 import { createToolJobsRepo } from './repo/tool-jobs-repo.ts';
 import { createChatService } from './service/chat-service.ts';
+import { createComputeService } from './service/compute-service.ts';
 import { createDecisionService } from './service/decision-service.ts';
 import { createMeter } from './service/metering.ts';
 import { createRunKeyService } from './service/run-key-service.ts';
@@ -76,9 +77,10 @@ await startService({
     return { postgres, eventBus, outbox, priceBook: priceBook.resource };
   },
   routes: (app, { config, resources, logger }) => {
+    const callsRepo = createCallsRepo(resources.postgres.pool);
     const meter = createMeter({
       billing: createServiceClient('billing', config.BILLING_URL, { timeoutMs: 5_000 }),
-      repo: createCallsRepo(resources.postgres.pool),
+      repo: callsRepo,
       logger,
     });
     const common = {
@@ -110,6 +112,11 @@ await startService({
           speechMicroPerChar: config.TOOL_SPEECH_MICRO_PER_CHAR,
         },
         logger,
+      }),
+      compute: createComputeService({
+        meter,
+        repo: callsRepo,
+        pricePerCoreHourMicro: config.COMPUTE_PRICE_MICRO_PER_CORE_HOUR,
       }),
       unavailableModels: meter.regionBlockedModels,
     });

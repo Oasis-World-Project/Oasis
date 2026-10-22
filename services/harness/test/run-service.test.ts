@@ -191,6 +191,17 @@ modelGateway.post('/internal/run-keys', async (request, reply) => {
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
   });
 });
+/** 假 model-gateway：算力冻结和结算 */
+const COMPUTE_CALL = '5e5e5e5e-5e5e-4e5e-8e5e-5e5e5e5e5e5e';
+const compute: { path: string; body: Record<string, unknown> }[] = [];
+modelGateway.post('/internal/v1/compute', async (request, reply) => {
+  compute.push({ path: 'hold', body: request.body as Record<string, unknown> });
+  return reply.code(201).send({ callId: COMPUTE_CALL });
+});
+modelGateway.post('/internal/v1/compute/:id/settle', async (request, reply) => {
+  compute.push({ path: 'settle', body: request.body as Record<string, unknown> });
+  return reply.code(204).send();
+});
 modelGateway.post('/internal/run-keys/:id/revoke', async (request, reply) => {
   revoked.push((request.params as { id: string }).id);
   return reply.code(204).send();
@@ -205,8 +216,14 @@ beforeAll(async () => {
     store,
     modelGateway: createServiceClient('model-gateway', url),
     modelBaseUrl: 'http://sandbox-ingress:8080/v1',
+    packages: {
+      egressProxy: 'http://sandbox-egress:8888',
+      npmRegistry: 'https://registry.npmmirror.com/',
+      pipIndexUrl: 'https://pypi.example/simple',
+    },
     maxConcurrent: 2,
     timeoutMs: 60_000,
+    cores: 2,
     outputMaxBytes: 1024 * 1024,
     serviceName: 'harness',
     logger: pino({ level: 'silent' }),
@@ -214,7 +231,7 @@ beforeAll(async () => {
 });
 afterAll(() => modelGateway.close());
 beforeEach(() => {
-  for (const list of [started, destroyed, events, outbox, issued, revoked, methods])
+  for (const list of [started, destroyed, events, outbox, issued, revoked, methods, compute])
     list.length = 0;
   rows.clear();
   stored.clear();
@@ -265,9 +282,18 @@ describe('一次 agent 运行', () => {
     expect(started[0]?.env).toMatchObject({
       OASIS_RUN_KEY: 'oasis_run_secret',
       OASIS_MODEL: base.model,
+      // 装软件包走出口代理；调模型和工具的入口代理不走
+      HTTPS_PROXY: 'http://sandbox-egress:8888',
+      NO_PROXY: 'sandbox-ingress,localhost,127.0.0.1',
+      npm_config_registry: 'https://registry.npmmirror.com/',
+      PIP_INDEX_URL: 'https://pypi.example/simple',
     });
     expect(destroyed).toEqual([run.id]);
     expect(revoked).toHaveLength(1);
+    // 算力：开沙箱前按最长时间冻结，销毁后按实际时长结算
+    expect(compute.map((c) => c.path)).toEqual(['hold', 'settle']);
+    expect(compute[0]?.body).toMatchObject({ runId: run.id, cores: 2, maxMs: 60_000 });
+    expect(compute[1]?.body).toMatchObject({ cores: 2, elapsedMs: expect.any(Number) });
     expect(outbox[0]).toMatchObject({
       type: 'harness.run.finished',
       data: {

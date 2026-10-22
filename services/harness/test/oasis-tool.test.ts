@@ -79,7 +79,7 @@ describe('oasis-tool 长任务', () => {
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'oasis-tool-'));
     vi.stubEnv('OASIS_MODEL_BASE_URL', `${await fake.listen({ port: 0, host: '127.0.0.1' })}/v1`);
-    vi.stubEnv('OASIS_RUN_KEY', 'k');
+    vi.stubEnv('OASIS_TOOL_AUTH', 'k');
     vi.stubEnv('OASIS_TOOL_WAIT_SECONDS', '1');
     vi.spyOn(process.stdout, 'write').mockImplementation((text) => {
       printed.push(String(text));

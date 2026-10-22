@@ -65,9 +65,11 @@ await startService({
         defaultModel: config.DEFAULT_NODE_MODEL,
         maxNodes: config.MAX_PLAN_NODES,
         maxAttempts: config.MAX_PLAN_ATTEMPTS,
+        decisionModel: config.GATE_MODEL,
         rates: {
           workRun: config.ESTIMATE_WORK_RUN_MICRO,
           speechRun: config.ESTIMATE_SPEECH_RUN_MICRO,
+          computeRun: config.ESTIMATE_COMPUTE_RUN_MICRO,
         },
       },
       logger,
