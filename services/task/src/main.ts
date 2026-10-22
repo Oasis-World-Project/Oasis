@@ -1,7 +1,13 @@
 // task：工作流控制面（ADR 0004）。管任务的节点图、状态和调度；节点在 harness 里执行，
-// 收到 harness.run.finished 就推进（讨论下一轮、过关卡），并定时和 harness 对账。
+// 收到 harness.run.finished 就推进（讨论下一轮、过关卡），收到 model-gateway.call.settled 就累加花费，
+// 并定时和 harness 对账。
 import { fileURLToPath } from 'node:url';
-import { HARNESS_STREAM, RunFinished } from '@oasis/contracts/events';
+import {
+  CallSettled,
+  HARNESS_STREAM,
+  MODEL_GATEWAY_STREAM,
+  RunFinished,
+} from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
   createServiceClient,
@@ -40,6 +46,7 @@ await startService({
       maxParallel: config.MAX_PARALLEL_NODES,
       maxRetries: config.MAX_NODE_RETRIES,
       maxReworks: config.MAX_NODE_REWORKS,
+      budgetMultiplier: config.BUDGET_MULTIPLIER,
       logger,
     });
     const runFinished = startEventConsumer({
@@ -53,6 +60,15 @@ await startService({
         if (data.taskId) await workflows.onRunFinished(data);
       },
     });
+    // 属于任务的模型调用结算了：累加花费，超过上限时暂停任务
+    const callSettled = startEventConsumer({
+      connection: eventBus.connection,
+      stream: MODEL_GATEWAY_STREAM,
+      durable: 'task-call-settled',
+      filterSubject: CallSettled.type,
+      logger,
+      handle: async (envelope) => workflows.onCallSettled(CallSettled.data.parse(envelope.data)),
+    });
     // 启动时对一次账，之后定时对账
     void workflows.reconcile(0).catch((err: unknown) => logger.warn({ err }, '启动对账失败'));
     const timer = setInterval(() => {
@@ -63,7 +79,7 @@ await startService({
       ready: async () => {},
       close: async () => clearInterval(timer),
     };
-    return { postgres, eventBus, runFinished, reconciler };
+    return { postgres, eventBus, runFinished, callSettled, reconciler };
   },
   routes: (app) => registerRoutes(app, workflows),
 });

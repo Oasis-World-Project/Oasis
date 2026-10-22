@@ -1,9 +1,9 @@
 // 任务的数据访问。对一个任务的所有调度决定都在一个事务里做：先锁住任务这一行，
 // 读出整张图，再写回改动。这样两个运行同时结束，也不会把同一个节点启动两次。
-import { and, asc, desc, eq, inArray, lt, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, lte } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { edges, nodeRuns, nodes, tasks } from './schema.ts';
+import { edges, nodeRuns, nodes, spendRecords, tasks } from './schema.ts';
 
 export type Task = typeof tasks.$inferSelect;
 export type Node = typeof nodes.$inferSelect;
@@ -18,10 +18,17 @@ export interface Snapshot {
   activeRuns: NodeRun[];
 }
 
-type TaskPatch = Partial<Pick<Task, 'status' | 'attention' | 'finishedAt' | 'spentMicro'>>;
+type TaskPatch = Partial<
+  Pick<Task, 'status' | 'attention' | 'finishedAt' | 'spentMicro' | 'budgetLimitMicro'>
+>;
 type NodePatch = Partial<
   Pick<
     Node,
+    | 'title'
+    | 'role'
+    | 'goal'
+    | 'model'
+    | 'spentMicro'
     | 'status'
     | 'attempts'
     | 'reworks'
@@ -36,6 +43,11 @@ type NodePatch = Partial<
   >
 >;
 type RunPatch = Partial<Pick<NodeRun, 'status' | 'summary' | 'error' | 'outputs' | 'finishedAt'>>;
+export type NewNode = Pick<
+  Node,
+  'id' | 'key' | 'title' | 'kind' | 'role' | 'goal' | 'model' | 'status' | 'config'
+>;
+type EdgeEnds = Pick<Edge, 'fromNodeId' | 'toNodeId'>;
 
 /** 事务里能做的写操作（写进去的同时也更新快照，后面的判断看到的是最新状态） */
 export interface Writer {
@@ -45,15 +57,24 @@ export interface Writer {
     run: Pick<NodeRun, 'id' | 'nodeId' | 'attempt' | 'purpose' | 'status' | 'meta' | 'request'>,
   ): Promise<void>;
   setRun(runId: string, patch: RunPatch): Promise<void>;
+  addNode(node: NewNode): Promise<void>;
+  /** 删除节点：它的进出连线留下断开的一端；两端都空了的连线一起删掉 */
+  deleteNode(nodeId: string): Promise<void>;
+  addEdge(edge: Pick<Edge, 'id'> & EdgeEnds): Promise<void>;
+  setEdge(edgeId: string, ends: EdgeEnds): Promise<void>;
+  deleteEdge(edgeId: string): Promise<void>;
+  /** 记一笔花费；这次调用已经记过时返回 false */
+  addSpend(record: {
+    callId: string;
+    nodeId: string | null;
+    chargedMicro: number;
+  }): Promise<boolean>;
 }
 
 export interface TaskStore {
   create(input: {
     task: Omit<Task, 'createdAt' | 'updatedAt' | 'finishedAt' | 'spentMicro' | 'attention'>;
-    nodes: Pick<
-      Node,
-      'id' | 'key' | 'title' | 'kind' | 'role' | 'goal' | 'model' | 'status' | 'config'
-    >[];
+    nodes: NewNode[];
     edges: Pick<Edge, 'id' | 'fromNodeId' | 'toNodeId'>[];
   }): Promise<void>;
   /** 读快照（不加锁，给查询接口用） */
@@ -156,6 +177,52 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
             await tx.update(nodeRuns).set(patch).where(eq(nodeRuns.id, runId));
             const run = snapshot.activeRuns.find((r) => r.id === runId);
             if (run) Object.assign(run, patch);
+          },
+          async addNode(node) {
+            const [row] = await tx
+              .insert(nodes)
+              .values({ ...node, taskId })
+              .returning();
+            if (row) snapshot.nodes.push(row);
+          },
+          async deleteNode(nodeId) {
+            // 连线的外键是 on delete set null：删掉节点，连线就留下断开的一端
+            await tx.delete(nodes).where(eq(nodes.id, nodeId));
+            await tx
+              .delete(edges)
+              .where(
+                and(eq(edges.taskId, taskId), isNull(edges.fromNodeId), isNull(edges.toNodeId)),
+              );
+            snapshot.nodes = snapshot.nodes.filter((n) => n.id !== nodeId);
+            for (const e of snapshot.edges) {
+              if (e.fromNodeId === nodeId) e.fromNodeId = null;
+              if (e.toNodeId === nodeId) e.toNodeId = null;
+            }
+            snapshot.edges = snapshot.edges.filter((e) => e.fromNodeId || e.toNodeId);
+          },
+          async addEdge(edge) {
+            const [row] = await tx
+              .insert(edges)
+              .values({ ...edge, taskId })
+              .returning();
+            if (row) snapshot.edges.push(row);
+          },
+          async setEdge(edgeId, ends) {
+            await tx.update(edges).set(ends).where(eq(edges.id, edgeId));
+            const edge = snapshot.edges.find((e) => e.id === edgeId);
+            if (edge) Object.assign(edge, ends);
+          },
+          async deleteEdge(edgeId) {
+            await tx.delete(edges).where(eq(edges.id, edgeId));
+            snapshot.edges = snapshot.edges.filter((e) => e.id !== edgeId);
+          },
+          async addSpend(record) {
+            const rows = await tx
+              .insert(spendRecords)
+              .values({ ...record, taskId })
+              .onConflictDoNothing()
+              .returning({ callId: spendRecords.callId });
+            return rows.length > 0;
           },
         };
         return fn(snapshot, writer);

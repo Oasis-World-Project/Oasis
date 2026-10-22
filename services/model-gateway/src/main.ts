@@ -1,8 +1,11 @@
 // model-gateway：所有模型调用（聊天、Jev 决策、沙箱里的 agent）的唯一出口，调用前冻结额度、调用后按实际花费结算。
 import { fileURLToPath } from 'node:url';
+import { MODEL_GATEWAY_STREAM } from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
   createServiceClient,
+  ensureStream,
+  startOutboxRelay,
   startService,
   type Logger,
   type ServiceResource,
@@ -59,7 +62,15 @@ await startService({
     });
     if (!provider.configured) ctx.logger.warn('没有配置 OPENROUTER_API_KEY：模型调用会返回 503');
     priceBook = startPriceBook(provider, ctx.config.PRICING_REFRESH_MS, ctx.logger);
-    return { ...(await connectPostgresAndEventBus(ctx)), priceBook: priceBook.resource };
+    const { postgres, eventBus } = await connectPostgresAndEventBus(ctx);
+    await ensureStream(eventBus.connection, MODEL_GATEWAY_STREAM);
+    // 属于任务的调用结算后发 model-gateway.call.settled（task 累加花费）
+    const outbox = startOutboxRelay({
+      pool: postgres.pool,
+      connection: eventBus.connection,
+      logger: ctx.logger,
+    });
+    return { postgres, eventBus, outbox, priceBook: priceBook.resource };
   },
   routes: (app, { config, resources, logger }) => {
     const meter = createMeter({

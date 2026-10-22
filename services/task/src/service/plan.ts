@@ -1,6 +1,6 @@
 // 工作流方案的校验，以及把方案变成库里的节点和连线（ADR 0004 §3、§9）。
 import { randomUUID } from 'node:crypto';
-import type { WorkflowPlan } from '@oasis/contracts/task';
+import type { PlanNode, WorkflowPlan } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
 
 /** 找环：返回环上的一个节点名，没有环返回 undefined（Kahn 拓扑排序剩下的就是环上的） */
@@ -51,18 +51,17 @@ export function validatePlan(plan: WorkflowPlan): void {
   if (problems.length > 0) throw new HttpError(400, 'invalid_plan', problems.join('；'));
 }
 
-/** 把方案变成节点和连线的行（节点名 → 生成的节点 ID） */
-export function planToRows(plan: WorkflowPlan) {
-  const ids = new Map(plan.nodes.map((n) => [n.key, randomUUID()]));
-  const nodes = plan.nodes.map((n) => ({
-    id: ids.get(n.key) as string,
+/** 方案里的一个节点 → 库里的一行（status 由调用方定：方案里的是等待，用户新建的是新建） */
+export function nodeRow(n: PlanNode, id: string, status: 'waiting' | 'draft') {
+  return {
+    id,
     key: n.key,
     title: n.title,
     kind: n.kind,
     role: n.role,
     goal: n.goal,
     model: n.model,
-    status: 'waiting' as const,
+    status,
     config: {
       checks: n.checks,
       expects: n.expects,
@@ -70,7 +69,13 @@ export function planToRows(plan: WorkflowPlan) {
         ? { participants: n.participants, rounds: n.rounds, round: 0, transcript: [] }
         : {}),
     },
-  }));
+  };
+}
+
+/** 把方案变成节点和连线的行（节点名 → 生成的节点 ID） */
+export function planToRows(plan: WorkflowPlan) {
+  const ids = new Map(plan.nodes.map((n) => [n.key, randomUUID()]));
+  const nodes = plan.nodes.map((n) => nodeRow(n, ids.get(n.key) as string, 'waiting'));
   const edges = plan.edges.map((e) => ({
     id: randomUUID(),
     fromNodeId: ids.get(e.from) as string,

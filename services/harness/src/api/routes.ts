@@ -1,4 +1,4 @@
-// harness 只有内部接口（gateway 不转发 /internal）：task 等服务用它启动运行、看进度、追问、取消。
+// harness 只有内部接口（gateway 不转发 /internal）：task 等服务用它启动运行、看进度、追问、停止、取消。
 import { RunMessageBody, StartRunBody } from '@oasis/contracts/harness';
 import { parseWith, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
@@ -44,6 +44,13 @@ export function registerRoutes(app: ServiceApp, runs: RunService): void {
     const { runId } = parseWith(RunParams, request.params);
     const { text } = parseWith(RunMessageBody, request.body);
     await runs.message(runId, text);
+    return reply.code(202).send();
+  });
+
+  /** 停止：存下产出和会话，之后可以用 continueFrom 接着做 */
+  app.post('/internal/runs/:runId/stop', async (request, reply) => {
+    const { runId } = parseWith(RunParams, request.params);
+    await runs.stop(runId);
     return reply.code(202).send();
   });
 

@@ -1,4 +1,4 @@
-// 调度决定（纯函数）：看一眼整张图，算出哪些节点该开跑、哪些断开了、任务是否该结束或需要用户处理。
+// 调度决定（纯函数）：看一眼整张图，算出哪些节点该开跑、哪些断开了或接好了、任务是否该结束、停下或需要用户处理。
 import type { Attention, NodeStatus, TaskStatus } from '@oasis/contracts/task';
 import type { Edge, Node } from '../repo/task-store.ts';
 
@@ -12,6 +12,8 @@ export interface ScheduleDecision {
   start: Node[];
   /** 新发现断开的节点（有进来的连线是空的） */
   blocked: Node[];
+  /** 断开的线已经接好、回到等待的节点 */
+  unblocked: Node[];
   /** 任务该进入的状态（不需要改时为 undefined） */
   task?: { status: TaskStatus; attention: Attention | null };
 }
@@ -28,32 +30,37 @@ export function decide(input: {
   const { nodes, edges } = input;
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const blocked: Node[] = [];
+  const unblocked: Node[] = [];
   const ready: Node[] = [];
+  // 新建（draft）的节点不自动开跑，等用户点运行
   for (const node of nodes.filter((n) => n.status === 'waiting' || n.status === 'blocked')) {
     const links = incoming(node, edges);
     if (links.some((e) => e.fromNodeId === null)) {
       if (node.status === 'waiting') blocked.push(node);
       continue;
     }
-    if (
-      node.status === 'waiting' &&
-      links.every((e) => byId.get(e.fromNodeId ?? '')?.status === 'succeeded')
-    ) {
+    if (node.status === 'blocked') unblocked.push(node);
+    if (links.every((e) => byId.get(e.fromNodeId ?? '')?.status === 'succeeded')) {
       ready.push(node);
     }
   }
-  if (input.taskStatus !== 'running') return { start: [], blocked };
+  if (input.taskStatus !== 'running') return { start: [], blocked, unblocked };
 
   const active = nodes.filter((n) => ACTIVE.includes(n.status)).length;
   const start = ready.slice(0, Math.max(0, input.maxParallel - active));
-  if (active > 0 || ready.length > 0) return { start, blocked };
+  if (active > 0 || ready.length > 0) return { start, blocked, unblocked };
 
-  // 没有在跑的、也没有能跑的了：要么全部完成，要么卡住了需要用户处理
+  // 没有在跑的、也没有能跑的了：全部完成；或者有节点停下 / 新建着，等用户点运行；或者卡住了需要用户处理
   if (nodes.every((n) => n.status === 'succeeded')) {
-    return { start, blocked, task: { status: 'succeeded', attention: null } };
+    return { start, blocked, unblocked, task: { status: 'succeeded', attention: null } };
   }
   const failed = nodes.find((n) => n.status === 'failed');
-  const broken = [...blocked, ...nodes.filter((n) => n.status === 'blocked')][0];
+  const broken = [...blocked, ...nodes.filter((n) => n.status === 'blocked')].find(
+    (n) => !unblocked.includes(n),
+  );
+  if (!failed && !broken && nodes.some((n) => n.status === 'stopped' || n.status === 'draft')) {
+    return { start, blocked, unblocked, task: { status: 'stopped', attention: null } };
+  }
   const attention: Attention = failed
     ? { reason: 'node_failed', nodeId: failed.id, message: `「${failed.title}」没能完成` }
     : broken
@@ -71,6 +78,7 @@ export function decide(input: {
   return {
     start,
     blocked,
+    unblocked,
     task: stuck || failed ? { status: 'needs_attention', attention } : undefined,
   };
 }

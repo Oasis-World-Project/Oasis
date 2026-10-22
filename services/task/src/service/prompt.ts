@@ -107,6 +107,14 @@ export function summaryPrompt(input: { context: NodeContext; transcript: Speech[
   ].join('\n\n');
 }
 
+/** 停止后继续：接着原会话做完；停下期间用户追加的要求一起带上 */
+export function resumePrompt(newNotes: string[]): string {
+  const notes = newNotes.length
+    ? `\n\n【用户新追加的要求】\n${newNotes.map((n) => `- ${n}`).join('\n')}`
+    : '';
+  return `你刚才被用户停下了。请接着把没做完的做完，已经做好的不用重做；成果照样写到 out/。${notes}`;
+}
+
 /** 关卡没过：接着原会话改一次 */
 export function reworkPrompt(unmet: string[]): string {
   return [

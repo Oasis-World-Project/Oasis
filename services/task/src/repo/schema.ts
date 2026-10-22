@@ -10,8 +10,10 @@ export interface NodeConfig {
   participants?: { name: string; model: string; stance: string }[];
   rounds?: number;
   round?: number;
-  /** 讨论已经把用户追加要求的前几条交给参与者了（之后的新要求在下一轮带上） */
+  /** 用户追加要求的前几条已经交给节点了（讨论在下一轮、停止后在继续时带上之后的新要求） */
   notesSeen?: number;
+  /** 节点现在的产出是哪次运行交出来的（下游拿这次运行的产出） */
+  outputsRunId?: string;
   /** 每条发言记下是哪次运行说的，下一轮这位参与者接着那次运行的会话 */
   transcript?: { round: number; name: string; text: string; runId: string }[];
 }
@@ -44,6 +46,7 @@ export const tasks = pgTable('tasks', {
   attention: jsonb('attention').$type<Attention>(),
   estimateMicro: micro('estimate_micro'),
   spentMicro: micro('spent_micro').notNull().default(0),
+  budgetLimitMicro: micro('budget_limit_micro'),
   createdAt: at('created_at').notNull().defaultNow(),
   updatedAt: at('updated_at').notNull().defaultNow(),
   finishedAt: at('finished_at'),
@@ -80,7 +83,8 @@ export const edges = pgTable('edges', {
   toNodeId: uuid('to_node_id'),
 });
 
-export type NodeRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type NodeRunStatus =
+  'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'stopped';
 export type NodeRunPurpose = 'work' | 'rework' | 'speech' | 'summary';
 export const nodeRuns = pgTable('node_runs', {
   id: uuid('id').primaryKey(),
@@ -96,4 +100,13 @@ export const nodeRuns = pgTable('node_runs', {
   request: jsonb('request').$type<RunRequestRecord>().notNull(),
   createdAt: at('created_at').notNull().defaultNow(),
   finishedAt: at('finished_at'),
+});
+
+/** 已经计入花费的模型调用（结算事件按调用 ID 只算一次） */
+export const spendRecords = pgTable('spend_records', {
+  callId: uuid('call_id').primaryKey(),
+  taskId: uuid('task_id').notNull(),
+  nodeId: uuid('node_id'),
+  chargedMicro: micro('charged_micro').notNull(),
+  createdAt: at('created_at').notNull().defaultNow(),
 });

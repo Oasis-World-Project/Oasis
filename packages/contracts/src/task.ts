@@ -1,4 +1,4 @@
-// task 的接口：提交工作流方案（内部），查看任务、取消、追问节点（对外，经 gateway 的 /api/task/v1/*）。
+// task 的接口：提交工作流方案（内部）；查看、运行、停止、取消任务，编辑节点和连线，追问节点（对外，经 gateway 的 /api/task/v1/*）。
 // 设计见 ADR 0004。
 import { z } from 'zod';
 import { RunOutputFile } from './harness.ts';
@@ -54,6 +54,7 @@ export const DiscussionPlanNode = z.object({
   model: z.string().min(1).max(200),
 });
 
+/** 方案里的节点；用户新建节点也用它（节点名在任务里不能重复，新建的节点不会自动开跑） */
 export const PlanNode = z.discriminatedUnion('kind', [WorkPlanNode, DiscussionPlanNode]);
 export type PlanNode = z.infer<typeof PlanNode>;
 
@@ -94,6 +95,8 @@ export const TaskStatus = z.enum([
 export type TaskStatus = z.infer<typeof TaskStatus>;
 
 export const NodeStatus = z.enum([
+  /** 用户新建的节点：不会自动开跑，点「运行」（整体或单个）后才加入 */
+  'draft',
   'waiting',
   'running',
   /** 过关卡中（5.2b） */
@@ -170,6 +173,8 @@ export const TaskBody = z.object({
   attention: Attention.nullable(),
   estimateMicro: z.number().int().nonnegative().nullable(),
   spentMicro: z.number().int().nonnegative(),
+  /** 花到这么多就暂停问用户（预估的 3 倍；用户选择继续后再加 3 倍预估）；没有预估时为 null */
+  budgetLimitMicro: z.number().int().nonnegative().nullable(),
   nodes: z.array(NodeBody),
   edges: z.array(EdgeBody),
   createdAt: z.iso.datetime(),
@@ -192,3 +197,38 @@ export const TaskList = z.object({ tasks: z.array(TaskSummary) });
 
 /** 对节点追问 / 补充要求 */
 export const NodeMessageBody = z.object({ text: z.string().trim().min(1).max(20_000) });
+
+/** 修改还没开始的节点：只改给出的字段；类型不能改，参与者和轮数只对讨论节点有效 */
+export const UpdateNodeBody = z
+  .object({
+    title: NodeCommon.title,
+    role: z.string().max(2000),
+    goal: NodeCommon.goal,
+    model: z.string().min(1).max(200),
+    checks: z.array(z.string().trim().min(1).max(300)).max(5),
+    expects: z.array(ExpectedFile).max(10),
+    participants: z.array(Participant).min(2).max(5),
+    rounds: z.number().int().min(1).max(5),
+  })
+  .partial()
+  .refine((body) => Object.keys(body).length > 0, '至少要改一项');
+export type UpdateNodeBody = z.infer<typeof UpdateNodeBody>;
+
+/** 新建连线：from 的产出交给 to */
+export const CreateEdgeBody = z.object({ from: z.uuid(), to: z.uuid() });
+
+/** 接上线头 / 改连线的一端 */
+export const UpdateEdgeBody = z
+  .object({ from: z.uuid(), to: z.uuid() })
+  .partial()
+  .refine((body) => body.from !== undefined || body.to !== undefined, '要给出起点或终点');
+export type UpdateEdgeBody = z.infer<typeof UpdateEdgeBody>;
+
+/**
+ * 任务「需要处理」时用户的选择：
+ * - continue：用现在的结果继续往下做（节点失败时跳过它；花费超限时提高上限接着做）
+ * - retry：让失败的节点再试（重做次数重新算）
+ * - cancel：取消任务
+ */
+export const DecisionBody = z.object({ choice: z.enum(['continue', 'retry', 'cancel']) });
+export type DecisionBody = z.infer<typeof DecisionBody>;

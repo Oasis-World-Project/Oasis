@@ -2,9 +2,11 @@
 // - 干活节点：一次运行；失败重做从头再来；关卡没过接着原会话改一次。
 // - 讨论节点：第一轮每位参与者各说一次（并行）→ 之后每轮每人接着自己的会话回应上一轮别人的发言
 //   → 最后汇总者写结论（之后和干活节点一样过关卡）。
+// - 停止后继续：干活节点接着停下的那次运行的会话；讨论节点把这一步没说完的重新说。
 import type { NodeConfig, NodeRunPurpose, RunMeta } from '../repo/schema.ts';
 import type { Node, NodeRun, Snapshot } from '../repo/task-store.ts';
 import {
+  resumePrompt,
   reworkPrompt,
   speechPrompt,
   summaryPrompt,
@@ -52,11 +54,11 @@ function contextOf(snapshot: Snapshot, node: Node): NodeContext {
   };
 }
 
-/** 上游节点最近一次成功运行的产出，放进 in/<上游节点名>/ */
+/** 上游节点交出的产出（交出它们的那次运行），放进 in/<上游节点名>/；没有产出的上游不放 */
 const inputsOf = (snapshot: Snapshot, node: Node) =>
   upstreamOf(snapshot, node)
-    .filter((u) => u.currentRunId)
-    .map((u) => ({ runId: u.currentRunId as string, as: u.key }));
+    .filter((u) => u.config.outputsRunId && u.outputs.length > 0)
+    .map((u) => ({ runId: u.config.outputsRunId as string, as: u.key }));
 
 const speechesOf = (config: NodeConfig): Speech[] =>
   (config.transcript ?? []).map(({ round, name, text }) => ({ round, name, text }));
@@ -120,6 +122,37 @@ export function firstStep(snapshot: Snapshot, node: Node): Step {
         meta: {},
       },
     ],
+    config: { ...node.config, notesSeen: node.userNotes.length },
+  };
+}
+
+/** 停止后继续 */
+export function resumeStep(snapshot: Snapshot, node: Node): Step {
+  const config = node.config;
+  if (node.kind === 'discussion') {
+    const current = config.round ?? 0;
+    if (current === 0) return firstStep(snapshot, node);
+    const spoke = new Set(
+      (config.transcript ?? []).filter((t) => t.round === current).map((t) => t.name),
+    );
+    const missing = (config.participants ?? []).filter((p) => !spoke.has(p.name));
+    if (missing.length === 0) return afterRound(snapshot, node);
+    return { requests: missing.map((p) => speech(snapshot, node, p.name, current)) };
+  }
+  // 还没真正跑起来就停了（没有运行）：从头做
+  if (!node.currentRunId) return firstStep(snapshot, node);
+  return {
+    requests: [
+      {
+        purpose: 'work',
+        model: node.model,
+        prompt: resumePrompt(node.userNotes.slice(config.notesSeen ?? 0)),
+        inputsFrom: [],
+        continueFrom: node.currentRunId,
+        meta: {},
+      },
+    ],
+    config: { ...config, notesSeen: node.userNotes.length },
   };
 }
 

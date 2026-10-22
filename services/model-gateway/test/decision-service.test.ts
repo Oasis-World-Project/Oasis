@@ -1,3 +1,4 @@
+import type { EventEnvelope } from '@oasis/contracts/events';
 import { createServiceClient } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
@@ -43,9 +44,13 @@ openrouter.post('/api/alpha/decisions', async (request, reply) => {
 
 const started: Parameters<CallsRepo['start']>[0][] = [];
 const finished: CallOutcome[] = [];
+const settledEvents: EventEnvelope[] = [];
 const repo: CallsRepo = {
   start: async (call) => void started.push(call),
-  finish: async (_id, outcome) => void finished.push(outcome),
+  async finish(_id, outcome, event) {
+    finished.push(outcome);
+    if (event) settledEvents.push(event);
+  },
 };
 
 let service: ReturnType<typeof createDecisionService>;
@@ -73,6 +78,7 @@ beforeEach(() => {
   upstreamBodies.length = 0;
   started.length = 0;
   finished.length = 0;
+  settledEvents.length = 0;
   upstreamStatus = 200;
 });
 
@@ -105,6 +111,22 @@ describe('Jev 决策', () => {
       status: 'succeeded',
       costSource: 'provider',
       promptTokens: 120,
+    });
+    expect(settledEvents).toEqual([]); // 不属于任务的调用不发结算事件
+  });
+
+  it('替任务调用（如关卡）：结算后发出 call.settled，带上任务、节点和实际扣费', async () => {
+    const TASK = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
+    await service.decide({
+      caller: { payerId: PAYER, taskId: TASK, nodeId: TASK },
+      requestId: 'r3',
+      body,
+      signal: new AbortController().signal,
+    });
+    expect(started[0]).toMatchObject({ taskId: TASK, nodeId: TASK });
+    expect(settledEvents[0]).toMatchObject({
+      type: 'model-gateway.call.settled',
+      data: { taskId: TASK, nodeId: TASK, runId: null, kind: 'decision', chargedMicro: 5 },
     });
   });
 

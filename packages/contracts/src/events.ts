@@ -34,12 +34,12 @@ const RunRef = {
   nodeId: z.uuid().nullable(),
 };
 
-/** agent 运行结束（成功、失败或取消）。task 据此推进节点状态。 */
+/** agent 运行结束（成功、失败、取消或停止）。task 据此推进节点状态。 */
 export const RunFinished = {
   type: 'harness.run.finished',
   data: z.object({
     ...RunRef,
-    status: z.enum(['succeeded', 'failed', 'cancelled']),
+    status: z.enum(['succeeded', 'failed', 'cancelled', 'stopped']),
     error: z.string().nullable(),
     outputs: z.array(z.object({ path: z.string(), size: z.number().int().nonnegative() })),
     /** AI 最后说的一句话 */
@@ -48,3 +48,30 @@ export const RunFinished = {
   }),
 } as const;
 export type RunFinishedData = z.infer<typeof RunFinished.data>;
+
+/** model-gateway 的事件都在这个 stream 里。 */
+export const MODEL_GATEWAY_STREAM = {
+  name: 'MODEL_GATEWAY',
+  subjects: ['model-gateway.>'],
+} as const;
+
+/**
+ * 一次属于某个任务的模型调用结算完了（聊天、Jev 决策都算）。task 据此累加任务和节点的花费，
+ * 超过上限时暂停任务。不属于任务的调用（私聊）不发。
+ */
+export const CallSettled = {
+  type: 'model-gateway.call.settled',
+  data: z.object({
+    callId: z.uuid(),
+    payerId: z.uuid(),
+    taskId: z.uuid(),
+    nodeId: z.uuid().nullable(),
+    runId: z.uuid().nullable(),
+    kind: z.enum(['chat', 'decision']),
+    model: z.string(),
+    /** 实际扣了多少（微美元） */
+    chargedMicro: z.number().int().nonnegative(),
+    settledAt: z.iso.datetime(),
+  }),
+} as const;
+export type CallSettledData = z.infer<typeof CallSettled.data>;

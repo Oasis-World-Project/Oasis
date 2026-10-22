@@ -1,7 +1,9 @@
 // 每一次上游调用（聊天、决策）共用的计量步骤：冻结额度并登记 → 按实际花费结算，或失败退回。
+// 属于某个任务的调用结算后，经发件箱发出 model-gateway.call.settled，task 据此累加花费。
 import { randomUUID } from 'node:crypto';
 import { HoldResult, SettleResult } from '@oasis/contracts/billing';
-import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
+import { CallSettled } from '@oasis/contracts/events';
+import { createEnvelope, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import type { CallKind, CallsRepo } from '../repo/calls-repo.ts';
 import type { CostSource, Usage } from './pricing.ts';
 
@@ -18,6 +20,8 @@ export interface MeteredCall {
   holdId: string;
   requestId: string;
   model: string;
+  kind: CallKind;
+  caller: Caller;
 }
 
 /** 把上游拒绝的原因归成几类，让用户看到能照着做的提示；细节只进日志和调用记录。 */
@@ -77,7 +81,14 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
         requestId: input.requestId,
         holdId,
       });
-      return { id, holdId, requestId: input.requestId, model: input.model };
+      return {
+        id,
+        holdId,
+        requestId: input.requestId,
+        model: input.model,
+        kind: input.kind,
+        caller: input.caller,
+      };
     },
 
     /** 调上游。还没产生费用就失败（连不上、被拒绝）时退回冻结，并抛出给调用方看的错误。 */
@@ -121,15 +132,34 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
           '结算失败，冻结将过期退回',
         );
       }
-      await repo.finish(call.id, {
-        status: error ? 'failed' : 'succeeded',
-        error: error ?? null,
-        promptTokens: usage?.prompt_tokens ?? null,
-        completionTokens: usage?.completion_tokens ?? null,
-        upstreamCostMicro: cost.costMicro,
-        chargedMicro,
-        costSource: cost.source,
-      });
+      const { caller } = call;
+      const settled =
+        caller.taskId && chargedMicro !== null
+          ? createEnvelope('model-gateway', CallSettled.type, {
+              callId: call.id,
+              payerId: caller.payerId,
+              taskId: caller.taskId,
+              nodeId: caller.nodeId ?? null,
+              runId: caller.runId ?? null,
+              kind: call.kind,
+              model: call.model,
+              chargedMicro,
+              settledAt: new Date().toISOString(),
+            })
+          : undefined;
+      await repo.finish(
+        call.id,
+        {
+          status: error ? 'failed' : 'succeeded',
+          error: error ?? null,
+          promptTokens: usage?.prompt_tokens ?? null,
+          completionTokens: usage?.completion_tokens ?? null,
+          upstreamCostMicro: cost.costMicro,
+          chargedMicro,
+          costSource: cost.source,
+        },
+        settled,
+      );
     },
   };
 }

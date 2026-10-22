@@ -49,6 +49,8 @@ export function createGate(deps: {
   /** 验收点检查：把节点要做的事、最后一句话和文字产出交给 Jev，每条验收点一个问题 */
   async function checkPoints(input: {
     payerId: string;
+    taskId: string;
+    nodeId: string;
     runId: string;
     goal: string;
     summary: string | null;
@@ -76,7 +78,12 @@ export function createGate(deps: {
     );
     const { answers } = await modelGateway.json('POST', '/internal/v1/decisions', {
       body: { model: deps.model, state, questions },
-      headers: { [OASIS_HEADERS.payerId]: input.payerId },
+      // 花费记在付费人账上，并计入这个任务和节点
+      headers: {
+        [OASIS_HEADERS.payerId]: input.payerId,
+        [OASIS_HEADERS.taskId]: input.taskId,
+        [OASIS_HEADERS.nodeId]: input.nodeId,
+      },
       schema: DecisionAnswers,
     });
     return input.checks.filter((_, i) => (answers[`c${i}`]?.noul ?? 1) < deps.threshold);
@@ -85,6 +92,8 @@ export function createGate(deps: {
   return {
     async check(input: {
       payerId: string;
+      taskId: string;
+      nodeId: string;
       runId: string;
       goal: string;
       summary: string | null;

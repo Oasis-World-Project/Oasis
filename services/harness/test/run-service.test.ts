@@ -229,7 +229,9 @@ async function until<T>(read: () => T | undefined, ms = 3_000): Promise<T> {
 const finished = (id: string) =>
   until(() => {
     const row = rows.get(id);
-    return row && ['succeeded', 'failed', 'cancelled'].includes(row.status) && outbox.length
+    return row &&
+      ['succeeded', 'failed', 'cancelled', 'stopped'].includes(row.status) &&
+      outbox.length
       ? row
       : undefined;
   });
@@ -364,6 +366,42 @@ describe('一次 agent 运行', () => {
     expect(destroyed).toContain(run.id);
     expect(revoked).toHaveLength(1);
     expect(outbox[0]).toMatchObject({ data: { status: 'cancelled' } });
+  });
+
+  it('停止：先存下已经做出来的产出和会话，再销毁沙箱；之后可以接着这次运行做', async () => {
+    const run = await service.start({ ...base, prompt: 'SLOW 慢慢做' });
+    await until(() => events.find((e) => e.kind === 'user_message'));
+    await service.stop(run.id);
+    const row = await finished(run.id);
+    expect(row).toMatchObject({
+      status: 'stopped',
+      error: '已停止',
+      outputs: [{ path: 'result.md' }],
+    });
+    expect(stored.has(`runs/${run.id}/session.tar`)).toBe(true);
+    expect(destroyed).toContain(run.id);
+    expect(revoked).toHaveLength(1);
+    expect(outbox[0]).toMatchObject({ data: { status: 'stopped' } });
+
+    outbox.length = 0;
+    const next = await service.start({ ...base, prompt: '接着做', continueFrom: run.id });
+    expect((await finished(next.id)).status).toBe('succeeded');
+    expect(methods).toContain('session/resume');
+  });
+
+  it('还在排队就被停止：不起沙箱，记为已停止', async () => {
+    const busy = [
+      await service.start({ ...base, prompt: 'SLOW 1' }),
+      await service.start({ ...base, prompt: 'SLOW 2' }),
+    ];
+    const queued = await service.start({ ...base, prompt: '排队的' });
+    await service.stop(queued.id);
+    for (const r of busy) await service.cancel(r.id);
+    const row = await until(() =>
+      rows.get(queued.id)?.status === 'stopped' ? rows.get(queued.id) : undefined,
+    );
+    expect(row.sessionKey).toBeNull();
+    expect(started.map((s) => s.runId)).not.toContain(queued.id);
   });
 
   it('同一个运行 ID 重复提交：幂等返回，不会起第二个沙箱', async () => {

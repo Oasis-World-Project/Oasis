@@ -17,6 +17,8 @@ export const taskEnv = {
   MAX_PARALLEL_NODES: z.coerce.number().int().positive().max(20).default(3),
   /** 节点失败后自动重做几次（ADR 0004：2，即最多跑 3 次） */
   MAX_NODE_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
+  /** 花费超过预估的几倍时暂停问用户（ADR 0004：3） */
+  BUDGET_MULTIPLIER: z.coerce.number().int().min(1).max(100).default(3),
   /** 多久对账一次运行中的节点（防止 harness 的结束事件丢失） */
   RECONCILE_INTERVAL_MS: z.coerce.number().int().min(5_000).default(60_000),
 };

@@ -4,6 +4,7 @@ import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type {
   Edge,
+  NewNode,
   Node,
   NodeRun,
   Snapshot,
@@ -17,12 +18,29 @@ import { createWorkflowService } from '../src/service/workflow-service.ts';
 const OWNER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 const STRANGER = '1d1d1d1d-1d1d-4d1d-8d1d-1d1d1d1d1d1d';
 
+const newNode = (n: NewNode, taskId: string): Node => ({
+  ...n,
+  taskId,
+  attempts: 0,
+  reworks: 0,
+  userNotes: [],
+  warning: null,
+  summary: null,
+  outputs: [],
+  currentRunId: null,
+  spentMicro: 0,
+  createdAt: new Date(),
+  startedAt: null,
+  finishedAt: null,
+});
+
 /** 内存版 TaskStore：同一个任务的事务排队执行，和行锁的效果一样 */
 function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
   const tasks = new Map<string, Task>();
   const nodes = new Map<string, Node>();
   const edges = new Map<string, Edge>();
   const runs = new Map<string, NodeRun>();
+  const spends = new Set<string>();
   const locks = new Map<string, Promise<unknown>>();
   const snapshot = (task: Task): Snapshot => ({
     task,
@@ -44,23 +62,7 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
         spentMicro: 0,
         attention: null,
       });
-      for (const n of input.nodes) {
-        nodes.set(n.id, {
-          ...n,
-          taskId: input.task.id,
-          attempts: 0,
-          reworks: 0,
-          userNotes: [],
-          warning: null,
-          summary: null,
-          outputs: [],
-          currentRunId: null,
-          spentMicro: 0,
-          createdAt: now,
-          startedAt: null,
-          finishedAt: null,
-        });
-      }
+      for (const n of input.nodes) nodes.set(n.id, newNode(n, input.task.id));
       for (const e of input.edges) edges.set(e.id, { ...e, taskId: input.task.id });
     },
     async get(taskId) {
@@ -96,6 +98,36 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
             snap.activeRuns.push(row);
           },
           setRun: async (id, patch) => void Object.assign(runs.get(id) as NodeRun, patch),
+          async addNode(n) {
+            const row = newNode(n, taskId);
+            nodes.set(n.id, row);
+            snap.nodes.push(row);
+          },
+          async deleteNode(id) {
+            nodes.delete(id);
+            snap.nodes = snap.nodes.filter((n) => n.id !== id);
+            for (const e of [...edges.values()].filter((x) => x.taskId === taskId)) {
+              if (e.fromNodeId === id) e.fromNodeId = null;
+              if (e.toNodeId === id) e.toNodeId = null;
+              if (!e.fromNodeId && !e.toNodeId) edges.delete(e.id);
+            }
+            snap.edges = [...edges.values()].filter((e) => e.taskId === taskId);
+          },
+          async addEdge(edge) {
+            const row = { ...edge, taskId };
+            edges.set(edge.id, row);
+            snap.edges.push(row);
+          },
+          setEdge: async (id, ends) => void Object.assign(edges.get(id) as Edge, ends),
+          async deleteEdge(id) {
+            edges.delete(id);
+            snap.edges = snap.edges.filter((e) => e.id !== id);
+          },
+          async addSpend({ callId }) {
+            if (spends.has(callId)) return false;
+            spends.add(callId);
+            return true;
+          },
         };
         return fn(snap, w);
       });
@@ -115,10 +147,11 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
   };
 }
 
-/** 假 harness：记下提交的运行、追问和取消；可以设置下一次提交返回 4xx 或连不上 */
+/** 假 harness：记下提交的运行、追问、停止和取消；可以设置下一次提交返回 4xx 或连不上 */
 const submitted: Record<string, unknown>[] = [];
 const messages: { runId: string; text: string }[] = [];
 const cancelled: string[] = [];
+const stopped: string[] = [];
 let harnessKnows = new Set<string>();
 let finishedRemote = new Map<string, Record<string, unknown>>();
 let rejectNext = false;
@@ -148,6 +181,10 @@ harness.post('/internal/runs/:id/messages', async (request, reply) => {
     runId: (request.params as { id: string }).id,
     text: (request.body as { text: string }).text,
   });
+  return reply.code(202).send();
+});
+harness.post('/internal/runs/:id/stop', async (request, reply) => {
+  stopped.push((request.params as { id: string }).id);
   return reply.code(202).send();
 });
 harness.post('/internal/runs/:id/cancel', async (request, reply) => {
@@ -195,6 +232,7 @@ beforeEach(() => {
   submitted.length = 0;
   messages.length = 0;
   cancelled.length = 0;
+  stopped.length = 0;
   harnessKnows = new Set();
   finishedRemote = new Map();
   rejectNext = false;
@@ -208,6 +246,7 @@ beforeEach(() => {
     maxParallel: 3,
     maxRetries: 2,
     maxReworks: 1,
+    budgetMultiplier: 3,
     logger: pino({ level: 'silent' }),
   });
 });
@@ -235,12 +274,13 @@ const discussion = (key: string, names: string[], rounds = 2) => ({
   rounds,
 });
 type PlanNode = ReturnType<typeof work> | ReturnType<typeof discussion>;
-const create = (keys: (string | PlanNode)[], edges: [string, string][]) =>
+const create = (keys: (string | PlanNode)[], edges: [string, string][], estimateMicro?: number) =>
   service.create({
     ownerId: OWNER,
     payerId: OWNER,
     title: '测试任务',
     brief: '做一份温馨小屋的介绍',
+    ...(estimateMicro ? { estimateMicro } : {}),
     plan: {
       nodes: keys.map((k) => (typeof k === 'string' ? work(k) : k)),
       edges: edges.map(([from, to]) => ({ from, to })),
@@ -261,7 +301,7 @@ const runOf = (key: string, task: { nodes: { id: string; key: string }[] }) =>
   runsOf(key, task).at(-1) as Submitted;
 const finish = (
   runId: string,
-  status: 'succeeded' | 'failed' | 'cancelled',
+  status: 'succeeded' | 'failed' | 'cancelled' | 'stopped',
   extra: Record<string, unknown> = {},
 ) =>
   service.onRunFinished({
@@ -296,7 +336,10 @@ describe('工作流调度', () => {
       outputs: [{ path: 'a.md', size: 3 }],
     });
     expect(submitted).toHaveLength(2); // B 还没完成，C 不跑
-    await finish(runOf('B', task).runId, 'succeeded', { summary: 'B 写好了' });
+    await finish(runOf('B', task).runId, 'succeeded', {
+      summary: 'B 写好了',
+      outputs: [{ path: 'b.md', size: 3 }],
+    });
 
     const c = runOf('C', task);
     expect(c.inputsFrom.map((i) => i.as).sort()).toEqual(['A', 'B']);
@@ -520,5 +563,237 @@ describe('讨论节点', () => {
     await finish(runOf('D', task).runId, 'failed');
     expect(await statusOf(task.id)).toMatchObject({ task: 'needs_attention', D: 'failed' });
     expect(cancelled).toEqual([yi?.runId]);
+  });
+});
+
+const keyOf = (task: { nodes: { id: string; key: string }[] }, key: string) =>
+  task.nodes.find((n) => n.key === key)?.id as string;
+const errorOf = async (action: () => Promise<unknown>) => {
+  const err = (await action().catch((e: unknown) => e)) as HttpError;
+  return { status: err.statusCode, message: err.message };
+};
+
+describe('停止与继续', () => {
+  it('停止整个任务：在跑的节点停下（harness 存下产出和会话）；停下时追问记下来；点运行接着原会话做', async () => {
+    const task = await create(['A', 'B'], [['A', 'B']]);
+    const a = runOf('A', task);
+    const after = await service.stop(OWNER, task.id);
+    expect(after.status).toBe('stopped');
+    expect(after.nodes.find((n) => n.key === 'A')?.status).toBe('stopped');
+    expect(stopped).toEqual([a.runId]);
+    await finish(a.runId, 'stopped'); // harness 停好了：不再推进
+    expect(await service.message(OWNER, task.id, keyOf(task, 'A'), '结尾加一句')).toBe('noted');
+
+    expect((await service.run(OWNER, task.id)).status).toBe('running');
+    const resumed = runOf('A', task);
+    expect(resumed.continueFrom).toBe(a.runId);
+    expect(resumed.prompt).toContain('你刚才被用户停下了');
+    expect(resumed.prompt).toContain('- 结尾加一句');
+    await finish(resumed.runId, 'succeeded', { outputs: [{ path: 'a.md', size: 1 }] });
+    expect(await statusOf(task.id)).toMatchObject({ A: 'succeeded', B: 'running' });
+  });
+
+  it('停止一个节点：其他支路照常跑；都跑不动了任务停下；单独运行它只跑它，不自动往下', async () => {
+    const task = await create(
+      ['A', 'B', 'C'],
+      [
+        ['A', 'C'],
+        ['B', 'C'],
+      ],
+    );
+    await service.stopNode(OWNER, task.id, keyOf(task, 'A'));
+    await finish(runOf('B', task).runId, 'succeeded');
+    expect(await statusOf(task.id)).toMatchObject({
+      task: 'stopped',
+      A: 'stopped',
+      B: 'succeeded',
+    });
+
+    await service.runNode(OWNER, task.id, keyOf(task, 'A'));
+    await finish(runOf('A', task).runId, 'succeeded');
+    expect(await statusOf(task.id)).toMatchObject({
+      task: 'stopped',
+      A: 'succeeded',
+      C: 'waiting',
+    });
+    expect(runsOf('C', task)).toHaveLength(0);
+
+    await service.run(OWNER, task.id);
+    expect(await statusOf(task.id)).toMatchObject({ task: 'running', C: 'running' });
+  });
+
+  it('讨论说到一半停下：继续时只让没说完的人重新说这一轮', async () => {
+    const task = await create([discussion('D', ['甲', '乙'])], []);
+    const [jia, yi] = runsOf('D', task);
+    await finish(jia?.runId as string, 'succeeded', { summary: '甲的看法' });
+    await service.stop(OWNER, task.id);
+    expect(stopped).toEqual([yi?.runId]);
+    await service.run(OWNER, task.id);
+    const again = runsOf('D', task).slice(2);
+    expect(again).toHaveLength(1);
+    expect(again[0]?.model).toBe('deepseek/乙');
+    expect(again[0]?.prompt).toContain('第 1 轮');
+  });
+
+  it('不在跑的节点不能停；已完成的节点不能再运行', async () => {
+    const task = await create(['A', 'B'], [['A', 'B']]);
+    expect((await errorOf(() => service.stopNode(OWNER, task.id, keyOf(task, 'B')))).status).toBe(
+      409,
+    );
+    await finish(runOf('A', task).runId, 'succeeded');
+    expect((await errorOf(() => service.runNode(OWNER, task.id, keyOf(task, 'A')))).status).toBe(
+      409,
+    );
+  });
+});
+
+describe('编辑节点和连线', () => {
+  it('删掉中间节点留下断口 → 整体运行报错列出问题 → 新建节点接上线头 → 运行后新节点拿到上游产出', async () => {
+    const task = await create(
+      ['A', 'B', 'C'],
+      [
+        ['A', 'B'],
+        ['B', 'C'],
+      ],
+    );
+    let detail = await service.deleteNode(OWNER, task.id, keyOf(task, 'B'));
+    const tail = detail.edges.find((e) => e.to === null) as { id: string };
+    const head = detail.edges.find((e) => e.from === null) as { id: string };
+    expect(detail.nodes.find((n) => n.key === 'C')?.status).toBe('blocked');
+
+    const invalid = await errorOf(() => service.run(OWNER, task.id));
+    expect(invalid.status).toBe(409);
+    expect(invalid.message).toContain('「C」前面的连线没接上');
+    expect(invalid.message).toContain('「A」后面的连线没接上');
+
+    detail = await service.createNode(OWNER, task.id, work('N', '新步骤'));
+    const n = keyOf(detail, 'N');
+    expect(detail.nodes.find((x) => x.key === 'N')?.status).toBe('draft');
+    await service.updateEdge(OWNER, task.id, tail.id, { to: n });
+    detail = await service.updateEdge(OWNER, task.id, head.id, { from: n });
+    expect(detail.nodes.find((x) => x.key === 'C')?.status).toBe('waiting');
+
+    // A 做完：新建的节点不会自己开跑，任务停下等用户点运行
+    await finish(runOf('A', task).runId, 'succeeded', { outputs: [{ path: 'a.md', size: 1 }] });
+    expect(await statusOf(task.id)).toMatchObject({ task: 'stopped', N: 'draft', C: 'waiting' });
+    await service.run(OWNER, task.id);
+    expect(await statusOf(task.id)).toMatchObject({ task: 'running', N: 'running' });
+    expect(runOf('N', detail).inputsFrom.map((i) => i.as)).toEqual(['A']);
+  });
+
+  it('改还没开始的节点会用在它的说明里；已经开始的不能改、不能删、不能往里接线；不能成环', async () => {
+    const task = await create(['A', 'B'], [['A', 'B']]);
+    await service.updateNode(OWNER, task.id, keyOf(task, 'B'), { goal: '写成一首诗' });
+    for (const action of [
+      () => service.updateNode(OWNER, task.id, keyOf(task, 'A'), { goal: '改' }),
+      () => service.deleteNode(OWNER, task.id, keyOf(task, 'A')),
+      () => service.createEdge(OWNER, task.id, keyOf(task, 'B'), keyOf(task, 'A')),
+    ]) {
+      expect((await errorOf(action)).status).toBe(409);
+    }
+    const c = keyOf(await service.createNode(OWNER, task.id, work('C')), 'C');
+    await service.createEdge(OWNER, task.id, keyOf(task, 'B'), c);
+    const cycle = await errorOf(() => service.createEdge(OWNER, task.id, c, keyOf(task, 'B')));
+    expect(cycle).toMatchObject({ status: 409, message: '连上之后工作流会成环' });
+    expect((await errorOf(() => service.updateNode(OWNER, task.id, c, { rounds: 3 }))).status).toBe(
+      400,
+    );
+
+    await finish(runOf('A', task).runId, 'succeeded');
+    expect(runOf('B', task).prompt).toContain('写成一首诗');
+  });
+
+  it('任务结束后不能再改', async () => {
+    const task = await create(['A'], []);
+    await service.cancel(OWNER, task.id);
+    const err = await errorOf(() => service.createNode(OWNER, task.id, work('X')));
+    expect(err).toMatchObject({ status: 409 });
+  });
+});
+
+describe('需要处理时三选一', () => {
+  const failThrice = async (task: { nodes: { id: string; key: string }[] }, key: string) => {
+    for (let i = 0; i < 3; i++) await finish(runOf(key, task).runId, 'failed');
+  };
+
+  it('节点失败 → 用现在的结果继续：它算完成并留提醒，下游照常跑（拿不到它的产出）', async () => {
+    const task = await create(['A', 'B'], [['A', 'B']]);
+    await failThrice(task, 'A');
+    const detail = await service.decide(OWNER, task.id, { choice: 'continue' });
+    expect(detail.status).toBe('running');
+    expect(detail.nodes.find((n) => n.key === 'A')).toMatchObject({
+      status: 'succeeded',
+      warning: '没能完成，按你的选择用现有的结果继续往下做',
+    });
+    expect(runOf('B', task).inputsFrom).toEqual([]);
+  });
+
+  it('节点失败 → 再试：重做次数重新算', async () => {
+    const task = await create(['A'], []);
+    await failThrice(task, 'A');
+    await service.decide(OWNER, task.id, { choice: 'retry' });
+    expect((await service.get(OWNER, task.id)).nodes[0]).toMatchObject({
+      status: 'running',
+      attempts: 1,
+    });
+    expect(submitted).toHaveLength(4);
+  });
+
+  it('连线断开时只能接线或取消；不需要处理时不能选', async () => {
+    const task = await create(
+      ['A', 'B', 'C'],
+      [
+        ['A', 'B'],
+        ['B', 'C'],
+      ],
+    );
+    expect(
+      (await errorOf(() => service.decide(OWNER, task.id, { choice: 'continue' }))).status,
+    ).toBe(409);
+    await service.deleteNode(OWNER, task.id, keyOf(task, 'B'));
+    await finish(runOf('A', task).runId, 'succeeded');
+    const detail = await service.get(OWNER, task.id);
+    expect(detail).toMatchObject({
+      status: 'needs_attention',
+      attention: { reason: 'workflow_broken', message: '「C」前面的连线断开了' },
+    });
+    expect(await errorOf(() => service.decide(OWNER, task.id, { choice: 'retry' }))).toMatchObject({
+      status: 409,
+      message: '工作流的连线断开了：先把线接好再点运行，或者取消任务',
+    });
+    expect((await service.decide(OWNER, task.id, { choice: 'cancel' })).status).toBe('cancelled');
+  });
+});
+
+describe('花费', () => {
+  const settle = (taskId: string, nodeId: string, callId: string, chargedMicro: number) =>
+    service.onCallSettled({ callId, taskId, nodeId, chargedMicro });
+  const CALL = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
+
+  it('结算事件累加到任务和节点（同一次调用只算一次）；超过预估 3 倍就停下所有节点问用户', async () => {
+    const task = await create(['A', 'B'], [], 1_000);
+    expect(task.budgetLimitMicro).toBe(3_000);
+    await settle(task.id, keyOf(task, 'A'), CALL(1), 2_000);
+    await settle(task.id, keyOf(task, 'A'), CALL(1), 2_000);
+    let detail = await service.get(OWNER, task.id);
+    expect(detail.spentMicro).toBe(2_000);
+    expect(detail.nodes.find((n) => n.key === 'A')?.spentMicro).toBe(2_000);
+
+    await settle(task.id, keyOf(task, 'B'), CALL(2), 1_500);
+    detail = await service.get(OWNER, task.id);
+    expect(detail.status).toBe('needs_attention');
+    expect(detail.attention).toMatchObject({
+      reason: 'over_budget',
+      message: '已经花了 $0.0035，超过了预估（$0.001）的 3 倍',
+    });
+    expect(detail.nodes.map((n) => n.status)).toEqual(['stopped', 'stopped']);
+    expect(stopped.sort()).toEqual([runOf('A', task).runId, runOf('B', task).runId].sort());
+
+    expect((await errorOf(() => service.decide(OWNER, task.id, { choice: 'retry' }))).status).toBe(
+      409,
+    );
+    detail = await service.decide(OWNER, task.id, { choice: 'continue' });
+    expect(detail).toMatchObject({ status: 'running', budgetLimitMicro: 6_500 });
+    expect(runOf('A', task).continueFrom).toBeDefined();
   });
 });

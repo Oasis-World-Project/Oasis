@@ -34,9 +34,12 @@ export type MetaBody = z.infer<typeof MetaBody>;
  * 服务之间约定的请求头。x-oasis-* 只能由内部写入：gateway 会丢弃客户端带来的同名头。
  * - userId：gateway 校验会话后写入的当前用户
  * - payerId：模型调用由谁付费（私聊是主人，群聊是群主）
+ * - taskId / nodeId：内部服务替某个任务的某个节点调用模型时写明归属（计入任务花费）
  */
 export const OASIS_HEADERS = {
   userId: 'x-oasis-user-id',
   payerId: 'x-oasis-payer-id',
+  taskId: 'x-oasis-task-id',
+  nodeId: 'x-oasis-node-id',
   requestId: 'x-request-id',
 } as const;

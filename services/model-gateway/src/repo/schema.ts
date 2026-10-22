@@ -1,5 +1,5 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
-import { bigint, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
@@ -34,4 +34,13 @@ export const runKeys = pgTable('run_keys', {
   expiresAt: at('expires_at').notNull(),
   revokedAt: at('revoked_at'),
   createdAt: at('created_at').notNull().defaultNow(),
+});
+
+/** 事务发件箱（列名由 service-kit 的 startOutboxRelay 约定） */
+export const outbox = pgTable('outbox', {
+  id: uuid('id').primaryKey(),
+  subject: text('subject').notNull(),
+  payload: jsonb('payload').notNull(),
+  createdAt: at('created_at').notNull().defaultNow(),
+  publishedAt: at('published_at'),
 });

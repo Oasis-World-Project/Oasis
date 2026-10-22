@@ -1,6 +1,8 @@
 // 一次 agent 运行的完整生命周期：
 // 排队 → 签发临时 Key → 起沙箱、放入输入 → dsh 握手、交任务 → 记录事件 → 等空闲（期间可追问）
 // → 取出产出和会话存档存进对象存储 → 销毁沙箱、作废 Key → 写结局并发出 harness.run.finished。
+// 用户「停止」时不等 dsh 说完：直接从还在跑的沙箱里取出产出和会话存档，再销毁沙箱；
+// 之后用 continueFrom 接着这次运行，AI 记得停下之前做到哪了（ADR 0004 §4）。
 import { randomUUID } from 'node:crypto';
 import { RunFinished } from '@oasis/contracts/events';
 import type { RunBody, RunEventBody, RunTextsBody, StartRunBody } from '@oasis/contracts/harness';
@@ -39,10 +41,17 @@ interface LiveRun {
   lastText?: string;
   /** 事件按顺序写库 */
   writes: Promise<void>;
+  /** 被停止时从沙箱里取出的产出和会话存档 */
+  saved?: Promise<Saved>;
   done: Promise<void>;
 }
 
-/** 取消、超时、服务关闭时中止运行的原因 */
+interface Saved {
+  outputs?: { key: string; files: { path: string; size: number }[] };
+  session?: { key: string; files: { path: string; size: number }[] };
+}
+
+/** 取消、停止、超时、服务关闭时中止运行的原因 */
 class StopRun extends Error {
   readonly status: Status;
   constructor(status: Status, message: string) {
@@ -50,6 +59,13 @@ class StopRun extends Error {
     this.status = status;
   }
 }
+
+/** 存下来的产出和会话 → 运行结局里的字段 */
+const savedOutcome = (saved: Saved) => ({
+  outputs: saved.outputs?.files.filter((f) => f.path !== KEEP_FILE) ?? [],
+  outputKey: saved.outputs?.key ?? null,
+  sessionKey: saved.session?.key ?? null,
+});
 
 function toRunBody(run: Run): RunBody {
   return {
@@ -134,6 +150,18 @@ export function createRunService(deps: {
     if (files.length === 0) return undefined;
     await store.put(key, tar, 'application/x-tar');
     return { key, files };
+  }
+
+  /** 取出产出和会话存档（会话存档失败不影响结果） */
+  async function save(sandbox: Sandbox, id: string): Promise<Saved> {
+    const outputs = await archive(sandbox, SANDBOX_PATHS.outputs, `runs/${id}/outputs.tar`);
+    const session = await archive(sandbox, SANDBOX_PATHS.sessions, `runs/${id}/session.tar`).catch(
+      (err: unknown) => {
+        logger.warn({ err, runId: id }, '会话存档失败（不影响运行结果）');
+        return undefined;
+      },
+    );
+    return { outputs, session };
   }
 
   /** 上游运行的产出：解出来放到 in/<as>/ 下 */
@@ -233,7 +261,19 @@ export function createRunService(deps: {
         ],
       });
       const box = sandbox;
-      run.abort.signal.addEventListener('abort', () => void box.destroy(), { once: true });
+      run.abort.signal.addEventListener(
+        'abort',
+        () => {
+          const reason: unknown = run.abort.signal.reason;
+          if (reason instanceof StopRun && reason.status === 'stopped') {
+            // 停止：先把已经做出来的东西存下来，再销毁沙箱
+            run.saved = save(box, id).finally(() => void box.destroy());
+          } else {
+            void box.destroy();
+          }
+        },
+        { once: true },
+      );
       await repo.update(id, { containerId: sandbox.id, status: 'running', startedAt: new Date() });
 
       let stderrTail = '';
@@ -265,27 +305,24 @@ export function createRunService(deps: {
       const failure = await settle(run, agent);
       stopped();
 
-      const outputs = await archive(sandbox, SANDBOX_PATHS.outputs, `runs/${id}/outputs.tar`);
-      const session = await archive(
-        sandbox,
-        SANDBOX_PATHS.sessions,
-        `runs/${id}/session.tar`,
-      ).catch((err: unknown) => {
-        logger.warn({ err, runId: id }, '会话存档失败（不影响运行结果）');
-        return undefined;
-      });
+      const saved = await save(sandbox, id);
       await agent.shutdown().catch(() => undefined);
       Object.assign(outcome, {
         status: failure ? 'failed' : 'succeeded',
         error: failure ?? null,
-        outputs: outputs?.files.filter((f) => f.path !== KEEP_FILE) ?? [],
-        outputKey: outputs?.key ?? null,
-        sessionKey: session?.key ?? null,
+        ...savedOutcome(saved),
       });
     } catch (err) {
       const stop = err instanceof StopRun ? err : run.abort.signal.reason;
       if (stop instanceof StopRun) {
         Object.assign(outcome, { status: stop.status, error: stop.message });
+        if (run.saved) {
+          const saved = await run.saved.catch((saveErr: unknown) => {
+            logger.warn({ err: saveErr, runId: id }, '停止时保存产出失败');
+            return {};
+          });
+          Object.assign(outcome, savedOutcome(saved));
+        }
       } else {
         logger.error({ err, runId: id }, '运行失败');
         outcome.error = err instanceof Error ? err.message : String(err);
@@ -311,7 +348,7 @@ export function createRunService(deps: {
 
   async function finish(row: Run, outcome: Omit<RunOutcome, 'finishedAt'>) {
     const finishedAt = new Date();
-    const status = outcome.status as 'succeeded' | 'failed' | 'cancelled';
+    const status = outcome.status as 'succeeded' | 'failed' | 'cancelled' | 'stopped';
     const event = createEnvelope(deps.serviceName, RunFinished.type, {
       runId: row.id,
       payerId: row.payerId,
@@ -352,7 +389,9 @@ export function createRunService(deps: {
       let previous: Run | undefined;
       if (body.continueFrom) {
         previous = await repo.get(body.continueFrom);
-        const ended = ['succeeded', 'failed', 'cancelled'].includes(previous?.status ?? '');
+        const ended = ['succeeded', 'failed', 'cancelled', 'stopped'].includes(
+          previous?.status ?? '',
+        );
         if (previous?.payerId !== body.payerId || !ended || !previous.sessionKey) {
           throw new HttpError(
             409,
@@ -448,6 +487,16 @@ export function createRunService(deps: {
       }
       run.prompts += 1;
       await run.agent.prompt(text);
+    },
+
+    /**
+     * 停止：排队中的不再开始；运行中的先存下产出和会话再销毁沙箱，之后可以接着做。
+     * 已经在收尾（马上就成功了）或已结束的不受影响，不报错。
+     */
+    async stop(id: string): Promise<void> {
+      await owned(id);
+      const run = live.get(id);
+      if (run && !run.closing) run.abort.abort(new StopRun('stopped', '已停止'));
     },
 
     /** 取消：排队中的不再开始，运行中的立即销毁沙箱。已结束的取消不报错。 */

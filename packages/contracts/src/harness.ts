@@ -1,4 +1,4 @@
-// harness 的内部接口（只给 task 等内部服务用，gateway 不转发）：启动一次 agent 运行、查进度、追问、取消。
+// harness 的内部接口（只给 task 等内部服务用，gateway 不转发）：启动一次 agent 运行、查进度、追问、停止、取消。
 import { z } from 'zod';
 
 export const RunStatus = z.enum([
@@ -8,6 +8,8 @@ export const RunStatus = z.enum([
   'succeeded',
   'failed',
   'cancelled',
+  /** 用户点了停止：已经做出来的产出和会话都存下了，可以用 continueFrom 接着做 */
+  'stopped',
 ]);
 export type RunStatus = z.infer<typeof RunStatus>;
 

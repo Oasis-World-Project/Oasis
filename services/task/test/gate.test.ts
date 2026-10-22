@@ -37,8 +37,12 @@ function fakeClient(answer: (path: string, body: unknown) => unknown) {
 }
 
 const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
+const TASK = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
+const NODE = '3c3c3c3c-3c3c-4c3c-8c3c-3c3c3c3c3c3c';
 const input = {
   payerId: PAYER,
+  taskId: TASK,
+  nodeId: NODE,
   runId: 'run-1',
   goal: '写一份介绍',
   summary: '写好了',
@@ -69,7 +73,11 @@ describe('关卡的验收点检查', () => {
       body: { state: string[]; questions: object };
       headers: object;
     };
-    expect(call.headers).toEqual({ 'x-oasis-payer-id': PAYER });
+    expect(call.headers).toEqual({
+      'x-oasis-payer-id': PAYER,
+      'x-oasis-task-id': TASK,
+      'x-oasis-node-id': NODE,
+    });
     expect(Object.keys(call.body.questions)).toEqual(['c0', 'c1']);
     expect(call.body.state.join('\n')).toContain('欢迎光临');
   });
