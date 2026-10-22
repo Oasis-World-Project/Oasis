@@ -18,6 +18,8 @@ export const runs = pgTable('runs', {
   outputs: jsonb('outputs').$type<RunOutputFile[]>().notNull().default([]),
   outputKey: text('output_key'),
   sessionKey: text('session_key'),
+  summary: text('summary'),
+  inputsFrom: jsonb('inputs_from').$type<{ runId: string; as: string }[]>().notNull().default([]),
   createdAt: at('created_at').notNull().defaultNow(),
   startedAt: at('started_at'),
   finishedAt: at('finished_at'),

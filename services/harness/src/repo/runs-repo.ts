@@ -8,10 +8,13 @@ export type Run = typeof runs.$inferSelect;
 export type RunEvent = typeof runEvents.$inferSelect;
 type NewRun = Pick<
   typeof runs.$inferInsert,
-  'id' | 'payerId' | 'taskId' | 'nodeId' | 'model' | 'prompt'
+  'id' | 'payerId' | 'taskId' | 'nodeId' | 'model' | 'prompt' | 'inputsFrom'
 >;
 type RunPatch = Partial<Pick<Run, 'status' | 'error' | 'containerId' | 'runKeyId' | 'startedAt'>>;
-export type RunOutcome = Pick<Run, 'status' | 'error' | 'outputs' | 'outputKey' | 'sessionKey'> & {
+export type RunOutcome = Pick<
+  Run,
+  'status' | 'error' | 'outputs' | 'outputKey' | 'sessionKey' | 'summary'
+> & {
   finishedAt: Date;
 };
 

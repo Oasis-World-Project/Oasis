@@ -1,6 +1,7 @@
 // 对象存储（S3 兼容；本地是 SeaweedFS）：存运行的产出和 dsh 会话存档。
 import {
   CreateBucketCommand,
+  GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
   S3Client,
@@ -9,6 +10,7 @@ import type { ServiceResource } from '@oasis/service-kit';
 
 export interface ObjectStore {
   put(key: string, body: Buffer, contentType: string): Promise<void>;
+  get(key: string): Promise<Buffer>;
 }
 
 export function createObjectStore(options: {
@@ -31,6 +33,11 @@ export function createObjectStore(options: {
         await client.send(
           new PutObjectCommand({ Bucket, Key: key, Body: body, ContentType: contentType }),
         );
+      },
+      async get(key) {
+        const result = await client.send(new GetObjectCommand({ Bucket, Key: key }));
+        if (!result.Body) throw new Error(`对象存储里没有 ${key}`);
+        return Buffer.from(await result.Body.transformToByteArray());
       },
     },
     /** 桶不存在就建（启动时调用一次） */

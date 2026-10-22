@@ -257,6 +257,7 @@ services:
       <<: [*runtime-env, *nats-env]
       PORT: 4105
       DATABASE_URL: postgres://svc_task:${TASK_DB_PASSWORD:?}@postgres:5432/task?sslmode=disable
+      HARNESS_URL: http://harness:4107
     depends_on: *data-deps
 
   canvas:

@@ -33,20 +33,21 @@ export async function readLimited(stream: Readable, maxBytes: number): Promise<B
 }
 
 /**
- * 列出 tar 包里的文件（不含目录）。Docker 取出的 tar 以被取目录的名字开头（如 out/），
- * 列表里去掉这一层，得到相对路径。
+ * 取出 tar 包里的文件（不含目录）。Docker 取出的 tar 以被取目录的名字开头（如 out/），
+ * 这里去掉这一层，得到相对路径。
  */
-export async function listFiles(tar: Buffer): Promise<{ path: string; size: number }[]> {
-  const files: { path: string; size: number }[] = [];
+export async function extractFiles(tar: Buffer): Promise<{ path: string; content: Buffer }[]> {
+  const files: { path: string; content: Buffer }[] = [];
   const reader = extract();
   const done = new Promise<void>((resolve, reject) => {
     reader.on('entry', (header, stream, next) => {
-      if (header.type === 'file') {
+      const chunks: Buffer[] = [];
+      stream.on('data', (chunk: unknown) => chunks.push(chunk as Buffer));
+      stream.on('end', () => {
         const path = header.name.split('/').slice(1).join('/');
-        if (path) files.push({ path, size: header.size ?? 0 });
-      }
-      stream.on('end', next);
-      stream.resume();
+        if (header.type === 'file' && path) files.push({ path, content: Buffer.concat(chunks) });
+        next();
+      });
     });
     reader.on('finish', resolve);
     reader.on('error', reject);
@@ -54,4 +55,9 @@ export async function listFiles(tar: Buffer): Promise<{ path: string; size: numb
   reader.end(tar);
   await done;
   return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** 列出 tar 包里的文件和大小（路径规则同 extractFiles）。 */
+export async function listFiles(tar: Buffer): Promise<{ path: string; size: number }[]> {
+  return (await extractFiles(tar)).map((f) => ({ path: f.path, size: f.content.length }));
 }

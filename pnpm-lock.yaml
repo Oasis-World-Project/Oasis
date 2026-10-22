@@ -536,9 +536,21 @@ importers:
 
   services/task:
     dependencies:
+      '@oasis/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@oasis/service-kit':
         specifier: workspace:*
         version: link:../../packages/service-kit
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
+      pg:
+        specifier: 'catalog:'
+        version: 8.23.1
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@oasis/tsconfig':
         specifier: workspace:*
@@ -546,9 +558,21 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
+      fastify:
+        specifier: 'catalog:'
+        version: 5.12.7
+      pino:
+        specifier: 'catalog:'
+        version: 10.4.0
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@24.19.2)(jsdom@29.1.1)(vite@8.3.4(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
 
 packages:
 

@@ -5,7 +5,7 @@ import Fastify from 'fastify';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Executor, Sandbox, SandboxSpec } from '../src/executor/executor.ts';
-import { packFiles } from '../src/executor/tar.ts';
+import { extractFiles, packFiles } from '../src/executor/tar.ts';
 import type { ObjectStore } from '../src/repo/object-store.ts';
 import type { Run, RunEvent, RunsRepo } from '../src/repo/runs-repo.ts';
 import { createRunService } from '../src/service/run-service.ts';
@@ -128,6 +128,8 @@ const repo: RunsRepo = {
       outputs: [],
       outputKey: null,
       sessionKey: null,
+      summary: null,
+      inputsFrom: run.inputsFrom ?? [],
       createdAt: new Date(),
       startedAt: null,
       finishedAt: null,
@@ -154,7 +156,14 @@ const repo: RunsRepo = {
 };
 
 const stored = new Map<string, Buffer>();
-const store: ObjectStore = { put: async (key, body) => void stored.set(key, body) };
+const store: ObjectStore = {
+  put: async (key, body) => void stored.set(key, body),
+  get: async (key) => {
+    const body = stored.get(key);
+    if (!body) throw new Error(`没有 ${key}`);
+    return body;
+  },
+};
 
 /** 假 model-gateway：签发和作废临时 Key */
 const issued: Record<string, unknown>[] = [];
@@ -213,7 +222,12 @@ const finished = (id: string) =>
       : undefined;
   });
 
-const base = { payerId: PAYER, model: 'deepseek/deepseek-v4.1-flash', inputs: [] };
+const base = {
+  payerId: PAYER,
+  model: 'deepseek/deepseek-v4.1-flash',
+  inputs: [],
+  inputsFrom: [],
+};
 
 describe('一次 agent 运行', () => {
   it('跑完：签发 Key → 起沙箱 → 交任务 → 收产出和会话存档 → 销毁沙箱、作废 Key → 发事件', async () => {
@@ -238,11 +252,44 @@ describe('一次 agent 运行', () => {
     expect(revoked).toHaveLength(1);
     expect(outbox[0]).toMatchObject({
       type: 'harness.run.finished',
-      data: { runId: run.id, status: 'succeeded', outputs: [{ path: 'result.md' }] },
+      data: {
+        runId: run.id,
+        status: 'succeeded',
+        outputs: [{ path: 'result.md' }],
+        summary: '收到：写一份成果',
+      },
     });
     // 运行时上下文那条不是用户说的，不记
     const kinds = events.map((e) => e.kind);
     expect(kinds).toEqual(['status', 'user_message', 'assistant_text', 'turn_end', 'status']);
+  });
+
+  it('上游运行的产出放进 in/<上游名>/；只能引用同一付费人、已成功的运行', async () => {
+    const upstream = await service.start({ ...base, prompt: '先写' });
+    await finished(upstream.id);
+    outbox.length = 0;
+    const downstream = await service.start({
+      ...base,
+      prompt: '接着写',
+      inputsFrom: [{ runId: upstream.id, as: 'draft' }],
+    });
+    await finished(downstream.id);
+    // 沙箱拿到的输入包里，上游产出在 in/draft/ 下（extractFiles 去掉了顶层的 in/）
+    const sandboxTar = started[1]?.files[0]?.tar ?? Buffer.alloc(0);
+    const files = (await extractFiles(sandboxTar)).map((f) => f.path);
+    expect(files).toContain('draft/result.md');
+
+    const OTHER_PAYER = '1d1d1d1d-1d1d-4d1d-8d1d-1d1d1d1d1d1d';
+    const cases = [
+      { payerId: PAYER, runId: '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f' }, // 不存在
+      { payerId: OTHER_PAYER, runId: downstream.id }, // 别人的运行
+    ];
+    for (const { payerId, runId } of cases) {
+      const err = await service
+        .start({ ...base, payerId, prompt: 'p', inputsFrom: [{ runId, as: 'x' }] })
+        .catch((e: unknown) => e);
+      expect((err as HttpError).statusCode).toBe(409);
+    }
   });
 
   it('运行中追问：排在当前这一轮之后处理，处理完才收尾；结束后再追问是 409', async () => {

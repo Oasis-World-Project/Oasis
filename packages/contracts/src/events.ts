@@ -42,6 +42,8 @@ export const RunFinished = {
     status: z.enum(['succeeded', 'failed', 'cancelled']),
     error: z.string().nullable(),
     outputs: z.array(z.object({ path: z.string(), size: z.number().int().nonnegative() })),
+    /** AI 最后说的一句话 */
+    summary: z.string().nullable(),
     finishedAt: z.iso.datetime(),
   }),
 } as const;

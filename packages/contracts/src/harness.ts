@@ -32,6 +32,24 @@ export const StartRunBody = z.object({
   /** 交给 agent 的完整任务说明 */
   prompt: z.string().min(1).max(200_000),
   inputs: z.array(RunInputFile).max(200).default([]),
+  /**
+   * 把之前某次运行的产出放进本次沙箱的 in/<as>/ 下（工作流里上游节点交给下游）。
+   * 只能引用同一付费人、已成功的运行。
+   */
+  inputsFrom: z
+    .array(
+      z.object({
+        runId: z.uuid(),
+        as: z
+          .string()
+          .regex(
+            /^[\p{L}\p{N}_.-]{1,64}$/u,
+            '只能用字母、数字、下划线、点和短横线，最长 64 个字符',
+          ),
+      }),
+    )
+    .max(20)
+    .default([]),
 });
 export type StartRunBody = z.input<typeof StartRunBody>;
 
@@ -48,6 +66,8 @@ export const RunBody = z.object({
   status: RunStatus,
   error: z.string().nullable(),
   outputs: z.array(RunOutputFile),
+  /** AI 最后说的一句话（下游节点和界面用） */
+  summary: z.string().nullable(),
   createdAt: z.iso.datetime(),
   startedAt: z.iso.datetime().nullable(),
   finishedAt: z.iso.datetime().nullable(),

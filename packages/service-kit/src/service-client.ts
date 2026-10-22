@@ -15,7 +15,7 @@ interface RequestOptions<T> {
 }
 
 export interface ServiceClient {
-  /** 发 JSON 请求并校验响应；204 时返回 undefined。 */
+  /** 发 JSON 请求并校验响应；没有正文的成功响应（204、空的 202 等）返回 undefined。 */
   json<T>(method: string, path: string, options?: RequestOptions<T>): Promise<T>;
   /** 拿到原始 Response（流式响应用），非 2xx 同样抛 HttpError。 */
   stream(method: string, path: string, options?: RequestOptions<never>): Promise<Response>;
@@ -67,8 +67,10 @@ export function createServiceClient(
   return {
     async json<T>(method: string, path: string, options: RequestOptions<T> = {}): Promise<T> {
       const response = await send(method, path, options, true);
-      if (response.status === 204) return undefined as T;
-      const data: unknown = await response.json();
+      // 204，或者 202 这类成功但没有正文的响应，都返回 undefined
+      const text = response.status === 204 ? '' : await response.text();
+      if (text === '') return undefined as T;
+      const data: unknown = JSON.parse(text);
       if (!options.schema) return data as T;
       const parsed = options.schema.safeParse(data);
       if (!parsed.success)

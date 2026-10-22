@@ -8,11 +8,14 @@ import { RunKeyCreated } from '@oasis/contracts/model-gateway';
 import { createEnvelope, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { connectAgent, SANDBOX_PATHS, sandboxEnv, type AgentConnection } from '../adapter/dsh.ts';
 import type { Executor, Sandbox } from '../executor/executor.ts';
-import { listFiles, packFiles, readLimited } from '../executor/tar.ts';
+import { extractFiles, listFiles, packFiles, readLimited } from '../executor/tar.ts';
 import type { ObjectStore } from '../repo/object-store.ts';
 import type { Run, RunOutcome, RunsRepo } from '../repo/runs-repo.ts';
 
 type Status = RunBody['status'];
+
+/** 放进 out/ 的占位文件：保证目录存在且属于沙箱用户，不算产出 */
+const KEEP_FILE = '.oasis-keep';
 
 interface LiveRun {
   readonly abort: AbortController;
@@ -22,6 +25,8 @@ interface LiveRun {
   /** 已经开始收尾，不再接受追问 */
   closing: boolean;
   nextSeq: number;
+  /** AI 最近说的一句话，结束时作为 summary */
+  lastText?: string;
   /** 事件按顺序写库 */
   writes: Promise<void>;
   done: Promise<void>;
@@ -46,6 +51,7 @@ function toRunBody(run: Run): RunBody {
     status: run.status,
     error: run.error,
     outputs: run.outputs,
+    summary: run.summary,
     createdAt: run.createdAt.toISOString(),
     startedAt: run.startedAt?.toISOString() ?? null,
     finishedAt: run.finishedAt?.toISOString() ?? null,
@@ -91,6 +97,7 @@ export function createRunService(deps: {
     data: Record<string, unknown>,
   ) {
     const seq = run.nextSeq++;
+    if (kind === 'assistant_text') run.lastText = String(data.text);
     run.writes = run.writes
       .then(() => repo.appendEvents(runId, [{ seq, kind, data }]))
       .catch((err: unknown) => logger.error({ err, runId, seq }, '写运行事件失败'));
@@ -119,6 +126,20 @@ export function createRunService(deps: {
     return { key, files };
   }
 
+  /** 上游运行的产出：解出来放到 in/<as>/ 下 */
+  async function upstreamFiles(row: Run) {
+    const files: { path: string; content: Buffer }[] = [];
+    for (const ref of row.inputsFrom) {
+      const upstream = await repo.get(ref.runId);
+      if (!upstream?.outputKey) continue;
+      for (const file of await extractFiles(await store.get(upstream.outputKey))) {
+        if (file.path !== KEEP_FILE)
+          files.push({ path: `in/${ref.as}/${file.path}`, content: file.content });
+      }
+    }
+    return files;
+  }
+
   async function execute(row: Run, inputs: { path: string; content: Buffer }[], run: LiveRun) {
     const { id } = row;
     const release = await gate.acquire();
@@ -137,6 +158,7 @@ export function createRunService(deps: {
       outputs: [],
       outputKey: null,
       sessionKey: null,
+      summary: null,
     };
     try {
       const stopped = () => {
@@ -164,8 +186,9 @@ export function createRunService(deps: {
 
       const files = [
         ...inputs.map((f) => ({ path: `in/${f.path}`, content: f.content })),
+        ...(await upstreamFiles(row)),
         // 保证 out/ 目录存在且属于沙箱用户
-        { path: 'out/.oasis-keep', content: Buffer.alloc(0) },
+        { path: `out/${KEEP_FILE}`, content: Buffer.alloc(0) },
       ];
       sandbox = await executor.start({
         runId: id,
@@ -217,7 +240,7 @@ export function createRunService(deps: {
       Object.assign(outcome, {
         status: failure ? 'failed' : 'succeeded',
         error: failure ?? null,
-        outputs: outputs?.files.filter((f) => f.path !== '.oasis-keep') ?? [],
+        outputs: outputs?.files.filter((f) => f.path !== KEEP_FILE) ?? [],
         outputKey: outputs?.key ?? null,
         sessionKey: session?.key ?? null,
       });
@@ -232,6 +255,7 @@ export function createRunService(deps: {
     } finally {
       clearTimeout(timer);
       run.closing = true;
+      outcome.summary = run.lastText ?? null;
       await sandbox
         ?.destroy()
         .catch((err: unknown) => logger.warn({ err, runId: id }, '销毁沙箱失败'));
@@ -258,6 +282,7 @@ export function createRunService(deps: {
       status,
       error: outcome.error,
       outputs: outcome.outputs,
+      summary: outcome.summary,
       finishedAt: finishedAt.toISOString(),
     });
     await repo.finish(row.id, { ...outcome, finishedAt }, event);
@@ -272,8 +297,19 @@ export function createRunService(deps: {
 
   return {
     async start(
-      body: StartRunBody & { inputs: NonNullable<StartRunBody['inputs']> },
+      body: StartRunBody & Required<Pick<StartRunBody, 'inputs' | 'inputsFrom'>>,
     ): Promise<RunBody> {
+      // 只能拿同一付费人、已成功的运行的产出当输入
+      for (const ref of body.inputsFrom) {
+        const upstream = await repo.get(ref.runId);
+        if (upstream?.payerId !== body.payerId || upstream.status !== 'succeeded') {
+          throw new HttpError(
+            409,
+            'input_run_unavailable',
+            `上游运行 ${ref.runId} 不存在或没有成功`,
+          );
+        }
+      }
       const id = body.runId ?? randomUUID();
       const inserted = await repo.insert({
         id,
@@ -282,6 +318,7 @@ export function createRunService(deps: {
         nodeId: body.nodeId ?? null,
         model: body.model,
         prompt: body.prompt,
+        inputsFrom: body.inputsFrom,
       });
       const row = await owned(id);
       if (!inserted) {
@@ -353,6 +390,7 @@ export function createRunService(deps: {
           outputs: [],
           outputKey: null,
           sessionKey: null,
+          summary: null,
         });
         if (row.runKeyId) {
           await deps.modelGateway

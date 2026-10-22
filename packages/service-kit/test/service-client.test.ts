@@ -15,6 +15,7 @@ upstream.get('/not-configured', async (_request, reply) =>
     .send({ error: { code: 'provider_not_configured', message: '没配置', requestId: 'r' } }),
 );
 upstream.post('/empty', async (_request, reply) => reply.code(204).send());
+upstream.post('/accepted', async (_request, reply) => reply.code(202).send());
 
 let baseUrl = '';
 beforeAll(async () => {
@@ -60,9 +61,9 @@ describe('服务间调用客户端', () => {
     expect([err.statusCode, err.code]).toEqual([503, 'provider_not_configured']);
   });
 
-  it('204 返回 undefined', async () => {
-    expect(
-      await createServiceClient('demo', baseUrl).json('POST', '/empty', { body: {} }),
-    ).toBeUndefined();
+  it('204 和没有正文的 202 都返回 undefined', async () => {
+    const client = createServiceClient('demo', baseUrl);
+    expect(await client.json('POST', '/empty', { body: {} })).toBeUndefined();
+    expect(await client.json('POST', '/accepted', { body: {} })).toBeUndefined();
   });
 });

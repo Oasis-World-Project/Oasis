@@ -2,23 +2,33 @@
   "name": "@oasis/task",
   "version": "0.0.0",
   "private": true,
-  "description": "任务与工作流：任务、节点图（串行/并行/讨论/互审）、节点状态机、重跑",
+  "description": "工作流控制面：任务的节点图、状态机、调度、重做、追问路由（ADR 0004）",
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "migrations"
   ],
   "scripts": {
     "dev": "node --env-file-if-exists=.env --watch src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@oasis/service-kit": "workspace:*"
+    "@oasis/contracts": "workspace:*",
+    "@oasis/service-kit": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@oasis/tsconfig": "workspace:*",
     "@types/node": "catalog:",
-    "typescript": "catalog:"
+    "@types/pg": "catalog:",
+    "fastify": "catalog:",
+    "pino": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }
