@@ -5,6 +5,7 @@ import { Catalog, type CatalogEntry } from '@oasis/contracts/agent';
 import type { RunFinishedData } from '@oasis/contracts/events';
 import { RunBody } from '@oasis/contracts/harness';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
+import { z } from 'zod';
 import type { Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
 import type { Effects, Engine, PlannerJob } from './effects.ts';
 import { planToRows } from './plan.ts';
@@ -31,6 +32,7 @@ export interface PlanningConfig {
 }
 
 const RUN_FINAL = ['succeeded', 'failed', 'cancelled', 'stopped'];
+const Unavailable = z.object({ models: z.array(z.string()) });
 
 /** 微美元 → 给用户看的金额 */
 export function dollars(micro: number): string {
@@ -43,14 +45,27 @@ export function createPlanning(deps: {
   store: TaskStore;
   harness: ServiceClient;
   agent: ServiceClient;
+  modelGateway: ServiceClient;
   engine: Engine;
   config: PlanningConfig;
   logger: Logger;
 }) {
   const { store, harness, engine, config, logger } = deps;
 
-  const catalog = async (): Promise<CatalogEntry[]> =>
-    (await deps.agent.json('GET', '/internal/models/catalog', { schema: Catalog })).models;
+  /** 规划员能挑的模型：已接入的，去掉在当前网络用不了的（查不到时不排除） */
+  async function catalog(): Promise<CatalogEntry[]> {
+    const { models } = await deps.agent.json('GET', '/internal/models/catalog', {
+      schema: Catalog,
+    });
+    const blocked = await deps.modelGateway
+      .json('GET', '/internal/v1/models/unavailable', { schema: Unavailable })
+      .then((r) => new Set(r.models))
+      .catch((err: unknown) => {
+        logger.warn({ err }, '查不到哪些模型用不了，不排除');
+        return new Set<string>();
+      });
+    return models.filter((m) => !blocked.has(m.providerModel));
+  }
 
   /** 在事务里开一次规划员运行（从头排，或接着上一次改） */
   async function open(snapshot: Snapshot, w: Writer, fx: Effects, revise?: PlannerJob['revise']) {

@@ -113,6 +113,9 @@ const UNAVAILABLE: Record<Attention['reason'], string> = {
   workflow_broken: '工作流的连线断开了：先把线接好再点运行，或者取消任务',
 };
 
+/** 上游拒绝「地区不可用」时运行的错误里带的代码（model-gateway 给的） */
+const REGION_UNAVAILABLE = 'provider_region_unavailable';
+
 const isOpen = (r: NodeRun) => r.status === 'pending' || r.status === 'running';
 
 /** 节点还没结束的运行（讨论同一轮里的几条发言可能同时在跑） */
@@ -132,6 +135,8 @@ export function createWorkflowService(deps: {
   budgetMultiplier: number;
   /** 规划员要查模型目录 */
   agent: ServiceClient;
+  /** 规划员要排除在当前网络用不了的模型 */
+  modelGateway: ServiceClient;
   planning: Omit<PlanningConfig, 'budgetMultiplier'>;
   logger: Logger;
 }) {
@@ -140,6 +145,7 @@ export function createWorkflowService(deps: {
     store,
     harness,
     agent: deps.agent,
+    modelGateway: deps.modelGateway,
     engine: { transact, schedule },
     config: { ...deps.planning, budgetMultiplier: deps.budgetMultiplier },
     logger,
@@ -398,7 +404,9 @@ export function createWorkflowService(deps: {
         await w.setNode(nodeId, {
           status: 'succeeded',
           finishedAt: new Date(),
-          warning: `交付前检查没完全通过：${unmet.join('；')}`,
+          warning: [current.warning, `交付前检查没完全通过：${unmet.join('；')}`]
+            .filter(Boolean)
+            .join('；'),
         });
       }
       await schedule(fresh, w, fx);
@@ -416,6 +424,16 @@ export function createWorkflowService(deps: {
     error: string | null,
     fx: Effects,
   ) {
+    if (error?.includes(REGION_UNAVAILABLE) && run.request.model !== deps.planning.defaultModel) {
+      // 模型在当前网络用不了：重试也没用，换默认模型接着做，不算一次重做
+      logger.info(
+        { nodeId: node.id, model: run.request.model },
+        '模型在当前网络用不了，换默认模型',
+      );
+      await switchModel(w, node, run, deps.planning.defaultModel);
+      await openStep(snapshot, w, node, retryStep(snapshot, node, run), fx);
+      return;
+    }
     if (node.attempts <= deps.maxRetries) {
       logger.info({ nodeId: node.id, attempt: node.attempts, error }, '节点失败，自动重做');
       await w.setNode(node.id, { attempts: node.attempts + 1 });
@@ -433,6 +451,21 @@ export function createWorkflowService(deps: {
         message: `「${node.title}」试了 ${node.attempts} 次都没成功`,
       },
     });
+  }
+
+  /** 把这次运行用的模型换掉：讨论发言换那位参与者的，其余换节点的；节点上留一条提醒 */
+  async function switchModel(w: Writer, node: Node, run: NodeRun, model: string) {
+    const who = run.meta.participant;
+    const note = `${who ? `「${who}」` : ''}原定的模型 ${run.request.model} 在当前网络用不了，改用 ${model}`;
+    const warning = [node.warning, note].filter(Boolean).join('；');
+    if (run.purpose === 'speech' && who) {
+      const participants = (node.config.participants ?? []).map((p) =>
+        p.name === who ? { ...p, model } : p,
+      );
+      await w.setNode(node.id, { config: { ...node.config, participants }, warning });
+    } else {
+      await w.setNode(node.id, { model, warning });
+    }
   }
 
   /** 讨论的一次发言结束：记进讨论记录；这一轮都说完了就开下一轮或汇总 */

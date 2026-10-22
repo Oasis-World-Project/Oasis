@@ -88,6 +88,7 @@ await startService({
       chat: createChatService({ ...common, defaultMaxTokens: config.DEFAULT_MAX_TOKENS }),
       decisions: createDecisionService(common),
       runKeys: createRunKeyService({ repo: createRunKeysRepo(resources.postgres.pool) }),
+      unavailableModels: meter.regionBlockedModels,
     });
   },
 });

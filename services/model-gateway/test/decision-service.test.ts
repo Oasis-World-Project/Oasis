@@ -47,6 +47,7 @@ const finished: CallOutcome[] = [];
 const settledEvents: EventEnvelope[] = [];
 const repo: CallsRepo = {
   start: async (call) => void started.push(call),
+  regionBlockedModels: async () => [],
   async finish(_id, outcome, event) {
     finished.push(outcome);
     if (event) settledEvents.push(event);

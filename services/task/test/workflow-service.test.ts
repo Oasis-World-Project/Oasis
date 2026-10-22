@@ -214,8 +214,19 @@ harness.get('/internal/models/catalog', async () => ({
       tags: ['性价比'],
       providerModel: 'deepseek/x',
     },
+    {
+      key: 'gpt',
+      name: 'GPT',
+      vendor: 'OpenAI',
+      category: 'llm',
+      tags: ['通用'],
+      providerModel: 'openai/blocked',
+    },
   ],
 }));
+/** 假 model-gateway：在当前网络用不了的模型 */
+let unavailable: string[] = [];
+harness.get('/internal/v1/models/unavailable', async () => ({ models: unavailable }));
 harness.post('/internal/runs/:id/messages', async (request, reply) => {
   messages.push({
     runId: (request.params as { id: string }).id,
@@ -277,6 +288,7 @@ beforeEach(() => {
   finishedRemote = new Map();
   rejectNext = false;
   plans = new Map();
+  unavailable = [];
   events.length = 0;
   gateResults = [];
   gateCalls.length = 0;
@@ -290,6 +302,7 @@ beforeEach(() => {
     maxReworks: 1,
     budgetMultiplier: 3,
     agent: createServiceClient('agent', harnessUrl),
+    modelGateway: createServiceClient('model-gateway', harnessUrl),
     planning: {
       model: 'deepseek/planner',
       defaultModel: 'deepseek/x',
@@ -1070,5 +1083,72 @@ describe('整体验收（从任务单来的任务）', () => {
       status: 'succeeded',
       acceptance: { unmet: [] },
     });
+  });
+});
+
+describe('模型在当前网络用不了', () => {
+  const REGION =
+    '502: {"code":"provider_region_unavailable","message":"这个模型在当前网络所在的地区用不了"}';
+
+  it('规划员的模型目录里去掉用不了的模型', async () => {
+    unavailable = ['openai/blocked'];
+    await service.create({
+      ownerId: OWNER,
+      payerId: OWNER,
+      title: 't',
+      brief: 'b',
+      sheet: {
+        title: 't',
+        deliverables: [{ name: 'd', form: 'f' }],
+        criteria: ['c'],
+        style: [],
+        budgetMicro: null,
+        assumptions: [],
+        materials: [],
+      },
+    });
+    const prompt = (submitted.find((x) => !x.nodeId) as { prompt: string }).prompt;
+    expect(prompt).toContain('deepseek/x（DeepSeek');
+    expect(prompt).not.toContain('openai/blocked');
+  });
+
+  it('干活节点碰上了：换默认模型接着做，不算一次重做，节点上留提醒', async () => {
+    const task = await service.create({
+      ownerId: OWNER,
+      payerId: OWNER,
+      title: 't',
+      brief: 'b',
+      plan: { nodes: [{ ...work('A'), model: 'openai/blocked' }], edges: [] },
+    });
+    await finish(runOf('A', task).runId, 'failed', { error: REGION });
+    const next = runOf('A', task);
+    expect(next.model).toBe('deepseek/x');
+    const node = (await service.get(OWNER, task.id)).nodes[0];
+    expect(node).toMatchObject({
+      status: 'running',
+      model: 'deepseek/x',
+      attempts: 1,
+      warning: '原定的模型 openai/blocked 在当前网络用不了，改用 deepseek/x',
+    });
+    // 默认模型也用不了：照常按失败重做
+    await finish(next.runId, 'failed', { error: REGION });
+    expect((await service.get(OWNER, task.id)).nodes[0]?.attempts).toBe(2);
+  });
+
+  it('讨论里某位参与者碰上了：只换他的模型，重新说这一句', async () => {
+    const d = discussion('D', ['甲', '乙'], 1);
+    d.participants[1]!.model = 'openai/blocked';
+    const task = await create([d], []);
+    const yi = runsOf('D', task).find((r) => r.model === 'openai/blocked')!;
+    await finish(yi.runId, 'failed', { error: REGION });
+    const again = runOf('D', task);
+    expect(again.model).toBe('deepseek/x');
+    expect(again.prompt).toContain('你是「乙」');
+    const node = (await service.get(OWNER, task.id)).nodes[0];
+    expect(node?.discussion?.participants.map((p) => p.model)).toEqual([
+      'deepseek/甲',
+      'deepseek/x',
+    ]);
+    expect(node?.warning).toBe('「乙」原定的模型 openai/blocked 在当前网络用不了，改用 deepseek/x');
   });
 });

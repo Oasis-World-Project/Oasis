@@ -41,7 +41,13 @@ function abortOnClose(reply: FastifyReply): AbortSignal {
 
 export function registerRoutes(
   app: ServiceApp,
-  services: { chat: ChatService; decisions: DecisionService; runKeys: RunKeyService },
+  services: {
+    chat: ChatService;
+    decisions: DecisionService;
+    runKeys: RunKeyService;
+    /** 在当前网络用不了的模型 */
+    unavailableModels: () => Promise<string[]>;
+  },
 ): void {
   const { chat, decisions, runKeys } = services;
 
@@ -79,6 +85,11 @@ export function registerRoutes(
   app.post('/internal/v1/decisions', (request, reply) =>
     decide(internalCaller(request), request, reply),
   );
+
+  /** 在当前网络用不了的模型（task 的规划员挑模型时排除它们） */
+  app.get('/internal/v1/models/unavailable', async () => ({
+    models: await services.unavailableModels(),
+  }));
 
   /** harness 为一次 agent 运行签发临时 Key；明文只在这里返回一次。 */
   app.post('/internal/run-keys', async (request, reply) => {

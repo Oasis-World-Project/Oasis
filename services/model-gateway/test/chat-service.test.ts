@@ -55,6 +55,7 @@ const started: Parameters<CallsRepo['start']>[0][] = [];
 const finished: CallOutcome[] = [];
 const repo: CallsRepo = {
   start: async (call) => void started.push(call),
+  regionBlockedModels: async () => [],
   finish: async (_id, outcome) => void finished.push(outcome),
 };
 const silent = pino({ level: 'silent' });

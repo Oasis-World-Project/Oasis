@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { HoldResult, SettleResult } from '@oasis/contracts/billing';
 import { CallSettled } from '@oasis/contracts/events';
 import { createEnvelope, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
-import type { CallKind, CallsRepo } from '../repo/calls-repo.ts';
+import { REGION_ERROR, type CallKind, type CallsRepo } from '../repo/calls-repo.ts';
 import type { CostSource, Usage } from './pricing.ts';
 
 /** 谁在调用、钱算在哪：付费人，以及（agent 运行时）所属的任务、节点和运行。 */
@@ -26,7 +26,7 @@ export interface MeteredCall {
 
 /** 把上游拒绝的原因归成几类，让用户看到能照着做的提示；细节只进日志和调用记录。 */
 function upstreamError(status: number, detail: string): HttpError {
-  if (status === 403 && /not available in your region/i.test(detail)) {
+  if (status === 403 && detail.toLowerCase().includes(REGION_ERROR)) {
     return new HttpError(502, 'provider_region_unavailable', '这个模型在当前网络所在的地区用不了');
   }
   if (status === 429) {
@@ -51,6 +51,9 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
   }
 
   return {
+    /** 在当前网络用不了的模型：最近一次聊天调用因为地区限制被上游拒绝、之后没再成功过 */
+    regionBlockedModels: () => repo.regionBlockedModels(),
+
     /** 冻结额度并登记调用。额度不够时 billing 返回 402，调用方应直接把错误交出去、不调上游。 */
     async hold(input: {
       caller: Caller;

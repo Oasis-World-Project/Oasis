@@ -41,14 +41,15 @@ await startService({
       logger,
     });
     const harness = createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 15_000 });
+    const modelGateway = createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
+      timeoutMs: 60_000,
+    });
     workflows = createWorkflowService({
       store: createTaskStore(postgres.pool),
       harness,
       gate: createGate({
         harness,
-        modelGateway: createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
-          timeoutMs: 60_000,
-        }),
+        modelGateway,
         model: config.GATE_MODEL,
         threshold: config.GATE_THRESHOLD,
         logger,
@@ -58,6 +59,7 @@ await startService({
       maxReworks: config.MAX_NODE_REWORKS,
       budgetMultiplier: config.BUDGET_MULTIPLIER,
       agent: createServiceClient('agent', config.AGENT_URL, { timeoutMs: 5_000 }),
+      modelGateway,
       planning: {
         model: config.PLANNER_MODEL,
         defaultModel: config.DEFAULT_NODE_MODEL,
