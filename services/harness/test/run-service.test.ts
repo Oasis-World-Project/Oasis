@@ -83,10 +83,13 @@ const methods: string[] = [];
 const started: SandboxSpec[] = [];
 const destroyed: string[] = [];
 let orphansRemoved: ReadonlySet<string> | undefined;
+/** 起沙箱要多久（模拟容器启动慢） */
+let startDelayMs = 0;
 const executor: Executor = {
   check: async () => {},
   async start(spec) {
     started.push(spec);
+    await sleep(startDelayMs);
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     fakeDsh(stdin, stdout);
@@ -215,6 +218,7 @@ beforeEach(() => {
     list.length = 0;
   rows.clear();
   stored.clear();
+  startDelayMs = 0;
 });
 
 async function until<T>(read: () => T | undefined, ms = 3_000): Promise<T> {
@@ -387,6 +391,17 @@ describe('一次 agent 运行', () => {
     const next = await service.start({ ...base, prompt: '接着做', continueFrom: run.id });
     expect((await finished(next.id)).status).toBe('succeeded');
     expect(methods).toContain('session/resume');
+  });
+
+  it('沙箱还在启动时被取消：起好后立刻销毁，不再交任务', async () => {
+    startDelayMs = 200;
+    const run = await service.start({ ...base, prompt: '做一次' });
+    await until(() => started.find((s) => s.runId === run.id));
+    await service.cancel(run.id);
+    const row = await finished(run.id);
+    expect(row.status).toBe('cancelled');
+    expect(destroyed).toContain(run.id);
+    expect(events.some((e) => e.kind === 'user_message')).toBe(false);
   });
 
   it('还在排队就被停止：不起沙箱，记为已停止', async () => {

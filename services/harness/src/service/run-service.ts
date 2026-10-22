@@ -274,6 +274,8 @@ export function createRunService(deps: {
         },
         { once: true },
       );
+      // 沙箱启动期间就被取消或停止了：上面的监听来不及收到，这里补上（finally 会销毁沙箱）
+      stopped();
       await repo.update(id, { containerId: sandbox.id, status: 'running', startedAt: new Date() });
 
       let stderrTail = '';
