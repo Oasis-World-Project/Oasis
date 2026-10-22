@@ -27,6 +27,10 @@ export interface ProviderClient {
   images(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   speech(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   transcriptions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
+  /** 视频：提交、查进度、下载（长任务） */
+  submitVideo(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
+  videoStatus(id: string): Promise<Response>;
+  videoContent(id: string, index: number): Promise<Response>;
   /** 某次生成的实际花费（美元）；查不到返回 undefined */
   generationCost(id: string): Promise<number | undefined>;
 }
@@ -48,6 +52,11 @@ export function createOpenRouterClient(options: {
       },
       body: JSON.stringify(body),
       signal,
+    });
+  const get = (url: string, timeoutMs: number) =>
+    fetch(url, {
+      headers: { authorization: `Bearer ${options.apiKey ?? ''}` },
+      signal: AbortSignal.timeout(timeoutMs),
     });
   return {
     configured: Boolean(options.apiKey),
@@ -84,6 +93,11 @@ export function createOpenRouterClient(options: {
     images: (body, signal) => post(`${base}/images`, body, signal),
     speech: (body, signal) => post(`${base}/audio/speech`, body, signal),
     transcriptions: (body, signal) => post(`${base}/audio/transcriptions`, body, signal),
+
+    submitVideo: (body, signal) => post(`${base}/videos`, body, signal),
+    videoStatus: (id) => get(`${base}/videos/${encodeURIComponent(id)}`, 30_000),
+    videoContent: (id, index) =>
+      get(`${base}/videos/${encodeURIComponent(id)}/content?index=${index}`, 300_000),
 
     async generationCost(id) {
       const response = await fetch(`${base}/generation?id=${encodeURIComponent(id)}`, {

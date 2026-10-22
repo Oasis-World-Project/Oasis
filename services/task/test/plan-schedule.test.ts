@@ -13,6 +13,7 @@ const work = (key: string) => ({
   model: 'm',
   checks: [] as string[],
   expects: [] as string[],
+  tools: [] as { key: string; uses: number }[],
 });
 
 describe('方案校验', () => {

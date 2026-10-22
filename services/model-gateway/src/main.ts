@@ -19,6 +19,7 @@ import { registerRoutes } from './api/routes.ts';
 import { modelGatewayEnv } from './config.ts';
 import { createCallsRepo } from './repo/calls-repo.ts';
 import { createRunKeysRepo } from './repo/run-keys-repo.ts';
+import { createToolJobsRepo } from './repo/tool-jobs-repo.ts';
 import { createChatService } from './service/chat-service.ts';
 import { createDecisionService } from './service/decision-service.ts';
 import { createMeter } from './service/metering.ts';
@@ -97,10 +98,13 @@ await startService({
           apiKey: config.TAVILY_API_KEY,
         }),
         meter,
+        jobs: createToolJobsRepo(resources.postgres.pool),
+        jobTimeoutMs: config.TOOL_JOB_TIMEOUT_MS,
         config: {
           imageModels: config.TOOL_IMAGE_MODELS,
           speechModels: config.TOOL_SPEECH_MODELS,
           transcribeModels: config.TOOL_TRANSCRIBE_MODELS,
+          videoModels: config.TOOL_VIDEO_MODELS,
           jevModel: config.TOOL_JEV_MODEL,
           tavilyCreditMicro: config.TAVILY_CREDIT_MICRO,
           speechMicroPerChar: config.TOOL_SPEECH_MICRO_PER_CHAR,

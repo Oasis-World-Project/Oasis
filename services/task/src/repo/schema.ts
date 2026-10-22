@@ -7,6 +7,8 @@ import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-
 export interface NodeConfig {
   checks?: string[];
   expects?: string[];
+  /** 干活节点要用的外部工具 */
+  tools?: { key: string; uses: number }[];
   participants?: { name: string; model: string; stance: string }[];
   rounds?: number;
   round?: number;

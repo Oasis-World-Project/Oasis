@@ -17,6 +17,8 @@ export interface NodeContext {
   goal: string;
   upstream: UpstreamInput[];
   userNotes: string[];
+  /** 分给这个节点的外部工具（工具名） */
+  tools: string[];
 }
 
 export interface Speech {
@@ -50,11 +52,26 @@ function context(c: NodeContext, goalLabel: string): string[] {
 const transcriptText = (speeches: Speech[]) =>
   speeches.map((s) => `- 第 ${s.round} 轮 ${s.name}：${s.text}`).join('\n');
 
+/** 节点能用的外部工具：都通过沙箱里的 oasis-tool 命令调用，用法让 AI 自己查 */
+function toolsPart(tools: string[]): string[] {
+  if (tools.length === 0) return [];
+  return [
+    [
+      '【可以用的工具】',
+      `- 这次分给你的：${tools.join('、')}。`,
+      '- 都用 oasis-tool 命令调用。先运行 `oasis-tool list` 看每个工具的用法，再按用法调用，例如 `oasis-tool image.generate --prompt "……" --out out/图.png`。',
+      '- 工具按次收费，记在任务花费里：想清楚再调，不要反复试。',
+      '- 要等很久的工具（视频）命令会自己等；没等到时按它的提示运行 `oasis-tool wait <任务号>`。',
+    ].join('\n'),
+  ];
+}
+
 /** 干活节点 */
 export function workPrompt(c: NodeContext): string {
   return [
     `你是 Oasis 工作流里的一个节点，负责「${c.title}」。`,
     ...context(c, '你要做的事'),
+    ...toolsPart(c.tools),
     [
       '【规则】',
       '- 把成果文件写到 out/ 目录（可以建子目录），下游节点和用户只看得到 out/ 里的东西。',

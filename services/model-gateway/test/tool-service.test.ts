@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createOpenRouterClient } from '../src/adapters/openrouter.ts';
 import { createTavilyClient } from '../src/adapters/tavily.ts';
 import type { CallOutcome, CallsRepo } from '../src/repo/calls-repo.ts';
+import type { ToolJob, ToolJobsRepo } from '../src/repo/tool-jobs-repo.ts';
 import { createMeter } from '../src/service/metering.ts';
 import { createToolService } from '../src/service/tool-service.ts';
 
@@ -54,6 +55,27 @@ fake.post('/api/v1/audio/transcriptions', async (request) => {
   record('transcribe', request.body);
   return { text: '你好，欢迎来到小木屋。' };
 });
+/** 假的视频接口：前 videoPolls 次查询还在做，之后按 videoEnd 结束 */
+let videoPolls = 0;
+let videoEnd: 'completed' | 'failed' = 'completed';
+fake.post('/api/v1/videos', async (request, reply) => {
+  record('video', request.body);
+  return reply
+    .code(202)
+    .send({ id: 'vid-1', polling_url: '/api/v1/videos/vid-1', status: 'pending' });
+});
+fake.get('/api/v1/videos/:id', async () => {
+  if (videoPolls > 0) {
+    videoPolls -= 1;
+    return { id: 'vid-1', status: 'in_progress' };
+  }
+  return videoEnd === 'completed'
+    ? { id: 'vid-1', status: 'completed', usage: { cost: 0.5 } }
+    : { id: 'vid-1', status: 'failed', error: '内容不合规' };
+});
+fake.get('/api/v1/videos/:id/content', async (_request, reply) =>
+  reply.type('video/mp4').send(Buffer.from('mp4')),
+);
 fake.post('/api/alpha/decisions', async (request) => {
   record('decide', request.body);
   return {
@@ -89,6 +111,26 @@ const repo: CallsRepo = {
   },
 };
 
+const jobRows = new Map<string, ToolJob>();
+const jobs: ToolJobsRepo = {
+  async insert(job) {
+    jobRows.set(job.id, {
+      ...job,
+      status: 'pending',
+      error: null,
+      createdAt: new Date(),
+      finishedAt: null,
+    });
+  },
+  get: async (id) => jobRows.get(id),
+  async finish(id, status, error) {
+    const row = jobRows.get(id);
+    if (row?.status !== 'pending') return false;
+    jobRows.set(id, { ...row, status, error: error ?? null, finishedAt: new Date() });
+    return true;
+  },
+};
+
 let tools: ReturnType<typeof createToolService>;
 let urls = { billing: '', fake: '' };
 const build = (tavilyKey: string | undefined) => {
@@ -101,8 +143,11 @@ const build = (tavilyKey: string | undefined) => {
     }),
     tavily: createTavilyClient({ baseUrl: `${urls.fake}/tavily`, apiKey: tavilyKey }),
     meter: createMeter({ billing: createServiceClient('billing', urls.billing), repo, logger }),
+    jobs,
+    jobTimeoutMs: 30 * 60_000,
     config: {
       imageModels: ['bytedance-seed/seedream-4.5', 'openai/gpt-image-2'],
+      videoModels: ['alibaba/wan-2.7'],
       speechModels: ['bytedance-seed/seed-audio-1-0'],
       transcribeModels: ['openai/whisper-large-v3'],
       jevModel: 'typesafe/jev-1.14',
@@ -129,6 +174,9 @@ beforeEach(() => {
   settled.length = 0;
   blocked = [];
   imageStatus = 200;
+  videoPolls = 0;
+  videoEnd = 'completed';
+  jobRows.clear();
   tools = build('tvly-k');
 });
 
@@ -157,6 +205,7 @@ describe('工具目录', () => {
       'audio.transcribe',
       'web.search',
       'web.fetch',
+      'video.generate',
       'jev.decide',
     ]);
     expect(byKey['image.generate']).toMatchObject({
@@ -279,5 +328,64 @@ describe('调用工具', () => {
   it('没配 Key 的工具：503', async () => {
     tools = build(undefined);
     expect((await errorOf(call('web.search', { query: 'x' })))?.code).toBe('tool_unavailable');
+  });
+});
+
+describe('长任务（视频）', () => {
+  const job = (id: string, payerId = PAYER) =>
+    tools.job({ payerId }, id, new AbortController().signal);
+
+  it('提交时冻结（留够时间）并交回任务号；做好前是 pending；做好后按实际花费结算一次', async () => {
+    videoPolls = 1;
+    const submitted = await call('video.generate', { prompt: '木屋的清晨', duration: '6' }, TASK);
+    const id = submitted.job?.id ?? '';
+    expect(submitted).toMatchObject({ tool: 'video.generate', costMicro: 0, files: [] });
+    expect(upstream[0]).toEqual({
+      path: 'video',
+      body: { model: 'alibaba/wan-2.7', prompt: '木屋的清晨', duration: 6 },
+    });
+    expect(billingCalls[0]?.body).toMatchObject({ amountMicro: 1_500_000, ttlMs: 40 * 60_000 });
+
+    expect(await job(id)).toEqual({ status: 'pending' });
+    const done = await job(id);
+    expect(done).toMatchObject({
+      status: 'completed',
+      result: { costMicro: 500_000, files: [{ name: 'video.mp4', mediaType: 'video/mp4' }] },
+    });
+    expect(Buffer.from(done.result!.files[0]!.base64, 'base64').toString()).toBe('mp4');
+    expect(settled[0]).toMatchObject({
+      data: { kind: 'tool', taskId: TASK, chargedMicro: 500_000 },
+    });
+
+    // 再取一次：照样交回结果，但不再结算
+    expect((await job(id)).status).toBe('completed');
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'settle']);
+  });
+
+  it('供应商说失败：退回冻结；之后再问也是失败', async () => {
+    videoEnd = 'failed';
+    const id = (await call('video.generate', { prompt: 'x' })).job?.id ?? '';
+    const result = await job(id);
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('内容不合规');
+    expect((await job(id)).status).toBe('failed');
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release']);
+  });
+
+  it('等太久：算失败并退回', async () => {
+    videoPolls = 99;
+    const id = (await call('video.generate', { prompt: 'x' })).job?.id ?? '';
+    const row = jobRows.get(id)!;
+    jobRows.set(id, { ...row, createdAt: new Date(Date.now() - 31 * 60_000) });
+    expect(await job(id)).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('30 分钟'),
+    });
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release']);
+  });
+
+  it('别人的任务号：查不到', async () => {
+    const id = (await call('video.generate', { prompt: 'x' })).job?.id ?? '';
+    expect((await errorOf(job(id, TASK)))?.statusCode).toBe(404);
   });
 });

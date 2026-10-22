@@ -48,6 +48,14 @@ export const modelGatewayEnv = {
     'bytedance-seed/seed-audio-1-0,fish-audio/s2.1-pro,openai/gpt-4o-mini-tts-2025-12-15',
   ),
   TOOL_TRANSCRIBE_MODELS: list('openai/whisper-large-v3,google/chirp-3'),
+  /** 都是每秒不超过 $0.20 的（冻结按每秒 $0.25 算）；换贵的模型要同时调冻结 */
+  TOOL_VIDEO_MODELS: list('alibaba/wan-3.0,minimax/hailuo-2.3,kwaivgi/kling-v3.0-std'),
+  /** 长任务（视频）最多等多久，超时就算失败、退回冻结 */
+  TOOL_JOB_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .default(30 * 60_000),
   /** jev.decide 用的决策模型 */
   TOOL_JEV_MODEL: z.string().min(1).default('typesafe/jev-1.14'),
   /** 配音拿不到实际花费时每个字估多少（微美元） */

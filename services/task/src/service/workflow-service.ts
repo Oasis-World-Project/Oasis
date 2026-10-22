@@ -58,6 +58,7 @@ function toNodeBody(node: Node): NodeBody {
     model: node.model,
     checks: c.checks ?? [],
     expects: c.expects ?? [],
+    tools: c.tools ?? [],
     discussion:
       node.kind === 'discussion'
         ? {

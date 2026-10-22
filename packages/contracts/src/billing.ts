@@ -21,6 +21,13 @@ export const CreateHoldBody = z.object({
   amountMicro: z.number().int().positive(),
   reason: z.string().min(1).max(100),
   ref: z.string().min(1).max(200),
+  /** 多久没结算就自动退回；不给就用默认（10 分钟）。长任务（视频、容器算力）要更久 */
+  ttlMs: z
+    .number()
+    .int()
+    .min(60_000)
+    .max(6 * 3600_000)
+    .optional(),
 });
 export type CreateHoldBody = z.infer<typeof CreateHoldBody>;
 

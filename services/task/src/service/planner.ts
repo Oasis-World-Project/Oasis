@@ -1,6 +1,7 @@
 // 规划员（ADR 0005 §4）的纯函数部分：给规划员的说明、规划门（检查它写的 out/plan.json）、按方案估算花费。
 // 规划员只排方案；方案对不对由代码检查，花费由代码按经验单价算，不让 AI 估。
 import type { CatalogEntry } from '@oasis/contracts/agent';
+import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { NodeKey, WorkflowPlan, type TaskSheet } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
 import { z } from 'zod';
@@ -24,11 +25,21 @@ export function plannerPrompt(input: {
   brief: string;
   sheet: TaskSheet;
   catalog: CatalogEntry[];
+  /** 现在能用的外部工具 */
+  tools: ToolEntry[];
   limits: PlannerLimits;
 }): string {
   const models = input.catalog
     .map((m) => `- ${m.providerModel}（${m.name}，${m.vendor}；${m.tags.join('、')}）`)
     .join('\n');
+  const tools = input.tools.length
+    ? input.tools
+        .map(
+          (t) =>
+            `- ${t.key}（${t.name}，每${t.unit}约 $${(t.estimateMicro / 1_000_000).toFixed(3)}${t.long ? '，要等几分钟' : ''}）：${t.description}`,
+        )
+        .join('\n')
+    : '（现在没有可用的工具）';
   const deliverables = input.sheet.deliverables.map((d) => `「${d.name}」`).join('、');
   const example = {
     nodes: [
@@ -39,6 +50,7 @@ export function plannerPrompt(input: {
         role: '资深文案',
         goal: '……写成 out/初稿.md',
         model: input.limits.defaultModel,
+        tools: [],
         checks: ['从任务单里挑和这个节点相关的验收点'],
         expects: ['初稿.md'],
       },
@@ -64,6 +76,7 @@ export function plannerPrompt(input: {
     '你是 Oasis 的规划员。用户已经确认了下面的任务单，你要为它排一条工作流，交给 AI 团队去做。',
     `【任务】\n${input.brief}`,
     `【可以用的模型】（节点里的 model 只能填这些；没有特别理由就用 ${input.limits.defaultModel}）\n${models}`,
+    `【可以用的工具】（干活节点的 tools 只能填这些：写成 {"key": "image.generate", "uses": 预计用几次}；节点自己写不出来的东西——图片、视频、配音、转写、联网查资料——才用工具，按次收费）\n${tools}`,
     [
       '【节点】',
       '- work（干活）：一个 AI 在独立的容器里完成一件事，能读写文件、运行命令；成果写到 out/。',
@@ -98,6 +111,7 @@ export function checkPlan(
   text: string | undefined,
   sheet: TaskSheet,
   catalog: CatalogEntry[],
+  tools: ToolEntry[],
   limits: PlannerLimits,
 ): { plan: PlannerPlan } | { problems: string[] } {
   if (text === undefined) return { problems: [`没有找到 out/${PLAN_FILE}`] };
@@ -133,6 +147,15 @@ export function checkPlan(
   for (const model of new Set(used)) {
     if (!usable.has(model)) problems.push(`模型 ${model} 不在可以用的模型里`);
   }
+  const usableTools = new Set(tools.map((t) => t.key));
+  for (const node of plan.nodes) {
+    if (node.kind !== 'work') continue;
+    for (const tool of node.tools) {
+      if (!usableTools.has(tool.key)) {
+        problems.push(`节点「${node.key}」的工具 ${tool.key} 不在可以用的工具里`);
+      }
+    }
+  }
   const keys = new Set(plan.nodes.map((n) => n.key));
   for (const d of sheet.deliverables) {
     const owner = plan.deliverables[d.name];
@@ -150,15 +173,21 @@ export interface EstimateRates {
   speechRun: number;
 }
 
-/** 按方案估算花费：每个干活节点一次、讨论按发言次数 + 汇总，再留两成给重做和关卡退回 */
-export function estimatePlan(plan: WorkflowPlan, rates: EstimateRates): number {
-  const runs = plan.nodes.reduce(
-    (sum, n) =>
-      sum +
-      (n.kind === 'discussion'
-        ? (n.participants.length * n.rounds + 1) * rates.speechRun
-        : rates.workRun),
-    0,
-  );
-  return Math.ceil(runs * 1.2);
+/**
+ * 按方案估算花费：每个干活节点一次、讨论按发言次数 + 汇总，加上工具（预计次数 × 目录里的单价），
+ * 再留两成给重做和关卡退回
+ */
+export function estimatePlan(
+  plan: WorkflowPlan,
+  rates: EstimateRates,
+  tools: Pick<ToolEntry, 'key' | 'estimateMicro'>[],
+): number {
+  const price = new Map(tools.map((t) => [t.key, t.estimateMicro]));
+  const total = plan.nodes.reduce((sum, n) => {
+    if (n.kind === 'discussion')
+      return sum + (n.participants.length * n.rounds + 1) * rates.speechRun;
+    const toolCost = n.tools.reduce((s, t) => s + t.uses * (price.get(t.key) ?? 0), 0);
+    return sum + rates.workRun + toolCost;
+  }, 0);
+  return Math.ceil(total * 1.2);
 }

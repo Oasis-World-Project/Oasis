@@ -51,6 +51,7 @@ function contextOf(snapshot: Snapshot, node: Node): NodeContext {
       outputs: u.outputs,
     })),
     userNotes: node.userNotes,
+    tools: (node.config.tools ?? []).map((t) => t.key),
   };
 }
 

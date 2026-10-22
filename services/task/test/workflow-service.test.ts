@@ -227,6 +227,22 @@ harness.get('/internal/models/catalog', async () => ({
 /** 假 model-gateway：在当前网络用不了的模型 */
 let unavailable: string[] = [];
 harness.get('/internal/v1/models/unavailable', async () => ({ models: unavailable }));
+/** 假 model-gateway：工具目录（联网搜索没配 Key，不可用） */
+const toolEntry = (key: string, estimateMicro: number, available: boolean) => ({
+  key,
+  name: key,
+  description: `${key} 的说明`,
+  usage: `oasis-tool ${key}`,
+  unit: '次',
+  estimateMicro,
+  long: false,
+  available,
+  models: [],
+  defaultModel: null,
+});
+harness.get('/internal/v1/tools', async () => ({
+  tools: [toolEntry('image.generate', 40_000, true), toolEntry('web.search', 8_000, false)],
+}));
 harness.post('/internal/runs/:id/messages', async (request, reply) => {
   messages.push({
     runId: (request.params as { id: string }).id,
@@ -323,6 +339,7 @@ const work = (key: string, title = key) => ({
   model: 'deepseek/x',
   checks: [] as string[],
   expects: [] as string[],
+  tools: [] as { key: string; uses: number }[],
 });
 const discussion = (key: string, names: string[], rounds = 2) => ({
   key,
@@ -925,6 +942,42 @@ describe('规划（从任务单开始）', () => {
       { name: '首页文案', form: 'Markdown', nodeId: keyOf(detail, 'polish') },
     ]);
     expect(events.map((e) => (e.data as { status: string }).status)).toEqual(['running']);
+  });
+
+  it('规划员看得到能用的工具；节点分到的工具计入预估，并写进节点的说明', async () => {
+    const task = await fromSheet();
+    const [planner] = plannerRuns();
+    expect(planner?.prompt).toContain('- image.generate（image.generate，每次约 $0.040）');
+    expect(planner?.prompt).not.toContain('- web.search');
+
+    await plannerDone(
+      JSON.stringify({
+        nodes: [{ ...work('draw', '画首屏'), tools: [{ key: 'image.generate', uses: 2 }] }],
+        edges: [],
+        deliverables: { 首页文案: 'draw' },
+      }),
+    );
+    const detail = await service.get(OWNER, task.id);
+    // (3000 + 2 × 40000) × 1.2
+    expect(detail.estimateMicro).toBe(99_600);
+    expect(detail.nodes[0]?.tools).toEqual([{ key: 'image.generate', uses: 2 }]);
+    const prompt = runOf('draw', detail).prompt;
+    expect(prompt).toContain('【可以用的工具】\n- 这次分给你的：image.generate。');
+    expect(prompt).toContain('oasis-tool list');
+  });
+
+  it('方案里用了不能用的工具：退回给规划员改', async () => {
+    await fromSheet();
+    await plannerDone(
+      JSON.stringify({
+        nodes: [{ ...work('find'), tools: [{ key: 'web.search', uses: 1 }] }],
+        edges: [],
+        deliverables: { 首页文案: 'find' },
+      }),
+    );
+    expect(plannerRuns().at(-1)?.prompt).toContain(
+      '节点「find」的工具 web.search 不在可以用的工具里',
+    );
   });
 
   it('方案没过规划门：接着原会话让规划员改；改好了照常开跑', async () => {

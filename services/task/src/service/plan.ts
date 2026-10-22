@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import type { PlanNode, WorkflowPlan } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
+import type { NodeConfig } from '../repo/schema.ts';
 
 /** 找环：返回环上的一个节点名，没有环返回 undefined（Kahn 拓扑排序剩下的就是环上的） */
 export function findCycle(
@@ -53,6 +54,13 @@ export function validatePlan(plan: WorkflowPlan): void {
 
 /** 方案里的一个节点 → 库里的一行（status 由调用方定：方案里的是等待，用户新建的是新建） */
 export function nodeRow(n: PlanNode, id: string, status: 'waiting' | 'draft') {
+  const config: NodeConfig = {
+    checks: n.checks,
+    expects: n.expects,
+    ...(n.kind === 'discussion'
+      ? { participants: n.participants, rounds: n.rounds, round: 0, transcript: [] }
+      : { tools: n.tools }),
+  };
   return {
     id,
     key: n.key,
@@ -62,13 +70,7 @@ export function nodeRow(n: PlanNode, id: string, status: 'waiting' | 'draft') {
     goal: n.goal,
     model: n.model,
     status,
-    config: {
-      checks: n.checks,
-      expects: n.expects,
-      ...(n.kind === 'discussion'
-        ? { participants: n.participants, rounds: n.rounds, round: 0, transcript: [] }
-        : {}),
-    },
+    config,
   };
 }
 

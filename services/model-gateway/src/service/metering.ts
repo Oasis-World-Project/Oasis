@@ -54,6 +54,9 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
     /** 在当前网络用不了的模型：最近一次聊天调用因为地区限制被上游拒绝、之后没再成功过 */
     regionBlockedModels: () => repo.regionBlockedModels(),
 
+    /** 没产生费用就失败了（如长任务在供应商那边失败）：退回冻结，记下原因 */
+    fail: release,
+
     /** 冻结额度并登记调用。额度不够时 billing 返回 402，调用方应直接把错误交出去、不调上游。 */
     async hold(input: {
       caller: Caller;
@@ -61,6 +64,8 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
       model: string;
       amountMicro: number;
       requestId: string;
+      /** 冻结多久没结算就自动退回（长任务要更久）；不给用 billing 的默认 */
+      ttlMs?: number;
     }): Promise<MeteredCall> {
       const id = randomUUID();
       const { holdId } = await billing.json('POST', '/internal/holds', {
@@ -69,6 +74,7 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
           amountMicro: input.amountMicro,
           reason: 'model_call',
           ref: `call:${id}`,
+          ...(input.ttlMs ? { ttlMs: input.ttlMs } : {}),
         },
         requestId: input.requestId,
         schema: HoldResult,

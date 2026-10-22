@@ -44,3 +44,15 @@ export const outbox = pgTable('outbox', {
   createdAt: at('created_at').notNull().defaultNow(),
   publishedAt: at('published_at'),
 });
+
+/** 长任务（视频）：供应商的任务号、进度，以及结算时要用的调用信息 */
+export const toolJobs = pgTable('tool_jobs', {
+  id: uuid('id').primaryKey(),
+  tool: text('tool').notNull(),
+  providerJobId: text('provider_job_id').notNull(),
+  status: text('status', { enum: ['pending', 'completed', 'failed'] }).notNull(),
+  call: jsonb('call').$type<Record<string, unknown>>().notNull(),
+  error: text('error'),
+  createdAt: at('created_at').notNull().defaultNow(),
+  finishedAt: at('finished_at'),
+});

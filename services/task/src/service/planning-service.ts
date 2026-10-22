@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { Catalog, type CatalogEntry } from '@oasis/contracts/agent';
 import type { RunFinishedData } from '@oasis/contracts/events';
 import { RunBody } from '@oasis/contracts/harness';
+import { ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
@@ -67,6 +68,17 @@ export function createPlanning(deps: {
     return models.filter((m) => !blocked.has(m.providerModel));
   }
 
+  /** 规划员能用的外部工具：现在可用的（查不到时当作没有工具，方案照样能排） */
+  async function tools(): Promise<ToolEntry[]> {
+    return deps.modelGateway
+      .json('GET', '/internal/v1/tools', { schema: ToolList })
+      .then((r) => r.tools.filter((t) => t.available))
+      .catch((err: unknown) => {
+        logger.warn({ err }, '查不到工具目录，这次规划不用工具');
+        return [];
+      });
+  }
+
   /** 在事务里开一次规划员运行（从头排，或接着上一次改） */
   async function open(snapshot: Snapshot, w: Writer, fx: Effects, revise?: PlannerJob['revise']) {
     const runId = randomUUID();
@@ -89,6 +101,7 @@ export function createPlanning(deps: {
             brief: task.brief,
             sheet: task.sheet!,
             catalog: await catalog(),
+            tools: await tools(),
             limits: { maxNodes: config.maxNodes, defaultModel: config.defaultModel },
           });
       await harness.json('POST', '/internal/runs', {
@@ -125,14 +138,20 @@ export function createPlanning(deps: {
   }
 
   /** 方案通过了：建节点和连线，算预估和上限，开跑（预估超过用户设的上限时先问用户） */
-  async function adopt(snapshot: Snapshot, w: Writer, fx: Effects, plan: PlannerPlan) {
+  async function adopt(
+    snapshot: Snapshot,
+    w: Writer,
+    fx: Effects,
+    plan: PlannerPlan,
+    toolList: ToolEntry[],
+  ) {
     const { task } = snapshot;
     const sheet = task.sheet!;
     const rows = planToRows(plan);
     for (const node of rows.nodes) await w.addNode(node);
     for (const edge of rows.edges) await w.addEdge(edge);
     const idOf = new Map(rows.nodes.map((n) => [n.key, n.id]));
-    const estimate = estimatePlan(plan, config.rates);
+    const estimate = estimatePlan(plan, config.rates, toolList);
     const overUserCap = sheet.budgetMicro !== null && estimate > sheet.budgetMicro;
     await w.setTask({
       estimateMicro: estimate,
@@ -164,10 +183,11 @@ export function createPlanning(deps: {
   ): Promise<void> {
     const task = await store.findTaskByPlannerRun(result.runId);
     if (task?.status !== 'planning' || task.plannerRunId !== result.runId) return;
-    // 事务外读方案、查模型目录，事务里只做决定
+    // 事务外读方案、查模型和工具目录，事务里只做决定
+    const toolList = result.status === 'succeeded' ? await tools() : [];
     const checked =
       result.status === 'succeeded'
-        ? checkPlan(await readPlan(result.runId), task.sheet!, await catalog(), {
+        ? checkPlan(await readPlan(result.runId), task.sheet!, await catalog(), toolList, {
             maxNodes: config.maxNodes,
             defaultModel: config.defaultModel,
           })
@@ -177,7 +197,7 @@ export function createPlanning(deps: {
       if (current.status !== 'planning' || current.plannerRunId !== result.runId) return;
       if ('plan' in checked) {
         logger.info({ taskId: current.id, nodes: checked.plan.nodes.length }, '方案通过规划门');
-        return adopt(snapshot, w, fx, checked.plan);
+        return adopt(snapshot, w, fx, checked.plan, toolList);
       }
       if (current.planAttempts < config.maxAttempts) {
         logger.info(

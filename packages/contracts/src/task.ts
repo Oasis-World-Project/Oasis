@@ -28,12 +28,22 @@ const NodeCommon = {
   expects: z.array(ExpectedFile).max(10).default([]),
 };
 
+/** 节点要用的外部工具（ADR 0006 §5）：工具名和预计用几次（用来估算花费，不是硬上限） */
+export const NodeTool = z.object({
+  key: z.string().regex(/^[a-z0-9]+(\.[a-z0-9_-]+)+$/, '工具名形如 image.generate'),
+  uses: z.number().int().min(1).max(50).default(1),
+});
+export type NodeTool = z.infer<typeof NodeTool>;
+const NodeTools = z.array(NodeTool).max(6);
+
 /** 干活节点：一个 agent 完成一件事 */
 export const WorkPlanNode = z.object({
   ...NodeCommon,
   kind: z.literal('work'),
   /** 供应商型号，如 deepseek/deepseek-v4.1-flash */
   model: z.string().min(1).max(200),
+  /** 生图、联网搜索之类的外部工具；节点说明里只列这些 */
+  tools: NodeTools.default([]),
 });
 
 export const Participant = z.object({
@@ -174,6 +184,8 @@ export const NodeBody = z.object({
   model: z.string(),
   checks: z.array(z.string()),
   expects: z.array(z.string()),
+  /** 要用的外部工具（讨论节点没有；旧版 task 不返回时当作没有） */
+  tools: z.array(NodeTool).default([]),
   /** 讨论节点的参与者、轮数和讨论记录；干活节点为 null */
   discussion: z
     .object({
@@ -252,7 +264,7 @@ export const TaskList = z.object({ tasks: z.array(TaskSummary) });
 /** 对节点追问 / 补充要求 */
 export const NodeMessageBody = z.object({ text: z.string().trim().min(1).max(20_000) });
 
-/** 修改还没开始的节点：只改给出的字段；类型不能改，参与者和轮数只对讨论节点有效 */
+/** 修改还没开始的节点：只改给出的字段；类型不能改，参与者和轮数只对讨论节点有效，工具只对干活节点有效 */
 export const UpdateNodeBody = z
   .object({
     title: NodeCommon.title,
@@ -263,6 +275,7 @@ export const UpdateNodeBody = z
     expects: z.array(ExpectedFile).max(10),
     participants: z.array(Participant).min(2).max(5),
     rounds: z.number().int().min(1).max(5),
+    tools: NodeTools,
   })
   .partial()
   .refine((body) => Object.keys(body).length > 0, '至少要改一项');

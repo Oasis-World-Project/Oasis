@@ -10,6 +10,7 @@ const MAX_TEXT = 20_000;
 
 export interface ToolConfig {
   imageModels: string[];
+  videoModels: string[];
   speechModels: string[];
   transcribeModels: string[];
   jevModel: string;
@@ -35,7 +36,7 @@ interface ToolOutcome {
   cost: { costMicro: number; source: CostSource };
 }
 
-export interface ToolDef {
+interface ToolBase {
   key: string;
   name: string;
   description: string;
@@ -44,7 +45,6 @@ export interface ToolDef {
   estimateMicro: number;
   /** 调用前冻结多少（微美元），按参数算 */
   holdMicro: (args: Record<string, unknown>) => number;
-  long: boolean;
   /** 依赖哪个供应商（没配 Key 就不能用） */
   provider: 'openrouter' | 'tavily';
   /** 可以选的模型；不需要模型的工具返回空 */
@@ -52,8 +52,28 @@ export interface ToolDef {
   args: z.ZodType<Record<string, unknown>>;
   /** 这次调用记在哪个模型名下（调用记录、地区检查用） */
   modelOf: (args: Record<string, unknown>, models: string[]) => string;
+}
+
+/** 马上出结果的工具 */
+interface QuickTool extends ToolBase {
+  long: false;
   run: (deps: ToolDeps, args: Record<string, unknown>, model: string) => Promise<ToolOutcome>;
 }
+
+/** 长任务的进度 */
+type LongState =
+  | { state: 'pending' }
+  | { state: 'failed'; error: string }
+  | { state: 'completed'; outcome: ToolOutcome };
+
+/** 长任务（视频）：先提交拿到供应商的任务号，之后查进度，做好了再取结果 */
+interface LongTool extends ToolBase {
+  long: true;
+  start: (deps: ToolDeps, args: Record<string, unknown>, model: string) => Promise<string>;
+  check: (deps: ToolDeps, providerJobId: string) => Promise<LongState>;
+}
+
+export type ToolDef = QuickTool | LongTool;
 
 const usd = (value: number) => Math.round(value * USD_TO_MICRO);
 const clip = (text: string, max = MAX_TEXT) =>
@@ -103,6 +123,14 @@ const FetchArgs = z.object({
   depth: z.enum(['basic', 'advanced']).default('basic'),
 });
 
+const VideoArgs = z.object({
+  prompt: z.string().trim().min(1).max(4000),
+  duration: z.coerce.number().int().min(1).max(20).default(5),
+  resolution: z.enum(['480p', '720p', '768p', '1080p']).optional(),
+  aspect_ratio: z.enum(['16:9', '9:16', '1:1', '4:3', '3:4']).optional(),
+  model: optionalModel,
+});
+
 const DecideArgs = z.object({
   question: z.string().trim().min(1).max(1000),
   /** 选一个：给出选项 */
@@ -127,6 +155,12 @@ const ImagesResponse = z.looseObject({
 });
 const TranscriptionResponse = z.looseObject({
   text: z.string(),
+  usage: z.looseObject({ cost: z.number().optional() }).optional(),
+});
+const VideoSubmitResponse = z.looseObject({ id: z.string() });
+const VideoStatusResponse = z.looseObject({
+  status: z.string(),
+  error: z.unknown().optional(),
   usage: z.looseObject({ cost: z.number().optional() }).optional(),
 });
 const DecisionResponse = z.looseObject({
@@ -339,6 +373,68 @@ export const TOOLS: ToolDef[] = [
         text: parts.join('\n\n'),
         files: [],
         cost: { costMicro: credits * deps.config.tavilyCreditMicro, source: 'provider' },
+      };
+    },
+  },
+  {
+    key: 'video.generate',
+    name: '生成视频',
+    description:
+      '按文字描述生成一段短视频（几秒到十几秒，商品展示、宣传片段、场景镜头……），存成 MP4。要等几分钟。',
+    usage:
+      'oasis-tool video.generate --prompt "画面描述" [--duration 5] [--resolution 720p] [--aspect_ratio 16:9] --out out/视频.mp4（没等到就按提示运行 oasis-tool wait <任务号>）',
+    unit: '秒',
+    estimateMicro: 500_000,
+    holdMicro: (args) => (Number(args.duration) || 5) * 250_000,
+    long: true,
+    provider: 'openrouter',
+    models: (config) => config.videoModels,
+    args: VideoArgs,
+    modelOf: pickModel,
+    async start(deps, args, model) {
+      const a = VideoArgs.parse(args);
+      const response = await deps.upstream(() =>
+        deps.openrouter.submitVideo(
+          {
+            model,
+            prompt: a.prompt,
+            duration: a.duration,
+            ...(a.resolution ? { resolution: a.resolution } : {}),
+            ...(a.aspect_ratio ? { aspect_ratio: a.aspect_ratio } : {}),
+          },
+          deps.signal,
+        ),
+      );
+      return VideoSubmitResponse.parse(await response.json()).id;
+    },
+    async check(deps, id) {
+      const response = await deps.openrouter.videoStatus(id);
+      if (!response.ok) throw new Error(`查视频进度失败：${response.status}`);
+      const body = VideoStatusResponse.parse(await response.json());
+      if (body.status === 'failed' || body.status === 'cancelled' || body.status === 'expired') {
+        return {
+          state: 'failed',
+          error: `视频没生成出来：${JSON.stringify(body.error ?? body.status)}`,
+        };
+      }
+      if (body.status !== 'completed') return { state: 'pending' };
+      const content = await deps.openrouter.videoContent(id, 0);
+      if (!content.ok) throw new Error(`下载视频失败：${content.status}`);
+      const video = Buffer.from(await content.arrayBuffer());
+      return {
+        state: 'completed',
+        outcome: {
+          text: `视频生成好了（${video.length} 字节）。`,
+          files: [
+            {
+              name: 'video.mp4',
+              mediaType: content.headers.get('content-type') ?? 'video/mp4',
+              base64: video.toString('base64'),
+            },
+          ],
+          cost:
+            typeof body.usage?.cost === 'number' ? provider(body.usage.cost) : estimate(500_000),
+        },
       };
     },
   },

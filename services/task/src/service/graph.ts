@@ -49,9 +49,12 @@ export function checkNewNode(snapshot: Snapshot, node: PlanNode): void {
 
 /** 修改节点：算出要写的列和配置 */
 export function nodeChanges(node: Node, body: UpdateNodeBody) {
-  const { title, role, goal, model, checks, expects, participants, rounds } = body;
+  const { title, role, goal, model, checks, expects, participants, rounds, tools } = body;
   if (node.kind !== 'discussion' && (participants !== undefined || rounds !== undefined)) {
     throw new HttpError(400, 'invalid_node', '只有讨论节点有参与者和轮数');
+  }
+  if (node.kind === 'discussion' && tools !== undefined) {
+    throw new HttpError(400, 'invalid_node', '只有干活节点能用工具');
   }
   if (participants) checkParticipants(title ?? node.title, participants);
   const config: NodeConfig = {
@@ -60,6 +63,7 @@ export function nodeChanges(node: Node, body: UpdateNodeBody) {
     ...(expects ? { expects } : {}),
     ...(participants ? { participants } : {}),
     ...(rounds ? { rounds } : {}),
+    ...(tools ? { tools } : {}),
   };
   return {
     ...(title !== undefined ? { title } : {}),

@@ -16,6 +16,9 @@ import type { ToolService } from '../service/tool-service.ts';
 
 const KeyIdParams = z.object({ keyId: z.uuid() });
 const ToolParams = z.object({ key: z.string().min(1).max(50) });
+const JobParams = z.object({ jobId: z.uuid() });
+/** 工具的参数里可能带着要转写的录音（base64），放宽请求体上限（入口代理是 50MB） */
+const TOOL_BODY = { bodyLimit: 40 * 1024 * 1024 };
 const Attribution = z.object({
   [OASIS_HEADERS.taskId]: z.uuid().optional(),
   [OASIS_HEADERS.nodeId]: z.uuid().optional(),
@@ -82,6 +85,11 @@ export function registerRoutes(
     return tools.call({ caller, key, args, requestId: request.id, signal: abortOnClose(reply) });
   }
 
+  function toolJob(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
+    const { jobId } = parseWith(JobParams, request.params);
+    return tools.job(caller, jobId, abortOnClose(reply));
+  }
+
   async function decide(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
     const body = parseWith(DecisionRequest, request.body);
     return decisions.decide({ caller, requestId: request.id, body, signal: abortOnClose(reply) });
@@ -98,8 +106,12 @@ export function registerRoutes(
 
   /** 工具目录（规划员、节点说明用）；调用工具（ADR 0006） */
   app.get('/internal/v1/tools', async () => ({ tools: await tools.list() }));
-  app.post('/internal/v1/tools/:key', (request, reply) =>
+  app.post('/internal/v1/tools/:key', TOOL_BODY, (request, reply) =>
     useTool(internalCaller(request), request, reply),
+  );
+  /** 长任务（视频）的进度和结果 */
+  app.get('/internal/v1/tools/jobs/:jobId', (request, reply) =>
+    toolJob(internalCaller(request), request, reply),
   );
 
   /** 在当前网络用不了的模型（task 的规划员挑模型时排除它们） */
@@ -132,7 +144,10 @@ export function registerRoutes(
     await runKeys.authenticate(request.headers.authorization);
     return { tools: await tools.list() };
   });
-  app.post('/run/v1/tools/:key', async (request, reply) =>
+  app.post('/run/v1/tools/:key', TOOL_BODY, async (request, reply) =>
     useTool(await runKeys.authenticate(request.headers.authorization), request, reply),
+  );
+  app.get('/run/v1/tools/jobs/:jobId', async (request, reply) =>
+    toolJob(await runKeys.authenticate(request.headers.authorization), request, reply),
   );
 }

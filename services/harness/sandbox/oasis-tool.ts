@@ -5,6 +5,8 @@
 //   oasis-tool image.generate --prompt "…" --out out/图.png
 //   oasis-tool web.search --query "…"
 //   oasis-tool audio.transcribe --file in/录音.mp3
+//   oasis-tool video.generate --prompt "…" --out out/视频.mp4   长任务：提交后自己等，等不到就给任务号
+//   oasis-tool wait <任务号> --out out/视频.mp4                   接着等长任务
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, extname, join } from 'node:path';
 
@@ -21,7 +23,17 @@ interface ToolResult {
   text: string;
   files: ToolFile[];
   costMicro: number;
+  job?: { id: string };
 }
+interface ToolJob {
+  status: 'pending' | 'completed' | 'failed';
+  result?: ToolResult;
+  error?: string;
+}
+
+/** 长任务每隔几秒问一次进度；一次命令最多等多久（秒），免得超过运行命令的时间限制 */
+const POLL_MS = 5_000;
+const waitSeconds = () => Number(process.env.OASIS_TOOL_WAIT_SECONDS) || 100;
 interface ToolEntry {
   key: string;
   name: string;
@@ -94,6 +106,34 @@ async function list(): Promise<void> {
   }
 }
 
+async function save(result: ToolResult, out: string | undefined): Promise<void> {
+  say(result.text);
+  const targets = targetsFor(result.files, out);
+  for (const [i, f] of result.files.entries()) {
+    const target = targets[i] ?? join('out', f.name);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, Buffer.from(f.base64, 'base64'));
+    say(`已保存：${target}`);
+  }
+  say(`花费：$${(result.costMicro / 1_000_000).toFixed(4)}`);
+}
+
+/** 等长任务做完：做好了就保存；等到上限还没好，告诉 AI 怎么接着等 */
+async function wait(id: string, out: string | undefined): Promise<void> {
+  const deadline = Date.now() + waitSeconds() * 1000;
+  for (;;) {
+    const job = (await request(`/tools/jobs/${encodeURIComponent(id)}`)) as ToolJob;
+    if (job.status === 'completed' && job.result) return save(job.result, out);
+    if (job.status === 'failed') throw new Error(job.error ?? '没做出来');
+    if (Date.now() + POLL_MS > deadline) {
+      const again = `oasis-tool wait ${id}${out ? ` --out ${JSON.stringify(out)}` : ''}`;
+      say(`还没做好（任务号 ${id}）。先做别的，过一会儿运行：${again}`);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+  }
+}
+
 async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
   if (file) {
@@ -106,24 +146,25 @@ async function run(key: string, argv: string[]): Promise<void> {
     method: 'POST',
     body: JSON.stringify({ args }),
   })) as ToolResult;
+  if (!result.job) return save(result, out);
   say(result.text);
-  const targets = targetsFor(result.files, out);
-  for (const [i, f] of result.files.entries()) {
-    const target = targets[i] ?? join('out', f.name);
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, Buffer.from(f.base64, 'base64'));
-    say(`已保存：${target}`);
-  }
-  say(`花费：$${(result.costMicro / 1_000_000).toFixed(4)}`);
+  return wait(result.job.id, out);
 }
 
-async function main(argv: string[]): Promise<void> {
+export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
   if (!command || command === 'help' || command === '--help') {
-    say('用法：oasis-tool list | oasis-tool <工具名> --参数 值 … [--out 路径]');
+    say(
+      '用法：oasis-tool list | oasis-tool <工具名> --参数 值 … [--out 路径] | oasis-tool wait <任务号>',
+    );
     return;
   }
   if (command === 'list') return list();
+  if (command === 'wait') {
+    const [id, ...more] = rest;
+    if (!id) throw new Error('wait 后面要写任务号');
+    return wait(id, parseArgs(more).out);
+  }
   return run(command, rest);
 }
 

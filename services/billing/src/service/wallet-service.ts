@@ -49,11 +49,12 @@ export function createWalletService(deps: {
     },
 
     async hold(input: CreateHoldBody): Promise<HoldResult> {
-      const amountMicro = applyMultiplier(input.amountMicro, deps.priceMultiplier);
+      const { ttlMs, ...fields } = input;
+      const amountMicro = applyMultiplier(fields.amountMicro, deps.priceMultiplier);
       const hold = await repo.createHold({
-        ...input,
+        ...fields,
         amountMicro,
-        expiresAt: new Date(now().getTime() + deps.holdTtlMs),
+        expiresAt: new Date(now().getTime() + (ttlMs ?? deps.holdTtlMs)),
       });
       if (!hold) throw new HttpError(402, 'insufficient_balance', '额度不够了');
       return { holdId: hold.id, heldMicro: hold.amountMicro };
