@@ -309,7 +309,7 @@ services:
 
   model-gateway:
     <<: *node-service
-    # OpenRouter Key 只写在 services/model-gateway/.env 里；其余配置由下面的 environment 覆盖
+    # OpenRouter、Tavily 的 Key 只写在 services/model-gateway/.env 里；其余配置由下面的 environment 覆盖
     env_file:
       - path: ../../services/model-gateway/.env
         required: false

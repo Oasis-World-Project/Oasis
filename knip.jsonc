@@ -10,6 +10,10 @@
       "entry": [],
       "project": [],
     },
+    // 沙箱镜像里的命令（不经 package.json 引用，由 Dockerfile 装进镜像）
+    "services/harness": {
+      "entry": ["sandbox/oasis-tool.ts"],
+    },
     // exports 用了 "./*" 通配，knip 推不出对应的源码入口
     "packages/contracts": {
       "entry": ["src/*.ts"],

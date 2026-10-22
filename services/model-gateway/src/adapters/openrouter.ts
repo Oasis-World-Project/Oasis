@@ -1,4 +1,5 @@
-// OpenRouter 的最小客户端：价格表、chat completions（OpenAI 兼容）、结构化决策（Decisions API）。
+// OpenRouter 的最小客户端：价格表、chat completions（OpenAI 兼容）、结构化决策（Decisions API），
+// 以及多模态：生图、配音、转写和查询某次生成的实际花费（ADR 0006）。
 // 换供应商只换这个文件。
 import { z } from 'zod';
 
@@ -23,6 +24,11 @@ export interface ProviderClient {
   listPrices(): Promise<Map<string, ModelPrice>>;
   chatCompletions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   decisions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
+  images(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
+  speech(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
+  transcriptions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
+  /** 某次生成的实际花费（美元）；查不到返回 undefined */
+  generationCost(id: string): Promise<number | undefined>;
 }
 
 export function createOpenRouterClient(options: {
@@ -73,6 +79,20 @@ export function createOpenRouterClient(options: {
 
     decisions(body, signal) {
       return post(options.decisionsUrl, body, signal);
+    },
+
+    images: (body, signal) => post(`${base}/images`, body, signal),
+    speech: (body, signal) => post(`${base}/audio/speech`, body, signal),
+    transcriptions: (body, signal) => post(`${base}/audio/transcriptions`, body, signal),
+
+    async generationCost(id) {
+      const response = await fetch(`${base}/generation?id=${encodeURIComponent(id)}`, {
+        headers: { authorization: `Bearer ${options.apiKey ?? ''}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) return undefined;
+      const body = (await response.json()) as { data?: { total_cost?: number } };
+      return typeof body.data?.total_cost === 'number' ? body.data.total_cost : undefined;
     },
   };
 }

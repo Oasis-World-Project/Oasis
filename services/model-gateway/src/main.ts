@@ -23,6 +23,8 @@ import { createChatService } from './service/chat-service.ts';
 import { createDecisionService } from './service/decision-service.ts';
 import { createMeter } from './service/metering.ts';
 import { createRunKeyService } from './service/run-key-service.ts';
+import { createToolService } from './service/tool-service.ts';
+import { createTavilyClient } from './adapters/tavily.ts';
 
 /** 定时刷新价格表；拉取失败时保留上一版，1 分钟后重试。 */
 function startPriceBook(provider: ProviderClient, refreshMs: number, logger: Logger) {
@@ -88,6 +90,23 @@ await startService({
       chat: createChatService({ ...common, defaultMaxTokens: config.DEFAULT_MAX_TOKENS }),
       decisions: createDecisionService(common),
       runKeys: createRunKeyService({ repo: createRunKeysRepo(resources.postgres.pool) }),
+      tools: createToolService({
+        openrouter: provider,
+        tavily: createTavilyClient({
+          baseUrl: config.TAVILY_BASE_URL,
+          apiKey: config.TAVILY_API_KEY,
+        }),
+        meter,
+        config: {
+          imageModels: config.TOOL_IMAGE_MODELS,
+          speechModels: config.TOOL_SPEECH_MODELS,
+          transcribeModels: config.TOOL_TRANSCRIBE_MODELS,
+          jevModel: config.TOOL_JEV_MODEL,
+          tavilyCreditMicro: config.TAVILY_CREDIT_MICRO,
+          speechMicroPerChar: config.TOOL_SPEECH_MICRO_PER_CHAR,
+        },
+        logger,
+      }),
       unavailableModels: meter.regionBlockedModels,
     });
   },

@@ -2,7 +2,7 @@
 import type { ChatMessage } from '@oasis/contracts/model-gateway';
 import type { ModelPrice } from '../adapters/openrouter.ts';
 
-const USD_TO_MICRO = 1_000_000;
+export const USD_TO_MICRO = 1_000_000;
 
 /** 一条消息里参与计费的字符数：文字内容、多段内容和工具调用都算上。 */
 function messageChars(message: ChatMessage): number {

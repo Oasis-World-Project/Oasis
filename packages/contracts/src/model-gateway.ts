@@ -70,3 +70,49 @@ export const RunKeyCreated = z.object({
   expiresAt: z.iso.datetime(),
 });
 export type RunKeyCreated = z.infer<typeof RunKeyCreated>;
+
+// ---- 工具（ADR 0006）：生图、配音、转写、联网搜索、网页抓取、Jev 判断……都经 model-gateway 计量 ----
+
+/** 目录里的一个工具：给规划员和节点里的 AI 看 */
+export const ToolEntry = z.object({
+  /** 稳定的名字，如 image.generate */
+  key: z.string(),
+  name: z.string(),
+  /** 能做什么（普通话） */
+  description: z.string(),
+  /** 用法：oasis-tool 命令示例 */
+  usage: z.string(),
+  /** 计费单位，如 张、次、千字 */
+  unit: z.string(),
+  /** 用一次大约多少钱（微美元），规划时估算用 */
+  estimateMicro: z.number().int().nonnegative(),
+  /** 要等几十秒到几分钟的长任务 */
+  long: z.boolean(),
+  /** 能不能用（供应商 Key 没配就不能用） */
+  available: z.boolean(),
+  /** 可以指定的模型（已去掉当前网络用不了的）；不需要模型的工具为空 */
+  models: z.array(z.string()),
+  defaultModel: z.string().nullable(),
+});
+export type ToolEntry = z.infer<typeof ToolEntry>;
+export const ToolList = z.object({ tools: z.array(ToolEntry) });
+
+/** 调用工具：参数按工具各自校验 */
+export const ToolCallBody = z.object({ args: z.record(z.string(), z.unknown()) });
+
+/** 工具交回的文件（图片、音频……） */
+export const ToolFile = z.object({
+  name: z.string(),
+  mediaType: z.string(),
+  base64: z.string(),
+});
+
+/** 工具的结果：给 AI 看的文字、结构化数据（可选）、文件，以及这次花了多少钱 */
+export const ToolResult = z.object({
+  tool: z.string(),
+  text: z.string(),
+  data: z.unknown().optional(),
+  files: z.array(ToolFile),
+  costMicro: z.number().int().nonnegative(),
+});
+export type ToolResult = z.infer<typeof ToolResult>;

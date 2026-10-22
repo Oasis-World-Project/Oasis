@@ -27,7 +27,7 @@ export interface CallsRepo {
   start(call: NewCall): Promise<void>;
   /** 写结局；有事件时在同一个事务里写进发件箱 */
   finish(id: string, outcome: CallOutcome, event?: EventEnvelope): Promise<void>;
-  /** 最近一次聊天调用因为「地区不可用」失败的模型（之后没再成功过） */
+  /** 最近一次聊天或工具调用因为「地区不可用」失败的模型（之后没再成功过） */
   regionBlockedModels(): Promise<string[]>;
 }
 
@@ -41,7 +41,7 @@ export function createCallsRepo(pool: pg.Pool): CallsRepo {
       const result = await db.execute<{ model: string }>(sql`
         select model from (
           select distinct on (model) model, status, error from calls
-          where kind = 'chat' and finished_at is not null
+          where kind in ('chat', 'tool') and finished_at is not null
           order by model, finished_at desc
         ) latest
         where status = 'failed' and error ilike ${`%${REGION_ERROR}%`}

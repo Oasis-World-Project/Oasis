@@ -5,7 +5,7 @@ const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' 
 
 export const calls = pgTable('calls', {
   id: uuid('id').primaryKey(),
-  kind: text('kind', { enum: ['chat', 'decision'] }).notNull(),
+  kind: text('kind', { enum: ['chat', 'decision', 'tool'] }).notNull(),
   payerId: uuid('payer_id').notNull(),
   runId: uuid('run_id'),
   taskId: uuid('task_id'),

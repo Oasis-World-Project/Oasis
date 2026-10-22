@@ -68,7 +68,7 @@ export const CallSettled = {
     taskId: z.uuid(),
     nodeId: z.uuid().nullable(),
     runId: z.uuid().nullable(),
-    kind: z.enum(['chat', 'decision']),
+    kind: z.enum(['chat', 'decision', 'tool']),
     model: z.string(),
     /** 实际扣了多少（微美元） */
     chargedMicro: z.number().int().nonnegative(),

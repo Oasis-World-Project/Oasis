@@ -4,6 +4,8 @@ proxy_buffering off;
 proxy_request_buffering off;
 proxy_read_timeout 600s;
 proxy_send_timeout 600s;
-# 沙箱自己带来的 x-oasis-* 一律丢掉：付费人只由临时 Key 决定
+# 沙箱自己带来的 x-oasis-* 一律丢掉：付费人和归属（任务、节点）只由临时 Key 决定
 proxy_set_header X-Oasis-User-Id "";
 proxy_set_header X-Oasis-Payer-Id "";
+proxy_set_header X-Oasis-Task-Id "";
+proxy_set_header X-Oasis-Node-Id "";
