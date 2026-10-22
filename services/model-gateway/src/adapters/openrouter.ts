@@ -1,4 +1,5 @@
-// OpenRouter（OpenAI 兼容）的最小客户端：价格表 + chat completions。换供应商只换这个文件。
+// OpenRouter 的最小客户端：价格表、chat completions（OpenAI 兼容）、结构化决策（Decisions API）。
+// 换供应商只换这个文件。
 import { z } from 'zod';
 
 const ModelsResponse = z.object({
@@ -21,13 +22,27 @@ export interface ProviderClient {
   readonly configured: boolean;
   listPrices(): Promise<Map<string, ModelPrice>>;
   chatCompletions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
+  decisions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
 }
 
 export function createOpenRouterClient(options: {
   baseUrl: string;
+  /** Decisions API 不在 /api/v1 下，单独配置 */
+  decisionsUrl: string;
   apiKey: string | undefined;
 }): ProviderClient {
   const base = options.baseUrl.replace(/\/$/, '');
+  const post = (url: string, body: Record<string, unknown>, signal: AbortSignal) =>
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${options.apiKey ?? ''}`,
+        'content-type': 'application/json',
+        'x-title': 'Oasis',
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
   return {
     configured: Boolean(options.apiKey),
 
@@ -53,16 +68,11 @@ export function createOpenRouterClient(options: {
     },
 
     chatCompletions(body, signal) {
-      return fetch(`${base}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${options.apiKey ?? ''}`,
-          'content-type': 'application/json',
-          'x-title': 'Oasis',
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
+      return post(`${base}/chat/completions`, body, signal);
+    },
+
+    decisions(body, signal) {
+      return post(options.decisionsUrl, body, signal);
     },
   };
 }

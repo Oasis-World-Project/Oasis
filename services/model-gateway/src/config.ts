@@ -5,12 +5,14 @@ export const modelGatewayEnv = {
   ...postgresAndEventBus.env,
   BILLING_URL: z.url(),
   OPENROUTER_BASE_URL: z.url().default('https://openrouter.ai/api/v1'),
+  /** Jev 等结构化决策模型的接口 */
+  OPENROUTER_DECISIONS_URL: z.url().default('https://openrouter.ai/api/alpha/decisions'),
   /** 没配置时服务照常启动，但模型调用返回 503 */
   OPENROUTER_API_KEY: z
     .string()
     .optional()
     .transform((value) => value || undefined),
-  /** 调用方没给 max_tokens 时的上限（也用于估算冻结金额） */
+  /** 调用方没给输出上限（max_tokens / max_completion_tokens）时用这个（也用于估算冻结金额） */
   DEFAULT_MAX_TOKENS: z.coerce.number().int().positive().max(32_000).default(2048),
   /** 模型价格表多久刷新一次 */
   PRICING_REFRESH_MS: z.coerce

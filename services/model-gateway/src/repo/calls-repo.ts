@@ -3,7 +3,11 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { calls } from './schema.ts';
 
-type NewCall = Pick<typeof calls.$inferInsert, 'id' | 'payerId' | 'model' | 'requestId' | 'holdId'>;
+export type CallKind = (typeof calls.$inferInsert)['kind'];
+type NewCall = Pick<
+  typeof calls.$inferInsert,
+  'id' | 'kind' | 'payerId' | 'runId' | 'taskId' | 'nodeId' | 'model' | 'requestId' | 'holdId'
+>;
 export type CallOutcome = Pick<
   typeof calls.$inferInsert,
   | 'status'

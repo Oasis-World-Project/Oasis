@@ -13,6 +13,24 @@ describe('冻结金额估算', () => {
     // 48 × 0.1 + 1000 × 0.5 = 504.8 微美元
     expect(estimateHoldMicro(PRICE, messages, 1000)).toBe(505);
   });
+  it('工具调用和工具定义也计入输入', () => {
+    const withTools = [
+      ...messages,
+      {
+        role: 'assistant' as const,
+        content: null,
+        tool_calls: [
+          {
+            id: 'c',
+            type: 'function' as const,
+            function: { name: 'write', arguments: 'x'.repeat(90) },
+          },
+        ],
+      },
+    ];
+    expect(estimateInputTokens(withTools)).toBeGreaterThan(estimateInputTokens(messages) + 60);
+    expect(estimateInputTokens(messages, 150)).toBe(estimateInputTokens(messages) + 100);
+  });
   it('再便宜也至少冻结 1 微美元', () => {
     expect(estimateHoldMicro({ prompt: 0, completion: 0 }, messages, 10)).toBe(1);
   });

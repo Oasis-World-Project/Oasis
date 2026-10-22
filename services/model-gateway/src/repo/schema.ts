@@ -5,7 +5,11 @@ const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' 
 
 export const calls = pgTable('calls', {
   id: uuid('id').primaryKey(),
+  kind: text('kind', { enum: ['chat', 'decision'] }).notNull(),
   payerId: uuid('payer_id').notNull(),
+  runId: uuid('run_id'),
+  taskId: uuid('task_id'),
+  nodeId: uuid('node_id'),
   model: text('model').notNull(),
   requestId: text('request_id'),
   status: text('status', { enum: ['running', 'succeeded', 'failed'] }).notNull(),
@@ -18,4 +22,16 @@ export const calls = pgTable('calls', {
   error: text('error'),
   createdAt: at('created_at').notNull().defaultNow(),
   finishedAt: at('finished_at'),
+});
+
+export const runKeys = pgTable('run_keys', {
+  id: uuid('id').primaryKey(),
+  keyHash: text('key_hash').notNull().unique(),
+  payerId: uuid('payer_id').notNull(),
+  runId: uuid('run_id').notNull(),
+  taskId: uuid('task_id'),
+  nodeId: uuid('node_id'),
+  expiresAt: at('expires_at').notNull(),
+  revokedAt: at('revoked_at'),
+  createdAt: at('created_at').notNull().defaultNow(),
 });

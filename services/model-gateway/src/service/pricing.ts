@@ -4,12 +4,20 @@ import type { ModelPrice } from '../adapters/openrouter.ts';
 
 const USD_TO_MICRO = 1_000_000;
 
+/** 一条消息里参与计费的字符数：文字内容、多段内容和工具调用都算上。 */
+function messageChars(message: ChatMessage): number {
+  const { content, tool_calls: toolCalls } = message;
+  const contentChars =
+    typeof content === 'string' ? content.length : content ? JSON.stringify(content).length : 0;
+  return contentChars + (toolCalls ? JSON.stringify(toolCalls).length : 0);
+}
+
 /**
  * 输入 token 数的保守估计：按 1.5 个字符 1 个 token 算（中文接近 1:1，英文约 4:1，宁可多冻结），
- * 每条消息再加 8 个 token 的格式开销。
+ * 每条消息再加 8 个 token 的格式开销。extraChars 是消息以外也要发给模型的内容（如工具定义）。
  */
-export function estimateInputTokens(messages: readonly ChatMessage[]): number {
-  const chars = messages.reduce((total, message) => total + message.content.length, 0);
+export function estimateInputTokens(messages: readonly ChatMessage[], extraChars = 0): number {
+  const chars = messages.reduce((total, message) => total + messageChars(message), extraChars);
   return Math.ceil(chars / 1.5) + messages.length * 8;
 }
 
@@ -18,8 +26,10 @@ export function estimateHoldMicro(
   price: ModelPrice,
   messages: readonly ChatMessage[],
   maxTokens: number,
+  extraChars = 0,
 ): number {
-  const usd = estimateInputTokens(messages) * price.prompt + maxTokens * price.completion;
+  const usd =
+    estimateInputTokens(messages, extraChars) * price.prompt + maxTokens * price.completion;
   return Math.max(1, Math.ceil(usd * USD_TO_MICRO));
 }
 
@@ -41,6 +51,7 @@ export function actualCostMicro(input: {
   price: ModelPrice | undefined;
   messages: readonly ChatMessage[];
   completionChars: number;
+  extraChars?: number;
 }): { costMicro: number; source: CostSource } {
   const { usage, price } = input;
   if (typeof usage?.cost === 'number' && usage.cost >= 0) {
@@ -56,7 +67,7 @@ export function actualCostMicro(input: {
   }
   if (!price) return { costMicro: 0, source: 'estimate' };
   const usd =
-    estimateInputTokens(input.messages) * price.prompt +
+    estimateInputTokens(input.messages, input.extraChars) * price.prompt +
     Math.ceil(input.completionChars / 1.5) * price.completion;
   return { costMicro: Math.ceil(usd * USD_TO_MICRO), source: 'estimate' };
 }

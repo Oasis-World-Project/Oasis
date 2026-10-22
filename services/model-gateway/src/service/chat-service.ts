@@ -1,25 +1,24 @@
 // 一次模型调用的完整计量流程：冻结 → 调上游 → 转发并读取用量 → 按实际花费结算（失败则退回冻结）。
-import { randomUUID } from 'node:crypto';
-import { HoldResult, SettleResult } from '@oasis/contracts/billing';
 import type { ChatCompletionRequest } from '@oasis/contracts/model-gateway';
-import { createSseParser, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
+import { createSseParser, HttpError, type Logger } from '@oasis/service-kit';
 import type { ModelPrice, ProviderClient } from '../adapters/openrouter.ts';
-import type { CallsRepo } from '../repo/calls-repo.ts';
+import type { Caller, MeteredCall, Meter } from './metering.ts';
 import { actualCostMicro, estimateHoldMicro, type Usage } from './pricing.ts';
 
-export interface PreparedCall {
-  id: string;
-  holdId: string;
-  payerId: string;
-  requestId: string;
-  body: ChatCompletionRequest & { max_tokens: number };
+export interface PreparedCall extends MeteredCall {
+  /** 发给上游的请求体（调用方没给输出上限时补上 max_tokens） */
+  body: ChatCompletionRequest;
+  /** 输出 token 上限，用于估算冻结金额 */
+  maxOutputTokens: number;
+  /** 消息之外也要计入输入的字符数（工具定义） */
+  extraChars: number;
   price: ModelPrice | undefined;
 }
 
 const decoder = () => new TextDecoder();
 
 /** 把上游拒绝的原因归成几类，让用户看到能照着做的提示；细节只进日志和调用记录。 */
-function upstreamError(status: number, detail: string): HttpError {
+export function upstreamError(status: number, detail: string): HttpError {
   if (status === 403 && /not available in your region/i.test(detail)) {
     return new HttpError(502, 'provider_region_unavailable', '这个模型在当前网络所在的地区用不了');
   }
@@ -29,28 +28,27 @@ function upstreamError(status: number, detail: string): HttpError {
   return new HttpError(502, 'provider_error', '模型服务返回了错误，请稍后再试');
 }
 
+/** 流式片段里本次生成的字符数（文字和工具调用参数），用于没有用量信息时估算花费。 */
+function deltaChars(delta: {
+  content?: string | null;
+  tool_calls?: { function?: { arguments?: string } }[];
+}): number {
+  const toolChars = (delta.tool_calls ?? []).reduce(
+    (total, call) => total + (call.function?.arguments?.length ?? 0),
+    0,
+  );
+  return (delta.content?.length ?? 0) + toolChars;
+}
+
 export function createChatService(deps: {
   provider: ProviderClient;
-  billing: ServiceClient;
-  repo: CallsRepo;
+  meter: Meter;
   prices: () => Map<string, ModelPrice>;
   defaultMaxTokens: number;
   fallbackHoldMicro: number;
   logger: Logger;
 }) {
-  const { provider, billing, repo, logger } = deps;
-
-  async function release(call: PreparedCall, error: string): Promise<void> {
-    await billing
-      .json('POST', `/internal/holds/${call.holdId}/release`, {
-        body: {},
-        requestId: call.requestId,
-      })
-      .catch((err: unknown) =>
-        logger.error({ err, holdId: call.holdId }, '退回冻结失败，等待过期自动回收'),
-      );
-    await repo.finish(call.id, { status: 'failed', error, chargedMicro: 0 });
-  }
+  const { provider, meter, logger } = deps;
 
   async function settle(
     call: PreparedCall,
@@ -58,65 +56,42 @@ export function createChatService(deps: {
     completionChars: number,
     error?: string,
   ) {
-    const { costMicro, source } = actualCostMicro({
+    const cost = actualCostMicro({
       usage,
       price: call.price,
       messages: call.body.messages,
       completionChars,
+      extraChars: call.extraChars,
     });
-    let chargedMicro: number | null = null;
-    try {
-      ({ chargedMicro } = await billing.json('POST', `/internal/holds/${call.holdId}/settle`, {
-        body: {
-          costMicro,
-          detail: { model: call.body.model, callId: call.id, costSource: source },
-        },
-        requestId: call.requestId,
-        schema: SettleResult,
-      }));
-    } catch (err) {
-      logger.error({ err, holdId: call.holdId, costMicro }, '结算失败，冻结将过期退回');
-    }
-    await repo.finish(call.id, {
-      status: error ? 'failed' : 'succeeded',
-      error: error ?? null,
-      promptTokens: usage?.prompt_tokens ?? null,
-      completionTokens: usage?.completion_tokens ?? null,
-      upstreamCostMicro: costMicro,
-      chargedMicro,
-      costSource: source,
-    });
+    await meter.settle(call, cost, usage, error);
   }
 
   return {
     /** 冻结额度并登记调用。额度不够时抛 402，上游不会被调用。 */
     async prepare(input: {
-      payerId: string;
+      caller: Caller;
       requestId: string;
       body: ChatCompletionRequest;
     }): Promise<PreparedCall> {
       if (!provider.configured) {
         throw new HttpError(503, 'provider_not_configured', '模型服务还没有配置 API Key');
       }
-      const body = { ...input.body, max_tokens: input.body.max_tokens ?? deps.defaultMaxTokens };
+      const requested = input.body.max_completion_tokens ?? input.body.max_tokens;
+      const maxOutputTokens = requested ?? deps.defaultMaxTokens;
+      const body = requested ? input.body : { ...input.body, max_tokens: maxOutputTokens };
+      const extraChars = input.body.tools ? JSON.stringify(input.body.tools).length : 0;
       const price = deps.prices().get(body.model);
       const amountMicro = price
-        ? estimateHoldMicro(price, body.messages, body.max_tokens)
+        ? estimateHoldMicro(price, body.messages, maxOutputTokens, extraChars)
         : deps.fallbackHoldMicro;
-      const id = randomUUID();
-      const { holdId } = await billing.json('POST', '/internal/holds', {
-        body: { userId: input.payerId, amountMicro, reason: 'model_call', ref: `call:${id}` },
-        requestId: input.requestId,
-        schema: HoldResult,
-      });
-      await repo.start({
-        id,
-        payerId: input.payerId,
+      const call = await meter.hold({
+        caller: input.caller,
+        kind: 'chat',
         model: body.model,
+        amountMicro,
         requestId: input.requestId,
-        holdId,
       });
-      return { id, holdId, payerId: input.payerId, requestId: input.requestId, body, price };
+      return { ...call, body, maxOutputTokens, extraChars, price };
     },
 
     /** 调上游。还没开始返回内容就失败时退回冻结，并抛出给调用方的错误。 */
@@ -128,12 +103,12 @@ export function createChatService(deps: {
           signal,
         );
       } catch (err) {
-        await release(call, `上游连接失败：${String(err)}`);
+        await meter.release(call, `上游连接失败：${String(err)}`);
         throw new HttpError(503, 'provider_unavailable', '模型服务暂时连不上', { cause: err });
       }
       if (!response.ok) {
         const detail = (await response.text().catch(() => '')).slice(0, 500);
-        await release(call, `上游返回 ${response.status}：${detail}`);
+        await meter.release(call, `上游返回 ${response.status}：${detail}`);
         logger.warn({ status: response.status, detail, model: call.body.model }, '上游拒绝了请求');
         throw upstreamError(response.status, detail);
       }
@@ -153,10 +128,11 @@ export function createChatService(deps: {
         try {
           const chunk = JSON.parse(data) as {
             usage?: Usage;
-            choices?: { delta?: { content?: string } }[];
+            choices?: { delta?: Parameters<typeof deltaChars>[0] }[];
           };
           if (chunk.usage) usage = chunk.usage;
-          completionChars += chunk.choices?.[0]?.delta?.content?.length ?? 0;
+          const delta = chunk.choices?.[0]?.delta;
+          if (delta) completionChars += deltaChars(delta);
         } catch {
           // 不是 JSON 的事件照样转发，只是不参与计量
         }
@@ -183,9 +159,10 @@ export function createChatService(deps: {
     async finishJson(call: PreparedCall, response: Response): Promise<unknown> {
       const result = (await response.json()) as {
         usage?: Usage;
-        choices?: { message?: { content?: string } }[];
+        choices?: { message?: Parameters<typeof deltaChars>[0] }[];
       };
-      await settle(call, result.usage, result.choices?.[0]?.message?.content?.length ?? 0);
+      const message = result.choices?.[0]?.message;
+      await settle(call, result.usage, message ? deltaChars(message) : 0);
       return result;
     },
   };
