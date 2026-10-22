@@ -73,7 +73,8 @@ export function translateNotification(method: string, params: unknown): AgentEve
     case 'assistant/message': {
       const message = data.message as { content?: unknown } | undefined;
       const text = textOf(message?.content);
-      return text ? { kind: 'assistant_text', data: { text: clip(text) } } : undefined;
+      // 模型调工具前常吐一段空白，不算它说了话
+      return text.trim() ? { kind: 'assistant_text', data: { text: clip(text) } } : undefined;
     }
     case 'tool/call':
       return {

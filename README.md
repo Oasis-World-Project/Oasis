@@ -38,7 +38,7 @@ pnpm sandbox:build
 ```
 
 - 沙箱容器在内部网络 `oasis-sandbox` 里，**不通外网**，只能访问 `pnpm infra:up` 起的沙箱入口代理 `sandbox-ingress`。代理只放行「调模型」和「Jev 决策」两条路径，转给 model-gateway 的 `/run/v1/*`，凭每次运行专用的临时 Key 计费；访问其他任何地址都会失败。
-- 本机开发时 model-gateway 跑在宿主机上，入口代理经 `host.docker.internal:4108` 访问它。如果运行时报「模型服务连不上」，把 `services/model-gateway/.env` 里的 `HOST` 改成 `0.0.0.0` 再重启（这会让局域网也能访问 4108，只在自己电脑上这样做）。
+- 本机开发时 model-gateway 跑在宿主机上，入口代理经 `host.docker.internal:4108` 访问它。Docker Desktop（Windows / macOS）上默认配置就能通（2026-10-22 在 Windows 上实测）；在 Linux 宿主机上要把 `services/model-gateway/.env` 里的 `HOST` 改成 `0.0.0.0`（这会让局域网也能访问 4108，只在自己电脑上这样做）。
 - harness 的 `/ready` 会检查 Docker、沙箱镜像和网络是否都在。设计见 [ADR 0003](docs/adr/0003-task-workflow.md)。
 
 需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 9 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。

@@ -66,6 +66,14 @@ describe('dsh 事件翻译', () => {
     expect(translateNotification(...event('step/start', {}))).toBeUndefined();
   });
 
+  it('只有空白的 AI 发言不记（模型调工具前常吐一段空白）', () => {
+    expect(
+      translateNotification(
+        ...event('assistant/message', { message: { content: [{ type: 'text', text: '  \n' }] } }),
+      ),
+    ).toBeUndefined();
+  });
+
   it('过长的内容截断', () => {
     const translated = translateNotification(
       ...event('tool/call', { callId: 'c', name: 'write', arguments: 'x'.repeat(10_000) }),
