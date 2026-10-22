@@ -1,7 +1,7 @@
 // 每一次上游调用（聊天、决策）共用的计量步骤：冻结额度并登记 → 按实际花费结算，或失败退回。
 import { randomUUID } from 'node:crypto';
 import { HoldResult, SettleResult } from '@oasis/contracts/billing';
-import type { Logger, ServiceClient } from '@oasis/service-kit';
+import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import type { CallKind, CallsRepo } from '../repo/calls-repo.ts';
 import type { CostSource, Usage } from './pricing.ts';
 
@@ -20,8 +20,32 @@ export interface MeteredCall {
   model: string;
 }
 
+/** 把上游拒绝的原因归成几类，让用户看到能照着做的提示；细节只进日志和调用记录。 */
+function upstreamError(status: number, detail: string): HttpError {
+  if (status === 403 && /not available in your region/i.test(detail)) {
+    return new HttpError(502, 'provider_region_unavailable', '这个模型在当前网络所在的地区用不了');
+  }
+  if (status === 429) {
+    return new HttpError(503, 'provider_busy', '模型服务现在太忙，请稍后再试');
+  }
+  return new HttpError(502, 'provider_error', '模型服务返回了错误，请稍后再试');
+}
+
 export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; logger: Logger }) {
   const { billing, repo, logger } = deps;
+
+  async function release(call: MeteredCall, error: string): Promise<void> {
+    await billing
+      .json('POST', `/internal/holds/${call.holdId}/release`, {
+        body: {},
+        requestId: call.requestId,
+      })
+      .catch((err: unknown) =>
+        logger.error({ err, holdId: call.holdId }, '退回冻结失败，等待过期自动回收'),
+      );
+    await repo.finish(call.id, { status: 'failed', error, chargedMicro: 0 });
+  }
+
   return {
     /** 冻结额度并登记调用。额度不够时 billing 返回 402，调用方应直接把错误交出去、不调上游。 */
     async hold(input: {
@@ -56,17 +80,22 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
       return { id, holdId, requestId: input.requestId, model: input.model };
     },
 
-    /** 上游没产生费用就失败了：退回冻结。退回失败也不要紧，冻结过期后会被自动回收。 */
-    async release(call: MeteredCall, error: string): Promise<void> {
-      await billing
-        .json('POST', `/internal/holds/${call.holdId}/release`, {
-          body: {},
-          requestId: call.requestId,
-        })
-        .catch((err: unknown) =>
-          logger.error({ err, holdId: call.holdId }, '退回冻结失败，等待过期自动回收'),
-        );
-      await repo.finish(call.id, { status: 'failed', error, chargedMicro: 0 });
+    /** 调上游。还没产生费用就失败（连不上、被拒绝）时退回冻结，并抛出给调用方看的错误。 */
+    async callUpstream(call: MeteredCall, request: () => Promise<Response>): Promise<Response> {
+      let response: Response;
+      try {
+        response = await request();
+      } catch (err) {
+        await release(call, `上游连接失败：${String(err)}`);
+        throw new HttpError(503, 'provider_unavailable', '模型服务暂时连不上', { cause: err });
+      }
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => '')).slice(0, 500);
+        await release(call, `上游返回 ${response.status}：${detail}`);
+        logger.warn({ status: response.status, detail, model: call.model }, '上游拒绝了请求');
+        throw upstreamError(response.status, detail);
+      }
+      return response;
     },
 
     /** 按实际花费结算（多冻结的部分退回），并记下用量和花费来源。 */

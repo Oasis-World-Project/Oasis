@@ -72,7 +72,6 @@ await startService({
       meter,
       prices: priceBook.current,
       fallbackHoldMicro: config.FALLBACK_HOLD_MICRO,
-      logger,
     };
     registerRoutes(app, {
       chat: createChatService({ ...common, defaultMaxTokens: config.DEFAULT_MAX_TOKENS }),

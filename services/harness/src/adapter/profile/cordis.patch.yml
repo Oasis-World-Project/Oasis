@@ -1,0 +1,109 @@
+# Oasis 自己的 dsh 组合（ADR 0003 §5）。镜像构建时从 dsh 自带的 sdk 模板复制出 oasis profile，再叠上这一层。
+# 原则：dsh 只当可拆装的底座。用不上的插件一律关掉（少一个工具，每次模型调用就少一段提示词）；
+# 模型一律走 Oasis 的 model-gateway（经沙箱入口代理），凭每次运行专用的临时 Key 计费。
+# 运行时由环境变量注入：OASIS_MODEL_BASE_URL、OASIS_RUN_KEY、OASIS_MODELS（JSON 数组）、OASIS_MODEL。
+
+# ---- 模型：只有一个路由 oasis，指向 model-gateway ----
+- id: llm-pi-ai
+  config:
+    providers:
+      oasis:
+        displayName: Oasis
+        apiKeyEnv: OASIS_RUN_KEY
+        api: openai-completions
+        baseURL: !!js process.env.OASIS_MODEL_BASE_URL
+        models: !!js JSON.parse(process.env.OASIS_MODELS ?? '[]')
+- id: agent-default-model
+  config:
+    provider: oasis
+    model: !!js process.env.OASIS_MODEL
+
+# ---- 关掉：DeepSeek 自家账号、模型和网页搜索（模型和联网都走 Oasis） ----
+- id: deepseek-account
+  disabled: true
+- id: deepseek-llm-api-extensions
+  disabled: true
+- id: llm-deepseek
+  disabled: true
+- id: llm-deepseek-account
+  disabled: true
+- id: session-log-deepseek
+  disabled: true
+- id: plugin-package-inventory-deepseek
+  disabled: true
+- id: web
+  disabled: true
+- id: web-search-deepseek
+  disabled: true
+- id: web-deepseek-api
+  disabled: true
+- id: web-fetch-http
+  disabled: true
+- id: tool-web
+  disabled: true
+
+# ---- 关掉：运行中问用户（Oasis 规定节点里的 AI 不主动追问） ----
+- id: user-questions
+  disabled: true
+
+# ---- 关掉：编排类能力（工作流由 Oasis 的 task 服务管，节点里不再套一层） ----
+- id: ptc-runtime
+  disabled: true
+- id: workflow-ptc
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: goal
+  disabled: true
+- id: goal-round-driver
+  disabled: true
+- id: command-goal
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: plan-mode
+  disabled: true
+- id: jobs
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: subagent-fork-in-process
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+
+# ---- 关掉：插件管理、远程访问、热重载、遥测、自动起标题（会多花一次模型调用） ----
+- id: tool-plugin-manager
+  disabled: true
+- id: plugin-manager
+  disabled: true
+- id: remote-access
+  disabled: true
+- id: typert-gateway
+  disabled: true
+- id: hmr
+  disabled: true
+- id: otel
+  disabled: true
+- id: session-telemetry-otel
+  disabled: true
+- id: session-title
+  disabled: true
+- id: session-title-llm
+  disabled: true
+- id: command-feedback
+  disabled: true
+- id: mcp-resources
+  disabled: true
+
+# ---- 关掉：Windows PowerShell、切换工作目录（沙箱是 Linux，工作目录固定为 /workspace） ----
+- id: pwsh-sandbox
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-working-directory
+  disabled: true

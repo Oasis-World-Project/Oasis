@@ -74,14 +74,15 @@
   - 对等待中的节点：记为它开始时的附加要求；用户也可以直接改它的目标。
 - 节点的输入只认上游实际交付的产出，不会因为上游被改过而重新比对原需求。
 
-### 5. dsh 的定制
+### 5. dsh 的定制（5.1 已落地）
 
 - 精确锁定 `@deepseek-ai/dsh@0.2.1-rc.2`。只有 `services/harness/src/adapter/` 能接触它。
-- 不用 dsh 自带的 profile，在 Adapter 里维护 Oasis 自己的组合，接入方式是 `--profile sdk`（JSON-RPC stdio）。
+- 不用 dsh 自带的 profile，在 Adapter 里维护 Oasis 自己的组合（`services/harness/src/adapter/profile/cordis.patch.yml`，镜像里叫 `oasis` profile，由 sdk 模板派生），接入方式是 SDK 模式的 JSON-RPC stdio。5.1 实测：模型可见的工具从 25 个降到 10 个（bash、read、write、edit、glob、grep、read_image、todo_write、skill、subagent），单次请求从约 2.4 万字符降到约 1.1 万字符，启动约 1 秒。
   - **拆掉**：DeepSeek 账号与官方模型、DeepSeek 网页搜索、goal、plan mode、jobs、schedule、自动起标题、ask_user / user-questions、审批、插件管理与插件市场、dsh 自带的 workflow 工具、遥测，以及其他用不上的。
   - **装上**：Oasis 模型路由（指向 model-gateway）、Oasis 工具（从目录生成，经 model-gateway 调用）。
   - 以后需要改 dsh 内核时，按 fork + patch 的方式记录在案。
 - 容器内权限用 `danger-full-access`，隔离由容器负责。
+- 运行中用户的追问：发进这个节点自己的 dsh 会话，排在当前这一轮之后处理（带完整上下文），只影响这个节点。
 - 会话存档：运行结束后，把 dsh 的会话存储打包存进对象存储。用途是互审打回后的重做（带着原来的上下文继续改）和服务崩溃后的恢复，不用于追问已完成的节点（已完成的节点不接受追问）。
 
 ### 6. 执行器与运行环境
@@ -93,7 +94,8 @@
 - **GPU 策略**：厂商接口能做的一律调接口；没有接口的（如 Blender 渲染、视频重建 3D）用云 GPU；不依赖任何开发机或本地硬件。
 - 运行环境是一组镜像，都叫 `oasis/harness-sandbox-<环境>:<dsh 版本>`：基础、文档、媒体（ffmpeg）、3D（Blender）、浏览器（Playwright、axe）。规划时为每个节点选一个。
 - **网络**：
-  - 容器只能访问 model-gateway，以及一个只放行软件包仓库（npm、PyPI 等）的出口代理。
+  - 沙箱容器在内部网络 `oasis-sandbox`（不通外网）里，只能访问入口代理 `sandbox-ingress`。入口代理只放行 `/v1/chat/completions` 和 `/v1/decisions` 两条路径，转给 model-gateway 的 `/run/v1/*`，并丢掉沙箱自带的 `x-oasis-*` 头；其他路径一律 403。这样沙箱里的代码碰不到任何服务的 `/internal` 接口（5.1 实测：不带 Key 401、其他路径 403、宿主机服务和外网都连不上）。
+  - 5.4 再加一个只放行软件包仓库（npm、PyPI 等）的出口代理。
   - 抓取网页、联网搜索也是工具，经 model-gateway 走，可计量、可审计。
   - 输入和产出由 harness 拷进拷出，容器不直接访问对象存储。
 - **资源限制**：每个容器有 CPU、内存、时长上限；运行结束或取消时销毁容器、作废临时 Key。
@@ -101,7 +103,7 @@
 
 ### 7. 模型与工具调用
 
-- **临时 Key**：harness 向 model-gateway `POST /internal/run-keys` 申请，绑定付款人、任务、节点、运行和过期时间，只返回一次。库里存 sha256。运行结束就作废。
+- **临时 Key**：harness 向 model-gateway `POST /internal/run-keys` 申请，绑定付款人、任务、节点、运行和过期时间，只返回一次。库里存 sha256。运行结束就作废（`POST /internal/run-keys/:keyId/revoke`）。
 - **运行专用入口**：model-gateway 新开 `/run/v1/*`（OpenAI 兼容），用 Bearer 临时 Key 鉴权，只对沙箱网络开放，gateway 不转发。
 - **chat completions 契约扩展**：
   - 消息支持 `tool_calls`、`role: tool`、`content: null` 和内容数组。

@@ -1,6 +1,6 @@
 // 一次模型调用的完整计量流程：冻结 → 调上游 → 转发并读取用量 → 按实际花费结算（失败则退回冻结）。
 import type { ChatCompletionRequest } from '@oasis/contracts/model-gateway';
-import { createSseParser, HttpError, type Logger } from '@oasis/service-kit';
+import { createSseParser, HttpError } from '@oasis/service-kit';
 import type { ModelPrice, ProviderClient } from '../adapters/openrouter.ts';
 import type { Caller, MeteredCall, Meter } from './metering.ts';
 import { actualCostMicro, estimateHoldMicro, type Usage } from './pricing.ts';
@@ -16,17 +16,6 @@ export interface PreparedCall extends MeteredCall {
 }
 
 const decoder = () => new TextDecoder();
-
-/** 把上游拒绝的原因归成几类，让用户看到能照着做的提示；细节只进日志和调用记录。 */
-export function upstreamError(status: number, detail: string): HttpError {
-  if (status === 403 && /not available in your region/i.test(detail)) {
-    return new HttpError(502, 'provider_region_unavailable', '这个模型在当前网络所在的地区用不了');
-  }
-  if (status === 429) {
-    return new HttpError(503, 'provider_busy', '模型服务现在太忙，请稍后再试');
-  }
-  return new HttpError(502, 'provider_error', '模型服务返回了错误，请稍后再试');
-}
 
 /** 流式片段里本次生成的字符数（文字和工具调用参数），用于没有用量信息时估算花费。 */
 function deltaChars(delta: {
@@ -46,9 +35,8 @@ export function createChatService(deps: {
   prices: () => Map<string, ModelPrice>;
   defaultMaxTokens: number;
   fallbackHoldMicro: number;
-  logger: Logger;
 }) {
-  const { provider, meter, logger } = deps;
+  const { provider, meter } = deps;
 
   async function settle(
     call: PreparedCall,
@@ -95,24 +83,10 @@ export function createChatService(deps: {
     },
 
     /** 调上游。还没开始返回内容就失败时退回冻结，并抛出给调用方的错误。 */
-    async open(call: PreparedCall, signal: AbortSignal): Promise<Response> {
-      let response: Response;
-      try {
-        response = await provider.chatCompletions(
-          { ...call.body, usage: { include: true } },
-          signal,
-        );
-      } catch (err) {
-        await meter.release(call, `上游连接失败：${String(err)}`);
-        throw new HttpError(503, 'provider_unavailable', '模型服务暂时连不上', { cause: err });
-      }
-      if (!response.ok) {
-        const detail = (await response.text().catch(() => '')).slice(0, 500);
-        await meter.release(call, `上游返回 ${response.status}：${detail}`);
-        logger.warn({ status: response.status, detail, model: call.body.model }, '上游拒绝了请求');
-        throw upstreamError(response.status, detail);
-      }
-      return response;
+    open(call: PreparedCall, signal: AbortSignal): Promise<Response> {
+      return meter.callUpstream(call, () =>
+        provider.chatCompletions({ ...call.body, usage: { include: true } }, signal),
+      );
     },
 
     /** 流式：把上游的 SSE 原样转给调用方，同时读出用量，结束后结算。 */

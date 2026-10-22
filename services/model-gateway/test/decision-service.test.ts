@@ -59,7 +59,6 @@ beforeAll(async () => {
     meter: createMeter({ billing: createServiceClient('billing', billingUrl), repo, logger }),
     prices: () => new Map([['typesafe/jev-1.14', { prompt: 0.000000042, completion: 0 }]]),
     fallbackHoldMicro: 200_000,
-    logger,
   });
 });
 afterAll(async () => {

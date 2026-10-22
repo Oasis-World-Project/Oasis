@@ -2,23 +2,36 @@
   "name": "@oasis/harness",
   "version": "0.0.0",
   "private": true,
-  "description": "Agent 运行时：唯一接触 DeepSeek Harness 的服务，把工作流节点变成一次 agent 运行",
+  "description": "Agent 运行时：唯一接触 DeepSeek Harness 的服务，每次运行起一个沙箱容器跑 dsh",
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "migrations"
   ],
   "scripts": {
     "dev": "node --env-file-if-exists=.env --watch src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@oasis/service-kit": "workspace:*"
+    "@aws-sdk/client-s3": "3.1154.0",
+    "@oasis/contracts": "workspace:*",
+    "@oasis/service-kit": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:",
+    "tar-stream": "3.2.2",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@oasis/tsconfig": "workspace:*",
     "@types/node": "catalog:",
-    "typescript": "catalog:"
+    "@types/pg": "catalog:",
+    "@types/tar-stream": "3.1.5",
+    "fastify": "catalog:",
+    "pino": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

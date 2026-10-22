@@ -21,6 +21,7 @@
     "infra:ps": "node scripts/compose.mjs ps",
     "stack:up": "node scripts/compose.mjs up --services",
     "stack:logs": "node scripts/compose.mjs logs",
+    "sandbox:build": "docker build -f infra/images/harness-sandbox-base/Dockerfile -t oasis/harness-sandbox-base:0.2.1-rc.2 .",
     "check:engineering": "node scripts/check-engineering.mjs",
     "cleanup": "node scripts/cleanup-task.mjs",
     "prepare": "lefthook install"

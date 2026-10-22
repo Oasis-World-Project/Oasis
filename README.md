@@ -29,6 +29,18 @@ pnpm desktop        # （可选）另开一个终端，打开 Electron 桌面窗
 - **地区限制**：OpenRouter 按发出请求的网络判断地区。部分模型（目前是 Claude、GPT、Gemini）在一些地区用不了，界面会提示「这个 AI 在当前网络所在的地区用不了」，这次调用不扣钱。换到这些模型支持的网络，或者部署到海外服务器上就能用。
 - **计费**：每次调用先冻结一笔预估金额，完成后按 OpenRouter 报告的实际花费 × `BILLING_PRICE_MULTIPLIER`（billing 的配置，默认 1.0）扣除，多冻结的部分退回。规则见 [ADR 0002](docs/adr/0002-auth-billing-chat-loop.md)。
 
+### Agent 运行（harness）
+
+每次 agent 运行，harness 都会通过本机 Docker 起一个沙箱容器，里面跑精确锁定版本的 DeepSeek Harness（dsh）。第一次用之前先构建沙箱镜像（约 1.4 GB，需要能访问 npm）：
+
+```bash
+pnpm sandbox:build
+```
+
+- 沙箱容器在内部网络 `oasis-sandbox` 里，**不通外网**，只能访问 `pnpm infra:up` 起的沙箱入口代理 `sandbox-ingress`。代理只放行「调模型」和「Jev 决策」两条路径，转给 model-gateway 的 `/run/v1/*`，凭每次运行专用的临时 Key 计费；访问其他任何地址都会失败。
+- 本机开发时 model-gateway 跑在宿主机上，入口代理经 `host.docker.internal:4108` 访问它。如果运行时报「模型服务连不上」，把 `services/model-gateway/.env` 里的 `HOST` 改成 `0.0.0.0` 再重启（这会让局域网也能访问 4108，只在自己电脑上这样做）。
+- harness 的 `/ready` 会检查 Docker、沙箱镜像和网络是否都在。设计见 [ADR 0003](docs/adr/0003-task-workflow.md)。
+
 需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 9 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。
 
 ## 服务
@@ -56,6 +68,7 @@ pnpm desktop        # （可选）另开一个终端，打开 Electron 桌面窗
 | NATS 2.15（JetStream） | `127.0.0.1:4222`，监控页 http://127.0.0.1:8222 |
 | SeaweedFS（S3） | http://127.0.0.1:8333 |
 | Mailpit | SMTP `127.0.0.1:1025`，收件箱 http://127.0.0.1:8025 |
+| 沙箱入口代理 | 只在内部网络 `oasis-sandbox` 里，宿主机访问不到 |
 
 ## 目录
 
@@ -76,4 +89,5 @@ docs/       工程方向、架构决策记录（ADR）
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、依赖方向、死代码、重复率、数据库迁移检查 |
 | `pnpm cleanup` | 清理临时产物并报告释放的空间 |
 | `pnpm infra:ps` / `pnpm infra:down` | 查看 / 停止全部容器 |
+| `pnpm sandbox:build` | 构建 agent 沙箱镜像（dsh 版本锁定在镜像标签里） |
 | `pnpm stack:up` / `pnpm stack:logs` | 容器里跑全套 / 看日志 |

@@ -141,6 +141,24 @@ services:
       timeout: 3s
       retries: 20
 
+  # 沙箱入口代理（ADR 0003 §6）：沙箱容器在内部网络 oasis-sandbox 里，不通外网，只能访问它；
+  # 它只放行 chat completions 和 Jev 决策两条路径，转到 model-gateway 的 /run/v1/*。
+  # 本机开发时 model-gateway 跑在宿主机上，经 host.docker.internal 访问；pnpm stack:up 时改为容器里的 model-gateway。
+  sandbox-ingress:
+    image: oasis/sandbox-ingress:1.29.3
+    build: ../images/sandbox-ingress
+    pull_policy: build
+    environment:
+      MODEL_GATEWAY_UPSTREAM: ${SANDBOX_INGRESS_UPSTREAM:-http://host.docker.internal:4108}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks: [default, sandbox]
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   # ---------- 服务（profile: services）----------
   # 唯一对外的服务；不依赖上游先启动，某个上游挂了只影响它自己的路由
   gateway:
@@ -267,7 +285,23 @@ services:
       <<: [*runtime-env, *nats-env]
       PORT: 4107
       DATABASE_URL: postgres://svc_harness:${HARNESS_DB_PASSWORD:?}@postgres:5432/harness?sslmode=disable
-    depends_on: *data-deps
+      MODEL_GATEWAY_URL: http://model-gateway:4108
+      S3_ENDPOINT: http://seaweedfs:8333
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?}
+      DOCKER_SOCKET: /var/run/docker.sock
+    # harness 要通过宿主机的 Docker 起沙箱容器（权限较大，只给 harness）。
+    # socket 的属组在 Linux 上一般是 docker 组，用 DOCKER_SOCKET_GID 指定；Docker Desktop 上是 0。
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - ${DOCKER_SOCKET_GID:-0}
+    depends_on:
+      <<: *data-deps
+      seaweedfs:
+        condition: service_healthy
+      sandbox-ingress:
+        condition: service_healthy
 
   model-gateway:
     <<: *node-service
@@ -287,6 +321,13 @@ services:
       DATABASE_URL: postgres://svc_model_gateway:${MODEL_GATEWAY_DB_PASSWORD:?}@postgres:5432/model_gateway?sslmode=disable
       BILLING_URL: http://billing:4102
     depends_on: *data-deps
+
+networks:
+  default: {}
+  # 沙箱容器所在的内部网络：不通外网，名字固定，harness 按名字把沙箱接进来
+  sandbox:
+    name: oasis-sandbox
+    internal: true
 
 volumes:
   postgres-data:

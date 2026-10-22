@@ -18,6 +18,7 @@
 | `pnpm dev` | 9 个服务 + Web（Vite，http://127.0.0.1:5173）在本机运行，改代码自动重启 / 热更新 |
 | `pnpm desktop` | 打开 Electron 桌面窗口（加载上面的 Web 地址，需先 `pnpm dev`） |
 | `pnpm stack:up` / `stack:logs` | 中间件 + 9 个服务全部在容器里跑（集成验证）/ 看日志 |
+| `pnpm sandbox:build` | 构建 agent 沙箱镜像 `oasis/harness-sandbox-base:<dsh 版本>` |
 | `pnpm lint` · `pnpm typecheck` · `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、依赖方向、死代码、重复率、迁移检查 |
 | `pnpm cleanup` | 任务收尾清理并报告释放空间（`--build`、`--docker` 可选） |
@@ -26,7 +27,7 @@
 
 1. **微服务边界**：每个服务独占数据库（同一个 PostgreSQL 实例里的独立 database + 独立账号，其他账号连不上）。服务之间只走 HTTP API 或 NATS 事件；跨服务 import 由 dependency-cruiser 拦截。
 2. **共享包**：`packages/*` 只放契约（contracts）、基础设施库（service-kit）、设计令牌和 tsconfig，不放业务逻辑。
-3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness；dsh 版本精确锁定。
+3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness（含 `profile/` 下 Oasis 自己的 dsh 组合）；dsh 版本精确锁定在沙箱镜像里。沙箱容器只能经入口代理访问 model-gateway 的 `/run/v1/*`，不得给沙箱开其他网络通路（ADR 0003）。
 4. **模型调用**：所有模型调用（聊天、Jev、dsh 里的 agent）都经过 `services/model-gateway`，由它计量并上报 billing。
 5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。
 6. **配置外置**：配置全部来自环境变量，每个服务提供 `.env.example`；禁止硬编码地址、端口、密钥；禁止 `if (env === 'local')` 一类分支。

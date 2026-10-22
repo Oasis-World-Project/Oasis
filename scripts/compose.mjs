@@ -41,6 +41,15 @@ const result = spawnSync(
     ...action,
     ...extra,
   ],
-  { cwd: ROOT, stdio: 'inherit', env: { ...process.env, GIT_COMMIT: commit } },
+  {
+    cwd: ROOT,
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      GIT_COMMIT: commit,
+      // 全套在容器里跑时，沙箱入口代理直接转给容器里的 model-gateway（本机开发时转给宿主机）
+      ...(withServices ? { SANDBOX_INGRESS_UPSTREAM: 'http://model-gateway:4108' } : {}),
+    },
+  },
 );
 process.exit(result.status ?? 1);

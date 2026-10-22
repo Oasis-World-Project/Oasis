@@ -77,7 +77,6 @@ beforeAll(async () => {
     prices: () => new Map([['vendor/model', { prompt: 0.0000001, completion: 0.0000005 }]]),
     defaultMaxTokens: 1000,
     fallbackHoldMicro: 200_000,
-    logger: silent,
   });
 });
 afterAll(async () => {
@@ -194,7 +193,6 @@ describe('一次模型调用', () => {
       prices: () => new Map(),
       defaultMaxTokens: 1000,
       fallbackHoldMicro: 1,
-      logger: silent,
     });
     await expect(
       unconfigured.prepare({ caller: { payerId: PAYER }, requestId: 'r', body: request }),

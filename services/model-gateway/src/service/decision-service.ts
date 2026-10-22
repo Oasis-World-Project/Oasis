@@ -1,9 +1,8 @@
 // 结构化决策（Jev 等，OpenRouter Decisions API）：冻结 → 调上游 → 按 usage.cost 结算。
 // 决策模型只按输入收费、不生成文字，所以冻结金额只按输入估算，并留出余量。
 import type { DecisionRequest } from '@oasis/contracts/model-gateway';
-import { HttpError, type Logger } from '@oasis/service-kit';
+import { HttpError } from '@oasis/service-kit';
 import type { ModelPrice, ProviderClient } from '../adapters/openrouter.ts';
-import { upstreamError } from './chat-service.ts';
 import type { Caller, Meter } from './metering.ts';
 import type { Usage } from './pricing.ts';
 
@@ -28,9 +27,8 @@ export function createDecisionService(deps: {
   meter: Meter;
   prices: () => Map<string, ModelPrice>;
   fallbackHoldMicro: number;
-  logger: Logger;
 }) {
-  const { provider, meter, logger } = deps;
+  const { provider, meter } = deps;
 
   return {
     async decide(input: {
@@ -57,19 +55,7 @@ export function createDecisionService(deps: {
         requestId: input.requestId,
       });
 
-      let response: Response;
-      try {
-        response = await provider.decisions(body, input.signal);
-      } catch (err) {
-        await meter.release(call, `上游连接失败：${String(err)}`);
-        throw new HttpError(503, 'provider_unavailable', '模型服务暂时连不上', { cause: err });
-      }
-      if (!response.ok) {
-        const detail = (await response.text().catch(() => '')).slice(0, 500);
-        await meter.release(call, `上游返回 ${response.status}：${detail}`);
-        logger.warn({ status: response.status, detail, model: body.model }, '决策模型拒绝了请求');
-        throw upstreamError(response.status, detail);
-      }
+      const response = await meter.callUpstream(call, () => provider.decisions(body, input.signal));
 
       const result = (await response.json()) as { usage?: Usage };
       const usage = result.usage;

@@ -1,0 +1,24 @@
+# MODEL_GATEWAY_UPSTREAM 由环境变量注入（nginx 镜像启动时用 envsubst 替换）
+server {
+  listen 8080;
+  client_max_body_size 50m;
+
+  location = /healthz {
+    access_log off;
+    return 200 "ok\n";
+  }
+
+  location = /v1/chat/completions {
+    proxy_pass ${MODEL_GATEWAY_UPSTREAM}/run/v1/chat/completions;
+    include /etc/nginx/conf.d/sandbox-proxy.inc;
+  }
+
+  location = /v1/decisions {
+    proxy_pass ${MODEL_GATEWAY_UPSTREAM}/run/v1/decisions;
+    include /etc/nginx/conf.d/sandbox-proxy.inc;
+  }
+
+  location / {
+    return 403;
+  }
+}
