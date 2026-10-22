@@ -10,12 +10,17 @@ export const SANDBOX_PATHS = {
   workdir: '/workspace',
   inputs: '/workspace/in',
   outputs: '/workspace/out',
-  /** dsh 的会话存储（互审打回重做、崩溃恢复时用来接着原上下文） */
+  /** dsh 的数据目录，会话存储在它下面的 sessions/ */
+  dshHome: '/home/node/.dsh',
+  /** dsh 的会话存储（关卡退回修改、停止后继续、讨论的下一轮时接着原会话） */
   sessions: '/home/node/.dsh/sessions',
 } as const;
 
 /** dsh 里指向 model-gateway 的模型路由名（profile/cordis.patch.yml 里定义） */
 const PROVIDER = 'oasis';
+
+/** 会话存档里不能带的文件：锁文件会让恢复以为会话还被占着 */
+export const isSessionLock = (path: string) => path.endsWith('.lock');
 
 /** 沙箱的环境变量。runKey 是密钥，调用方不得记进日志。 */
 export function sandboxEnv(input: {
@@ -140,6 +145,8 @@ export function connectAgent(io: {
     /** 握手：选定模型。dsh 起来要一两秒，给足时间 */
     initialize: (model: string, cwd: string) =>
       rpc.request('initialize', { cwd, provider: PROVIDER, model }, 60_000),
+    /** 接着之前存下的会话（会话存档要先放回 sessions/） */
+    resume: () => rpc.request('session/resume', session, 60_000),
     /** 交一条用户消息：运行中发的会排在当前这一轮之后处理 */
     prompt: (text: string) =>
       rpc.request(

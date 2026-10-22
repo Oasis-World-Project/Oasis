@@ -1,5 +1,5 @@
 // task：工作流控制面（ADR 0004）。管任务的节点图、状态和调度；节点在 harness 里执行，
-// 收到 harness.run.finished 就推进，并定时和 harness 对账。
+// 收到 harness.run.finished 就推进（讨论下一轮、过关卡），并定时和 harness 对账。
 import { fileURLToPath } from 'node:url';
 import { HARNESS_STREAM, RunFinished } from '@oasis/contracts/events';
 import {
@@ -12,6 +12,7 @@ import {
 import { registerRoutes } from './api/routes.ts';
 import { taskEnv } from './config.ts';
 import { createTaskStore } from './repo/task-store.ts';
+import { createGate } from './service/gate.ts';
 import { createWorkflowService, type WorkflowService } from './service/workflow-service.ts';
 
 let workflows: WorkflowService;
@@ -23,11 +24,22 @@ await startService({
   resources: async (ctx) => {
     const { config, logger } = ctx;
     const { postgres, eventBus } = await connectPostgresAndEventBus(ctx);
+    const harness = createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 15_000 });
     workflows = createWorkflowService({
       store: createTaskStore(postgres.pool),
-      harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 15_000 }),
+      harness,
+      gate: createGate({
+        harness,
+        modelGateway: createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
+          timeoutMs: 60_000,
+        }),
+        model: config.GATE_MODEL,
+        threshold: config.GATE_THRESHOLD,
+        logger,
+      }),
       maxParallel: config.MAX_PARALLEL_NODES,
       maxRetries: config.MAX_NODE_RETRIES,
+      maxReworks: config.MAX_NODE_REWORKS,
       logger,
     });
     const runFinished = startEventConsumer({

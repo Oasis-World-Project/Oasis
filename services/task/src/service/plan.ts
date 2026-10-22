@@ -36,6 +36,12 @@ export function validatePlan(plan: WorkflowPlan): void {
     if (!known.has(edge.to)) problems.push(`连线的终点「${edge.to}」不存在`);
     if (edge.from === edge.to) problems.push(`节点「${edge.from}」不能连向自己`);
   }
+  for (const node of plan.nodes) {
+    if (node.kind !== 'discussion') continue;
+    const names = node.participants.map((p) => p.name);
+    if (new Set(names).size !== names.length)
+      problems.push(`讨论「${node.title}」里有重名的参与者`);
+  }
   const pairs = plan.edges.map((e) => `${e.from}→${e.to}`);
   if (new Set(pairs).size !== pairs.length) problems.push('有重复的连线');
   if (problems.length === 0) {
@@ -57,6 +63,13 @@ export function planToRows(plan: WorkflowPlan) {
     goal: n.goal,
     model: n.model,
     status: 'waiting' as const,
+    config: {
+      checks: n.checks,
+      expects: n.expects,
+      ...(n.kind === 'discussion'
+        ? { participants: n.participants, rounds: n.rounds, round: 0, transcript: [] }
+        : {}),
+    },
   }));
   const edges = plan.edges.map((e) => ({
     id: randomUUID(),

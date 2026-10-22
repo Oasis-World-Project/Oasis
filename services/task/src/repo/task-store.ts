@@ -1,6 +1,6 @@
 // 任务的数据访问。对一个任务的所有调度决定都在一个事务里做：先锁住任务这一行，
 // 读出整张图，再写回改动。这样两个运行同时结束，也不会把同一个节点启动两次。
-import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, lte } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { edges, nodeRuns, nodes, tasks } from './schema.ts';
@@ -24,6 +24,8 @@ type NodePatch = Partial<
     Node,
     | 'status'
     | 'attempts'
+    | 'reworks'
+    | 'config'
     | 'userNotes'
     | 'warning'
     | 'summary'
@@ -39,14 +41,19 @@ type RunPatch = Partial<Pick<NodeRun, 'status' | 'summary' | 'error' | 'outputs'
 export interface Writer {
   setTask(patch: TaskPatch): Promise<void>;
   setNode(nodeId: string, patch: NodePatch): Promise<void>;
-  addRun(run: Pick<NodeRun, 'id' | 'nodeId' | 'attempt' | 'purpose' | 'status'>): Promise<void>;
+  addRun(
+    run: Pick<NodeRun, 'id' | 'nodeId' | 'attempt' | 'purpose' | 'status' | 'meta' | 'request'>,
+  ): Promise<void>;
   setRun(runId: string, patch: RunPatch): Promise<void>;
 }
 
 export interface TaskStore {
   create(input: {
     task: Omit<Task, 'createdAt' | 'updatedAt' | 'finishedAt' | 'spentMicro' | 'attention'>;
-    nodes: Pick<Node, 'id' | 'key' | 'title' | 'kind' | 'role' | 'goal' | 'model' | 'status'>[];
+    nodes: Pick<
+      Node,
+      'id' | 'key' | 'title' | 'kind' | 'role' | 'goal' | 'model' | 'status' | 'config'
+    >[];
     edges: Pick<Edge, 'id' | 'fromNodeId' | 'toNodeId'>[];
   }): Promise<void>;
   /** 读快照（不加锁，给查询接口用） */
@@ -57,6 +64,8 @@ export interface TaskStore {
   transact<T>(taskId: string, fn: (snapshot: Snapshot, w: Writer) => Promise<T>): Promise<T>;
   /** 还没结束、且创建早于 before 的运行（对账用） */
   listActiveRuns(before: Date): Promise<NodeRun[]>;
+  /** 正在过关卡、且交出产出的那次运行结束早于 before 的节点（关卡中途断了，对账时重做） */
+  listCheckingNodes(before: Date): Promise<Node[]>;
 }
 
 async function load(db: NodePgDatabase, task: Task): Promise<Snapshot> {
@@ -160,5 +169,14 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
         .where(
           and(inArray(nodeRuns.status, ['pending', 'running']), lt(nodeRuns.createdAt, before)),
         ),
+
+    async listCheckingNodes(before) {
+      const rows = await db
+        .select({ node: nodes })
+        .from(nodes)
+        .innerJoin(nodeRuns, eq(nodeRuns.id, nodes.currentRunId))
+        .where(and(eq(nodes.status, 'checking'), lte(nodeRuns.finishedAt, before)));
+      return rows.map((r) => r.node);
+    },
   };
 }

@@ -11,6 +11,8 @@ const work = (key: string) => ({
   role: '',
   goal: `做 ${key}`,
   model: 'm',
+  checks: [] as string[],
+  expects: [] as string[],
 });
 
 describe('方案校验', () => {
@@ -65,6 +67,33 @@ describe('方案校验', () => {
     ).toContain('有环');
     expect(findCycle(['A', 'B'], [{ from: 'A', to: 'B' }])).toBeUndefined();
   });
+
+  it('讨论节点：参与者不能重名；验收点、应有文件、参与者和轮数写进节点配置', () => {
+    const discussion = (names: string[]) => ({
+      key: 'D',
+      title: '讨论',
+      kind: 'discussion' as const,
+      role: '',
+      goal: '定方向',
+      model: 'm',
+      checks: ['给出明确建议'],
+      expects: ['*.md'],
+      participants: names.map((name) => ({ name, model: 'm', stance: '' })),
+      rounds: 2,
+    });
+    expect(() => validatePlan({ nodes: [discussion(['甲', '甲'])], edges: [] })).toThrow(
+      '重名的参与者',
+    );
+    const [row] = planToRows({ nodes: [discussion(['甲', '乙'])], edges: [] }).nodes;
+    expect(row?.config).toMatchObject({
+      checks: ['给出明确建议'],
+      expects: ['*.md'],
+      rounds: 2,
+      round: 0,
+      transcript: [],
+    });
+    expect(row?.config.participants?.map((p) => p.name)).toEqual(['甲', '乙']);
+  });
 });
 
 let seq = 0;
@@ -80,6 +109,7 @@ const node = (key: string, status: Node['status'] = 'waiting'): Node => ({
   config: {},
   status,
   attempts: 0,
+  reworks: 0,
   userNotes: [],
   warning: null,
   summary: null,

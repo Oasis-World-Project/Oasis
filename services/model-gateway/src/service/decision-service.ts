@@ -57,12 +57,19 @@ export function createDecisionService(deps: {
 
       const response = await meter.callUpstream(call, () => provider.decisions(body, input.signal));
 
-      const result = (await response.json()) as { usage?: Usage };
-      const usage = result.usage;
+      // Decisions API 的用量字段是 input_tokens / output_tokens（输出不收费），记账时换成通用的 prompt_tokens
+      const result = (await response.json()) as {
+        usage?: { input_tokens?: number; output_tokens?: number; cost?: number };
+      };
+      const usage: Usage = {
+        prompt_tokens: result.usage?.input_tokens,
+        completion_tokens: result.usage?.output_tokens,
+        cost: result.usage?.cost,
+      };
       const cost =
-        typeof usage?.cost === 'number' && usage.cost >= 0
+        typeof usage.cost === 'number' && usage.cost >= 0
           ? { costMicro: Math.round(usage.cost * USD_TO_MICRO), source: 'provider' as const }
-          : price && typeof usage?.prompt_tokens === 'number'
+          : price && typeof usage.prompt_tokens === 'number'
             ? {
                 costMicro: Math.ceil(usage.prompt_tokens * price.prompt * USD_TO_MICRO),
                 source: 'tokens' as const,

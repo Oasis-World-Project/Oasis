@@ -32,9 +32,12 @@ const openrouter = Fastify();
 openrouter.post('/api/alpha/decisions', async (request, reply) => {
   upstreamBodies.push(request.body as Record<string, unknown>);
   if (upstreamStatus !== 200) return reply.code(upstreamStatus).send({ error: { message: 'bad' } });
+  // 与 OpenRouter Decisions API 的响应格式一致
   return {
-    is_task: { type: 'noul', probability: 0.93 },
-    usage: { prompt_tokens: 120, cost: 0.000005 },
+    id: 'd1',
+    model: 'typesafe/jev-1.14',
+    answers: { is_task: { type: 'noul', noul: 0.93 } },
+    usage: { input_tokens: 120, output_tokens: 1, cost: 0.000005 },
   };
 });
 
@@ -76,7 +79,13 @@ beforeEach(() => {
 const body = {
   model: 'typesafe/jev-1.14',
   state: ['用户在私聊里说：帮我做一个温馨小屋的 3D 模型'],
-  questions: { is_task: { type: 'noul', criteria: '这句话是在交代一个要交付成果的任务' } },
+  questions: {
+    is_task: {
+      type: 'noul',
+      instructions: '判断用户这句话是不是在交代一个要交付成果的任务',
+      criteria: { true: '是任务', false: '只是闲聊或提问' },
+    },
+  },
 };
 
 describe('Jev 决策', () => {
@@ -87,12 +96,16 @@ describe('Jev 决策', () => {
       body,
       signal: new AbortController().signal,
     });
-    expect(result).toMatchObject({ is_task: { probability: 0.93 } });
+    expect(result).toMatchObject({ answers: { is_task: { noul: 0.93 } } });
     expect(upstreamBodies[0]).toEqual(body);
     expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'settle']);
     expect(billingCalls[1]?.body).toMatchObject({ costMicro: 5 });
     expect(started[0]).toMatchObject({ kind: 'decision', model: 'typesafe/jev-1.14' });
-    expect(finished[0]).toMatchObject({ status: 'succeeded', costSource: 'provider' });
+    expect(finished[0]).toMatchObject({
+      status: 'succeeded',
+      costSource: 'provider',
+      promptTokens: 120,
+    });
   });
 
   it('上游拒绝时退回冻结，不扣钱', async () => {

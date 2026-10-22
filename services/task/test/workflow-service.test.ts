@@ -11,6 +11,7 @@ import type {
   TaskStore,
   Writer,
 } from '../src/repo/task-store.ts';
+import type { Gate } from '../src/service/gate.ts';
 import { createWorkflowService } from '../src/service/workflow-service.ts';
 
 const OWNER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
@@ -47,8 +48,8 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
         nodes.set(n.id, {
           ...n,
           taskId: input.task.id,
-          config: {},
           attempts: 0,
+          reworks: 0,
           userNotes: [],
           warning: null,
           summary: null,
@@ -106,6 +107,11 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
     },
     listActiveRuns: async () =>
       [...runs.values()].filter((r) => r.status === 'pending' || r.status === 'running'),
+    listCheckingNodes: async (before) =>
+      [...nodes.values()].filter((n) => {
+        const run = n.currentRunId ? runs.get(n.currentRunId) : undefined;
+        return n.status === 'checking' && run?.finishedAt && run.finishedAt <= before;
+      }),
   };
 }
 
@@ -166,6 +172,18 @@ function runBody(id: string, status: string, extra: Record<string, unknown> = {}
   };
 }
 
+/** 假关卡：按顺序返回预设的结果（默认通过）；设成 'throw' 时这一次检查出错 */
+let gateResults: (string[] | 'throw')[] = [];
+const gateCalls: { runId: string; checks: string[] }[] = [];
+const gate = {
+  async check(input: { runId: string; checks: string[] }) {
+    gateCalls.push({ runId: input.runId, checks: input.checks });
+    const next = gateResults.shift() ?? [];
+    if (next === 'throw') throw new Error('关卡断了');
+    return { unmet: next };
+  },
+};
+
 let store: ReturnType<typeof memoryStore>;
 let service: ReturnType<typeof createWorkflowService>;
 let harnessUrl: string;
@@ -180,12 +198,16 @@ beforeEach(() => {
   harnessKnows = new Set();
   finishedRemote = new Map();
   rejectNext = false;
+  gateResults = [];
+  gateCalls.length = 0;
   store = memoryStore();
   service = createWorkflowService({
     store,
     harness: createServiceClient('harness', harnessUrl),
+    gate: gate as unknown as Gate,
     maxParallel: 3,
     maxRetries: 2,
+    maxReworks: 1,
     logger: pino({ level: 'silent' }),
   });
 });
@@ -197,23 +219,46 @@ const work = (key: string, title = key) => ({
   role: '',
   goal: `做 ${key}`,
   model: 'deepseek/x',
+  checks: [] as string[],
+  expects: [] as string[],
 });
-const create = (keys: string[], edges: [string, string][]) =>
+const discussion = (key: string, names: string[], rounds = 2) => ({
+  key,
+  title: key,
+  kind: 'discussion' as const,
+  role: '',
+  goal: '定下小屋介绍的风格',
+  model: 'deepseek/summary',
+  checks: ['给出明确建议'],
+  expects: [] as string[],
+  participants: names.map((name) => ({ name, model: `deepseek/${name}`, stance: `${name}的立场` })),
+  rounds,
+});
+type PlanNode = ReturnType<typeof work> | ReturnType<typeof discussion>;
+const create = (keys: (string | PlanNode)[], edges: [string, string][]) =>
   service.create({
     ownerId: OWNER,
     payerId: OWNER,
     title: '测试任务',
     brief: '做一份温馨小屋的介绍',
-    plan: { nodes: keys.map((k) => work(k)), edges: edges.map(([from, to]) => ({ from, to })) },
+    plan: {
+      nodes: keys.map((k) => (typeof k === 'string' ? work(k) : k)),
+      edges: edges.map(([from, to]) => ({ from, to })),
+    },
   });
-const runOf = (key: string, task: { nodes: { id: string; key: string }[] }) => {
+interface Submitted {
+  runId: string;
+  model: string;
+  prompt: string;
+  inputsFrom: { runId: string; as: string }[];
+  continueFrom?: string;
+}
+const runsOf = (key: string, task: { nodes: { id: string; key: string }[] }) => {
   const nodeId = task.nodes.find((n) => n.key === key)?.id;
-  return submitted.filter((s) => s.nodeId === nodeId).at(-1) as {
-    runId: string;
-    prompt: string;
-    inputsFrom: { runId: string; as: string }[];
-  };
+  return submitted.filter((s) => s.nodeId === nodeId) as unknown as Submitted[];
 };
+const runOf = (key: string, task: { nodes: { id: string; key: string }[] }) =>
+  runsOf(key, task).at(-1) as Submitted;
 const finish = (
   runId: string,
   status: 'succeeded' | 'failed' | 'cancelled',
@@ -357,5 +402,123 @@ describe('对账', () => {
       summary: '补上了',
     });
     expect(submitted.filter((s) => s.runId === b)).toHaveLength(2);
+  });
+});
+
+describe('出口关卡', () => {
+  it('没过：接着原会话改一次（带上没满足的地方）→ 再检查通过才算完成，下游才跑', async () => {
+    const task = await create(['A', 'B'], [['A', 'B']]);
+    const first = runOf('A', task);
+    gateResults = [['缺少文件 out/*.md']];
+    await finish(first.runId, 'succeeded', { outputs: [{ path: 'a.txt', size: 3 }] });
+
+    const rework = runOf('A', task);
+    expect(rework.runId).not.toBe(first.runId);
+    expect(rework.continueFrom).toBe(first.runId);
+    expect(rework.prompt).toContain('- 缺少文件 out/*.md');
+    expect(await statusOf(task.id)).toMatchObject({ A: 'running', B: 'waiting' });
+
+    await finish(rework.runId, 'succeeded', { outputs: [{ path: 'a.md', size: 3 }] });
+    expect(gateCalls.map((c) => c.runId)).toEqual([first.runId, rework.runId]);
+    const detail = await service.get(OWNER, task.id);
+    expect(detail.nodes.find((n) => n.key === 'A')).toMatchObject({
+      status: 'succeeded',
+      reworks: 1,
+      warning: null,
+      outputs: [{ path: 'a.md', size: 3 }],
+    });
+    // 下游拿到的是改过的那次运行的产出
+    expect(runOf('B', task).inputsFrom).toEqual([{ runId: rework.runId, as: 'A' }]);
+  });
+
+  it('改过一次还没过：照样往下走，只在节点上留提醒', async () => {
+    const task = await create(['A', 'B'], [['A', 'B']]);
+    gateResults = [['语气不够友好'], ['语气不够友好']];
+    await finish(runOf('A', task).runId, 'succeeded');
+    await finish(runOf('A', task).runId, 'succeeded');
+    const detail = await service.get(OWNER, task.id);
+    expect(detail.nodes.find((n) => n.key === 'A')).toMatchObject({
+      status: 'succeeded',
+      warning: '交付前检查没完全通过：语气不够友好',
+    });
+    expect(await statusOf(task.id)).toMatchObject({ B: 'running' });
+  });
+
+  it('关卡检查中途断了：节点停在检查中，对账时重新检查', async () => {
+    const task = await create(['A'], []);
+    gateResults = ['throw'];
+    await finish(runOf('A', task).runId, 'succeeded');
+    expect(await statusOf(task.id)).toMatchObject({ A: 'checking' });
+    await service.reconcile(0);
+    expect(await statusOf(task.id)).toMatchObject({ task: 'succeeded', A: 'succeeded' });
+  });
+
+  it('正在过关卡的节点不能追问', async () => {
+    const task = await create(['A'], []);
+    gateResults = ['throw'];
+    await finish(runOf('A', task).runId, 'succeeded');
+    const err = await service
+      .message(OWNER, task.id, task.nodes[0]?.id ?? '', '再改改')
+      .catch((e: unknown) => e);
+    expect((err as HttpError).statusCode).toBe(409);
+  });
+});
+
+describe('讨论节点', () => {
+  it('每轮所有人并行发言 → 下一轮接着自己的会话回应别人 → 汇总者写结论 → 过关卡', async () => {
+    const task = await create([discussion('D', ['甲', '乙']), 'W'], [['D', 'W']]);
+    const round1 = runsOf('D', task);
+    expect(round1.map((r) => r.model)).toEqual(['deepseek/甲', 'deepseek/乙']);
+    expect(round1[0]?.prompt).toContain('你是「甲」');
+    expect(round1[0]?.prompt).toContain('甲的立场');
+    expect(round1[0]?.prompt).toContain('第 1 轮（共 2 轮）');
+
+    await finish(round1[0]?.runId as string, 'succeeded', { summary: '我觉得要温馨' });
+    expect(runsOf('D', task)).toHaveLength(2); // 乙还没说完，不开下一轮
+    await finish(round1[1]?.runId as string, 'succeeded', { summary: '我觉得要简洁' });
+
+    const round2 = runsOf('D', task).slice(2);
+    expect(round2).toHaveLength(2);
+    expect(round2[0]?.continueFrom).toBe(round1[0]?.runId);
+    expect(round2[0]?.prompt).toContain('第 1 轮 乙：我觉得要简洁');
+    expect(round2[0]?.prompt).not.toContain('我觉得要温馨');
+    expect(round2[1]?.continueFrom).toBe(round1[1]?.runId);
+
+    await finish(round2[0]?.runId as string, 'succeeded', { summary: '可以兼顾' });
+    await finish(round2[1]?.runId as string, 'succeeded', { summary: '同意兼顾' });
+    const summary = runOf('D', task);
+    expect(summary.model).toBe('deepseek/summary');
+    expect(summary.prompt).toContain('第 2 轮 甲：可以兼顾');
+    expect(summary.prompt).toContain('第 1 轮 乙：我觉得要简洁');
+
+    await finish(summary.runId, 'succeeded', { outputs: [{ path: '讨论结论.md', size: 10 }] });
+    expect(gateCalls).toEqual([{ runId: summary.runId, checks: ['给出明确建议'] }]);
+    const detail = await service.get(OWNER, task.id);
+    const d = detail.nodes.find((n) => n.key === 'D');
+    expect(d?.status).toBe('succeeded');
+    expect(d?.discussion).toMatchObject({ rounds: 2, round: 2 });
+    expect(d?.discussion?.transcript).toHaveLength(4);
+    expect(runOf('W', task).inputsFrom).toEqual([{ runId: summary.runId, as: 'D' }]);
+  });
+
+  it('讨论进行中追问：记下来，下一轮发言带上', async () => {
+    const task = await create([discussion('D', ['甲', '乙'])], []);
+    const d = task.nodes[0]?.id ?? '';
+    expect(await service.message(OWNER, task.id, d, '别超过 100 字')).toBe('noted');
+    for (const r of runsOf('D', task)) await finish(r.runId, 'succeeded', { summary: '好' });
+    expect(runOf('D', task).prompt).toContain('【用户新追加的要求】\n- 别超过 100 字');
+  });
+
+  it('某人发言失败只重做他这一句；重做用完还失败，停掉同一轮其他人的发言', async () => {
+    const task = await create([discussion('D', ['甲', '乙'], 1)], []);
+    const [jia, yi] = runsOf('D', task);
+    await finish(jia?.runId as string, 'failed');
+    const retry = runOf('D', task);
+    expect(retry.model).toBe('deepseek/甲');
+    expect(retry.prompt).toContain('你是「甲」');
+    await finish(retry.runId, 'failed');
+    await finish(runOf('D', task).runId, 'failed');
+    expect(await statusOf(task.id)).toMatchObject({ task: 'needs_attention', D: 'failed' });
+    expect(cancelled).toEqual([yi?.runId]);
   });
 });

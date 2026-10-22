@@ -107,3 +107,10 @@
   disabled: true
 - id: tool-working-directory
   disabled: true
+
+# ---- 补上：agent-loop 要能看到会话存储，session/resume 才能用 ----
+# dsh 自带的 sdk 模板没给 agent-loop 注入 sessionPersistence，接着原会话（关卡退回修改、停止后继续、
+# 讨论的下一轮）时会报「session persistence is not configured」。2026-10-22 实测加上后可以跨容器恢复。
+- id: agent-loop
+  inject:
+    - sessionPersistence

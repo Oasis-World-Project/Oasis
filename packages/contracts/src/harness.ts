@@ -50,6 +50,11 @@ export const StartRunBody = z.object({
     )
     .max(20)
     .default([]),
+  /**
+   * 接着之前某次运行做：放回它的会话（AI 记得前面聊过什么）、它的产出（放回 out/）和它的输入。
+   * 用于关卡退回修改、停止后继续、讨论的下一轮。只能接同一付费人、已结束的运行。
+   */
+  continueFrom: z.uuid().optional(),
 });
 export type StartRunBody = z.input<typeof StartRunBody>;
 
@@ -106,3 +111,10 @@ export const RunEventList = z.object({ events: z.array(RunEventBody) });
 
 /** 用户在运行中追问或补充要求：排在当前这一轮之后处理，带着完整上下文 */
 export const RunMessageBody = z.object({ text: z.string().trim().min(1).max(20_000) });
+
+/** 某次运行的文字类产出（给关卡检查用；总长截断） */
+export const RunTextsBody = z.object({
+  files: z.array(z.object({ path: z.string(), text: z.string() })),
+  truncated: z.boolean(),
+});
+export type RunTextsBody = z.infer<typeof RunTextsBody>;

@@ -19,6 +19,8 @@ export const runs = pgTable('runs', {
   outputKey: text('output_key'),
   sessionKey: text('session_key'),
   summary: text('summary'),
+  sessionId: text('session_id'),
+  continueFrom: uuid('continue_from'),
   inputsFrom: jsonb('inputs_from').$type<{ runId: string; as: string }[]>().notNull().default([]),
   createdAt: at('created_at').notNull().defaultNow(),
   startedAt: at('started_at'),

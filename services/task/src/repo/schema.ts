@@ -3,6 +3,33 @@ import type { RunOutputFile } from '@oasis/contracts/harness';
 import type { Attention, NodeStatus, TaskStatus } from '@oasis/contracts/task';
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
+/** 节点配置：关卡的验收点和应有文件；讨论节点还有参与者、轮数、进行到第几轮和讨论记录 */
+export interface NodeConfig {
+  checks?: string[];
+  expects?: string[];
+  participants?: { name: string; model: string; stance: string }[];
+  rounds?: number;
+  round?: number;
+  /** 讨论已经把用户追加要求的前几条交给参与者了（之后的新要求在下一轮带上） */
+  notesSeen?: number;
+  /** 每条发言记下是哪次运行说的，下一轮这位参与者接着那次运行的会话 */
+  transcript?: { round: number; name: string; text: string; runId: string }[];
+}
+
+/** 交给 harness 的完整请求（没送到时按原样重交） */
+export interface RunRequestRecord {
+  model: string;
+  prompt: string;
+  inputsFrom: { runId: string; as: string }[];
+  continueFrom?: string;
+}
+
+/** 讨论发言的轮次和发言人 */
+export interface RunMeta {
+  round?: number;
+  participant?: string;
+}
+
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 const micro = (name: string) => bigint(name, { mode: 'number' });
 
@@ -27,13 +54,14 @@ export const nodes = pgTable('nodes', {
   taskId: uuid('task_id').notNull(),
   key: text('key').notNull(),
   title: text('title').notNull(),
-  kind: text('kind').$type<'work'>().notNull(),
+  kind: text('kind').$type<'work' | 'discussion'>().notNull(),
   role: text('role').notNull().default(''),
   goal: text('goal').notNull(),
   model: text('model').notNull(),
-  config: jsonb('config').$type<Record<string, unknown>>().notNull().default({}),
+  config: jsonb('config').$type<NodeConfig>().notNull().default({}),
   status: text('status').$type<NodeStatus>().notNull(),
   attempts: integer('attempts').notNull().default(0),
+  reworks: integer('reworks').notNull().default(0),
   userNotes: jsonb('user_notes').$type<string[]>().notNull().default([]),
   warning: text('warning'),
   summary: text('summary'),
@@ -53,16 +81,19 @@ export const edges = pgTable('edges', {
 });
 
 export type NodeRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type NodeRunPurpose = 'work' | 'rework' | 'speech' | 'summary';
 export const nodeRuns = pgTable('node_runs', {
   id: uuid('id').primaryKey(),
   taskId: uuid('task_id').notNull(),
   nodeId: uuid('node_id').notNull(),
   attempt: integer('attempt').notNull(),
-  purpose: text('purpose').$type<'work'>().notNull(),
+  purpose: text('purpose').$type<NodeRunPurpose>().notNull(),
   status: text('status').$type<NodeRunStatus>().notNull(),
   summary: text('summary'),
   error: text('error'),
   outputs: jsonb('outputs').$type<RunOutputFile[]>().notNull().default([]),
+  meta: jsonb('meta').$type<RunMeta>().notNull().default({}),
+  request: jsonb('request').$type<RunRequestRecord>().notNull(),
   createdAt: at('created_at').notNull().defaultNow(),
   finishedAt: at('finished_at'),
 });

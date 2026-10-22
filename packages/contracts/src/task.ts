@@ -8,18 +8,53 @@ export const NodeKey = z
   .string()
   .regex(/^[\p{L}\p{N}_-]{1,40}$/u, '节点名只能用字母、数字、下划线和短横线，最长 40 个字符');
 
-export const PlanNode = z.object({
+/** 应有的产出文件：out/ 下的相对路径，可以用 * 匹配一段里的任意字符（如 *.md） */
+const ExpectedFile = z
+  .string()
+  .regex(/^(?!\/)(?!.*\.\.)[^\n]{1,200}$/, '必须是 out/ 下的相对路径，不能有 ..');
+
+/** 两种节点共有的部分 */
+const NodeCommon = {
   key: NodeKey,
   /** 给用户看的名字，如「写文案」 */
   title: z.string().trim().min(1).max(60),
-  kind: z.literal('work'),
   /** 角色说明（可选），如「资深文案」 */
   role: z.string().max(2000).default(''),
-  /** 这个节点要做的事 */
+  /** 这个节点要做的事（讨论节点就是讨论的题目） */
   goal: z.string().trim().min(1).max(20_000),
+  /** 关卡的验收点（普通话，最多 5 条）：交出产出前由 Jev 逐条判断 */
+  checks: z.array(z.string().trim().min(1).max(300)).max(5).default([]),
+  /** 关卡的规则检查：这些文件必须在 out/ 里且不是空的 */
+  expects: z.array(ExpectedFile).max(10).default([]),
+};
+
+/** 干活节点：一个 agent 完成一件事 */
+export const WorkPlanNode = z.object({
+  ...NodeCommon,
+  kind: z.literal('work'),
   /** 供应商型号，如 deepseek/deepseek-v4.1-flash */
   model: z.string().min(1).max(200),
 });
+
+export const Participant = z.object({
+  /** 参与者的名字，讨论记录里用 */
+  name: z.string().trim().min(1).max(30),
+  model: z.string().min(1).max(200),
+  /** 立场或视角，如「从预算角度挑毛病」 */
+  stance: z.string().max(1000).default(''),
+});
+
+/** 讨论节点：几个参与者来回几轮，最后由汇总者写出结论 */
+export const DiscussionPlanNode = z.object({
+  ...NodeCommon,
+  kind: z.literal('discussion'),
+  participants: z.array(Participant).min(2).max(5),
+  rounds: z.number().int().min(1).max(5).default(2),
+  /** 汇总者用的型号 */
+  model: z.string().min(1).max(200),
+});
+
+export const PlanNode = z.discriminatedUnion('kind', [WorkPlanNode, DiscussionPlanNode]);
 export type PlanNode = z.infer<typeof PlanNode>;
 
 /** 连线：from 的产出交给 to */
@@ -84,15 +119,30 @@ export const NodeBody = z.object({
   id: z.uuid(),
   key: z.string(),
   title: z.string(),
-  kind: z.literal('work'),
+  kind: z.enum(['work', 'discussion']),
   role: z.string(),
   goal: z.string(),
   model: z.string(),
+  checks: z.array(z.string()),
+  expects: z.array(z.string()),
+  /** 讨论节点的参与者、轮数和讨论记录；干活节点为 null */
+  discussion: z
+    .object({
+      participants: z.array(Participant),
+      rounds: z.number().int(),
+      round: z.number().int(),
+      transcript: z.array(
+        z.object({ round: z.number().int(), name: z.string(), text: z.string() }),
+      ),
+    })
+    .nullable(),
   status: NodeStatus,
   /** 已经跑了几次（含重做） */
   attempts: z.number().int().nonnegative(),
   /** 用户在节点开跑前追加的要求 */
   userNotes: z.array(z.string()),
+  /** 关卡退回修改过几次（最多 1 次） */
+  reworks: z.number().int().nonnegative(),
   /** 给用户看的提醒（如关卡没过） */
   warning: z.string().nullable(),
   /** AI 最后说的一句话 */

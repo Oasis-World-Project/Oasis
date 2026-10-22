@@ -2,12 +2,27 @@
 import type { Readable } from 'node:stream';
 import { extract, pack } from 'tar-stream';
 
-/** 把若干文件打成 tar 包（路径相对于解包目录）。 */
+/** 沙箱用户（镜像里的 node 用户）的 uid/gid：放进沙箱的文件和目录都归它，dsh 才能写 */
+const SANDBOX_UID = 1000;
+
+/**
+ * 把若干文件打成 tar 包（路径相对于解包目录）。上级目录也作为条目写进去，
+ * 否则 Docker 会以 root 身份建这些目录，沙箱用户就写不进去了。
+ */
 export async function packFiles(files: { path: string; content: Buffer }[]): Promise<Buffer> {
+  const owner = { uid: SANDBOX_UID, gid: SANDBOX_UID };
+  const dirs = new Set<string>();
+  for (const file of files) {
+    const parts = file.path.split('/').slice(0, -1);
+    parts.forEach((_, i) => dirs.add(parts.slice(0, i + 1).join('/')));
+  }
   const archive = pack();
+  for (const dir of [...dirs].sort()) {
+    archive.entry({ name: `${dir}/`, type: 'directory', mode: 0o755, ...owner });
+  }
   for (const file of files) {
     archive.entry(
-      { name: file.path, size: file.content.length, mode: 0o644, uid: 1000, gid: 1000 },
+      { name: file.path, size: file.content.length, mode: 0o644, ...owner },
       file.content,
     );
   }

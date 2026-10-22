@@ -3,16 +3,26 @@
 // → 取出产出和会话存档存进对象存储 → 销毁沙箱、作废 Key → 写结局并发出 harness.run.finished。
 import { randomUUID } from 'node:crypto';
 import { RunFinished } from '@oasis/contracts/events';
-import type { RunBody, RunEventBody, StartRunBody } from '@oasis/contracts/harness';
+import type { RunBody, RunEventBody, RunTextsBody, StartRunBody } from '@oasis/contracts/harness';
 import { RunKeyCreated } from '@oasis/contracts/model-gateway';
 import { createEnvelope, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
-import { connectAgent, SANDBOX_PATHS, sandboxEnv, type AgentConnection } from '../adapter/dsh.ts';
+import {
+  connectAgent,
+  isSessionLock,
+  SANDBOX_PATHS,
+  sandboxEnv,
+  type AgentConnection,
+} from '../adapter/dsh.ts';
 import type { Executor, Sandbox } from '../executor/executor.ts';
 import { extractFiles, listFiles, packFiles, readLimited } from '../executor/tar.ts';
 import type { ObjectStore } from '../repo/object-store.ts';
 import type { Run, RunOutcome, RunsRepo } from '../repo/runs-repo.ts';
 
 type Status = RunBody['status'];
+
+/** 关卡检查时读得懂的文字类产出 */
+const TEXT_FILE =
+  /\.(md|markdown|txt|html?|css|js|mjs|ts|tsx|jsx|json|csv|tsv|xml|ya?ml|py|sql|svg)$/i;
 
 /** 放进 out/ 的占位文件：保证目录存在且属于沙箱用户，不算产出 */
 const KEEP_FILE = '.oasis-keep';
@@ -140,6 +150,26 @@ export function createRunService(deps: {
     return files;
   }
 
+  /**
+   * 接着之前某次运行时要放回沙箱的东西：它的产出放回 out/，它的会话存档放回 dsh 的 sessions/
+   * （去掉锁文件，否则恢复时会以为会话还被占着）。
+   */
+  async function continuation(row: Run) {
+    const previous = row.continueFrom ? await repo.get(row.continueFrom) : undefined;
+    if (!previous) return { workspace: [], dshHome: [] };
+    const workspace = previous.outputKey
+      ? (await extractFiles(await store.get(previous.outputKey)))
+          .filter((f) => f.path !== KEEP_FILE)
+          .map((f) => ({ path: `out/${f.path}`, content: f.content }))
+      : [];
+    const dshHome = previous.sessionKey
+      ? (await extractFiles(await store.get(previous.sessionKey)))
+          .filter((f) => !isSessionLock(f.path))
+          .map((f) => ({ path: `sessions/${f.path}`, content: f.content }))
+      : [];
+    return { workspace, dshHome };
+  }
+
   async function execute(row: Run, inputs: { path: string; content: Buffer }[], run: LiveRun) {
     const { id } = row;
     const release = await gate.acquire();
@@ -184,16 +214,23 @@ export function createRunService(deps: {
       await repo.update(id, { runKeyId: keyId });
       stopped();
 
+      const restored = await continuation(row);
       const files = [
         ...inputs.map((f) => ({ path: `in/${f.path}`, content: f.content })),
         ...(await upstreamFiles(row)),
+        ...restored.workspace,
         // 保证 out/ 目录存在且属于沙箱用户
         { path: `out/${KEEP_FILE}`, content: Buffer.alloc(0) },
       ];
       sandbox = await executor.start({
         runId: id,
         env: sandboxEnv({ modelBaseUrl: deps.modelBaseUrl, runKey: key.key, model: row.model }),
-        files: [{ dir: SANDBOX_PATHS.workdir, tar: await packFiles(files) }],
+        files: [
+          { dir: SANDBOX_PATHS.workdir, tar: await packFiles(files) },
+          ...(restored.dshHome.length > 0
+            ? [{ dir: SANDBOX_PATHS.dshHome, tar: await packFiles(restored.dshHome) }]
+            : []),
+        ],
       });
       const box = sandbox;
       run.abort.signal.addEventListener('abort', () => void box.destroy(), { once: true });
@@ -208,7 +245,7 @@ export function createRunService(deps: {
       const agent = connectAgent({
         stdin: sandbox.stdin,
         stdout: sandbox.stdout,
-        sessionId: id,
+        sessionId: row.sessionId ?? id,
         onEvent: (event) => record(id, run, event.kind, event.data),
       });
       run.abort.signal.addEventListener('abort', () => agent.abort(new Error('运行已中止')), {
@@ -220,6 +257,7 @@ export function createRunService(deps: {
         stopped();
         throw new Error(`dsh 启动失败：${String(err)}；stderr：${stderrTail}`, { cause: err });
       }
+      if (row.continueFrom) await agent.resume();
       run.prompts += 1;
       await agent.prompt(row.prompt);
       // 任务说明交出去之后才接受追问，保证追问排在任务说明后面
@@ -310,6 +348,19 @@ export function createRunService(deps: {
           );
         }
       }
+      // 接着之前的运行：同一付费人、已结束、留下了会话存档；没另给输入就沿用它的输入
+      let previous: Run | undefined;
+      if (body.continueFrom) {
+        previous = await repo.get(body.continueFrom);
+        const ended = ['succeeded', 'failed', 'cancelled'].includes(previous?.status ?? '');
+        if (previous?.payerId !== body.payerId || !ended || !previous.sessionKey) {
+          throw new HttpError(
+            409,
+            'continue_unavailable',
+            '要接着的那次运行不存在、还没结束或没有会话存档',
+          );
+        }
+      }
       const id = body.runId ?? randomUUID();
       const inserted = await repo.insert({
         id,
@@ -318,7 +369,10 @@ export function createRunService(deps: {
         nodeId: body.nodeId ?? null,
         model: body.model,
         prompt: body.prompt,
-        inputsFrom: body.inputsFrom,
+        inputsFrom:
+          body.inputsFrom.length === 0 && previous ? previous.inputsFrom : body.inputsFrom,
+        sessionId: previous ? (previous.sessionId ?? previous.id) : id,
+        continueFrom: previous?.id ?? null,
       });
       const row = await owned(id);
       if (!inserted) {
@@ -358,6 +412,31 @@ export function createRunService(deps: {
         data: e.data,
         createdAt: e.createdAt.toISOString(),
       }));
+    },
+
+    /** 文字类产出（给关卡检查用）：按路径顺序读，总长超过 maxChars 就截断 */
+    async texts(id: string, maxChars: number): Promise<RunTextsBody> {
+      const row = await owned(id);
+      const files: RunTextsBody['files'] = [];
+      if (!row.outputKey) return { files, truncated: false };
+      let left = maxChars;
+      let truncated = false;
+      for (const file of await extractFiles(await store.get(row.outputKey))) {
+        if (file.path === KEEP_FILE || !TEXT_FILE.test(file.path) || file.content.includes(0))
+          continue;
+        if (left <= 0) {
+          truncated = true;
+          break;
+        }
+        let text = file.content.toString('utf8');
+        if (text.length > left) {
+          text = text.slice(0, left);
+          truncated = true;
+        }
+        left -= text.length;
+        files.push({ path: file.path, text });
+      }
+      return { files, truncated };
     },
 
     /** 用户在运行中追问：排在当前这一轮之后处理。运行没在进行时 409。 */

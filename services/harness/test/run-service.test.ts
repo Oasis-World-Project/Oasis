@@ -69,11 +69,15 @@ function fakeDsh(stdin: PassThrough, stdout: PassThrough) {
         if (!busy && queue.length === 0) send({ jsonrpc: '2.0', id: req.id, result: {} });
         else waiters.push(() => send({ jsonrpc: '2.0', id: req.id, result: {} }));
       } else {
+        methods.push(req.method);
         send({ jsonrpc: '2.0', id: req.id, result: {} });
       }
     }
   });
 }
+
+/** 假 dsh 收到的其他方法（initialize、session/resume、shutdown） */
+const methods: string[] = [];
 
 /** 假执行器：每个沙箱里跑一个假 dsh；产出目录里有 result.md */
 const started: SandboxSpec[] = [];
@@ -93,8 +97,13 @@ const executor: Executor = {
       stderr: new PassThrough(),
       async readArchive(path) {
         const dir = path.split('/').at(-1) ?? 'x';
+        // 会话目录里带一个锁文件，接着原会话时应该被去掉
+        const extra =
+          dir === 'sessions'
+            ? [{ path: 'sessions/s/session.lock', content: Buffer.from('1') }]
+            : [];
         return Readable.from([
-          await packFiles([{ path: `${dir}/result.md`, content: Buffer.from('# 成果') }]),
+          await packFiles([{ path: `${dir}/result.md`, content: Buffer.from('# 成果') }, ...extra]),
         ]);
       },
       async destroy() {
@@ -130,6 +139,8 @@ const repo: RunsRepo = {
       sessionKey: null,
       summary: null,
       inputsFrom: run.inputsFrom ?? [],
+      sessionId: run.sessionId ?? null,
+      continueFrom: run.continueFrom ?? null,
       createdAt: new Date(),
       startedAt: null,
       finishedAt: null,
@@ -200,7 +211,8 @@ beforeAll(async () => {
 });
 afterAll(() => modelGateway.close());
 beforeEach(() => {
-  for (const list of [started, destroyed, events, outbox, issued, revoked]) list.length = 0;
+  for (const list of [started, destroyed, events, outbox, issued, revoked, methods])
+    list.length = 0;
   rows.clear();
   stored.clear();
 });
@@ -290,6 +302,37 @@ describe('一次 agent 运行', () => {
         .catch((e: unknown) => e);
       expect((err as HttpError).statusCode).toBe(409);
     }
+  });
+
+  it('接着之前的运行：放回会话存档（去掉锁文件）、放回产出，并让 dsh 恢复原会话', async () => {
+    const first = await service.start({ ...base, prompt: '先写' });
+    await finished(first.id);
+    outbox.length = 0;
+    const next = await service.start({ ...base, prompt: '按意见改', continueFrom: first.id });
+    await finished(next.id);
+    const [workspace, dshHome] = started[1]?.files ?? [];
+    expect((await extractFiles(workspace?.tar ?? Buffer.alloc(0))).map((f) => f.path)).toContain(
+      'result.md',
+    );
+    const session = (await extractFiles(dshHome?.tar ?? Buffer.alloc(0))).map((f) => f.path);
+    expect(session).toEqual(['result.md']); // sessions/ 下的锁文件被去掉了
+    expect(dshHome?.dir).toBe('/home/node/.dsh');
+    expect(methods).toContain('session/resume');
+    expect(rows.get(next.id)).toMatchObject({ sessionId: first.id, continueFrom: first.id });
+
+    const err = await service
+      .start({ ...base, prompt: 'p', continueFrom: '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f' })
+      .catch((e: unknown) => e);
+    expect((err as HttpError).statusCode).toBe(409);
+  });
+
+  it('读文字类产出给关卡用：只读文字文件，总长超过上限就截断', async () => {
+    const run = await service.start({ ...base, prompt: '写' });
+    await finished(run.id);
+    expect(await service.texts(run.id, 3)).toEqual({
+      files: [{ path: 'result.md', text: '# 成' }],
+      truncated: true,
+    });
   });
 
   it('运行中追问：排在当前这一轮之后处理，处理完才收尾；结束后再追问是 409', async () => {
