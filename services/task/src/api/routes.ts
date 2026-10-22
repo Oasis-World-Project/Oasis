@@ -15,6 +15,7 @@ import type { WorkflowService } from '../service/workflow-service.ts';
 const TaskParams = z.object({ taskId: z.uuid() });
 const NodeParams = TaskParams.extend({ nodeId: z.uuid() });
 const EdgeParams = TaskParams.extend({ edgeId: z.uuid() });
+const FileParams = NodeParams.extend({ '*': z.string().min(1).max(500) });
 const EventsQuery = z.object({ after: z.coerce.number().int().min(-1).default(-1) });
 
 export function registerRoutes(app: ServiceApp, workflows: WorkflowService): void {
@@ -22,6 +23,12 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
   app.post('/internal/tasks', async (request, reply) => {
     const body = parseWith(CreateTaskBody, request.body);
     return reply.code(201).send(await workflows.create(body));
+  });
+
+  /** 任务详情（conversation 发交付消息用） */
+  app.get('/internal/tasks/:taskId', async (request) => {
+    const { taskId } = parseWith(TaskParams, request.params);
+    return workflows.getInternal(taskId);
   });
 
   app.get('/v1/tasks', async (request) => ({
@@ -101,6 +108,13 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
   app.delete('/v1/tasks/:taskId/edges/:edgeId', async (request) => {
     const { taskId, edgeId } = parseWith(EdgeParams, request.params);
     return workflows.deleteEdge(requireUserId(request), taskId, edgeId);
+  });
+
+  /** 下载节点交出的一个文件 */
+  app.get('/v1/tasks/:taskId/files/:nodeId/*', async (request, reply) => {
+    const { taskId, nodeId, '*': path } = parseWith(FileParams, request.params);
+    const file = await workflows.file(requireUserId(request), taskId, nodeId, path);
+    return reply.type(file.contentType).send(file.content);
   });
 
   /** 节点的运行过程（按序号增量拉取） */

@@ -60,6 +60,33 @@ class StopRun extends Error {
   }
 }
 
+const CONTENT_TYPES: Record<string, string> = {
+  md: 'text/markdown; charset=utf-8',
+  txt: 'text/plain; charset=utf-8',
+  html: 'text/html; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  csv: 'text/csv; charset=utf-8',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  pdf: 'application/pdf',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  mp4: 'video/mp4',
+  glb: 'model/gltf-binary',
+  zip: 'application/zip',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+const contentTypeOf = (path: string) =>
+  CONTENT_TYPES[path.split('.').at(-1)?.toLowerCase() ?? ''] ?? 'application/octet-stream';
+
 /** 存下来的产出和会话 → 运行结局里的字段 */
 const savedOutcome = (saved: Saved) => ({
   outputs: saved.outputs?.files.filter((f) => f.path !== KEEP_FILE) ?? [],
@@ -478,6 +505,15 @@ export function createRunService(deps: {
         files.push({ path: file.path, text });
       }
       return { files, truncated };
+    },
+
+    /** 读一个产出文件（下载成果、读规划员写的方案用）；没有这个文件时 404 */
+    async file(id: string, path: string): Promise<{ content: Buffer; contentType: string }> {
+      const row = await owned(id);
+      const files = row.outputKey ? await extractFiles(await store.get(row.outputKey)) : [];
+      const found = files.find((f) => f.path === path && f.path !== KEEP_FILE);
+      if (!found) throw new HttpError(404, 'file_not_found', '没有这个文件');
+      return { content: found.content, contentType: contentTypeOf(path) };
     },
 
     /** 用户在运行中追问：排在当前这一轮之后处理。运行没在进行时 409。 */

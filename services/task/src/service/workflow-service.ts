@@ -1,4 +1,4 @@
-// 工作流控制面（ADR 0004）：提交方案 → 调度可以跑的节点 → 收到运行结束就推进（讨论的下一轮、汇总、
+// 工作流控制面（ADR 0004、0005）：任务单 → 规划（planning-service）或直接提交方案 → 调度可以跑的节点 → 收到运行结束就推进（讨论的下一轮、汇总、
 // 过关卡、关卡没过改一次）→ 失败自动重做 → 卡住、花费超限时交给用户处理。
 // 用户可以随时停止 / 继续、运行整个工作流或单个节点、改还没开始的节点和连线。
 // 节点真正的执行在 harness；这里只管图、状态和决定。所有决定都在锁住任务行的事务里做，
@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { CallSettledData, RunFinishedData } from '@oasis/contracts/events';
 import { RunBody, RunEventList } from '@oasis/contracts/harness';
 import type {
+  Attention,
   CreateTaskInput,
   DecisionBody,
   EdgeBody,
@@ -19,6 +20,7 @@ import type {
 } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import type { Node, NodeRun, Snapshot, Task, TaskStore, Writer } from '../repo/task-store.ts';
+import { noEffects, type Effects, type Submission } from './effects.ts';
 import type { Gate } from './gate.ts';
 import {
   checkDeleteEdge,
@@ -32,6 +34,7 @@ import {
   requireNotStarted,
 } from './graph.ts';
 import { nodeRow, planToRows, validatePlan } from './plan.ts';
+import { createPlanning, dollars, type PlanningConfig } from './planning-service.ts';
 import { decide } from './schedule.ts';
 import { afterRound, firstStep, resumeStep, retryStep, reworkStep, type Step } from './steps.ts';
 
@@ -42,13 +45,6 @@ const FINAL = ['succeeded', 'failed', 'cancelled'];
 const RUN_FINAL = ['succeeded', 'failed', 'cancelled', 'stopped'];
 /** 占着并发名额的节点状态 */
 const ACTIVE = ['running', 'checking'];
-
-/** 微美元 → 给用户看的金额 */
-function dollars(micro: number): string {
-  const usd = micro / 1_000_000;
-  // 不到 1 美分的保留两位有效数字，避免显示成 $0.00
-  return `$${usd >= 0.01 ? usd.toFixed(2) : String(Number(usd.toPrecision(2)))}`;
-}
 
 function toNodeBody(node: Node): NodeBody {
   const c = node.config;
@@ -98,6 +94,9 @@ function toTaskBody({ task, nodes, edges }: Snapshot): TaskBody {
     estimateMicro: task.estimateMicro,
     spentMicro: task.spentMicro,
     budgetLimitMicro: task.budgetLimitMicro,
+    sheet: task.sheet,
+    acceptance: task.acceptance,
+    deliverables: task.deliverables,
     nodes: nodes.map(toNodeBody),
     edges: edges.map((e): EdgeBody => ({ id: e.id, from: e.fromNodeId, to: e.toNodeId })),
     createdAt: task.createdAt.toISOString(),
@@ -105,28 +104,20 @@ function toTaskBody({ task, nodes, edges }: Snapshot): TaskBody {
   };
 }
 
-/** 要提交给 harness 的一次运行（在事务里决定，事务外提交） */
-interface Submission {
-  runId: string;
-  task: Task;
-  nodeId: string;
-  request: NodeRun['request'];
-}
+/** 「需要处理」时某个选择不适用的说明 */
+const UNAVAILABLE: Record<Attention['reason'], string> = {
+  node_failed: '节点失败时可以继续、再试或取消',
+  over_budget: '花费超过上限时只能继续或取消',
+  over_estimate: '预估超过你设的上限时只能照做或取消',
+  plan_failed: '工作流没排好时只能重新规划或取消',
+  workflow_broken: '工作流的连线断开了：先把线接好再点运行，或者取消任务',
+};
 
 const isOpen = (r: NodeRun) => r.status === 'pending' || r.status === 'running';
 
 /** 节点还没结束的运行（讨论同一轮里的几条发言可能同时在跑） */
 const openRuns = (snapshot: Snapshot, nodeId: string) =>
   snapshot.activeRuns.filter((r) => r.nodeId === nodeId && isOpen(r));
-
-/** 一个事务做完后要在事务外做的事 */
-interface Effects {
-  submit: Submission[];
-  gate: { taskId: string; nodeId: string; runId: string }[];
-  stop: string[];
-  cancel: string[];
-}
-const noEffects = (): Effects => ({ submit: [], gate: [], stop: [], cancel: [] });
 
 export function createWorkflowService(deps: {
   store: TaskStore;
@@ -139,9 +130,20 @@ export function createWorkflowService(deps: {
   maxReworks: number;
   /** 花费超过预估的几倍时暂停问用户（ADR 0004：3） */
   budgetMultiplier: number;
+  /** 规划员要查模型目录 */
+  agent: ServiceClient;
+  planning: Omit<PlanningConfig, 'budgetMultiplier'>;
   logger: Logger;
 }) {
   const { store, harness, gate, logger } = deps;
+  const planning = createPlanning({
+    store,
+    harness,
+    agent: deps.agent,
+    engine: { transact, schedule },
+    config: { ...deps.planning, budgetMultiplier: deps.budgetMultiplier },
+    logger,
+  });
 
   // ---------------------------------------------------------------- 事务里的推进
 
@@ -223,10 +225,55 @@ export function createWorkflowService(deps: {
     for (const node of decision.blocked) await w.setNode(node.id, { status: 'blocked' });
     for (const node of decision.unblocked) await w.setNode(node.id, { status: 'waiting' });
     for (const node of decision.start) await startNode(snapshot, w, node, fx);
-    if (decision.task) {
+    if (decision.task?.status === 'succeeded' && snapshot.task.sheet) {
+      // 从任务单来的任务：先对照任务单整体验收，再算完成
+      await w.setTask({ status: 'accepting', attention: null });
+      fx.accept.push(snapshot.task.id);
+    } else if (decision.task) {
       const finished = FINAL.includes(decision.task.status);
       await w.setTask({ ...decision.task, finishedAt: finished ? new Date() : null });
     }
+  }
+
+  /**
+   * 整体验收（事务外，ADR 0005 §5）：负责交付物的节点交出的东西一起交给关卡，对照任务单的「怎么算做好」。
+   * 没满足的地方记下来，照样交付（用户定）。
+   */
+  async function runAcceptance(taskId: string): Promise<void> {
+    const snapshot = await store.get(taskId);
+    if (snapshot?.task.status !== 'accepting' || !snapshot.task.sheet) return;
+    const { task } = snapshot;
+    const { sheet } = snapshot.task;
+    const missing: string[] = [];
+    const runs = task.deliverables.flatMap((d) => {
+      const node = snapshot.nodes.find((n) => n.id === d.nodeId);
+      const runId = node?.config.outputsRunId;
+      if (!node || !runId || node.outputs.length === 0) {
+        missing.push(`「${d.name}」没有交出文件`);
+        return [];
+      }
+      return [{ runId, summary: node.summary, outputs: node.outputs, label: d.name }];
+    });
+    const { unmet } =
+      runs.length > 0
+        ? await gate.check({
+            payerId: task.payerId,
+            taskId,
+            nodeId: null,
+            goal: task.brief,
+            runs,
+            checks: sheet.criteria,
+            expects: [],
+          })
+        : { unmet: [] };
+    await store.transact(taskId, async (fresh, w) => {
+      if (fresh.task.status !== 'accepting') return;
+      await w.setTask({
+        acceptance: { unmet: [...missing, ...unmet] },
+        status: 'succeeded',
+        finishedAt: new Date(),
+      });
+    });
   }
 
   /**
@@ -275,6 +322,12 @@ export function createWorkflowService(deps: {
       }
     }
     for (const s of fx.submit) await submit(s);
+    for (const job of fx.plan) await planning.submit(job);
+    for (const id of fx.accept) {
+      await runAcceptance(id).catch((err: unknown) =>
+        logger.error({ err, taskId: id }, '整体验收失败，等对账重试'),
+      );
+    }
     for (const g of fx.gate) {
       await runGate(g.taskId, g.nodeId, g.runId).catch((err: unknown) =>
         logger.error({ err, ...g }, '关卡检查失败，等对账重试'),
@@ -326,10 +379,8 @@ export function createWorkflowService(deps: {
       payerId: snapshot.task.payerId,
       taskId,
       nodeId,
-      runId,
       goal: node.goal,
-      summary: node.summary,
-      outputs: node.outputs,
+      runs: [{ runId, summary: node.summary, outputs: node.outputs }],
       checks: node.config.checks ?? [],
       expects: node.config.expects ?? [],
     });
@@ -413,7 +464,7 @@ export function createWorkflowService(deps: {
     result: Pick<RunFinishedData, 'runId' | 'status' | 'error' | 'outputs' | 'summary'>,
   ): Promise<void> {
     const found = await store.findRun(result.runId);
-    if (!found) return; // 不是工作流里的运行
+    if (!found) return planning.onFinished(result); // 不是节点的运行：可能是规划员
     await transact(found.taskId, async (snapshot, w, fx) => {
       const run = snapshot.activeRuns.find((r) => r.id === result.runId);
       if (!run) return; // 已经处理过
@@ -484,6 +535,12 @@ export function createWorkflowService(deps: {
       if (FINAL.includes(snapshot.task.status)) {
         throw new HttpError(409, 'task_finished', '任务已经结束了；要改的话请发起一个新任务');
       }
+      if (snapshot.task.status === 'planning') {
+        throw new HttpError(409, 'task_planning', 'AI 团队还在搭建工作流，请稍等');
+      }
+      if (snapshot.task.status === 'accepting') {
+        throw new HttpError(409, 'task_accepting', '工作流已经跑完，正在做最后的验收，请稍等');
+      }
       await fn(snapshot, w, fx);
     });
     return toTaskBody(await owned(ownerId, taskId));
@@ -493,6 +550,9 @@ export function createWorkflowService(deps: {
   async function cancelAll(snapshot: Snapshot, w: Writer, fx: Effects) {
     const now = new Date();
     await endRuns(w, snapshot.activeRuns.filter(isOpen), 'cancel', fx);
+    if (snapshot.task.status === 'planning' && snapshot.task.plannerRunId) {
+      fx.cancel.push(snapshot.task.plannerRunId);
+    }
     for (const node of snapshot.nodes) {
       if (!FINAL.includes(node.status)) {
         await w.setNode(node.id, { status: 'cancelled', finishedAt: now });
@@ -569,23 +629,46 @@ export function createWorkflowService(deps: {
       });
     },
 
-    /** 提交任务和工作流方案：校验 → 入库 → 立即开跑 */
+    /**
+     * 建任务：给任务单的先规划（规划员排出方案后自动开跑）；
+     * 直接给方案的校验后立即开跑。
+     */
     async create(body: CreateTaskInput): Promise<TaskBody> {
-      validatePlan(body.plan);
       const id = randomUUID();
-      const rows = planToRows(body.plan);
+      const base = {
+        id,
+        ownerId: body.ownerId,
+        payerId: body.payerId,
+        conversationId: body.conversationId ?? null,
+        title: body.title,
+        brief: body.brief,
+      };
+      if (body.sheet) {
+        await store.create({
+          task: {
+            ...base,
+            status: 'planning',
+            estimateMicro: null,
+            budgetLimitMicro: body.sheet.budgetMicro,
+            sheet: body.sheet,
+          },
+          nodes: [],
+          edges: [],
+        });
+        await transact(id, (snapshot, w, fx) => planning.begin(snapshot, w, fx));
+        return toTaskBody((await store.get(id)) as Snapshot);
+      }
+      const plan = body.plan as NonNullable<typeof body.plan>;
+      validatePlan(plan);
+      const rows = planToRows(plan);
       const estimate = body.estimateMicro ?? null;
       await store.create({
         task: {
-          id,
-          ownerId: body.ownerId,
-          payerId: body.payerId,
-          conversationId: body.conversationId ?? null,
-          title: body.title,
-          brief: body.brief,
+          ...base,
           status: 'running',
           estimateMicro: estimate,
           budgetLimitMicro: estimate === null ? null : estimate * deps.budgetMultiplier,
+          sheet: null,
         },
         nodes: rows.nodes,
         edges: rows.edges,
@@ -608,6 +691,13 @@ export function createWorkflowService(deps: {
     },
 
     get: async (ownerId: string, taskId: string) => toTaskBody(await owned(ownerId, taskId)),
+
+    /** 内部（conversation 发交付消息用）：不查归属 */
+    async getInternal(taskId: string): Promise<TaskBody> {
+      const snapshot = await store.get(taskId);
+      if (!snapshot) throw new HttpError(404, 'task_not_found', '没有这个任务');
+      return toTaskBody(snapshot);
+    },
 
     /** 节点的运行过程：转发它最近一次运行的事件 */
     async nodeEvents(ownerId: string, taskId: string, nodeId: string, after: number) {
@@ -655,6 +745,23 @@ export function createWorkflowService(deps: {
         throw err;
       }
       return 'delivered';
+    },
+
+    /** 下载节点交出的一个文件（交付消息和画布用） */
+    async file(ownerId: string, taskId: string, nodeId: string, path: string) {
+      const node = nodeOf(await owned(ownerId, taskId), nodeId);
+      const runId = node.config.outputsRunId;
+      if (!runId || !node.outputs.some((f) => f.path === path)) {
+        throw new HttpError(404, 'file_not_found', '没有这个文件');
+      }
+      const response = await harness.stream(
+        'GET',
+        `/internal/runs/${runId}/files/${path.split('/').map(encodeURIComponent).join('/')}`,
+      );
+      return {
+        contentType: response.headers.get('content-type') ?? 'application/octet-stream',
+        content: Buffer.from(await response.arrayBuffer()),
+      };
     },
 
     /** 运行整个工作流（先检查整张图） */
@@ -712,13 +819,17 @@ export function createWorkflowService(deps: {
           await w.setTask({ budgetLimitMicro: nextLimit(task) });
           return runAll(snapshot, w, fx);
         }
-        throw new HttpError(
-          409,
-          'choice_unavailable',
-          reason === 'over_budget'
-            ? '花费超过上限时只能继续或取消'
-            : '工作流的连线断开了：先把线接好再点运行，或者取消任务',
-        );
+        if (reason === 'over_estimate' && choice === 'continue') {
+          // 用户看了预估决定照做：上限按预估的倍数算
+          await w.setTask({
+            budgetLimitMicro: (task.estimateMicro ?? 0) * deps.budgetMultiplier,
+            status: 'running',
+            attention: null,
+          });
+          return schedule(snapshot, w, fx);
+        }
+        if (reason === 'plan_failed' && choice === 'retry') return planning.retry(snapshot, w, fx);
+        throw new HttpError(409, 'choice_unavailable', UNAVAILABLE[reason]);
       }),
 
     /** 新建节点：先是「新建」状态，不会自动开跑 */
@@ -823,6 +934,12 @@ export function createWorkflowService(deps: {
       for (const run of await store.listActiveRuns(before)) {
         await reconcileRun(run).catch((err: unknown) =>
           logger.warn({ err, runId: run.id }, '对账失败，下次再试'),
+        );
+      }
+      await planning.reconcile(before);
+      for (const task of await store.listStale('accepting', before)) {
+        await runAcceptance(task.id).catch((err: unknown) =>
+          logger.warn({ err, taskId: task.id }, '整体验收重试失败，下次再试'),
         );
       }
       for (const node of await store.listCheckingNodes(before)) {

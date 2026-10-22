@@ -1,5 +1,5 @@
 // 模型目录与调用路由。人设（名字、人格、声音……）在后续阶段加入，现在用系统默认设定。
-import type { ModelEntry, ModelRoute } from '@oasis/contracts/agent';
+import type { CatalogEntry, ModelEntry, ModelRoute } from '@oasis/contracts/agent';
 import { HttpError } from '@oasis/service-kit';
 import type { ModelRepo, ModelRow } from '../repo/model-repo.ts';
 
@@ -30,6 +30,24 @@ export function createModelService(repo: ModelRepo) {
   return {
     async list(): Promise<ModelEntry[]> {
       return (await repo.list()).map(toEntry);
+    },
+
+    /** 规划员能挑的模型：只列已接入的 */
+    async catalog(): Promise<CatalogEntry[]> {
+      return (await repo.list()).flatMap((row) =>
+        row.providerModel
+          ? [
+              {
+                key: row.key,
+                name: row.name,
+                vendor: row.vendor,
+                category: row.category,
+                tags: row.tags,
+                providerModel: row.providerModel,
+              },
+            ]
+          : [],
+      );
     },
 
     async route(key: string): Promise<ModelRoute> {

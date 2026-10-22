@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { RunService } from '../service/run-service.ts';
 
 const RunParams = z.object({ runId: z.uuid() });
+const FileParams = RunParams.extend({ '*': z.string().min(1).max(500) });
 const TextsQuery = z.object({
   maxChars: z.coerce.number().int().positive().max(50_000).default(8_000),
 });
@@ -37,6 +38,13 @@ export function registerRoutes(app: ServiceApp, runs: RunService): void {
     const { runId } = parseWith(RunParams, request.params);
     const { maxChars } = parseWith(TextsQuery, request.query);
     return runs.texts(runId, maxChars);
+  });
+
+  /** 读一个产出文件（out/ 下的相对路径） */
+  app.get('/internal/runs/:runId/files/*', async (request, reply) => {
+    const { runId, '*': path } = parseWith(FileParams, request.params);
+    const file = await runs.file(runId, path);
+    return reply.type(file.contentType).send(file.content);
   });
 
   /** 用户追问或补充要求（只对运行中的节点有效） */

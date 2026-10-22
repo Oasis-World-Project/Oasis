@@ -10,6 +10,9 @@ export function registerRoutes(app: ServiceApp, models: ModelService): void {
     return { models: await models.list() };
   });
 
+  // 只给 task 的规划员用：已接入的模型和它们的上游模型 ID
+  app.get('/internal/models/catalog', async () => ({ models: await models.catalog() }));
+
   // 只给 conversation 用：拿到调用某个模型所需的上游模型 ID 和人设
   app.get('/internal/models/:key/route', async (request) =>
     models.route(parseWith(KeyParams, request.params).key),

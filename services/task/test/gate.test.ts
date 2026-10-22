@@ -42,11 +42,9 @@ const NODE = '3c3c3c3c-3c3c-4c3c-8c3c-3c3c3c3c3c3c';
 const input = {
   payerId: PAYER,
   taskId: TASK,
-  nodeId: NODE,
-  runId: 'run-1',
+  nodeId: NODE as string | null,
   goal: '写一份介绍',
-  summary: '写好了',
-  outputs: [{ path: '介绍.md', size: 50 }],
+  runs: [{ runId: 'run-1', summary: '写好了', outputs: [{ path: '介绍.md', size: 50 }] }],
   checks: ['提到了价格', '语气友好'],
   expects: ['*.md'],
 };
@@ -69,6 +67,7 @@ describe('关卡的验收点检查', () => {
     });
     expect(await gate.check(input)).toEqual({ unmet: ['提到了价格'] });
     expect(harness.calls[0]?.path).toBe('/internal/runs/run-1/texts?maxChars=8000');
+    expect(harness.calls).toHaveLength(1);
     const call = gateway.calls[0] as {
       body: { state: string[]; questions: object };
       headers: object;
@@ -93,10 +92,42 @@ describe('关卡的验收点检查', () => {
       threshold: 0.5,
       logger: pino({ level: 'silent' }),
     });
-    expect(await gate.check({ ...input, outputs: [] })).toEqual({
+    expect(await gate.check({ ...input, runs: [{ ...input.runs[0]!, outputs: [] }] })).toEqual({
       unmet: ['out/ 里没有任何产出文件'],
     });
     expect(gateway.calls).toHaveLength(0);
     expect(await gate.check(input)).toEqual({ unmet: [] });
+  });
+
+  it('整体验收：几个节点的运行一起看（各自标上名字），不带节点归属', async () => {
+    const harness = fakeClient((path) => ({
+      files: [{ path: 'x.md', text: path.includes('run-2') ? '第二份' : '第一份' }],
+      truncated: false,
+    }));
+    const gateway = fakeClient(() => ({ answers: { c0: { type: 'noul', noul: 0.9 } } }));
+    const gate = createGate({
+      harness: harness.client,
+      modelGateway: gateway.client,
+      model: 'typesafe/jev-1.14',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    const result = await gate.check({
+      ...input,
+      nodeId: null,
+      checks: ['都写好了'],
+      runs: [
+        { ...input.runs[0]!, label: '首页文案' },
+        { runId: 'run-2', summary: null, outputs: [{ path: 'b.md', size: 1 }], label: '海报' },
+      ],
+    });
+    expect(result).toEqual({ unmet: [] });
+    expect(harness.calls.map((c) => c.path)).toEqual([
+      '/internal/runs/run-1/texts?maxChars=4000',
+      '/internal/runs/run-2/texts?maxChars=4000',
+    ]);
+    const call = gateway.calls[0] as { body: { state: string[] }; headers: object };
+    expect(call.headers).toEqual({ 'x-oasis-payer-id': PAYER, 'x-oasis-task-id': TASK });
+    expect(call.body.state.join('\n')).toContain('「海报」产出文件：b.md');
   });
 });

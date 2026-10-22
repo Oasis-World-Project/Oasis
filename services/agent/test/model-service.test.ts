@@ -30,6 +30,11 @@ async function errorCode(promise: Promise<unknown>) {
 }
 
 describe('模型目录', () => {
+  it('规划员的目录只列已接入的模型，带上游模型 ID', async () => {
+    const catalog = await createModelService(repo).catalog();
+    expect(catalog.map((m) => [m.key, m.providerModel])).toEqual([['ok', 'vendor/ok-1']]);
+  });
+
   it('没有上游模型的标记为不可用，对外不暴露上游模型 ID', async () => {
     const list = await createModelService(repo).list();
     expect(list.map((m) => [m.key, m.available])).toEqual([

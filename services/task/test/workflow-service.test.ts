@@ -2,15 +2,17 @@ import { createServiceClient, HttpError } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type {
-  Edge,
-  NewNode,
-  Node,
-  NodeRun,
-  Snapshot,
-  Task,
-  TaskStore,
-  Writer,
+import type { EventEnvelope } from '@oasis/contracts/events';
+import {
+  statusEvent,
+  type Edge,
+  type NewNode,
+  type Node,
+  type NodeRun,
+  type Snapshot,
+  type Task,
+  type TaskStore,
+  type Writer,
 } from '../src/repo/task-store.ts';
 import type { Gate } from '../src/service/gate.ts';
 import { createWorkflowService } from '../src/service/workflow-service.ts';
@@ -35,6 +37,9 @@ const newNode = (n: NewNode, taskId: string): Node => ({
 });
 
 /** 内存版 TaskStore：同一个任务的事务排队执行，和行锁的效果一样 */
+/** 发件箱里的事件 */
+const events: EventEnvelope[] = [];
+
 function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
   const tasks = new Map<string, Task>();
   const nodes = new Map<string, Node>();
@@ -56,6 +61,10 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
       const now = new Date();
       tasks.set(input.task.id, {
         ...input.task,
+        deliverables: [],
+        plannerRunId: null,
+        planAttempts: 0,
+        acceptance: null,
         createdAt: now,
         updatedAt: now,
         finishedAt: null,
@@ -81,6 +90,7 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
         const task = tasks.get(taskId);
         if (!task) throw new Error('没有任务');
         const snap = snapshot(task);
+        const before = { status: task.status, attention: task.attention };
         const w: Writer = {
           setTask: async (patch) => void Object.assign(task, patch),
           setNode: async (id, patch) => void Object.assign(nodes.get(id) as Node, patch),
@@ -129,7 +139,10 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
             return true;
           },
         };
-        return fn(snap, w);
+        const result = await fn(snap, w);
+        const event = statusEvent(before, task);
+        if (event) events.push(event);
+        return result;
       });
       locks.set(
         taskId,
@@ -139,6 +152,9 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
     },
     listActiveRuns: async () =>
       [...runs.values()].filter((r) => r.status === 'pending' || r.status === 'running'),
+    findTaskByPlannerRun: async (runId) =>
+      [...tasks.values()].find((t) => t.plannerRunId === runId),
+    listStale: async (status) => [...tasks.values()].filter((t) => t.status === status),
     listCheckingNodes: async (before) =>
       [...nodes.values()].filter((n) => {
         const run = n.currentRunId ? runs.get(n.currentRunId) : undefined;
@@ -176,6 +192,30 @@ harness.get('/internal/runs/:id', async (request, reply) => {
       .send({ error: { code: 'run_not_found', message: '无', requestId: 'r' } });
   return finishedRemote.get(id) ?? runBody(id, 'running');
 });
+/** 规划员写的方案：运行 ID → plan.json 的内容 */
+let plans = new Map<string, string>();
+harness.get('/internal/runs/:id/files/*', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const plan = plans.get(id);
+  if (!plan)
+    return reply
+      .code(404)
+      .send({ error: { code: 'file_not_found', message: '无', requestId: 'r' } });
+  return reply.type('application/json').send(plan);
+});
+/** 假 agent：模型目录 */
+harness.get('/internal/models/catalog', async () => ({
+  models: [
+    {
+      key: 'deepseek',
+      name: 'DeepSeek',
+      vendor: '深度求索',
+      category: 'llm',
+      tags: ['性价比'],
+      providerModel: 'deepseek/x',
+    },
+  ],
+}));
 harness.post('/internal/runs/:id/messages', async (request, reply) => {
   messages.push({
     runId: (request.params as { id: string }).id,
@@ -213,8 +253,8 @@ function runBody(id: string, status: string, extra: Record<string, unknown> = {}
 let gateResults: (string[] | 'throw')[] = [];
 const gateCalls: { runId: string; checks: string[] }[] = [];
 const gate = {
-  async check(input: { runId: string; checks: string[] }) {
-    gateCalls.push({ runId: input.runId, checks: input.checks });
+  async check(input: { runs: { runId: string }[]; checks: string[] }) {
+    gateCalls.push({ runId: input.runs[0]?.runId ?? '', checks: input.checks });
     const next = gateResults.shift() ?? [];
     if (next === 'throw') throw new Error('关卡断了');
     return { unmet: next };
@@ -236,6 +276,8 @@ beforeEach(() => {
   harnessKnows = new Set();
   finishedRemote = new Map();
   rejectNext = false;
+  plans = new Map();
+  events.length = 0;
   gateResults = [];
   gateCalls.length = 0;
   store = memoryStore();
@@ -247,6 +289,14 @@ beforeEach(() => {
     maxRetries: 2,
     maxReworks: 1,
     budgetMultiplier: 3,
+    agent: createServiceClient('agent', harnessUrl),
+    planning: {
+      model: 'deepseek/planner',
+      defaultModel: 'deepseek/x',
+      maxNodes: 4,
+      maxAttempts: 2,
+      rates: { workRun: 3_000, speechRun: 3_000 },
+    },
     logger: pino({ level: 'silent' }),
   });
 });
@@ -795,5 +845,230 @@ describe('花费', () => {
     detail = await service.decide(OWNER, task.id, { choice: 'continue' });
     expect(detail).toMatchObject({ status: 'running', budgetLimitMicro: 6_500 });
     expect(runOf('A', task).continueFrom).toBeDefined();
+  });
+});
+
+describe('规划（从任务单开始）', () => {
+  const sheetOf = (budgetMicro: number | null = null) => ({
+    title: '小木屋首页',
+    deliverables: [{ name: '首页文案', form: 'Markdown' }],
+    criteria: ['语气温馨'],
+    style: [],
+    budgetMicro,
+    assumptions: [],
+    materials: [],
+  });
+  const fromSheet = (budgetMicro: number | null = null) =>
+    service.create({
+      ownerId: OWNER,
+      payerId: OWNER,
+      title: '小木屋首页',
+      brief: '为小木屋民宿写官网首页开头',
+      sheet: sheetOf(budgetMicro),
+    });
+  const plannerRuns = () =>
+    submitted.filter((s) => !s.nodeId) as unknown as {
+      runId: string;
+      model: string;
+      prompt: string;
+      continueFrom?: string;
+    }[];
+  const goodPlan = JSON.stringify({
+    nodes: [work('write', '写初稿'), work('polish', '润色')],
+    edges: [{ from: 'write', to: 'polish' }],
+    deliverables: { 首页文案: 'polish' },
+  });
+  const plannerDone = async (
+    plan: string | undefined,
+    status: 'succeeded' | 'failed' = 'succeeded',
+  ) => {
+    const run = plannerRuns().at(-1)!;
+    if (plan) plans.set(run.runId, plan);
+    await finish(run.runId, status);
+    return run;
+  };
+
+  it('建任务后先规划；方案过了规划门就建节点、算预估和上限、开跑，并发出状态事件', async () => {
+    const task = await fromSheet();
+    expect(task).toMatchObject({ status: 'planning', nodes: [], sheet: { title: '小木屋首页' } });
+    const [planner] = plannerRuns();
+    expect(planner?.model).toBe('deepseek/planner');
+    expect(planner?.prompt).toContain('「首页文案」');
+    expect(planner?.prompt).toContain('deepseek/x（DeepSeek');
+    expect(planner?.prompt).toContain('最多 4 个节点');
+
+    await plannerDone(goodPlan);
+    const detail = await service.get(OWNER, task.id);
+    expect(detail).toMatchObject({
+      status: 'running',
+      estimateMicro: 7_200,
+      budgetLimitMicro: 21_600,
+    });
+    expect(detail.nodes.map((n) => `${n.key}=${n.status}`)).toEqual([
+      'write=running',
+      'polish=waiting',
+    ]);
+    expect(detail.deliverables).toEqual([
+      { name: '首页文案', form: 'Markdown', nodeId: keyOf(detail, 'polish') },
+    ]);
+    expect(events.map((e) => (e.data as { status: string }).status)).toEqual(['running']);
+  });
+
+  it('方案没过规划门：接着原会话让规划员改；改好了照常开跑', async () => {
+    const task = await fromSheet();
+    const bad = JSON.stringify({
+      nodes: [{ ...work('write'), model: 'openai/unknown' }],
+      edges: [],
+      deliverables: {},
+    });
+    const first = await plannerDone(bad);
+    const revise = plannerRuns().at(-1)!;
+    expect(revise.continueFrom).toBe(first.runId);
+    expect(revise.prompt).toContain('模型 openai/unknown 不在可以用的模型里');
+    expect(revise.prompt).toContain('交付物「首页文案」没有指定由哪个节点交出');
+    await plannerDone(goodPlan);
+    expect((await service.get(OWNER, task.id)).status).toBe('running');
+  });
+
+  it('规划员自己失败了：从头再排；两次都不行就交给用户（重新规划 / 取消）', async () => {
+    const task = await fromSheet();
+    await plannerDone(undefined, 'failed');
+    expect(plannerRuns().at(-1)!.continueFrom).toBeUndefined();
+    await plannerDone('不是 JSON');
+    const detail = await service.get(OWNER, task.id);
+    expect(detail.status).toBe('needs_attention');
+    expect(detail.attention?.reason).toBe('plan_failed');
+    expect(detail.attention?.message).toContain('不是合法的 JSON');
+    expect(
+      (await errorOf(() => service.decide(OWNER, task.id, { choice: 'continue' }))).status,
+    ).toBe(409);
+
+    expect((await service.decide(OWNER, task.id, { choice: 'retry' })).status).toBe('planning');
+    expect(plannerRuns()).toHaveLength(3);
+    await plannerDone(goodPlan);
+    expect((await service.get(OWNER, task.id)).status).toBe('running');
+  });
+
+  it('预估超过用户在任务单里设的上限：先不开跑，问用户；照做就按预估定上限开跑', async () => {
+    const task = await fromSheet(1_000);
+    await plannerDone(goodPlan);
+    let detail = await service.get(OWNER, task.id);
+    expect(detail).toMatchObject({
+      status: 'needs_attention',
+      attention: { reason: 'over_estimate', message: '预计要花 $0.0072，超过了你设的上限 $0.001' },
+    });
+    expect(detail.nodes.every((n) => n.status === 'waiting')).toBe(true);
+    detail = await service.decide(OWNER, task.id, { choice: 'continue' });
+    expect(detail).toMatchObject({ status: 'running', budgetLimitMicro: 21_600 });
+    expect(detail.nodes.find((n) => n.key === 'write')?.status).toBe('running');
+  });
+
+  it('规划中不能改工作流；取消会停掉规划员', async () => {
+    const task = await fromSheet();
+    expect(await errorOf(() => service.createNode(OWNER, task.id, work('x')))).toMatchObject({
+      status: 409,
+      message: 'AI 团队还在搭建工作流，请稍等',
+    });
+    await service.cancel(OWNER, task.id);
+    expect(cancelled).toEqual([plannerRuns()[0]?.runId]);
+    await plannerDone(goodPlan); // 取消后才到的结束事件不再推进
+    expect((await service.get(OWNER, task.id)).nodes).toEqual([]);
+  });
+});
+
+describe('下载成果', () => {
+  it('转给 harness 读交出这份产出的那次运行；节点没有这个文件就 404', async () => {
+    const task = await create(['A'], []);
+    const run = runOf('A', task);
+    plans.set(run.runId, '# 小木屋');
+    await finish(run.runId, 'succeeded', { outputs: [{ path: '首页.md', size: 11 }] });
+    const file = await service.file(OWNER, task.id, keyOf(task, 'A'), '首页.md');
+    expect(file.content.toString()).toBe('# 小木屋');
+    expect(
+      (await errorOf(() => service.file(OWNER, task.id, keyOf(task, 'A'), '别的.md'))).status,
+    ).toBe(404);
+  });
+});
+
+describe('整体验收（从任务单来的任务）', () => {
+  const start = async (criteria = ['语气温馨', '不超过 80 字']) => {
+    const task = await service.create({
+      ownerId: OWNER,
+      payerId: OWNER,
+      title: '小木屋首页',
+      brief: '为小木屋民宿写官网首页开头',
+      sheet: {
+        title: '小木屋首页',
+        deliverables: [
+          { name: '首页文案', form: 'Markdown' },
+          { name: '海报文案', form: 'Markdown' },
+        ],
+        criteria,
+        style: [],
+        budgetMicro: null,
+        assumptions: [],
+        materials: [],
+      },
+    });
+    const planner = submitted.find((s) => !s.nodeId) as { runId: string };
+    plans.set(
+      planner.runId,
+      JSON.stringify({
+        nodes: [work('home'), work('poster')],
+        edges: [],
+        deliverables: { 首页文案: 'home', 海报文案: 'poster' },
+      }),
+    );
+    await finish(planner.runId, 'succeeded');
+    return service.get(OWNER, task.id);
+  };
+
+  it('工作流跑完先验收：负责交付物的节点交出的东西一起看；没满足的记下来，照样完成', async () => {
+    const task = await start();
+    gateResults = [[], [], ['不超过 80 字']]; // 两个节点各自的关卡通过；整体验收有一条没满足
+    await finish(runOf('home', task).runId, 'succeeded', {
+      outputs: [{ path: '首页.md', size: 9 }],
+    });
+    await finish(runOf('poster', task).runId, 'succeeded', {
+      outputs: [{ path: '海报.md', size: 9 }],
+    });
+    const detail = await service.get(OWNER, task.id);
+    expect(detail).toMatchObject({ status: 'succeeded', acceptance: { unmet: ['不超过 80 字'] } });
+    expect(gateCalls.at(-1)).toEqual({
+      runId: runOf('home', task).runId,
+      checks: ['语气温馨', '不超过 80 字'],
+    });
+    expect(events.map((e) => (e.data as { status: string }).status)).toEqual([
+      'running',
+      'accepting',
+      'succeeded',
+    ]);
+  });
+
+  it('负责交付物的节点没交出文件：直接记为没满足（跳过它时就是这样）', async () => {
+    const task = await start();
+    await finish(runOf('home', task).runId, 'succeeded', {
+      outputs: [{ path: '首页.md', size: 9 }],
+    });
+    for (let i = 0; i < 3; i++) await finish(runOf('poster', task).runId, 'failed');
+    await service.decide(OWNER, task.id, { choice: 'continue' });
+    const detail = await service.get(OWNER, task.id);
+    expect(detail.status).toBe('succeeded');
+    expect(detail.acceptance?.unmet).toEqual(['「海报文案」没有交出文件']);
+  });
+
+  it('验收中途断了：任务停在验收中，对账时重新验收', async () => {
+    const task = await start();
+    gateResults = [[], [], 'throw'];
+    await finish(runOf('home', task).runId, 'succeeded', { outputs: [{ path: 'a.md', size: 1 }] });
+    await finish(runOf('poster', task).runId, 'succeeded', {
+      outputs: [{ path: 'b.md', size: 1 }],
+    });
+    expect((await service.get(OWNER, task.id)).status).toBe('accepting');
+    await service.reconcile(0);
+    expect(await service.get(OWNER, task.id)).toMatchObject({
+      status: 'succeeded',
+      acceptance: { unmet: [] },
+    });
   });
 });

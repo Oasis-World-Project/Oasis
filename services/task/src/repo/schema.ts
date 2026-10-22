@@ -1,6 +1,6 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
 import type { RunOutputFile } from '@oasis/contracts/harness';
-import type { Attention, NodeStatus, TaskStatus } from '@oasis/contracts/task';
+import type { Attention, NodeStatus, TaskSheet, TaskStatus } from '@oasis/contracts/task';
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /** 节点配置：关卡的验收点和应有文件；讨论节点还有参与者、轮数、进行到第几轮和讨论记录 */
@@ -32,6 +32,13 @@ export interface RunMeta {
   participant?: string;
 }
 
+/** 一样交付物由哪个节点交出 */
+export interface Deliverable {
+  name: string;
+  form: string;
+  nodeId: string | null;
+}
+
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 const micro = (name: string) => bigint(name, { mode: 'number' });
 
@@ -47,6 +54,11 @@ export const tasks = pgTable('tasks', {
   estimateMicro: micro('estimate_micro'),
   spentMicro: micro('spent_micro').notNull().default(0),
   budgetLimitMicro: micro('budget_limit_micro'),
+  sheet: jsonb('sheet').$type<TaskSheet>(),
+  deliverables: jsonb('deliverables').$type<Deliverable[]>().notNull().default([]),
+  plannerRunId: uuid('planner_run_id'),
+  planAttempts: integer('plan_attempts').notNull().default(0),
+  acceptance: jsonb('acceptance').$type<{ unmet: string[] }>(),
   createdAt: at('created_at').notNull().defaultNow(),
   updatedAt: at('updated_at').notNull().defaultNow(),
   finishedAt: at('finished_at'),
@@ -109,4 +121,13 @@ export const spendRecords = pgTable('spend_records', {
   nodeId: uuid('node_id'),
   chargedMicro: micro('charged_micro').notNull(),
   createdAt: at('created_at').notNull().defaultNow(),
+});
+
+/** 事务发件箱（列名由 service-kit 的 startOutboxRelay 约定） */
+export const outbox = pgTable('outbox', {
+  id: uuid('id').primaryKey(),
+  subject: text('subject').notNull(),
+  payload: jsonb('payload').notNull(),
+  createdAt: at('created_at').notNull().defaultNow(),
+  publishedAt: at('published_at'),
 });

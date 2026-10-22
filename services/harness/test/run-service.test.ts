@@ -332,6 +332,16 @@ describe('一次 agent 运行', () => {
     expect((err as HttpError).statusCode).toBe(409);
   });
 
+  it('读一个产出文件：带上内容类型；没有的文件 404', async () => {
+    const run = await service.start({ ...base, prompt: '写' });
+    await finished(run.id);
+    const file = await service.file(run.id, 'result.md');
+    expect(file.content.toString()).toBe('# 成果');
+    expect(file.contentType).toBe('text/markdown; charset=utf-8');
+    const err = await service.file(run.id, '.oasis-keep').catch((e: unknown) => e);
+    expect((err as HttpError).statusCode).toBe(404);
+  });
+
   it('读文字类产出给关卡用：只读文字文件，总长超过上限就截断', async () => {
     const run = await service.start({ ...base, prompt: '写' });
     await finished(run.id);

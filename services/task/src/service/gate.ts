@@ -35,6 +35,25 @@ const DecisionAnswers = z.object({
   answers: z.record(z.string(), z.object({ noul: z.number().optional() }).loose()),
 });
 
+/** 要检查的一次运行：交付时说的话和产出；label 是给 Jev 看的名字（如交付物名） */
+interface GateRun {
+  runId: string;
+  summary: string | null;
+  outputs: RunOutputFile[];
+  label?: string;
+}
+
+interface GateInput {
+  payerId: string;
+  taskId: string;
+  /** 整体验收时为 null */
+  nodeId: string | null;
+  goal: string;
+  runs: GateRun[];
+  checks: string[];
+  expects: string[];
+}
+
 export function createGate(deps: {
   harness: ServiceClient;
   modelGateway: ServiceClient;
@@ -46,26 +65,24 @@ export function createGate(deps: {
 }) {
   const { harness, modelGateway, logger } = deps;
 
-  /** 验收点检查：把节点要做的事、最后一句话和文字产出交给 Jev，每条验收点一个问题 */
-  async function checkPoints(input: {
-    payerId: string;
-    taskId: string;
-    nodeId: string;
-    runId: string;
-    goal: string;
-    summary: string | null;
-    outputs: RunOutputFile[];
-    checks: string[];
-  }): Promise<string[]> {
-    const texts = await harness.json('GET', `/internal/runs/${input.runId}/texts?maxChars=8000`, {
-      schema: RunTextsBody,
-    });
-    const state = [
-      `节点要做的事：${input.goal}`,
-      `它交付时说：${input.summary ?? '（没说）'}`,
-      `产出文件：${input.outputs.map((f) => f.path).join('、')}`,
-      ...texts.files.map((f) => `文件 ${f.path} 的内容：\n${f.text}`),
-    ];
+  /** 验收点检查：把要做的事、交付时说的话和文字产出交给 Jev，每条验收点一个问题 */
+  async function checkPoints(input: GateInput): Promise<string[]> {
+    // 几次运行的文字产出一起看，总长约 8,000 字
+    const perRun = Math.max(2_000, Math.floor(8_000 / input.runs.length));
+    const state = [`要做的事：${input.goal}`];
+    for (const run of input.runs) {
+      const texts = await harness.json(
+        'GET',
+        `/internal/runs/${run.runId}/texts?maxChars=${perRun}`,
+        { schema: RunTextsBody },
+      );
+      const who = run.label ? `「${run.label}」` : '';
+      state.push(
+        `${who}交付时说：${run.summary ?? '（没说）'}`,
+        `${who}产出文件：${run.outputs.map((f) => f.path).join('、')}`,
+        ...texts.files.map((f) => `文件 ${f.path} 的内容：\n${f.text}`),
+      );
+    }
     const questions = Object.fromEntries(
       input.checks.map((check, i) => [
         `c${i}`,
@@ -78,11 +95,11 @@ export function createGate(deps: {
     );
     const { answers } = await modelGateway.json('POST', '/internal/v1/decisions', {
       body: { model: deps.model, state, questions },
-      // 花费记在付费人账上，并计入这个任务和节点
+      // 花费记在付费人账上，并计入这个任务（和节点）
       headers: {
         [OASIS_HEADERS.payerId]: input.payerId,
         [OASIS_HEADERS.taskId]: input.taskId,
-        [OASIS_HEADERS.nodeId]: input.nodeId,
+        ...(input.nodeId ? { [OASIS_HEADERS.nodeId]: input.nodeId } : {}),
       },
       schema: DecisionAnswers,
     });
@@ -90,24 +107,20 @@ export function createGate(deps: {
   }
 
   return {
-    async check(input: {
-      payerId: string;
-      taskId: string;
-      nodeId: string;
-      runId: string;
-      goal: string;
-      summary: string | null;
-      outputs: RunOutputFile[];
-      checks: string[];
-      expects: string[];
-    }): Promise<GateResult> {
-      const unmet = checkRules(input.outputs, input.expects);
+    /**
+     * 节点出口的关卡（一次运行），或任务的整体验收（几个负责交付物的节点的运行一起看，nodeId 为 null）。
+     */
+    async check(input: GateInput): Promise<GateResult> {
+      const unmet = checkRules(
+        input.runs.flatMap((r) => r.outputs),
+        input.expects,
+      );
       // 规则没过就不用再问 Jev 了（连产出都没有，验收点无从谈起）
       if (unmet.length > 0 || input.checks.length === 0) return { unmet };
       try {
         return { unmet: await checkPoints(input) };
       } catch (err) {
-        logger.warn({ err, runId: input.runId }, '验收点检查出错，放行');
+        logger.warn({ err, taskId: input.taskId, nodeId: input.nodeId }, '验收点检查出错，放行');
         return { unmet: [] };
       }
     },

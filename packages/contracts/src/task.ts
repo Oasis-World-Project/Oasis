@@ -67,24 +67,66 @@ export const WorkflowPlan = z.object({
 });
 export type WorkflowPlan = z.infer<typeof WorkflowPlan>;
 
-/** POST /internal/tasks：提交任务和工作流方案（5.3 的规划、测试用），校验后立即开跑 */
-export const CreateTaskBody = z.object({
-  ownerId: z.uuid(),
-  payerId: z.uuid(),
-  conversationId: z.uuid().optional(),
-  title: z.string().trim().min(1).max(100),
-  /** 任务单摘要，交给每个节点 */
-  brief: z.string().trim().min(1).max(20_000),
-  plan: WorkflowPlan,
-  /** 预估花费（微美元）；有它才做「超过 3 倍暂停」检查 */
-  estimateMicro: z.number().int().nonnegative().optional(),
+/**
+ * 任务单（ADR 0005 §3）：私聊里的 AI 问完需求后给出，用户确认后交给规划员，也会交给每个节点。
+ * 「怎么算做好」会变成节点关卡和整体验收的验收点。
+ */
+export const TaskSheet = z.object({
+  title: z.string().trim().min(1).max(60),
+  /** 要交付的东西：名称和形式，如「首页文案」「Markdown」 */
+  deliverables: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(60),
+        form: z.string().trim().min(1).max(60),
+      }),
+    )
+    .min(1)
+    .max(10),
+  /** 怎么算做好（普通话） */
+  criteria: z.array(z.string().trim().min(1).max(200)).min(1).max(8),
+  /** 风格与限制 */
+  style: z.array(z.string().trim().min(1).max(200)).max(8).default([]),
+  /** 用户自己设的花费上限（微美元）；没设为 null */
+  budgetMicro: z.number().int().positive().nullable().default(null),
+  /** AI 自己定的事（技术假设），让用户知道，不用确认 */
+  assumptions: z.array(z.string().trim().min(1).max(200)).max(8).default([]),
+  /** 用户给的素材（文件名） */
+  materials: z.array(z.string().max(300)).max(50).default([]),
 });
+export type TaskSheet = z.infer<typeof TaskSheet>;
+
+/**
+ * POST /internal/tasks：建任务。两种方式，只能选一种：
+ * - sheet：用户确认的任务单（私聊接需求），由规划员排出工作流再开跑（ADR 0005）；
+ * - plan：直接给出工作流方案，校验后立即开跑（测试和联调用）。
+ */
+export const CreateTaskBody = z
+  .object({
+    ownerId: z.uuid(),
+    payerId: z.uuid(),
+    conversationId: z.uuid().optional(),
+    title: z.string().trim().min(1).max(100),
+    /** 任务说明，交给规划员和每个节点 */
+    brief: z.string().trim().min(1).max(20_000),
+    sheet: TaskSheet.optional(),
+    plan: WorkflowPlan.optional(),
+    /** 预估花费（微美元）；有它才做「超过 3 倍暂停」检查。给任务单时由 task 自己算 */
+    estimateMicro: z.number().int().nonnegative().optional(),
+  })
+  .refine((body) => Number(Boolean(body.sheet)) + Number(Boolean(body.plan)) === 1, {
+    message: '要么给出任务单，要么给出工作流方案',
+  });
 export type CreateTaskBody = z.input<typeof CreateTaskBody>;
 /** 校验后（默认值已补上）的提交内容 */
 export type CreateTaskInput = z.infer<typeof CreateTaskBody>;
 
 export const TaskStatus = z.enum([
+  /** 规划员正在按任务单排工作流（ADR 0005 §4） */
+  'planning',
   'running',
+  /** 工作流跑完了，正在对照任务单整体验收（ADR 0005 §5） */
+  'accepting',
   'stopped',
   /** 需要用户处理：节点重做超过上限、工作流断开、花费超过上限 */
   'needs_attention',
@@ -112,7 +154,11 @@ export const NodeStatus = z.enum([
 export type NodeStatus = z.infer<typeof NodeStatus>;
 
 export const Attention = z.object({
-  reason: z.enum(['node_failed', 'workflow_broken', 'over_budget']),
+  /**
+   * node_failed 节点重做用完还失败；workflow_broken 连线断开；over_budget 花费超过上限；
+   * plan_failed 规划员没排出合格的方案；over_estimate 预估超过了用户在任务单里设的上限
+   */
+  reason: z.enum(['node_failed', 'workflow_broken', 'over_budget', 'plan_failed', 'over_estimate']),
   nodeId: z.uuid().nullable(),
   message: z.string(),
 });
@@ -175,6 +221,14 @@ export const TaskBody = z.object({
   spentMicro: z.number().int().nonnegative(),
   /** 花到这么多就暂停问用户（预估的 3 倍；用户选择继续后再加 3 倍预估）；没有预估时为 null */
   budgetLimitMicro: z.number().int().nonnegative().nullable(),
+  /** 用户确认的任务单（直接给方案建的任务没有） */
+  sheet: TaskSheet.nullable(),
+  /** 整体验收的结果：没满足的地方（没满足也照样交付）；还没验收时为 null */
+  acceptance: z.object({ unmet: z.array(z.string()) }).nullable(),
+  /** 每样交付物由哪个节点交出（规划员定） */
+  deliverables: z.array(
+    z.object({ name: z.string(), form: z.string(), nodeId: z.uuid().nullable() }),
+  ),
   nodes: z.array(NodeBody),
   edges: z.array(EdgeBody),
   createdAt: z.iso.datetime(),

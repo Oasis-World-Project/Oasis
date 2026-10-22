@@ -1,5 +1,6 @@
 // 服务之间的异步事件。主题名就是事件类型，形如 <服务>.<对象>.<动作>。
 import { z } from 'zod';
+import { Attention, TaskStatus } from './task.ts';
 
 /** 所有事件共用的信封（参照 CloudEvents 精简）。id 同时用作 JetStream 去重 ID。 */
 export const EventEnvelope = z.object({
@@ -75,3 +76,26 @@ export const CallSettled = {
   }),
 } as const;
 export type CallSettledData = z.infer<typeof CallSettled.data>;
+
+/** task 的事件都在这个 stream 里。 */
+export const TASK_STREAM = { name: 'TASK', subjects: ['task.>'] } as const;
+
+/**
+ * 任务的状态或「需要处理」的原因变了（规划完开跑、需要处理、完成、失败、取消……）。
+ * conversation 据此更新私聊里的任务卡，完成时发交付消息。
+ */
+export const TaskStatusChanged = {
+  type: 'task.task.status_changed',
+  data: z.object({
+    taskId: z.uuid(),
+    ownerId: z.uuid(),
+    conversationId: z.uuid().nullable(),
+    title: z.string(),
+    status: TaskStatus,
+    attention: Attention.nullable(),
+    estimateMicro: z.number().int().nonnegative().nullable(),
+    spentMicro: z.number().int().nonnegative(),
+    changedAt: z.iso.datetime(),
+  }),
+} as const;
+export type TaskStatusChangedData = z.infer<typeof TaskStatusChanged.data>;

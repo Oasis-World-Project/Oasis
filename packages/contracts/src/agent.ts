@@ -1,4 +1,4 @@
-// agent 的对外接口：模型目录。
+// agent 的接口：模型目录（对外给前端，对内给 conversation 和 task 的规划员）。
 import { z } from 'zod';
 
 export const ModelCategory = z.enum([
@@ -40,3 +40,15 @@ export const ModelRoute = z.object({
   systemPrompt: z.string(),
 });
 export type ModelRoute = z.infer<typeof ModelRoute>;
+
+/** 内部：规划员能挑的模型（只列已接入的），节点里用 providerModel */
+export const CatalogEntry = z.object({
+  key: z.string(),
+  name: z.string(),
+  vendor: z.string(),
+  category: ModelCategory,
+  tags: z.array(z.string()),
+  providerModel: z.string(),
+});
+export type CatalogEntry = z.infer<typeof CatalogEntry>;
+export const Catalog = z.object({ models: z.array(CatalogEntry) });

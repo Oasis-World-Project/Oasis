@@ -1,9 +1,12 @@
 // 任务的数据访问。对一个任务的所有调度决定都在一个事务里做：先锁住任务这一行，
 // 读出整张图，再写回改动。这样两个运行同时结束，也不会把同一个节点启动两次。
+// 任务的状态或「需要处理」的原因变了，就在同一个事务里往发件箱写 task.task.status_changed。
+import { TaskStatusChanged } from '@oasis/contracts/events';
+import { createEnvelope } from '@oasis/service-kit';
 import { and, asc, desc, eq, inArray, isNull, lt, lte } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { edges, nodeRuns, nodes, spendRecords, tasks } from './schema.ts';
+import { edges, nodeRuns, nodes, outbox, spendRecords, tasks } from './schema.ts';
 
 export type Task = typeof tasks.$inferSelect;
 export type Node = typeof nodes.$inferSelect;
@@ -19,8 +22,53 @@ export interface Snapshot {
 }
 
 type TaskPatch = Partial<
-  Pick<Task, 'status' | 'attention' | 'finishedAt' | 'spentMicro' | 'budgetLimitMicro'>
+  Pick<
+    Task,
+    | 'status'
+    | 'attention'
+    | 'finishedAt'
+    | 'spentMicro'
+    | 'budgetLimitMicro'
+    | 'estimateMicro'
+    | 'deliverables'
+    | 'plannerRunId'
+    | 'planAttempts'
+    | 'acceptance'
+  >
 >;
+type NewTask = Omit<
+  Task,
+  | 'createdAt'
+  | 'updatedAt'
+  | 'finishedAt'
+  | 'spentMicro'
+  | 'attention'
+  | 'deliverables'
+  | 'plannerRunId'
+  | 'planAttempts'
+  | 'acceptance'
+>;
+
+/** 状态或「需要处理」的原因变了：要发的事件；没变返回 undefined */
+export function statusEvent(before: Pick<Task, 'status' | 'attention'>, after: Task) {
+  if (
+    before.status === after.status &&
+    JSON.stringify(before.attention) === JSON.stringify(after.attention)
+  ) {
+    return undefined;
+  }
+  return createEnvelope('task', TaskStatusChanged.type, {
+    taskId: after.id,
+    ownerId: after.ownerId,
+    conversationId: after.conversationId,
+    title: after.title,
+    status: after.status,
+    attention: after.attention,
+    estimateMicro: after.estimateMicro,
+    spentMicro: after.spentMicro,
+    changedAt: new Date().toISOString(),
+  });
+}
 type NodePatch = Partial<
   Pick<
     Node,
@@ -73,7 +121,7 @@ export interface Writer {
 
 export interface TaskStore {
   create(input: {
-    task: Omit<Task, 'createdAt' | 'updatedAt' | 'finishedAt' | 'spentMicro' | 'attention'>;
+    task: NewTask;
     nodes: NewNode[];
     edges: Pick<Edge, 'id' | 'fromNodeId' | 'toNodeId'>[];
   }): Promise<void>;
@@ -85,6 +133,10 @@ export interface TaskStore {
   transact<T>(taskId: string, fn: (snapshot: Snapshot, w: Writer) => Promise<T>): Promise<T>;
   /** 还没结束、且创建早于 before 的运行（对账用） */
   listActiveRuns(before: Date): Promise<NodeRun[]>;
+  /** 规划员这次运行属于哪个任务 */
+  findTaskByPlannerRun(runId: string): Promise<Task | undefined>;
+  /** 处在某个状态、且最近一次改动早于 before 的任务（对账卡在规划或验收的任务） */
+  listStale(status: 'planning' | 'accepting', before: Date): Promise<Task[]>;
   /** 正在过关卡、且交出产出的那次运行结束早于 before 的节点（关卡中途断了，对账时重做） */
   listCheckingNodes(before: Date): Promise<Node[]>;
 }
@@ -111,7 +163,10 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
     async create(input) {
       await db.transaction(async (tx) => {
         await tx.insert(tasks).values(input.task);
-        await tx.insert(nodes).values(input.nodes.map((n) => ({ ...n, taskId: input.task.id })));
+        // 从任务单开始的任务还没有节点（等规划员排）
+        if (input.nodes.length > 0) {
+          await tx.insert(nodes).values(input.nodes.map((n) => ({ ...n, taskId: input.task.id })));
+        }
         if (input.edges.length > 0) {
           await tx.insert(edges).values(input.edges.map((e) => ({ ...e, taskId: input.task.id })));
         }
@@ -153,6 +208,7 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
         const [task] = await tx.select().from(tasks).where(eq(tasks.id, taskId)).for('update');
         if (!task) throw new Error(`任务 ${taskId} 不存在`);
         const snapshot = await load(tx, task);
+        const before = { status: task.status, attention: task.attention };
         const writer: Writer = {
           async setTask(patch) {
             await tx
@@ -225,9 +281,25 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
             return rows.length > 0;
           },
         };
-        return fn(snapshot, writer);
+        const result = await fn(snapshot, writer);
+        const event = statusEvent(before, snapshot.task);
+        if (event) {
+          await tx.insert(outbox).values({ id: event.id, subject: event.type, payload: event });
+        }
+        return result;
       });
     },
+
+    async findTaskByPlannerRun(runId) {
+      const [row] = await db.select().from(tasks).where(eq(tasks.plannerRunId, runId));
+      return row;
+    },
+
+    listStale: (status, before) =>
+      db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.status, status), lt(tasks.updatedAt, before))),
 
     listActiveRuns: (before) =>
       db

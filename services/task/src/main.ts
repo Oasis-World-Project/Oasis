@@ -7,11 +7,14 @@ import {
   HARNESS_STREAM,
   MODEL_GATEWAY_STREAM,
   RunFinished,
+  TASK_STREAM,
 } from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
   createServiceClient,
+  ensureStream,
   startEventConsumer,
+  startOutboxRelay,
   startService,
   type ServiceResource,
 } from '@oasis/service-kit';
@@ -30,6 +33,13 @@ await startService({
   resources: async (ctx) => {
     const { config, logger } = ctx;
     const { postgres, eventBus } = await connectPostgresAndEventBus(ctx);
+    await ensureStream(eventBus.connection, TASK_STREAM);
+    // 任务状态变了就发 task.task.status_changed（conversation 更新任务卡、发交付消息）
+    const outbox = startOutboxRelay({
+      pool: postgres.pool,
+      connection: eventBus.connection,
+      logger,
+    });
     const harness = createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 15_000 });
     workflows = createWorkflowService({
       store: createTaskStore(postgres.pool),
@@ -47,6 +57,17 @@ await startService({
       maxRetries: config.MAX_NODE_RETRIES,
       maxReworks: config.MAX_NODE_REWORKS,
       budgetMultiplier: config.BUDGET_MULTIPLIER,
+      agent: createServiceClient('agent', config.AGENT_URL, { timeoutMs: 5_000 }),
+      planning: {
+        model: config.PLANNER_MODEL,
+        defaultModel: config.DEFAULT_NODE_MODEL,
+        maxNodes: config.MAX_PLAN_NODES,
+        maxAttempts: config.MAX_PLAN_ATTEMPTS,
+        rates: {
+          workRun: config.ESTIMATE_WORK_RUN_MICRO,
+          speechRun: config.ESTIMATE_SPEECH_RUN_MICRO,
+        },
+      },
       logger,
     });
     const runFinished = startEventConsumer({
@@ -79,7 +100,7 @@ await startService({
       ready: async () => {},
       close: async () => clearInterval(timer),
     };
-    return { postgres, eventBus, runFinished, callSettled, reconciler };
+    return { postgres, eventBus, outbox, runFinished, callSettled, reconciler };
   },
   routes: (app) => registerRoutes(app, workflows),
 });

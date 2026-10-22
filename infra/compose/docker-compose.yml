@@ -243,6 +243,7 @@ services:
       DATABASE_URL: postgres://svc_conversation:${CONVERSATION_DB_PASSWORD:?}@postgres:5432/conversation?sslmode=disable
       AGENT_URL: http://agent:4103
       MODEL_GATEWAY_URL: http://model-gateway:4108
+      TASK_URL: http://task:4105
     depends_on: *data-deps
 
   task:
@@ -259,6 +260,7 @@ services:
       DATABASE_URL: postgres://svc_task:${TASK_DB_PASSWORD:?}@postgres:5432/task?sslmode=disable
       HARNESS_URL: http://harness:4107
       MODEL_GATEWAY_URL: http://model-gateway:4108
+      AGENT_URL: http://agent:4103
     depends_on: *data-deps
 
   canvas:

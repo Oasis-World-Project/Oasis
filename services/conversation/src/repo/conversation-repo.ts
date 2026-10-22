@@ -1,13 +1,17 @@
-import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { conversations, messages } from './schema.ts';
+import { conversations, intakes, messages } from './schema.ts';
 
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
+export type Intake = typeof intakes.$inferSelect;
 type NewMessage = Pick<
   typeof messages.$inferInsert,
-  'conversationId' | 'authorKind' | 'authorId' | 'content' | 'status'
+  'conversationId' | 'authorKind' | 'authorId' | 'content' | 'status' | 'kind' | 'data'
+>;
+type IntakePatch = Partial<
+  Pick<Intake, 'status' | 'round' | 'turns' | 'cardMessageId' | 'sheet' | 'taskId'>
 >;
 
 export interface ConversationRepo {
@@ -15,6 +19,10 @@ export interface ConversationRepo {
   listDms(ownerId: string): Promise<Conversation[]>;
   findOwned(id: string, ownerId: string): Promise<Conversation | undefined>;
   insertMessage(message: NewMessage): Promise<Message>;
+  /** 由事件触发的消息（data.eventId）：同一个事件只插一次，重复时返回 undefined */
+  insertMessageOnce(
+    message: NewMessage & { data: { eventId: string } },
+  ): Promise<Message | undefined>;
   finishMessage(
     id: string,
     update: { content: string; status: 'complete' | 'failed'; error?: string },
@@ -23,6 +31,15 @@ export interface ConversationRepo {
   /** 最近的已完成消息（不含 excludeId），按时间正序 */
   recentComplete(conversationId: string, limit: number, excludeId: string): Promise<Message[]>;
   listMessages(conversationId: string, limit: number): Promise<Message[]>;
+  findMessage(conversationId: string, id: string): Promise<Message | undefined>;
+  setMessageData(id: string, data: Record<string, unknown>): Promise<Message>;
+  /** 开始接需求；这个会话已经有进行中的就返回 undefined */
+  createIntake(
+    intake: Pick<Intake, 'id' | 'conversationId' | 'request' | 'context'>,
+  ): Promise<Intake | undefined>;
+  /** 这个会话进行中的接需求（在问或等确认） */
+  findOpenIntake(conversationId: string): Promise<Intake | undefined>;
+  updateIntake(id: string, patch: IntakePatch): Promise<Intake>;
 }
 
 export function createConversationRepo(pool: pg.Pool): ConversationRepo {
@@ -69,6 +86,11 @@ export function createConversationRepo(pool: pg.Pool): ConversationRepo {
       return row!;
     },
 
+    async insertMessageOnce(message) {
+      const [row] = await db.insert(messages).values(message).onConflictDoNothing().returning();
+      return row;
+    },
+
     async finishMessage(id, update) {
       const [row] = await db
         .update(messages)
@@ -99,6 +121,50 @@ export function createConversationRepo(pool: pg.Pool): ConversationRepo {
         .orderBy(desc(messages.createdAt))
         .limit(limit);
       return rows.reverse();
+    },
+
+    async findMessage(conversationId, id) {
+      const [row] = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.id, id), eq(messages.conversationId, conversationId)));
+      return row;
+    },
+
+    async setMessageData(id, data) {
+      const [row] = await db.update(messages).set({ data }).where(eq(messages.id, id)).returning();
+      return row!;
+    },
+
+    async createIntake(intake) {
+      const [row] = await db
+        .insert(intakes)
+        .values({ ...intake, status: 'asking' })
+        .onConflictDoNothing()
+        .returning();
+      return row;
+    },
+
+    async findOpenIntake(conversationId) {
+      const [row] = await db
+        .select()
+        .from(intakes)
+        .where(
+          and(
+            eq(intakes.conversationId, conversationId),
+            inArray(intakes.status, ['asking', 'sheet']),
+          ),
+        );
+      return row;
+    },
+
+    async updateIntake(id, patch) {
+      const [row] = await db
+        .update(intakes)
+        .set({ ...patch, updatedAt: new Date() })
+        .where(eq(intakes.id, id))
+        .returning();
+      return row!;
     },
 
     listMessages: (conversationId, limit) =>
