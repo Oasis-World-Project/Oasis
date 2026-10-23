@@ -19,3 +19,23 @@ export function usedPercent(availableMicro: number, grantedMicro: number): numbe
     Math.max(0, Math.round(((grantedMicro - availableMicro) / grantedMicro) * 100)),
   );
 }
+
+/** 文件大小 → 给人看的写法（1 KB = 1024 B） */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+/** 任务花费常常只有几美分：不到 $1 时显示到 0.0001 美元，看得出差别 */
+export function formatCost(micro: number): string {
+  if (micro >= 1_000_000 || micro === 0) return formatUsd(micro);
+  if (micro < 100) return '< $0.0001';
+  return `$${(Math.floor(micro / 100) / 10_000).toFixed(4)}`;
+}

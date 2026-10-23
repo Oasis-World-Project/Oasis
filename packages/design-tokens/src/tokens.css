@@ -8,6 +8,10 @@
   --oasis-ink: #262734;
   --oasis-ink-muted: #545767;
   --oasis-hairline: rgb(38 39 52 / 0.12);
+  /* 进度环、进度条的底轨 */
+  --oasis-track: rgb(38 39 52 / 0.08);
+  /* 弹层（预览窗）后面压暗的那一层 */
+  --oasis-scrim: rgb(38 39 52 / 0.38);
 
   /* 唯一点睛色：发送、@、进度环、开关 */
   --oasis-accent: #ee5d43;

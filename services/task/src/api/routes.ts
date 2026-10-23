@@ -11,12 +11,14 @@ import {
 import { parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { WorkflowService } from '../service/workflow-service.ts';
+import { fileHeaders } from './file-headers.ts';
 
 const TaskParams = z.object({ taskId: z.uuid() });
 const NodeParams = TaskParams.extend({ nodeId: z.uuid() });
 const EdgeParams = TaskParams.extend({ edgeId: z.uuid() });
 const FileParams = NodeParams.extend({ '*': z.string().min(1).max(500) });
 const EventsQuery = z.object({ after: z.coerce.number().int().min(-1).default(-1) });
+const FileQuery = z.object({ download: z.enum(['0', '1']).default('0') });
 
 export function registerRoutes(app: ServiceApp, workflows: WorkflowService): void {
   /** 提交任务和工作流方案，校验后立即开跑 */
@@ -113,8 +115,9 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
   /** 下载节点交出的一个文件 */
   app.get('/v1/tasks/:taskId/files/:nodeId/*', async (request, reply) => {
     const { taskId, nodeId, '*': path } = parseWith(FileParams, request.params);
+    const { download } = parseWith(FileQuery, request.query);
     const file = await workflows.file(requireUserId(request), taskId, nodeId, path);
-    return reply.type(file.contentType).send(file.content);
+    return reply.headers(fileHeaders(file.contentType, path, download === '1')).send(file.content);
   });
 
   /** 节点的运行过程（按序号增量拉取） */

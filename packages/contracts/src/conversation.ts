@@ -38,6 +38,8 @@ export const AUTO_ANSWER = 'auto';
 export const QuestionsCard = z.object({
   intakeId: z.uuid(),
   round: z.number().int().min(1),
+  /** AI 在卡片上方说的一句话（旧消息没有） */
+  intro: z.string().default(''),
   questions: z.array(IntakeQuestion).min(1).max(4),
   answers: z.record(z.string(), z.string()).nullable(),
 });
@@ -46,6 +48,8 @@ export type QuestionsCard = z.infer<typeof QuestionsCard>;
 /** 任务单卡：open 等确认；confirmed 已建任务；superseded 被改过的新任务单替换；cancelled 不做了 */
 export const SheetCard = z.object({
   intakeId: z.uuid(),
+  /** AI 在卡片上方说的一句话（旧消息没有） */
+  intro: z.string().default(''),
   sheet: TaskSheet,
   status: z.enum(['open', 'confirmed', 'superseded', 'cancelled']),
   taskId: z.uuid().nullable(),

@@ -174,6 +174,7 @@ export function createIntakeService(deps: {
       const card: QuestionsCard = {
         intakeId: intake.id,
         round,
+        intro: reply.intro,
         questions: reply.questions,
         answers: null,
       };
@@ -201,6 +202,7 @@ export function createIntakeService(deps: {
       await supersede(conversation, intake);
       const card: SheetCard = {
         intakeId: intake.id,
+        intro: reply.intro,
         sheet: reply.sheet,
         status: 'open',
         taskId: null,

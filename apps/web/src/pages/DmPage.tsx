@@ -1,48 +1,68 @@
-// 和一个 AI 私聊：历史消息 + 流式回复。回复期间输入框锁定；失败的回复会写明原因。
+// 和一个 AI 私聊：历史消息 + 流式回复；在这里交代任务、回答问题卡、确认任务单、看进度、拿成果（ADR 0005）。
+// 回复期间输入框锁定；失败的回复会写明原因。
 import type { MessageBody } from '@oasis/contracts/conversation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
-import { ArrowUp } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { ArrowUp, ListChecks, Plus, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ApiError } from '../api/client.ts';
 import { dmsQuery, messagesQuery, walletQuery } from '../api/queries.ts';
 import { sendMessage } from '../api/stream.ts';
 import { useModelMap } from '../api/use-model-map.ts';
+import { Bubble, MessageItem } from '../chat/MessageItem.tsx';
+import { ChatActionsContext, useChatActionsValue } from '../chat/use-chat-actions.ts';
+import { useStickToBottom } from '../chat/use-stick-to-bottom.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 
 const route = getRouteApi('/shell/dms/$conversationId');
 
-const BUBBLE =
-  'max-w-[72%] whitespace-pre-wrap break-words rounded-card px-4 py-2.5 text-[14.5px] leading-relaxed';
-
-function Bubble({
-  message,
-  mono,
-  glow,
+/** 输入框左边的「＋」：把这条消息作为任务发布 */
+function ComposerMenu({
+  asTask,
+  onToggleTask,
+  disabled,
 }: {
-  message: Pick<MessageBody, 'role' | 'content' | 'status' | 'error'>;
-  mono: string;
-  glow: string;
+  asTask: boolean;
+  onToggleTask: () => void;
+  disabled: boolean;
 }) {
-  if (message.role === 'user') {
-    return (
-      <div className="flex justify-end">
-        <p className={`${BUBBLE} m-0 bg-glass-active shadow-raised`}>{message.content}</p>
-      </div>
-    );
-  }
+  const [open, setOpen] = useState(false);
   return (
-    <div className="flex items-start gap-2.5">
-      <AiAvatar mono={mono} glow={glow} size={30} glowing={message.status === 'streaming'} />
-      <div className={`${BUBBLE} bg-glass-strong shadow-edge-strong`}>
-        {message.content ||
-          (message.status === 'streaming' ? <span className="text-ink-muted">正在想…</span> : null)}
-        {message.status === 'failed' && (
-          <span className="mt-1 block text-[12.5px] text-accent">
-            {message.error ?? '回复失败了'}
-          </span>
-        )}
-      </div>
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        aria-label="更多发送方式"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="flex size-11 items-center justify-center rounded-full border-0 bg-transparent text-ink-muted hover:bg-glass-strong hover:text-ink disabled:opacity-45"
+      >
+        <Plus size={19} aria-hidden="true" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="glass absolute bottom-12 left-0 z-10 flex w-56 flex-col rounded-card bg-glass-strong p-1.5"
+        >
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={asTask}
+            onClick={() => {
+              onToggleTask();
+              setOpen(false);
+            }}
+            className="flex items-center gap-2.5 rounded-item border-0 bg-transparent px-3 py-2.5 text-left text-ink hover:bg-glass-active"
+          >
+            <ListChecks size={17} aria-hidden="true" />
+            <span className="flex flex-col">
+              <span className="text-[14px] font-medium">作为任务发布</span>
+              <span className="text-[12px] text-ink-muted">交给 AI 团队做出成果</span>
+            </span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -55,37 +75,46 @@ export function DmPage() {
   const messages = useQuery(messagesQuery(conversationId));
   const conversation = dms?.find((dm) => dm.id === conversationId);
   const model = conversation?.modelKey ? models.get(conversation.modelKey) : undefined;
-  const mono = model?.mono ?? 'AI';
-  const glow = model?.glow ?? 'var(--oasis-accent)';
+  const speaker = { mono: model?.mono ?? 'AI', glow: model?.glow ?? 'var(--oasis-accent)' };
 
   const [draft, setDraft] = useState('');
+  const [asTask, setAsTask] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [streaming, setStreaming] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const bottom = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const scrollToBottom = useStickToBottom(scroller, content);
   const input = useRef<HTMLTextAreaElement>(null);
+
+  const focusComposer = useCallback((nextHint?: string) => {
+    setHint(nextHint ?? null);
+    input.current?.focus();
+  }, []);
+  const actions = useChatActionsValue(conversationId, focusComposer);
+  const locked = sending || actions.busy !== null;
 
   // 回复结束后输入框解锁，把焦点还回去，方便接着打字
   useEffect(() => {
-    if (!sending) input.current?.focus();
-  }, [sending]);
-
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'end' });
-  }, [messages.data?.length, streaming]);
+    if (!locked) input.current?.focus();
+  }, [locked]);
 
   async function send() {
     const content = draft.trim();
-    if (!content || sending) return;
+    if (!content || locked) return;
     const key = messagesQuery(conversationId).queryKey;
     setSending(true);
     setNotice(null);
     setDraft('');
+    setHint(null);
+    scrollToBottom();
     let accepted = false;
     try {
-      await sendMessage(conversationId, content, (event) => {
+      await sendMessage(conversationId, { content, asTask }, (event) => {
         if (event.type === 'accepted') {
           accepted = true;
+          setAsTask(false);
           queryClient.setQueryData(key, (old: MessageBody[] = []) => [...old, event.userMessage]);
           setStreaming('');
         } else if (event.type === 'delta') {
@@ -116,73 +145,113 @@ export function DmPage() {
     }
   }
 
+  const placeholder = sending
+    ? 'AI 正在回复…'
+    : (hint ?? (asTask ? '说说要交付什么，比如：给我的民宿写个官网首页' : '发消息…'));
+  const list = messages.data ?? [];
+
   return (
-    <section
-      aria-label="私聊"
-      className="glass flex h-[calc(100vh-44px)] min-h-[520px] flex-col rounded-panel"
-    >
-      <header className="flex items-center gap-3 border-b border-hairline px-6 py-4">
-        <AiAvatar mono={mono} glow={glow} size={40} glowing />
-        <div className="flex flex-col">
-          <h1 className="m-0 text-[17px] font-medium">{conversation?.title ?? '私聊'}</h1>
-          <span className="text-xs text-ink-muted">{model?.versionLabel ?? '系统默认设定'}</span>
-        </div>
-      </header>
+    <ChatActionsContext.Provider value={actions}>
+      <section
+        aria-label="私聊"
+        className="glass flex h-[calc(100vh-44px)] min-h-[520px] flex-col rounded-panel"
+      >
+        <header className="flex items-center gap-3 border-b border-hairline px-6 py-4">
+          <AiAvatar mono={speaker.mono} glow={speaker.glow} size={40} glowing />
+          <div className="flex flex-col">
+            <h1 className="m-0 text-[17px] font-medium">{conversation?.title ?? '私聊'}</h1>
+            <span className="text-xs text-ink-muted">{model?.versionLabel ?? '系统默认设定'}</span>
+          </div>
+        </header>
 
-      <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-6 py-5" aria-live="polite">
-        {messages.isPending && <p className="m-0 text-sm text-ink-muted">正在加载消息…</p>}
-        {messages.data?.length === 0 && streaming === null && (
-          <p className="m-0 self-center pt-10 text-sm text-ink-muted">
-            打个招呼，开始和 {conversation?.title ?? 'AI'} 聊天吧。
-          </p>
-        )}
-        {messages.data?.map((message) => (
-          <Bubble key={message.id} message={message} mono={mono} glow={glow} />
-        ))}
-        {streaming !== null && (
-          <Bubble
-            message={{ role: 'assistant', content: streaming, status: 'streaming', error: null }}
-            mono={mono}
-            glow={glow}
-          />
-        )}
-        <div ref={bottom} />
-      </div>
-
-      <footer className="flex flex-col gap-2 px-6 pb-5 pt-2">
-        {notice && (
-          <p role="alert" className="m-0 text-[13px] text-accent">
-            {notice}
-          </p>
-        )}
-        <div className="flex items-end gap-2 rounded-card bg-glass-active p-2 pl-4 shadow-edge-strong">
-          <label htmlFor="dm-input" className="sr-only">
-            消息
-          </label>
-          <textarea
-            id="dm-input"
-            rows={1}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            ref={input}
-            autoFocus
-            disabled={sending}
-            placeholder={sending ? 'AI 正在回复…' : '发消息…'}
-            className="field-sizing-content max-h-40 min-h-10 flex-1 resize-none overflow-y-auto border-0 bg-transparent py-2 text-[14.5px] text-ink outline-none placeholder:text-ink-muted"
-          />
-          <button
-            type="button"
-            onClick={() => void send()}
-            disabled={sending || !draft.trim()}
-            aria-label="发送"
-            className="flex size-11 shrink-0 items-center justify-center rounded-full border-0 bg-accent text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            <ArrowUp size={18} strokeWidth={2.2} aria-hidden="true" />
-          </button>
+        <div ref={scroller} className="flex-1 overflow-y-auto px-6 py-5" aria-live="polite">
+          <div ref={content} className="flex flex-col gap-4">
+            {messages.isPending && <p className="m-0 text-sm text-ink-muted">正在加载消息…</p>}
+            {list.length === 0 && !messages.isPending && streaming === null && (
+              <p className="m-0 self-center pt-10 text-center text-sm text-ink-muted">
+                打个招呼，开始和 {conversation?.title ?? 'AI'} 聊天吧。
+                <br />
+                想让 AI 团队做出成果，点输入框左边的「＋」作为任务发布。
+              </p>
+            )}
+            {list.map((message, index) => (
+              <MessageItem
+                key={message.id}
+                message={message}
+                messages={list}
+                index={index}
+                speaker={speaker}
+              />
+            ))}
+            {streaming !== null && (
+              <Bubble
+                message={{
+                  role: 'assistant',
+                  content: streaming,
+                  status: 'streaming',
+                  error: null,
+                }}
+                speaker={speaker}
+              />
+            )}
+          </div>
         </div>
-        <p className="m-0 px-1 text-[11.5px] text-ink-muted">Enter 发送 · Shift + Enter 换行</p>
-      </footer>
-    </section>
+
+        <footer className="flex flex-col gap-2 px-6 pb-5 pt-2">
+          {(notice ?? actions.error) && (
+            <p role="alert" className="m-0 text-[13px] text-accent">
+              {notice ?? actions.error}
+            </p>
+          )}
+          <div className="flex items-end gap-1 rounded-card bg-glass-active p-2 shadow-edge-strong">
+            <ComposerMenu
+              asTask={asTask}
+              onToggleTask={() => setAsTask((v) => !v)}
+              disabled={locked}
+            />
+            <div className="flex min-w-0 flex-1 flex-col">
+              {asTask && (
+                <span className="mt-1 inline-flex items-center gap-1 self-start rounded-full bg-solid py-1 pl-2.5 pr-1 text-[12px] font-medium text-on-solid">
+                  任务
+                  <button
+                    type="button"
+                    onClick={() => setAsTask(false)}
+                    aria-label="不作为任务发布"
+                    className="flex size-4 items-center justify-center rounded-full border-0 bg-transparent p-0 text-on-solid"
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                </span>
+              )}
+              <label htmlFor="dm-input" className="sr-only">
+                消息
+              </label>
+              <textarea
+                id="dm-input"
+                rows={1}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={onKeyDown}
+                ref={input}
+                autoFocus
+                disabled={locked}
+                placeholder={placeholder}
+                className="field-sizing-content max-h-40 min-h-10 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-1 py-2 text-[14.5px] text-ink outline-none placeholder:text-ink-muted"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void send()}
+              disabled={locked || !draft.trim()}
+              aria-label={asTask ? '发布任务' : '发送'}
+              className="flex size-11 shrink-0 items-center justify-center rounded-full border-0 bg-accent text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <ArrowUp size={18} strokeWidth={2.2} aria-hidden="true" />
+            </button>
+          </div>
+          <p className="m-0 px-1 text-[11.5px] text-ink-muted">Enter 发送 · Shift + Enter 换行</p>
+        </footer>
+      </section>
+    </ChatActionsContext.Provider>
   );
 }

@@ -1,15 +1,16 @@
 // 发私聊消息：响应是 SSE 流（accepted → delta × N → done | error），逐个事件回调。
+// 接需求时 done 可能连着来几条（问题卡、任务单卡），每条一个 done。
 import { StreamEvent } from '@oasis/contracts/conversation';
 import { apiFetch } from './client.ts';
 
 export async function sendMessage(
   conversationId: string,
-  content: string,
+  body: { content: string; asTask?: boolean },
   onEvent: (event: StreamEvent) => void,
 ): Promise<void> {
   const response = await apiFetch(`/conversation/v1/conversations/${conversationId}/messages`, {
     method: 'POST',
-    body: { content },
+    body,
   });
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
   let pending = '';

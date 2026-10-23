@@ -8,6 +8,8 @@
   --color-ink: var(--oasis-ink);
   --color-ink-muted: var(--oasis-ink-muted);
   --color-hairline: var(--oasis-hairline);
+  --color-track: var(--oasis-track);
+  --color-scrim: var(--oasis-scrim);
   --color-accent: var(--oasis-accent);
   --color-on-accent: var(--oasis-on-accent);
   --color-solid: var(--oasis-solid);
