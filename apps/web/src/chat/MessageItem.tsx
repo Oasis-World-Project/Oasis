@@ -2,6 +2,7 @@
 import type { MessageBody } from '@oasis/contracts/conversation';
 import { startIntake } from '../api/queries.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
+import { SentAttachments } from './Attachments.tsx';
 import { DeliveryCard, NoticeCard } from './DeliveryCard.tsx';
 import { CardButton, type Speaker } from './parts.tsx';
 import { QuestionsCard } from './QuestionsCard.tsx';
@@ -109,9 +110,11 @@ export function MessageItem({
         .slice(0, index)
         .findLast((m) => m.role === 'user' && m.kind === 'text');
       const suggest = message.data.suggestTask && later.length === 0 && asked;
+      const attachments = message.data.attachments ?? [];
       return (
         <>
           <Bubble message={message} speaker={speaker} />
+          {attachments.length > 0 && <SentAttachments attachments={attachments} />}
           {suggest && <SuggestTask fromMessageId={asked.id} />}
         </>
       );

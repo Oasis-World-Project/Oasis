@@ -1,12 +1,16 @@
 // task 的接口：提交工作流方案（内部）；查看、运行、停止、取消任务，编辑节点和连线，追问节点（对外，经 gateway 的 /api/task/v1/*）。
 // 设计见 ADR 0004。
 import { z } from 'zod';
+import { Material } from './canvas.ts';
 import { RunOutputFile } from './harness.ts';
 
 /** 节点名：方案里引用它，也用作下游沙箱里的目录名 in/<节点名>/ */
 export const NodeKey = z
   .string()
   .regex(/^[\p{L}\p{N}_-]{1,40}$/u, '节点名只能用字母、数字、下划线和短横线，最长 40 个字符');
+
+/** 一个任务最多带几个素材 */
+export const MAX_MATERIALS = 20;
 
 /** 应有的产出文件：out/ 下的相对路径，可以用 * 匹配一段里的任意字符（如 *.md） */
 const ExpectedFile = z
@@ -123,6 +127,8 @@ export const CreateTaskBody = z
     plan: WorkflowPlan.optional(),
     /** 预估花费（微美元）；有它才做「超过 3 倍暂停」检查。给任务单时由 task 自己算 */
     estimateMicro: z.number().int().nonnegative().optional(),
+    /** 用户给的素材（存在 canvas）：规划员和每个节点都能在沙箱的 materials/ 下看到 */
+    materials: z.array(Material).max(MAX_MATERIALS).default([]),
   })
   .refine((body) => Number(Boolean(body.sheet)) + Number(Boolean(body.plan)) === 1, {
     message: '要么给出任务单，要么给出工作流方案',
@@ -237,6 +243,8 @@ export const TaskBody = z.object({
   sheet: TaskSheet.nullable(),
   /** 整体验收的结果：没满足的地方（没满足也照样交付）；还没验收时为 null */
   acceptance: z.object({ unmet: z.array(z.string()) }).nullable(),
+  /** 用户给的素材（旧版 task 不返回时当作没有） */
+  materials: z.array(Material).default([]),
   /** 每样交付物由哪个节点交出（规划员定） */
   deliverables: z.array(
     z.object({ name: z.string(), form: z.string(), nodeId: z.uuid().nullable() }),

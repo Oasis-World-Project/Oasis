@@ -5,57 +5,15 @@ import type {
   NoticeCard as NoticeData,
 } from '@oasis/contracts/conversation';
 import { useQuery } from '@tanstack/react-query';
-import { Download } from 'lucide-react';
 import { useState } from 'react';
 import { taskFileUrl, taskQuery } from '../api/queries.ts';
-import { formatBytes, formatCost } from '../ui/format.ts';
-import { badgeOf, baseName } from './files.ts';
+import { formatCost } from '../ui/format.ts';
+import { FileChip } from './FileChip.tsx';
 import { FilePreview, type PreviewFile } from './FilePreview.tsx';
 import { CardFrame, CardHeading, ItemList, StatusTag, type Speaker } from './parts.tsx';
 import { TaskDecisions } from './TaskCard.tsx';
 
 type DeliveredFile = DeliveryData['files'][number];
-
-function FileRow({
-  taskId,
-  file,
-  onOpen,
-}: {
-  taskId: string;
-  file: DeliveredFile;
-  onOpen: () => void;
-}) {
-  const name = baseName(file.path);
-  return (
-    <li className="flex items-center gap-1 rounded-full bg-glass-active pr-1 shadow-edge-strong">
-      <button
-        type="button"
-        onClick={onOpen}
-        aria-label={`预览 ${name}`}
-        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-full border-0 bg-transparent py-1.5 pl-1.5 pr-2 text-left text-ink"
-      >
-        <span
-          aria-hidden="true"
-          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-solid font-display text-[8.5px] font-medium text-on-solid"
-        >
-          {badgeOf(file.path)}
-        </span>
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate text-[13.5px] font-medium">{name}</span>
-          <span className="text-[11.5px] text-ink-muted">{formatBytes(file.size)}</span>
-        </span>
-      </button>
-      <a
-        href={taskFileUrl(taskId, file.nodeId, file.path, true)}
-        download={name}
-        aria-label={`下载 ${name}`}
-        className="flex size-9 shrink-0 items-center justify-center rounded-full text-ink-muted no-underline hover:bg-glass-strong hover:text-ink"
-      >
-        <Download size={16} aria-hidden="true" />
-      </a>
-    </li>
-  );
-}
 
 /** 按交付物分组，保持交付物第一次出现的顺序 */
 function groupByDeliverable(files: DeliveredFile[]) {
@@ -69,13 +27,12 @@ export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: S
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const { data: task } = useQuery(taskQuery(card.taskId));
   const groups = groupByDeliverable(card.files);
-  const open = (file: DeliveredFile) =>
-    setPreview({
-      path: file.path,
-      size: file.size,
-      url: taskFileUrl(card.taskId, file.nodeId, file.path),
-      downloadUrl: taskFileUrl(card.taskId, file.nodeId, file.path, true),
-    });
+  const toPreview = (file: DeliveredFile): PreviewFile => ({
+    path: file.path,
+    size: file.size,
+    url: taskFileUrl(card.taskId, file.nodeId, file.path),
+    downloadUrl: taskFileUrl(card.taskId, file.nodeId, file.path, true),
+  });
 
   return (
     <CardFrame speaker={speaker} label={`交付：${card.title}`}>
@@ -94,11 +51,10 @@ export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: S
           <h4 className="m-0 text-[12.5px] font-medium text-ink-muted">{deliverable}</h4>
           <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
             {files.map((file) => (
-              <FileRow
+              <FileChip
                 key={`${file.nodeId}/${file.path}`}
-                taskId={card.taskId}
-                file={file}
-                onOpen={() => open(file)}
+                file={toPreview(file)}
+                onOpen={() => setPreview(toPreview(file))}
               />
             ))}
           </ul>

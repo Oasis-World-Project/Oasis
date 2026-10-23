@@ -5,7 +5,7 @@ import { apiFetch } from './client.ts';
 
 export async function sendMessage(
   conversationId: string,
-  body: { content: string; asTask?: boolean },
+  body: { content: string; asTask?: boolean; attachments?: string[] },
   onEvent: (event: StreamEvent) => void,
 ): Promise<void> {
   const response = await apiFetch(`/conversation/v1/conversations/${conversationId}/messages`, {

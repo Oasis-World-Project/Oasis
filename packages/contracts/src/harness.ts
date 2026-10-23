@@ -53,6 +53,26 @@ export const StartRunBody = z.object({
     .max(20)
     .default([]),
   /**
+   * 用户给的素材：开沙箱前由 harness 向 canvas 取出，放在沙箱里的 path（如 materials/照片.jpg）。
+   * 是不是这个用户的文件，conversation 收附件时已经核对过。
+   */
+  materials: z
+    .array(
+      z.object({
+        uploadId: z.uuid(),
+        path: z
+          .string()
+          .min(1)
+          .max(300)
+          .regex(
+            /^materials\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\n]+$/,
+            '必须放在 materials/ 下，不能有 ..',
+          ),
+      }),
+    )
+    .max(20)
+    .default([]),
+  /**
    * 接着之前某次运行做：放回它的会话（AI 记得前面聊过什么）、它的产出（放回 out/）和它的输入。
    * 用于关卡退回修改、停止后继续、讨论的下一轮。只能接同一付费人、已结束的运行。
    */

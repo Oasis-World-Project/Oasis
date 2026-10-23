@@ -1,5 +1,6 @@
 // conversation 的对外接口：私聊和在私聊里接任务（ADR 0005；群聊在后续阶段）。
 import { z } from 'zod';
+import { UploadBody } from './canvas.ts';
 import { TaskSheet } from './task.ts';
 
 export const ConversationBody = z.object({
@@ -86,6 +87,18 @@ export const NoticeCard = z.object({
 });
 export type NoticeCard = z.infer<typeof NoticeCard>;
 
+/** 消息上的附件：canvas 里的一个上传文件 */
+export const MessageAttachment = UploadBody.pick({
+  id: true,
+  name: true,
+  size: true,
+  contentType: true,
+});
+export type MessageAttachment = z.infer<typeof MessageAttachment>;
+
+/** 一条消息最多带几个文件 */
+export const MAX_ATTACHMENTS = 10;
+
 const MessageBase = {
   id: z.uuid(),
   role: z.enum(['user', 'assistant']),
@@ -101,8 +114,12 @@ export const MessageBody = z.discriminatedUnion('kind', [
   z.object({
     ...MessageBase,
     kind: z.literal('text'),
-    /** suggestTask：AI 觉得这可能是个任务，回复下面附「当成任务来做」 */
-    data: z.object({ suggestTask: z.boolean().optional() }),
+    data: z.object({
+      /** AI 觉得这可能是个任务，回复下面附「当成任务来做」 */
+      suggestTask: z.boolean().optional(),
+      /** 用户随消息发的文件（存在 canvas，ADR 0007 §3） */
+      attachments: z.array(MessageAttachment).optional(),
+    }),
   }),
   z.object({ ...MessageBase, kind: z.literal('questions'), data: QuestionsCard }),
   z.object({ ...MessageBase, kind: z.literal('sheet'), data: SheetCard }),
@@ -119,6 +136,8 @@ export const SendMessageBody = z.object({
   content: z.string().trim().min(1).max(8000),
   /** 用户点了「发任务」：不用判断，直接当成任务 */
   asTask: z.boolean().default(false),
+  /** 先传到 canvas 的文件 id */
+  attachments: z.array(z.uuid()).max(MAX_ATTACHMENTS).default([]),
 });
 
 /** 回答问题卡：题目 id → 选项 id 或 auto；skip = 直接开始（没答的都按默认） */

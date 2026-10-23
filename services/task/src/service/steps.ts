@@ -14,6 +14,7 @@ import {
   type NodeContext,
   type Speech,
 } from './prompt.ts';
+import { materialPaths } from './materials.ts';
 import { incoming } from './schedule.ts';
 
 interface RunRequest {
@@ -52,6 +53,7 @@ function contextOf(snapshot: Snapshot, node: Node): NodeContext {
     })),
     userNotes: node.userNotes,
     tools: (node.config.tools ?? []).map((t) => t.key),
+    materials: materialPaths(snapshot.task.materials).map((m) => m.path),
   };
 }
 

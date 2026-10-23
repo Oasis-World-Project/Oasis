@@ -7,7 +7,14 @@ import { randomUUID } from 'node:crypto';
 import { RunFinished } from '@oasis/contracts/events';
 import type { RunBody, RunEventBody, RunTextsBody, StartRunBody } from '@oasis/contracts/harness';
 import { ComputeHold, RunKeyCreated } from '@oasis/contracts/model-gateway';
-import { createEnvelope, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
+import {
+  contentTypeOf,
+  createEnvelope,
+  HttpError,
+  type Logger,
+  type ObjectStore,
+  type ServiceClient,
+} from '@oasis/service-kit';
 import {
   connectAgent,
   isSessionLock,
@@ -18,7 +25,6 @@ import {
 } from '../adapter/dsh.ts';
 import type { Executor, Sandbox } from '../executor/executor.ts';
 import { extractFiles, listFiles, packFiles, readLimited } from '../executor/tar.ts';
-import type { ObjectStore } from '../repo/object-store.ts';
 import type { Run, RunOutcome, RunsRepo } from '../repo/runs-repo.ts';
 
 type Status = RunBody['status'];
@@ -61,33 +67,6 @@ class StopRun extends Error {
   }
 }
 
-const CONTENT_TYPES: Record<string, string> = {
-  md: 'text/markdown; charset=utf-8',
-  txt: 'text/plain; charset=utf-8',
-  html: 'text/html; charset=utf-8',
-  css: 'text/css; charset=utf-8',
-  js: 'text/javascript; charset=utf-8',
-  json: 'application/json; charset=utf-8',
-  csv: 'text/csv; charset=utf-8',
-  svg: 'image/svg+xml',
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  webp: 'image/webp',
-  gif: 'image/gif',
-  pdf: 'application/pdf',
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  mp4: 'video/mp4',
-  glb: 'model/gltf-binary',
-  zip: 'application/zip',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-};
-const contentTypeOf = (path: string) =>
-  CONTENT_TYPES[path.split('.').at(-1)?.toLowerCase() ?? ''] ?? 'application/octet-stream';
-
 /** 存下来的产出和会话 → 运行结局里的字段 */
 const savedOutcome = (saved: Saved) => ({
   outputs: saved.outputs?.files.filter((f) => f.path !== KEEP_FILE) ?? [],
@@ -128,11 +107,17 @@ function createGate(limit: number) {
   };
 }
 
+type Material = Required<StartRunBody>['materials'][number];
+
 export function createRunService(deps: {
   repo: RunsRepo;
   executor: Executor;
   store: ObjectStore;
   modelGateway: ServiceClient;
+  /** 取用户上传的素材（ADR 0007 §4） */
+  canvas: ServiceClient;
+  /** 一次运行的素材加起来最多多大 */
+  materialsMaxBytes: number;
   modelBaseUrl: string;
   packages: SandboxPackages;
   maxConcurrent: number;
@@ -229,7 +214,35 @@ export function createRunService(deps: {
     return { workspace, dshHome };
   }
 
-  async function execute(row: Run, inputs: { path: string; content: Buffer }[], run: LiveRun) {
+  /** 用户给的素材：向 canvas 取出来，放到 materials/ 下（路径已由 task 定好、契约校验过） */
+  async function materialFiles(materials: Material[], runId: string) {
+    const files: { path: string; content: Buffer }[] = [];
+    let total = 0;
+    for (const m of materials) {
+      const response = await deps.canvas.stream(
+        'GET',
+        `/internal/uploads/${encodeURIComponent(m.uploadId)}/content`,
+        { requestId: runId },
+      );
+      const content = Buffer.from(await response.arrayBuffer());
+      total += content.length;
+      if (total > deps.materialsMaxBytes) {
+        throw new StopRun(
+          'failed',
+          `素材加起来超过 ${Math.round(deps.materialsMaxBytes / 1024 / 1024)} MB，放不进沙箱`,
+        );
+      }
+      files.push({ path: m.path, content });
+    }
+    return files;
+  }
+
+  async function execute(
+    row: Run,
+    inputs: { path: string; content: Buffer }[],
+    materials: Material[],
+    run: LiveRun,
+  ) {
     const { id } = row;
     const release = await gate.acquire();
     let sandbox: Sandbox | undefined;
@@ -291,6 +304,7 @@ export function createRunService(deps: {
       const restored = await continuation(row);
       const files = [
         ...inputs.map((f) => ({ path: `in/${f.path}`, content: f.content })),
+        ...(await materialFiles(materials, id)),
         ...(await upstreamFiles(row)),
         ...restored.workspace,
         // 保证 out/ 目录存在且属于沙箱用户
@@ -497,7 +511,7 @@ export function createRunService(deps: {
         path: f.path,
         content: Buffer.from(f.contentBase64, 'base64'),
       }));
-      run.done = execute(row, inputs, run).catch((err: unknown) =>
+      run.done = execute(row, inputs, body.materials ?? [], run).catch((err: unknown) =>
         logger.error({ err, runId: id }, '运行收尾失败'),
       );
       return toRunBody(row);

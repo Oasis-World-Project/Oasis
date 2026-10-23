@@ -8,10 +8,9 @@ import {
   UpdateEdgeBody,
   UpdateNodeBody,
 } from '@oasis/contracts/task';
-import { parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
+import { fileResponseHeaders, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { WorkflowService } from '../service/workflow-service.ts';
-import { fileHeaders } from './file-headers.ts';
 
 const TaskParams = z.object({ taskId: z.uuid() });
 const NodeParams = TaskParams.extend({ nodeId: z.uuid() });
@@ -117,7 +116,9 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
     const { taskId, nodeId, '*': path } = parseWith(FileParams, request.params);
     const { download } = parseWith(FileQuery, request.query);
     const file = await workflows.file(requireUserId(request), taskId, nodeId, path);
-    return reply.headers(fileHeaders(file.contentType, path, download === '1')).send(file.content);
+    return reply
+      .headers(fileResponseHeaders(file.contentType, path, download === '1'))
+      .send(file.content);
   });
 
   /** 节点的运行过程（按序号增量拉取） */

@@ -1,5 +1,6 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
 import type { RunOutputFile } from '@oasis/contracts/harness';
+import type { Material } from '@oasis/contracts/canvas';
 import type { Attention, NodeStatus, TaskSheet, TaskStatus } from '@oasis/contracts/task';
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
@@ -57,6 +58,7 @@ export const tasks = pgTable('tasks', {
   spentMicro: micro('spent_micro').notNull().default(0),
   budgetLimitMicro: micro('budget_limit_micro'),
   sheet: jsonb('sheet').$type<TaskSheet>(),
+  materials: jsonb('materials').$type<Material[]>().notNull().default([]),
   deliverables: jsonb('deliverables').$type<Deliverable[]>().notNull().default([]),
   plannerRunId: uuid('planner_run_id'),
   planAttempts: integer('plan_attempts').notNull().default(0),

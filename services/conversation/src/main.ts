@@ -61,6 +61,7 @@ await startService({
       repo,
       agent,
       modelGateway,
+      canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 5_000 }),
       intake,
       historyLimit: config.HISTORY_LIMIT,
       replyMaxTokens: config.REPLY_MAX_TOKENS,

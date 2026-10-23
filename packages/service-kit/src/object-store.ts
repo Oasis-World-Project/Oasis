@@ -1,4 +1,4 @@
-// 对象存储（S3 兼容；本地是 SeaweedFS）：存运行的产出和 dsh 会话存档。
+// 对象存储（S3 兼容；本地是 SeaweedFS）。每个服务用自己的桶：harness 存运行产出和会话存档，canvas 存素材和成果。
 import {
   CreateBucketCommand,
   GetObjectCommand,
@@ -6,7 +6,16 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import type { ServiceResource } from '@oasis/service-kit';
+import { z } from 'zod';
+import type { ServiceResource } from './resource.ts';
+
+/** 连接对象存储需要的配置；桶名由各服务自己定（各自给默认值） */
+export const objectStoreEnv = {
+  S3_ENDPOINT: z.url(),
+  S3_REGION: z.string().default('us-east-1'),
+  S3_ACCESS_KEY: z.string().min(1),
+  S3_SECRET_KEY: z.string().min(1),
+};
 
 export interface ObjectStore {
   put(key: string, body: Buffer, contentType: string): Promise<void>;

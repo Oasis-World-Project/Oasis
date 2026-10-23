@@ -366,6 +366,7 @@ describe('发任务', () => {
     expect(api.bodies.find((b) => b.path.endsWith('/messages'))?.body).toEqual({
       content: '做个海报',
       asTask: true,
+      attachments: [],
     });
     // 发出去后回到普通发送
     expect(screen.getByRole('button', { name: '发送' })).toBeTruthy();

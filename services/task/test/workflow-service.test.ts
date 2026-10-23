@@ -376,6 +376,7 @@ type PlanNode = ReturnType<typeof work> | ReturnType<typeof discussion>;
 const create = (keys: (string | PlanNode)[], edges: [string, string][], estimateMicro?: number) =>
   service.create({
     ownerId: OWNER,
+    materials: [],
     payerId: OWNER,
     title: '测试任务',
     brief: '做一份温馨小屋的介绍',
@@ -910,6 +911,7 @@ describe('规划（从任务单开始）', () => {
   const fromSheet = (budgetMicro: number | null = null) =>
     service.create({
       ownerId: OWNER,
+      materials: [],
       payerId: OWNER,
       title: '小木屋首页',
       brief: '为小木屋民宿写官网首页开头',
@@ -1084,6 +1086,7 @@ describe('整体验收（从任务单来的任务）', () => {
   const start = async (criteria = ['语气温馨', '不超过 80 字']) => {
     const task = await service.create({
       ownerId: OWNER,
+      materials: [],
       payerId: OWNER,
       title: '小木屋首页',
       brief: '为小木屋民宿写官网首页开头',
@@ -1171,6 +1174,7 @@ describe('模型在当前网络用不了', () => {
     unavailable = ['openai/blocked'];
     await service.create({
       ownerId: OWNER,
+      materials: [],
       payerId: OWNER,
       title: 't',
       brief: 'b',
@@ -1192,6 +1196,7 @@ describe('模型在当前网络用不了', () => {
   it('干活节点碰上了：换默认模型接着做，不算一次重做，节点上留提醒', async () => {
     const task = await service.create({
       ownerId: OWNER,
+      materials: [],
       payerId: OWNER,
       title: 't',
       brief: 'b',
@@ -1227,5 +1232,29 @@ describe('模型在当前网络用不了', () => {
       'deepseek/x',
     ]);
     expect(node?.warning).toBe('「乙」原定的模型 openai/blocked 在当前网络用不了，改用 deepseek/x');
+  });
+});
+
+describe('用户给的素材（ADR 0007 §4）', () => {
+  it('每次运行都带上素材，同名的加序号；节点说明里列出素材路径', async () => {
+    const task = await service.create({
+      ownerId: OWNER,
+      payerId: OWNER,
+      title: '测试任务',
+      brief: '用照片做首页',
+      materials: [
+        { uploadId: '11111111-0000-4000-8000-000000000001', name: '照片.jpg', size: 10 },
+        { uploadId: '11111111-0000-4000-8000-000000000002', name: '照片.jpg', size: 20 },
+      ],
+      plan: { nodes: [work('A')], edges: [] },
+    });
+    expect(task.materials).toHaveLength(2);
+    const [run] = submitted;
+    expect(run!.materials).toEqual([
+      { uploadId: '11111111-0000-4000-8000-000000000001', path: 'materials/照片.jpg' },
+      { uploadId: '11111111-0000-4000-8000-000000000002', path: 'materials/照片 (2).jpg' },
+    ]);
+    expect(run!.prompt).toContain('【用户给的素材】');
+    expect(run!.prompt).toContain('- materials/照片 (2).jpg');
   });
 });

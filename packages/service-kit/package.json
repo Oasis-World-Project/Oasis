@@ -20,6 +20,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1154.0",
     "@nats-io/jetstream": "catalog:",
     "@nats-io/transport-node": "catalog:",
     "@oasis/contracts": "workspace:*",

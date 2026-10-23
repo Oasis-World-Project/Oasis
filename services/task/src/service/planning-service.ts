@@ -10,6 +10,7 @@ import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
 import type { Effects, Engine, PlannerJob } from './effects.ts';
+import { materialPaths } from './materials.ts';
 import { planToRows } from './plan.ts';
 import {
   checkPlan,
@@ -164,6 +165,7 @@ export function createPlanning(deps: {
           taskId: task.id,
           model: config.model,
           prompt,
+          materials: materialPaths(task.materials),
           ...(job.revise ? { continueFrom: job.revise.continueFrom } : {}),
         },
         requestId: job.runId,

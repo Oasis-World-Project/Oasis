@@ -1,5 +1,6 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
 import type { IntakeQuestion } from '@oasis/contracts/conversation';
+import type { Material } from '@oasis/contracts/canvas';
 import type { TaskSheet } from '@oasis/contracts/task';
 import { integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
@@ -58,6 +59,7 @@ export const intakes = pgTable('intakes', {
   cardMessageId: uuid('card_message_id'),
   sheet: jsonb('sheet').$type<TaskSheet>(),
   taskId: uuid('task_id'),
+  materials: jsonb('materials').$type<Material[]>().notNull().default([]),
   createdAt: at('created_at').notNull().defaultNow(),
   updatedAt: at('updated_at').notNull().defaultNow(),
 });

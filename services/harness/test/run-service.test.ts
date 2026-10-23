@@ -6,7 +6,7 @@ import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Executor, Sandbox, SandboxSpec } from '../src/executor/executor.ts';
 import { extractFiles, packFiles } from '../src/executor/tar.ts';
-import type { ObjectStore } from '../src/repo/object-store.ts';
+import type { ObjectStore } from '@oasis/service-kit';
 import type { Run, RunEvent, RunsRepo } from '../src/repo/runs-repo.ts';
 import { createRunService } from '../src/service/run-service.ts';
 
@@ -207,6 +207,18 @@ modelGateway.post('/internal/run-keys/:id/revoke', async (request, reply) => {
   return reply.code(204).send();
 });
 
+/** 假 canvas（和假 model-gateway 共用一个服务器）：用户上传的素材 */
+const PHOTO = '6a6a6a6a-6a6a-4a6a-8a6a-6a6a6a6a6a6a';
+const BIG = '6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b';
+modelGateway.get('/internal/uploads/:id/content', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  if (id === PHOTO) return reply.type('image/jpeg').send(Buffer.from('photo-bytes'));
+  if (id === BIG) return reply.type('application/octet-stream').send(Buffer.alloc(4096));
+  return reply
+    .code(404)
+    .send({ error: { code: 'upload_not_found', message: '没有这个文件', requestId: 'r' } });
+});
+
 let service: ReturnType<typeof createRunService>;
 beforeAll(async () => {
   const url = await modelGateway.listen({ port: 0, host: '127.0.0.1' });
@@ -215,6 +227,8 @@ beforeAll(async () => {
     executor,
     store,
     modelGateway: createServiceClient('model-gateway', url),
+    canvas: createServiceClient('canvas', url),
+    materialsMaxBytes: 1024,
     modelBaseUrl: 'http://sandbox-ingress:8080/v1',
     packages: {
       egressProxy: 'http://sandbox-egress:8888',
@@ -334,6 +348,31 @@ describe('一次 agent 运行', () => {
         .catch((e: unknown) => e);
       expect((err as HttpError).statusCode).toBe(409);
     }
+  });
+
+  it('用户给的素材向 canvas 取出来放进 materials/；取不到或太大时运行失败', async () => {
+    const run = await service.start({
+      ...base,
+      prompt: '用照片',
+      materials: [{ uploadId: PHOTO, path: 'materials/照片.jpg' }],
+    });
+    await finished(run.id);
+    const files = await extractFiles(started[0]?.files[0]?.tar ?? Buffer.alloc(0));
+    expect(files.find((f) => f.path === '照片.jpg')?.content.toString()).toBe('photo-bytes');
+
+    const errors: (string | null)[] = [];
+    for (const uploadId of ['6c6c6c6c-6c6c-4c6c-8c6c-6c6c6c6c6c6c', BIG]) {
+      const failed = await service.start({
+        ...base,
+        prompt: '用照片',
+        materials: [{ uploadId, path: 'materials/x.bin' }],
+      });
+      await finished(failed.id);
+      const body = await service.get(failed.id);
+      expect(body.status).toBe('failed');
+      errors.push(body.error);
+    }
+    expect(errors[1]).toContain('素材加起来超过');
   });
 
   it('接着之前的运行：放回会话存档（去掉锁文件）、放回产出，并让 dsh 恢复原会话', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fileHeaders } from '../src/api/file-headers.ts';
+import { fileResponseHeaders as fileHeaders } from '../src/file-headers.ts';
 
 describe('成果文件的响应头', () => {
   it('网页和 SVG 加沙箱，脚本不跑', () => {

@@ -207,6 +207,9 @@ importers:
 
   packages/service-kit:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: 3.1154.0
+        version: 3.1154.0
       '@nats-io/jetstream':
         specifier: 'catalog:'
         version: 3.4.0
@@ -320,9 +323,21 @@ importers:
 
   services/canvas:
     dependencies:
+      '@oasis/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@oasis/service-kit':
         specifier: workspace:*
         version: link:../../packages/service-kit
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
+      pg:
+        specifier: 'catalog:'
+        version: 8.23.1
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@oasis/tsconfig':
         specifier: workspace:*
@@ -330,9 +345,15 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.23.1
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@24.19.2)(jsdom@29.1.1)(vite@8.3.4(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
 
   services/conversation:
     dependencies:
@@ -407,9 +428,6 @@ importers:
 
   services/harness:
     dependencies:
-      '@aws-sdk/client-s3':
-        specifier: 3.1154.0
-        version: 3.1154.0
       '@oasis/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

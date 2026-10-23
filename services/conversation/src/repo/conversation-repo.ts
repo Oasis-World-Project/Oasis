@@ -11,7 +11,7 @@ type NewMessage = Pick<
   'conversationId' | 'authorKind' | 'authorId' | 'content' | 'status' | 'kind' | 'data'
 >;
 type IntakePatch = Partial<
-  Pick<Intake, 'status' | 'round' | 'turns' | 'cardMessageId' | 'sheet' | 'taskId'>
+  Pick<Intake, 'status' | 'round' | 'turns' | 'cardMessageId' | 'sheet' | 'taskId' | 'materials'>
 >;
 
 export interface ConversationRepo {
@@ -35,7 +35,7 @@ export interface ConversationRepo {
   setMessageData(id: string, data: Record<string, unknown>): Promise<Message>;
   /** 开始接需求；这个会话已经有进行中的就返回 undefined */
   createIntake(
-    intake: Pick<Intake, 'id' | 'conversationId' | 'request' | 'context'>,
+    intake: Pick<Intake, 'id' | 'conversationId' | 'request' | 'context' | 'materials'>,
   ): Promise<Intake | undefined>;
   /** 这个会话进行中的接需求（在问或等确认） */
   findOpenIntake(conversationId: string): Promise<Intake | undefined>;

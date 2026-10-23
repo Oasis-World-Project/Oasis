@@ -36,8 +36,10 @@ export function registerRoutes(app: ServiceApp, dms: DmService, intake: IntakeSe
   app.post('/v1/conversations/:id/messages', async (request, reply) => {
     const ownerId = requireUserId(request);
     const { id } = parseWith(IdParams, request.params);
-    const { content, asTask } = parseWith(SendMessageBody, request.body);
+    const { content, asTask, attachments: ids } = parseWith(SendMessageBody, request.body);
     await dms.assertOwned(id, ownerId);
+    // 附件在开始推流之前核对，不对就直接报错（这时还能返回普通的错误响应）
+    const attachments = await dms.resolveAttachments(ownerId, ids, request.id);
 
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -57,6 +59,7 @@ export function registerRoutes(app: ServiceApp, dms: DmService, intake: IntakeSe
         conversationId: id,
         content,
         asTask,
+        attachments,
         requestId: request.id,
         emit,
       });

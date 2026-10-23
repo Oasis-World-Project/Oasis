@@ -33,6 +33,7 @@ import {
   nodeOf,
   requireNotStarted,
 } from './graph.ts';
+import { materialPaths } from './materials.ts';
 import { nodeRow, planToRows, validatePlan } from './plan.ts';
 import { createPlanning, dollars, type PlanningConfig } from './planning-service.ts';
 import { decide } from './schedule.ts';
@@ -96,6 +97,7 @@ function toTaskBody({ task, nodes, edges }: Snapshot): TaskBody {
     spentMicro: task.spentMicro,
     budgetLimitMicro: task.budgetLimitMicro,
     sheet: task.sheet,
+    materials: task.materials,
     acceptance: task.acceptance,
     deliverables: task.deliverables,
     nodes: nodes.map(toNodeBody),
@@ -352,6 +354,8 @@ export function createWorkflowService(deps: {
           taskId: s.task.id,
           nodeId: s.nodeId,
           ...s.request,
+          // 每次运行都放一份（接着原会话做时 harness 不会放回上次的素材）
+          materials: materialPaths(s.task.materials),
         },
         requestId: s.runId,
         schema: RunBody,
@@ -676,6 +680,7 @@ export function createWorkflowService(deps: {
         conversationId: body.conversationId ?? null,
         title: body.title,
         brief: body.brief,
+        materials: body.materials,
       };
       if (body.sheet) {
         await store.create({

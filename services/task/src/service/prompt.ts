@@ -19,6 +19,8 @@ export interface NodeContext {
   userNotes: string[];
   /** 分给这个节点的外部工具（工具名） */
   tools: string[];
+  /** 用户给的素材在沙箱里的路径（materials/…） */
+  materials: string[];
 }
 
 export interface Speech {
@@ -42,6 +44,11 @@ function context(c: NodeContext, goalLabel: string): string[] {
       return `- 「${u.title}」交来的文件：${files}${said}`;
     });
     parts.push(`【上游交给你的东西】\n${lines.join('\n')}`);
+  }
+  if (c.materials.length > 0) {
+    parts.push(
+      `【用户给的素材】需要时打开参考或直接使用：\n${c.materials.map((p) => `- ${p}`).join('\n')}`,
+    );
   }
   if (c.userNotes.length > 0) {
     parts.push(`【用户追加的要求】\n${c.userNotes.map((n) => `- ${n}`).join('\n')}`);

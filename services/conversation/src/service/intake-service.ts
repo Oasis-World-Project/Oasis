@@ -6,12 +6,14 @@ import { OASIS_HEADERS } from '@oasis/contracts/common';
 import {
   AUTO_ANSWER,
   type IntakeQuestion,
+  type MessageAttachment,
   type QuestionsCard,
   type SheetCard,
 } from '@oasis/contracts/conversation';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Conversation, ConversationRepo, Intake, Message } from '../repo/conversation-repo.ts';
+import { attachmentsOf, mergeMaterials, withAttachmentNote } from './attachments.ts';
 import {
   intakeMessages,
   parseIntakeReply,
@@ -126,6 +128,7 @@ export function createIntakeService(deps: {
       turns: intake.turns,
       roundsLeft,
       skipped,
+      materials: intake.materials,
     });
     const attempts = [route.providerModel, route.providerModel, config.fallbackModel];
     let feedback: string | undefined;
@@ -268,20 +271,22 @@ export function createIntakeService(deps: {
     conversation: Conversation;
     ownerId: string;
     request: string;
+    /** 需求那条消息带的文件 */
+    attachments: MessageAttachment[];
     history: Message[];
     requestId: string;
   }): Promise<Message[]> {
+    const context = input.history.filter((m) => m.kind === 'text').slice(-8);
     const created = await repo.createIntake({
       id: randomUUID(),
       conversationId: input.conversation.id,
       request: input.request,
-      context: input.history
-        .filter((m) => m.kind === 'text')
-        .slice(-8)
-        .map((m) => ({
-          role: m.authorKind === 'user' ? ('user' as const) : ('assistant' as const),
-          content: m.content.slice(0, 2000),
-        })),
+      context: context.map((m) => ({
+        role: m.authorKind === 'user' ? ('user' as const) : ('assistant' as const),
+        content: withAttachmentNote(m.content.slice(0, 2000), attachmentsOf(m)),
+      })),
+      // 开始前几条聊天里发过的文件也算素材（常见：先发图，再说「用这些做个海报」）
+      materials: mergeMaterials([], [...context.flatMap(attachmentsOf), ...input.attachments]),
     });
     if (!created) throw new HttpError(409, 'intake_open', '已经有一件正在整理的任务了');
     return step(input.conversation, created, input.ownerId, input.requestId);
@@ -298,10 +303,15 @@ export function createIntakeService(deps: {
       intake: Intake;
       ownerId: string;
       text: string;
+      attachments: MessageAttachment[];
       requestId: string;
     }): Promise<Message[]> {
       const intake = await repo.updateIntake(input.intake.id, {
-        turns: [...input.intake.turns, { kind: 'user', text: input.text }],
+        turns: [
+          ...input.intake.turns,
+          { kind: 'user', text: withAttachmentNote(input.text, input.attachments) },
+        ],
+        materials: mergeMaterials(input.intake.materials, input.attachments),
       });
       return step(input.conversation, intake, input.ownerId, input.requestId);
     },
@@ -322,6 +332,7 @@ export function createIntakeService(deps: {
         conversation: input.conversation,
         ownerId: input.ownerId,
         request: message.content,
+        attachments: attachmentsOf(message),
         history: history.filter((m) => m.createdAt < message.createdAt),
         requestId: input.requestId,
       });
@@ -373,7 +384,9 @@ export function createIntakeService(deps: {
       if (intake.status !== 'sheet' || !intake.sheet || !intake.cardMessageId) {
         throw new HttpError(409, 'no_sheet', '任务单还没写好');
       }
-      const { sheet, cardMessageId } = intake;
+      const { cardMessageId, materials } = intake;
+      // 任务单上的素材以用户实际发的文件为准（AI 看不到文件，不让它填）
+      const sheet = { ...intake.sheet, materials: materials.map((m) => m.name) };
       const task = await deps.task.json('POST', '/internal/tasks', {
         body: {
           ownerId: input.ownerId,
@@ -382,6 +395,7 @@ export function createIntakeService(deps: {
           title: sheet.title,
           brief: [`用户的原话：${intake.request}`, sheetText(sheet)].join('\n\n'),
           sheet,
+          materials,
         },
         requestId: input.requestId,
         schema: CreatedTask,

@@ -1,10 +1,12 @@
 // 接需求（ADR 0005 §3）的纯函数部分：给私聊里的 AI 的说明、解析它按 JSON 给出的回答、把卡片写成文字。
 // 这个 AI 只负责读懂需求：问普通人听得懂的问题、写任务单；团队、模型和工具由后台的规划员决定。
+import type { Material } from '@oasis/contracts/canvas';
 import { AUTO_ANSWER, IntakeQuestion } from '@oasis/contracts/conversation';
 import type { ChatMessage } from '@oasis/contracts/model-gateway';
 import { TaskSheet } from '@oasis/contracts/task';
 import { z } from 'zod';
 import type { IntakeTurn } from '../repo/schema.ts';
+import { materialsText } from './attachments.ts';
 
 const Intro = z.string().trim().max(300).default('');
 
@@ -30,6 +32,8 @@ export interface IntakeState {
   roundsLeft: number;
   /** 用户点了「直接开始」 */
   skipped: boolean;
+  /** 用户给的素材（文件名和大小） */
+  materials: Material[];
 }
 
 function system(name: string): string {
@@ -74,6 +78,11 @@ export function intakeMessages(state: IntakeState): ChatMessage[] {
   if (state.context.length > 0) {
     const chat = state.context.map((m) => `${m.role === 'user' ? '用户' : '你'}：${m.content}`);
     parts.push(`【开始前的聊天】\n${chat.join('\n')}`);
+  }
+  if (state.materials.length > 0) {
+    parts.push(
+      `【用户给的素材】（你看不到内容，AI 团队做的时候能打开；任务单的 materials 会自动填上，不用你写）\n${materialsText(state.materials)}`,
+    );
   }
   if (state.turns.length > 0)
     parts.push(`【接需求的过程】\n${state.turns.map(describeTurn).join('\n\n')}`);

@@ -4,10 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { HARNESS_STREAM } from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
+  createObjectStore,
   createServiceClient,
   ensureStream,
   startOutboxRelay,
   startService,
+  type ObjectStore,
   type ServiceResource,
 } from '@oasis/service-kit';
 import { SANDBOX_PATHS } from './adapter/dsh.ts';
@@ -15,7 +17,6 @@ import { registerRoutes } from './api/routes.ts';
 import { harnessEnv } from './config.ts';
 import { createDockerApi, defaultDockerSocket } from './executor/docker-api.ts';
 import { createDockerExecutor, type Executor } from './executor/executor.ts';
-import { createObjectStore, type ObjectStore } from './repo/object-store.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
 import { createRunService, type RunService } from './service/run-service.ts';
 
@@ -72,6 +73,8 @@ await startService({
       modelGateway: createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
         timeoutMs: 10_000,
       }),
+      canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 60_000 }),
+      materialsMaxBytes: config.MATERIALS_MAX_BYTES,
       modelBaseUrl: config.SANDBOX_MODEL_BASE_URL,
       packages: {
         egressProxy: config.SANDBOX_EGRESS_PROXY,

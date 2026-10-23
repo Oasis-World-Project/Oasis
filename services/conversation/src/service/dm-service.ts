@@ -2,10 +2,17 @@
 // 每条用户消息先判断是不是在交代任务（ADR 0005 §2）：是就转去接需求，不走普通聊天。
 import { ModelRoute } from '@oasis/contracts/agent';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
-import type { ConversationBody, MessageBody, StreamEvent } from '@oasis/contracts/conversation';
+import { UploadLookupResult } from '@oasis/contracts/canvas';
+import type {
+  ConversationBody,
+  MessageAttachment,
+  MessageBody,
+  StreamEvent,
+} from '@oasis/contracts/conversation';
 import type { ChatMessage } from '@oasis/contracts/model-gateway';
 import { createSseParser, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import type { Conversation, ConversationRepo, Message } from '../repo/conversation-repo.ts';
+import { attachmentsOf, withAttachmentNote } from './attachments.ts';
 import type { IntakeService } from './intake-service.ts';
 
 /** 给用户看的错误说明（上游的技术细节只进日志）。 */
@@ -50,6 +57,8 @@ export function createDmService(deps: {
   repo: ConversationRepo;
   agent: ServiceClient;
   modelGateway: ServiceClient;
+  /** 核对用户随消息发的文件 */
+  canvas: ServiceClient;
   intake: IntakeService;
   historyLimit: number;
   replyMaxTokens: number;
@@ -169,7 +178,7 @@ export function createDmService(deps: {
         { role: 'system', content: route.systemPrompt },
         ...history.map((m): ChatMessage => ({
           role: m.authorKind === 'user' ? 'user' : 'assistant',
-          content: m.content,
+          content: withAttachmentNote(m.content, attachmentsOf(m)),
         })),
       ];
       const text = await streamReply({
@@ -227,11 +236,35 @@ export function createDmService(deps: {
      * - 像是在交代任务（或点了「发任务」）：开始接需求，出问题卡或任务单；
      * - 否则照常聊天，流式推送回复；有点像任务时回复下面附「当成任务来做」。
      */
+    /** 核对随消息发的文件都在 canvas 里、都是这个人的；有一个不是就整条消息不收 */
+    async resolveAttachments(
+      ownerId: string,
+      ids: string[],
+      requestId: string,
+    ): Promise<MessageAttachment[]> {
+      if (ids.length === 0) return [];
+      try {
+        const { uploads } = await deps.canvas.json('POST', '/internal/uploads/lookup', {
+          body: { ownerId, ids },
+          requestId,
+          schema: UploadLookupResult,
+        });
+        return uploads.map(({ id, name, size, contentType }) => ({ id, name, size, contentType }));
+      } catch (err) {
+        if (err instanceof HttpError && err.statusCode === 404) {
+          throw new HttpError(400, 'attachment_not_found', '有文件没找到，请重新添加');
+        }
+        throw err;
+      }
+    },
+
     async sendMessage(input: {
       ownerId: string;
       conversationId: string;
       content: string;
       asTask: boolean;
+      /** 已经核对过的附件（resolveAttachments） */
+      attachments: MessageAttachment[];
       requestId: string;
       emit: (event: StreamEvent) => void;
     }): Promise<void> {
@@ -242,6 +275,7 @@ export function createDmService(deps: {
         authorId: input.ownerId,
         content: input.content,
         status: 'complete',
+        ...(input.attachments.length > 0 ? { data: { attachments: input.attachments } } : {}),
       });
       input.emit({ type: 'accepted', userMessage: toMessageBody(userMessage) });
 
@@ -257,6 +291,7 @@ export function createDmService(deps: {
               intake: open,
               ownerId: input.ownerId,
               text: input.content,
+              attachments: input.attachments,
               requestId: input.requestId,
             }),
           );
@@ -276,6 +311,7 @@ export function createDmService(deps: {
               conversation,
               ownerId: input.ownerId,
               request: input.content,
+              attachments: input.attachments,
               history,
               requestId: input.requestId,
             }),

@@ -1,4 +1,4 @@
-import { postgresAndEventBus } from '@oasis/service-kit';
+import { objectStoreEnv, postgresAndEventBus } from '@oasis/service-kit';
 import { z } from 'zod';
 
 const positiveInt = z.coerce.number().int().positive();
@@ -7,6 +7,8 @@ export const harnessEnv = {
   ...postgresAndEventBus.env,
   /** 签发、作废运行临时 Key */
   MODEL_GATEWAY_URL: z.url(),
+  /** 取用户上传的素材放进沙箱 */
+  CANVAS_URL: z.url(),
 
   // ---- 执行器（Docker Engine API） ----
   /** Docker 的 socket；不填时 Linux/macOS 用 /var/run/docker.sock，Windows 用 Docker Desktop 的命名管道 */
@@ -38,13 +40,12 @@ export const harnessEnv = {
   MAX_CONCURRENT_RUNS: positiveInt.default(4),
   /** 一次运行最长多久（到点视为失败并销毁容器） */
   RUN_TIMEOUT_MS: positiveInt.default(30 * 60_000),
+  /** 一次运行的素材（用户上传的文件）加起来的大小上限 */
+  MATERIALS_MAX_BYTES: positiveInt.default(300 * 1024 * 1024),
   /** 产出文件打包后的大小上限 */
   OUTPUT_MAX_BYTES: positiveInt.default(200 * 1024 * 1024),
 
   // ---- 对象存储（产出与会话存档） ----
-  S3_ENDPOINT: z.url(),
-  S3_REGION: z.string().default('us-east-1'),
-  S3_ACCESS_KEY: z.string().min(1),
-  S3_SECRET_KEY: z.string().min(1),
+  ...objectStoreEnv,
   S3_BUCKET: z.string().default('oasis-harness'),
 };

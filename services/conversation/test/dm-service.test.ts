@@ -162,19 +162,45 @@ task.post('/internal/tasks', async (request, reply) => {
   });
 });
 
+/** 假 canvas：KAI 的两个文件 */
+const PHOTO = {
+  id: 'aaaaaaaa-0000-4000-8000-000000000001',
+  name: '民宿照片.jpg',
+  size: 2_400_000,
+  contentType: 'image/jpeg',
+};
+const LOGO = {
+  id: 'aaaaaaaa-0000-4000-8000-000000000002',
+  name: 'logo.png',
+  size: 30_000,
+  contentType: 'image/png',
+};
+const canvas = Fastify();
+canvas.post('/internal/uploads/lookup', async (request, reply) => {
+  const { ownerId, ids } = request.body as { ownerId: string; ids: string[] };
+  const files = [PHOTO, LOGO].filter((f) => ids.includes(f.id));
+  if (ownerId !== OWNER || files.length !== ids.length)
+    return reply
+      .code(404)
+      .send({ error: { code: 'upload_not_found', message: '没有', requestId: 'r' } });
+  return { uploads: files.map((f) => ({ ...f, createdAt: new Date().toISOString() })) };
+});
+
 let repo: ReturnType<typeof memoryRepo>;
 let service: ReturnType<typeof createDmService>;
 let intake: ReturnType<typeof createIntakeService>;
-const urls = { agent: '', gateway: '', task: '' };
+const urls = { agent: '', gateway: '', task: '', canvas: '' };
 beforeAll(async () => {
   urls.agent = await agent.listen({ port: 0, host: '127.0.0.1' });
   urls.gateway = await modelGateway.listen({ port: 0, host: '127.0.0.1' });
   urls.task = await task.listen({ port: 0, host: '127.0.0.1' });
+  urls.canvas = await canvas.listen({ port: 0, host: '127.0.0.1' });
 });
 afterAll(async () => {
   await agent.close();
   await modelGateway.close();
   await task.close();
+  await canvas.close();
 });
 beforeEach(() => {
   gatewayMode = 'ok';
@@ -207,6 +233,7 @@ beforeEach(() => {
   service = createDmService({
     repo,
     ...clients,
+    canvas: createServiceClient('canvas', urls.canvas),
     intake,
     historyLimit: 20,
     replyMaxTokens: 256,
@@ -215,13 +242,18 @@ beforeEach(() => {
   });
 });
 
-async function send(content: string, asTask = false): Promise<StreamEvent[]> {
+async function send(
+  content: string,
+  asTask = false,
+  attachmentIds: string[] = [],
+): Promise<StreamEvent[]> {
   const events: StreamEvent[] = [];
   await service.sendMessage({
     ownerId: OWNER,
     conversationId: CONV,
     content,
     asTask,
+    attachments: await service.resolveAttachments(OWNER, attachmentIds, 'r'),
     requestId: 'r',
     emit: (e) => events.push(e),
   });
@@ -542,5 +574,50 @@ describe('接需求', () => {
     const events = await send('算了不用了');
     expect(lastDone(events)).toMatchObject({ kind: 'text', content: '好，那我们先不做。' });
     expect(repo.intakes[0]!.status).toBe('cancelled');
+  });
+});
+
+describe('随消息发文件（ADR 0007 §4）', () => {
+  it('附件记在用户消息上；聊天时 AI 知道附了哪些文件', async () => {
+    const events = await send('看看这张照片', false, [PHOTO.id]);
+    const accepted = events[0] as Extract<StreamEvent, { type: 'accepted' }>;
+    expect(accepted.userMessage.data).toEqual({ attachments: [PHOTO] });
+    const toModel = seenRequests[0]!.body.messages.at(-1)!.content;
+    expect(toModel).toContain('随消息附了文件：民宿照片.jpg（2.3 MB）');
+  });
+
+  it('文件不存在或不是自己的：整条消息不收，400', async () => {
+    const err = await service
+      .resolveAttachments(OWNER, ['aaaaaaaa-0000-4000-8000-0000000000ff'], 'r')
+      .catch((e: unknown) => e);
+    expect((err as HttpError).statusCode).toBe(400);
+    expect(repo.rows).toHaveLength(0);
+  });
+
+  it('开始前发的文件和接需求时补的文件都算素材；确认时交给 task，任务单的素材以实际文件为准', async () => {
+    taskProbability = 0.1;
+    await send('先发你一张照片', false, [PHOTO.id]);
+    taskProbability = 0.9;
+    intakeReplies = [questions()];
+    await send('用它做个官网首页');
+    expect(intakeRequests[0]!.messages[1]!.content).toContain('【用户给的素材】');
+    expect(repo.intakes[0]!.materials).toEqual([
+      { uploadId: PHOTO.id, name: PHOTO.name, size: PHOTO.size },
+    ]);
+
+    intakeReplies = [sheet()];
+    await send('还有这个 logo，也用上', false, [LOGO.id, PHOTO.id]);
+    await intake.confirm({
+      conversation: (await repo.findOwned(CONV, OWNER))!,
+      ownerId: OWNER,
+      requestId: 'r',
+    });
+    expect(createdTasks[0]).toMatchObject({
+      materials: [
+        { uploadId: PHOTO.id, name: PHOTO.name, size: PHOTO.size },
+        { uploadId: LOGO.id, name: LOGO.name, size: LOGO.size },
+      ],
+      sheet: { materials: ['民宿照片.jpg', 'logo.png'] },
+    });
   });
 });

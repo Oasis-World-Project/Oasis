@@ -4,6 +4,8 @@ export { createEnvelope, ensureStream, publishEvent, startEventConsumer } from '
 export { errorBody, type ServiceApp } from './http.ts';
 export { HttpError, parseWith } from './http-error.ts';
 export type { Logger } from './logger.ts';
+export { contentTypeOf, fileResponseHeaders } from './file-headers.ts';
+export { createObjectStore, objectStoreEnv, type ObjectStore } from './object-store.ts';
 export { startOutboxRelay } from './outbox.ts';
 export { createPostgres, databaseEnv, type PostgresResource } from './postgres.ts';
 export {
