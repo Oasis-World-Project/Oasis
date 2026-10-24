@@ -22,6 +22,8 @@ export interface ModelPrice {
 export interface ProviderClient {
   readonly configured: boolean;
   listPrices(): Promise<Map<string, ModelPrice>>;
+  /** 所有支持参考图的端点中，最保守的参考图数量上限；未知或不支持返回 0。 */
+  imageReferenceLimit(model: string): Promise<number>;
   chatCompletions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   decisions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   images(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
@@ -60,6 +62,30 @@ export function createOpenRouterClient(options: {
     });
   return {
     configured: Boolean(options.apiKey),
+
+    async imageReferenceLimit(model) {
+      const slug = model.split('/').map(encodeURIComponent).join('/');
+      const response = await get(`${base}/images/models/${slug}/endpoints`, 15_000);
+      if (!response.ok) throw new Error(`读取参考图能力失败：${response.status}`);
+      const body = z
+        .object({
+          endpoints: z.array(
+            z.looseObject({
+              supported_parameters: z.record(z.string(), z.unknown()).optional(),
+            }),
+          ),
+        })
+        .parse(await response.json());
+      const limits = body.endpoints
+        .map((endpoint) => {
+          const range = z
+            .object({ type: z.literal('range'), max: z.number().int().nonnegative() })
+            .safeParse(endpoint.supported_parameters?.input_references);
+          return range.success ? range.data.max : 0;
+        })
+        .filter((limit) => limit > 0);
+      return limits.length ? Math.min(...limits) : 0;
+    },
 
     async listPrices() {
       // 价格表是公开接口，不需要 Key

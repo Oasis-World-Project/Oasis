@@ -38,7 +38,7 @@ export function createToolService(deps: {
     /** 工具目录：没配 Key、或者没有能用的模型的工具标成不可用 */
     async list(): Promise<ToolEntry[]> {
       const blocked = new Set(await meter.regionBlockedModels());
-      return TOOLS.map((tool) => {
+      const entries = TOOLS.map((tool) => {
         const all = tool.models(config);
         const models = all.filter((m) => !blocked.has(m));
         return {
@@ -49,11 +49,26 @@ export function createToolService(deps: {
           unit: tool.unit,
           estimateMicro: tool.estimateMicro,
           long: tool.long,
-          available: configured(tool) && (all.length === 0 || models.length > 0),
+          available: configured(tool) && (tool.provider === 'tavily' || models.length > 0),
           models,
           defaultModel: models[0] ?? null,
         };
       });
+      entries.push({
+        key: 'text.batch',
+        name: '批量生成文字',
+        description:
+          '用当前节点模型逐行生成文字，uses 按输入行数估计；支持停止和恢复。单价仅为规划估算，实际按模型 token 计费。',
+        usage:
+          'oasis-tool text.batch --in 提示.jsonl --out out/结果.jsonl --budget_micro 1000000（每行 {"id":"1","prompt":"要求"}；--resume true 恢复）',
+        unit: '行',
+        estimateMicro: 2_000,
+        long: false,
+        available: deps.openrouter.configured,
+        models: [],
+        defaultModel: null,
+      });
+      return entries;
     },
 
     async call(input: {
@@ -62,10 +77,11 @@ export function createToolService(deps: {
       args: Record<string, unknown>;
       requestId: string;
       signal: AbortSignal;
+      maxCostMicro?: number;
     }): Promise<ToolResult> {
       const tool = byKey.get(input.key);
       if (!tool) throw new HttpError(404, 'tool_not_found', `没有工具 ${input.key}`);
-      if (!configured(tool)) {
+      if (!configured(tool) || (tool.provider !== 'tavily' && !tool.models(config).length)) {
         throw new HttpError(503, 'tool_unavailable', `${tool.name}还没有配置好，现在用不了`);
       }
       const parsed = tool.args.safeParse(input.args);
@@ -79,7 +95,23 @@ export function createToolService(deps: {
       if (typeof args.model === 'string' && !tool.models(config).includes(args.model)) {
         throw new HttpError(400, 'invalid_tool_args', `${tool.name}不能用模型 ${args.model}`);
       }
-      const models = await usableModels(tool);
+      let models = await usableModels(tool);
+      if (tool.key === 'image.generate' && Array.isArray(args.references)) {
+        const count = args.references.length;
+        const compatible: string[] = [];
+        for (const candidate of models) {
+          const limit = await deps.openrouter.imageReferenceLimit(candidate).catch(() => 0);
+          if (limit >= count) compatible.push(candidate);
+        }
+        models = compatible;
+        if (!models.length || (typeof args.model === 'string' && !models.includes(args.model))) {
+          throw new HttpError(
+            400,
+            'reference_images_unsupported',
+            '没有已确认支持此参考图数量的可用模型；未调用生图',
+          );
+        }
+      }
       const model = tool.modelOf(args, models);
       if (tool.models(config).length > 0 && !models.includes(model)) {
         throw new HttpError(
@@ -89,56 +121,73 @@ export function createToolService(deps: {
         );
       }
 
-      const call = await meter.hold({
-        caller: input.caller,
-        kind: 'tool',
-        model,
-        amountMicro: tool.holdMicro(args),
-        requestId: input.requestId,
-        ...(tool.long ? { ttlMs: deps.jobTimeoutMs + HOLD_MARGIN_MS } : {}),
-      });
-      // 供应商已经接下了这次调用（可能已经收费）之后才出的错：按估算结算，不退回
-      let accepted = false;
-      const toolDeps = {
-        openrouter: deps.openrouter,
-        tavily: deps.tavily,
-        config,
-        signal: input.signal,
-        upstream: async (request: () => Promise<Response>) => {
-          const response = await meter.callUpstream(call, request);
-          accepted = true;
-          return response;
-        },
-      };
-      try {
-        if (tool.long) {
-          const providerJobId = await tool.start(toolDeps, args, model);
-          const id = randomUUID();
-          await jobs.insert({ id, tool: tool.key, providerJobId, call: { ...call } });
-          return {
-            tool: tool.key,
-            text: `${tool.name}已提交，要等几分钟；任务号 ${id}。`,
-            files: [],
-            costMicro: 0,
-            job: { id },
-          };
+      const canFallback = tool.key === 'image.generate' || tool.key === 'image.inspect';
+      const candidates =
+        !canFallback || typeof args.model === 'string' || !models.length ? [model] : models;
+      let lastError: unknown;
+      for (const model of candidates) {
+        const call = await meter.hold({
+          caller: input.caller,
+          kind: 'tool',
+          model,
+          amountMicro: tool.holdMicro(args),
+          ...(input.maxCostMicro === undefined ? {} : { maxCostMicro: input.maxCostMicro }),
+          requestId: input.requestId,
+          ...(tool.long ? { ttlMs: deps.jobTimeoutMs + HOLD_MARGIN_MS } : {}),
+        });
+        // 供应商已经接下了这次调用（可能已经收费）之后才出的错：按估算结算，不退回
+        let accepted = false;
+        const toolDeps = {
+          openrouter: deps.openrouter,
+          tavily: deps.tavily,
+          config,
+          signal: input.signal,
+          upstream: async (request: () => Promise<Response>) => {
+            const response = await meter.callUpstream(call, request);
+            accepted = true;
+            return response;
+          },
+        };
+        try {
+          if (tool.long) {
+            const providerJobId = await tool.start(toolDeps, args, model);
+            const id = randomUUID();
+            await jobs.insert({ id, tool: tool.key, providerJobId, call: { ...call } });
+            return {
+              tool: tool.key,
+              text: `${tool.name}已提交，要等几分钟；任务号 ${id}。`,
+              files: [],
+              costMicro: 0,
+              job: { id },
+            };
+          }
+          const outcome = await tool.run(toolDeps, args, model);
+          await meter.settle(call, outcome.cost, undefined);
+          return resultOf(tool, outcome);
+        } catch (err) {
+          if (accepted) {
+            deps.logger.error({ err, tool: tool.key }, '工具结果处理失败');
+            await meter.settle(
+              call,
+              { costMicro: tool.estimateMicro, source: 'estimate' },
+              undefined,
+              err instanceof Error ? err.message : String(err),
+            );
+            if (err instanceof HttpError) throw err;
+            throw new HttpError(502, 'tool_failed', `${tool.name}返回的结果看不懂`);
+          }
+          if (
+            err instanceof HttpError &&
+            err.code === 'provider_region_unavailable' &&
+            typeof args.model !== 'string'
+          ) {
+            lastError = err;
+            continue;
+          }
+          throw err;
         }
-        const outcome = await tool.run(toolDeps, args, model);
-        await meter.settle(call, outcome.cost, undefined);
-        return resultOf(tool, outcome);
-      } catch (err) {
-        if (accepted) {
-          deps.logger.error({ err, tool: tool.key }, '工具结果处理失败');
-          await meter.settle(
-            call,
-            { costMicro: tool.estimateMicro, source: 'estimate' },
-            undefined,
-            err instanceof Error ? err.message : String(err),
-          );
-          throw new HttpError(502, 'tool_failed', `${tool.name}返回的结果看不懂`);
-        }
-        throw err;
       }
+      throw lastError;
     },
 
     /**

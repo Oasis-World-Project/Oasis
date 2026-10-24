@@ -102,6 +102,28 @@ const request = {
 };
 
 describe('一次模型调用', () => {
+  it('批次预算在冻结前校验，不透传供应商；非流式返回计量金额', async () => {
+    await expect(
+      chat.prepare({
+        caller: { payerId: PAYER },
+        requestId: 'budget',
+        body: { ...request, max_cost_micro: 1 },
+      }),
+    ).rejects.toMatchObject({ code: 'call_budget_exceeded' });
+    expect(billingCalls).toEqual([]);
+    const call = await chat.prepare({
+      caller: { payerId: PAYER, runId: RUN },
+      requestId: 'r',
+      body: { ...request, stream: false, max_cost_micro: 1000 },
+    });
+    expect(call.body).not.toHaveProperty('max_cost_micro');
+    const result = await chat.finishJson(
+      call,
+      Response.json({ choices: [{ message: { content: '完成' } }], usage: { cost: 0.000042 } }),
+    );
+    expect(result).toMatchObject({ oasis: { costMicro: 42 } });
+    expect(started[0]).toMatchObject({ runId: RUN, payerId: PAYER });
+  });
   it('先冻结、再调用、原样转发，并按供应商返回的实际花费结算', async () => {
     const call = await chat.prepare({
       caller: { payerId: PAYER },

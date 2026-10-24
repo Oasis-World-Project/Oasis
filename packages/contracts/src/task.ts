@@ -35,7 +35,8 @@ const NodeCommon = {
 /** 节点要用的外部工具（ADR 0006 §5）：工具名和预计用几次（用来估算花费，不是硬上限） */
 export const NodeTool = z.object({
   key: z.string().regex(/^[a-z0-9]+(\.[a-z0-9_-]+)+$/, '工具名形如 image.generate'),
-  uses: z.number().int().min(1).max(50).default(1),
+  /** 批量工具按输入行计数，其余工具按目录单位计数。 */
+  uses: z.number().int().min(1).max(1000).default(1),
 });
 export type NodeTool = z.infer<typeof NodeTool>;
 const NodeTools = z.array(NodeTool).max(6);

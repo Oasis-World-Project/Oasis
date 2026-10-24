@@ -82,6 +82,8 @@ const methods: string[] = [];
 /** 假执行器：每个沙箱里跑一个假 dsh；产出目录里有 result.md */
 const started: SandboxSpec[] = [];
 const destroyed: string[] = [];
+const lifecycle: string[] = [];
+let pauseFails = false;
 let orphansRemoved: ReadonlySet<string> | undefined;
 /** 起沙箱要多久（模拟容器启动慢） */
 let startDelayMs = 0;
@@ -94,22 +96,28 @@ const executor: Executor = {
     const stdout = new PassThrough();
     fakeDsh(stdin, stdout);
     const sandbox: Sandbox = {
+      async pause() {
+        lifecycle.push('pause');
+        if (pauseFails) throw new Error('freeze failed');
+      },
       id: `container-${spec.runId}`,
       stdin,
       stdout,
       stderr: new PassThrough(),
       async readArchive(path) {
+        lifecycle.push('archive');
         const dir = path.split('/').at(-1) ?? 'x';
         // 会话目录里带一个锁文件，接着原会话时应该被去掉
         const extra =
           dir === 'sessions'
             ? [{ path: 'sessions/s/session.lock', content: Buffer.from('1') }]
-            : [];
+            : [{ path: 'out/.oasis-batches/batch/meta.json', content: Buffer.from('{"rows":[]}') }];
         return Readable.from([
           await packFiles([{ path: `${dir}/result.md`, content: Buffer.from('# 成果') }, ...extra]),
         ]);
       },
       async destroy() {
+        lifecycle.push('destroy');
         destroyed.push(spec.runId);
         stdout.end();
       },
@@ -250,6 +258,8 @@ beforeAll(async () => {
 });
 afterAll(() => modelGateway.close());
 beforeEach(() => {
+  lifecycle.length = 0;
+  pauseFails = false;
   for (const list of [started, destroyed, events, outbox, issued, revoked, methods, compute])
     list.length = 0;
   rows.clear();
@@ -341,6 +351,7 @@ describe('一次 agent 运行', () => {
     const sandboxTar = started[1]?.files[0]?.tar ?? Buffer.alloc(0);
     const files = (await extractFiles(sandboxTar)).map((f) => f.path);
     expect(files).toContain('draft/result.md');
+    expect(files.some((path) => path.includes('.oasis-batches'))).toBe(false);
 
     const OTHER_PAYER = '1d1d1d1d-1d1d-4d1d-8d1d-1d1d1d1d1d1d';
     const cases = [
@@ -410,6 +421,9 @@ describe('一次 agent 运行', () => {
     expect(file.contentType).toBe('text/markdown; charset=utf-8');
     const err = await service.file(run.id, '.oasis-keep').catch((e: unknown) => e);
     expect((err as HttpError).statusCode).toBe(404);
+    await expect(service.file(run.id, '.oasis-batches/batch/meta.json')).rejects.toMatchObject({
+      statusCode: 404,
+    });
   });
 
   it('读文字类产出给关卡用：只读文字文件，总长超过上限就截断', async () => {
@@ -463,6 +477,7 @@ describe('一次 agent 运行', () => {
       outputs: [{ path: 'result.md' }],
     });
     expect(stored.has(`runs/${run.id}/session.tar`)).toBe(true);
+    expect(lifecycle.slice(0, 3)).toEqual(['pause', 'archive', 'archive']);
     expect(destroyed).toContain(run.id);
     expect(revoked).toHaveLength(1);
     expect(outbox[0]).toMatchObject({ data: { status: 'stopped' } });
@@ -471,6 +486,21 @@ describe('一次 agent 运行', () => {
     const next = await service.start({ ...base, prompt: '接着做', continueFrom: run.id });
     expect((await finished(next.id)).status).toBe('succeeded');
     expect(methods).toContain('session/resume');
+    const restored = await extractFiles(started[1]!.files[0]!.tar);
+    expect(restored.some((file) => file.path.includes('.oasis-batches/batch/meta.json'))).toBe(
+      true,
+    );
+  });
+
+  it('冻结失败不归档仍在变动的检查点，并明确告知保存失败', async () => {
+    pauseFails = true;
+    const run = await service.start({ ...base, prompt: 'SLOW 等待' });
+    await until(() => events.find((e) => e.kind === 'user_message'));
+    await service.stop(run.id);
+    const row = await finished(run.id);
+    expect(row.error).toContain('保存失败');
+    expect(lifecycle).not.toContain('archive');
+    expect(stored.has(`runs/${run.id}/outputs.tar`)).toBe(false);
   });
 
   it('沙箱还在启动时被取消：起好后立刻销毁，不再交任务', async () => {

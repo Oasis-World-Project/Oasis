@@ -44,6 +44,7 @@ RUN dsh oasis --from-default-profile sdk --dump-config > /dev/null
 COPY --chown=node:node services/harness/src/adapter/profile/cordis.patch.yml /home/node/.dsh/profiles/oasis/cordis.patch.yml
 # 沙箱里调用 Oasis 工具的命令（ADR 0006）：Node 直接运行 TypeScript
 COPY services/harness/sandbox/oasis-tool.ts /opt/oasis/oasis-tool.ts
+COPY services/harness/sandbox/batch.ts /opt/oasis/batch.ts
 USER root
 RUN printf '#!/bin/sh\nexec node --no-warnings /opt/oasis/oasis-tool.ts "$@"\n' > /usr/local/bin/oasis-tool \
  && chmod 755 /usr/local/bin/oasis-tool

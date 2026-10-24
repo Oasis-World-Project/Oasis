@@ -7,11 +7,12 @@
 //   oasis-tool audio.transcribe --file in/录音.mp3
 //   oasis-tool video.generate --prompt "…" --out out/视频.mp4   长任务：提交后自己等，等不到就给任务号
 //   oasis-tool wait <任务号> --out out/视频.mp4                   接着等长任务
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, extname, join } from 'node:path';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, join } from 'node:path';
+import { runBatch } from './batch.ts';
 
 /** 这些参数是列表：逗号分隔，或者直接写 JSON 数组 */
-const LIST_ARGS = new Set(['urls', 'options', 'scale']);
+const LIST_ARGS = new Set(['urls', 'options', 'scale', 'ref', 'images']);
 const AUDIO_FORMATS = new Set(['mp3', 'wav', 'm4a', 'flac', 'ogg', 'webm']);
 
 interface ToolFile {
@@ -94,9 +95,13 @@ async function request(path: string, init: RequestInit = {}): Promise<unknown> {
     headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
   });
   const body = (await response.json().catch(() => ({}))) as {
-    error?: { message?: string };
+    error?: { message?: string; code?: string };
   };
-  if (!response.ok) throw new Error(body.error?.message ?? `工具服务返回 ${response.status}`);
+  if (!response.ok)
+    throw Object.assign(new Error(body.error?.message ?? `工具服务返回 ${response.status}`), {
+      code: body.error?.code,
+      status: response.status,
+    });
   return body;
 }
 
@@ -140,6 +145,46 @@ async function wait(id: string, out: string | undefined): Promise<void> {
 
 async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
+  if (
+    key === 'text.batch' ||
+    (key === 'jev.decide' && (args.in !== undefined || args.resume !== undefined))
+  ) {
+    if (file) throw new Error('批次请使用 --in，不使用 --file');
+    const result = await runBatch({ kind: key, args, out, request });
+    say(
+      `批次进度：完成 ${result.completed}，失败 ${result.failed}，不确定 ${result.uncertain}，待运行 ${result.pending}。费用及预留：${result.costMicro} 微美元。`,
+    );
+    say(`结果：${out}；恢复使用同一 --out 并加 --resume true。不确定的行不会自动重发。`);
+    return;
+  }
+  const paths =
+    key === 'image.generate' ? args.ref : key === 'image.inspect' ? args.images : undefined;
+  if (paths !== undefined) {
+    if (
+      !Array.isArray(paths) ||
+      paths.length < 1 ||
+      paths.length > 4 ||
+      paths.some((p) => typeof p !== 'string')
+    )
+      throw new Error('请提供 1–4 个图片路径');
+    let total = 0;
+    const images = [];
+    for (const path of paths as string[]) {
+      const mediaType = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.webp': 'image/webp',
+      }[extname(path).toLowerCase()];
+      if (!mediaType) throw new Error('图片只支持 PNG、JPEG、WebP');
+      total += (await stat(path)).size;
+      if (total > 20 * 1024 * 1024) throw new Error('图片总大小超过 20 MiB');
+      images.push({ mediaType, base64: (await readFile(path)).toString('base64') });
+    }
+    delete args.ref;
+    args[key === 'image.generate' ? 'references' : 'images'] = images;
+  }
+  if (key === 'web.fetch' && out) args.format = 'files';
   if (file) {
     const format = extname(file).slice(1).toLowerCase();
     if (!AUDIO_FORMATS.has(format)) throw new Error(`不支持的音频格式：${format}`);
@@ -150,6 +195,23 @@ async function run(key: string, argv: string[]): Promise<void> {
     method: 'POST',
     body: JSON.stringify({ args }),
   })) as ToolResult;
+  if (key === 'web.fetch' && out) {
+    for (const f of result.files) {
+      if (
+        basename(f.name) !== f.name ||
+        f.name.includes('\\') ||
+        !/^\d+-[a-f0-9]{12}\.md$/.test(f.name)
+      )
+        throw new Error('工具返回了不安全的文件名');
+      await mkdir(out, { recursive: true });
+      await writeFile(join(out, f.name), Buffer.from(f.base64, 'base64'));
+    }
+    say(result.text);
+    say(
+      `已保存 ${result.files.length} 份全文到 ${out}；花费：$${(result.costMicro / 1_000_000).toFixed(4)}`,
+    );
+    return;
+  }
   if (!result.job) return save(result, out);
   say(result.text);
   return wait(result.job.id, out);

@@ -35,6 +35,9 @@ const TEXT_FILE =
 
 /** 放进 out/ 的占位文件：保证目录存在且属于沙箱用户，不算产出 */
 const KEEP_FILE = '.oasis-keep';
+/** 批次恢复状态随 tar 存档，但不是成果，也不传给下游节点。 */
+const isPrivateOutput = (path: string) =>
+  path === KEEP_FILE || path === '.oasis-batches' || path.startsWith('.oasis-batches/');
 
 interface LiveRun {
   readonly abort: AbortController;
@@ -69,7 +72,7 @@ class StopRun extends Error {
 
 /** 存下来的产出和会话 → 运行结局里的字段 */
 const savedOutcome = (saved: Saved) => ({
-  outputs: saved.outputs?.files.filter((f) => f.path !== KEEP_FILE) ?? [],
+  outputs: saved.outputs?.files.filter((f) => !isPrivateOutput(f.path)) ?? [],
   outputKey: saved.outputs?.key ?? null,
   sessionKey: saved.session?.key ?? null,
 });
@@ -120,6 +123,7 @@ export function createRunService(deps: {
   materialsMaxBytes: number;
   modelBaseUrl: string;
   packages: SandboxPackages;
+  batchEnv?: Record<string, string>;
   maxConcurrent: number;
   timeoutMs: number;
   /** 沙箱的 CPU 核数（算力按 时长 × 核数 计费） */
@@ -187,7 +191,7 @@ export function createRunService(deps: {
       const upstream = await repo.get(ref.runId);
       if (!upstream?.outputKey) continue;
       for (const file of await extractFiles(await store.get(upstream.outputKey))) {
-        if (file.path !== KEEP_FILE)
+        if (!isPrivateOutput(file.path))
           files.push({ path: `in/${ref.as}/${file.path}`, content: file.content });
       }
     }
@@ -313,12 +317,15 @@ export function createRunService(deps: {
       sandboxSince = Date.now();
       sandbox = await executor.start({
         runId: id,
-        env: sandboxEnv({
-          modelBaseUrl: deps.modelBaseUrl,
-          runKey: key.key,
-          model: row.model,
-          packages: deps.packages,
-        }),
+        env: {
+          ...deps.batchEnv,
+          ...sandboxEnv({
+            modelBaseUrl: deps.modelBaseUrl,
+            runKey: key.key,
+            model: row.model,
+            packages: deps.packages,
+          }),
+        },
         files: [
           { dir: SANDBOX_PATHS.workdir, tar: await packFiles(files) },
           ...(restored.dshHome.length > 0
@@ -333,7 +340,10 @@ export function createRunService(deps: {
           const reason: unknown = run.abort.signal.reason;
           if (reason instanceof StopRun && reason.status === 'stopped') {
             // 停止：先把已经做出来的东西存下来，再销毁沙箱
-            run.saved = save(box, id).finally(() => void box.destroy());
+            run.saved = box
+              .pause()
+              .then(() => save(box, id))
+              .finally(() => box.destroy());
           } else {
             void box.destroy();
           }
@@ -387,6 +397,7 @@ export function createRunService(deps: {
         if (run.saved) {
           const saved = await run.saved.catch((saveErr: unknown) => {
             logger.warn({ err: saveErr, runId: id }, '停止时保存产出失败');
+            outcome.error = '已停止，但进度保存失败，不能保证恢复';
             return {};
           });
           Object.assign(outcome, savedOutcome(saved));
@@ -538,7 +549,7 @@ export function createRunService(deps: {
       let left = maxChars;
       let truncated = false;
       for (const file of await extractFiles(await store.get(row.outputKey))) {
-        if (file.path === KEEP_FILE || !TEXT_FILE.test(file.path) || file.content.includes(0))
+        if (isPrivateOutput(file.path) || !TEXT_FILE.test(file.path) || file.content.includes(0))
           continue;
         if (left <= 0) {
           truncated = true;
@@ -559,7 +570,7 @@ export function createRunService(deps: {
     async file(id: string, path: string): Promise<{ content: Buffer; contentType: string }> {
       const row = await owned(id);
       const files = row.outputKey ? await extractFiles(await store.get(row.outputKey)) : [];
-      const found = files.find((f) => f.path === path && f.path !== KEEP_FILE);
+      const found = files.find((f) => f.path === path && !isPrivateOutput(f.path));
       if (!found) throw new HttpError(404, 'file_not_found', '没有这个文件');
       return { content: found.content, contentType: contentTypeOf(path) };
     },

@@ -104,6 +104,9 @@ export function createDockerApi(socketPath: string) {
     startContainer: async (id: string) => {
       await readAll(await call('POST', `/containers/${id}/start`));
     },
+    pauseContainer: async (id: string) => {
+      await readAll(await call('POST', `/containers/${id}/pause`));
+    },
     /** 把一个 tar 包解到容器里的目录（目录必须已存在） */
     putArchive: async (id: string, dir: string, tar: Buffer) => {
       const query = `path=${encodeURIComponent(dir)}`;

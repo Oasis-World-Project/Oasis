@@ -99,11 +99,28 @@ with tempfile.TemporaryDirectory(prefix="oasis-file-tools-") as tmp:
     print("PASS: ffmpeg audio generation and ffprobe", flush=True)
 
     class Catalog(BaseHTTPRequestHandler):
+        calls = []
+
         def do_GET(self):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"tools":[]}')
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            Catalog.calls.append((self.path, body))
+            assert body["max_cost_micro"] == 200000
+            if self.path.endswith("chat/completions"):
+                assert body["model"] == "test/model"
+                result = {"choices": [{"message": {"content": "generated"}}], "oasis": {"costMicro": 10}}
+            else:
+                assert self.path.endswith("tools/jev.decide")
+                result = {"text": "good", "data": {"choice": "good"}, "costMicro": 20}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
 
         def log_message(self, *_args):
             pass
@@ -112,13 +129,25 @@ with tempfile.TemporaryDirectory(prefix="oasis-file-tools-") as tmp:
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            listing = run("oasis-tool", "list", env={
+            tool_env = {
                 **os.environ,
                 "OASIS_MODEL_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
                 "OASIS_TOOL_AUTH": "local-test-only",
-            })
+                "OASIS_MODEL": "test/model",
+            }
+            listing = run("oasis-tool", "list", env=tool_env)
             for name in ["libreoffice-writer", "ffmpeg", "openpyxl", "pandas", "weasyprint"]:
                 assert name in listing.lower(), name
+            for tool, row in [("text.batch", {"id": "1", "prompt": "sample"}), ("jev.decide", {"id": "1", "question": "clear?", "scale": ["bad", "good"]})]:
+                source = root / f"{tool}.jsonl"
+                source.write_text(json.dumps(row))
+                destination = f"out/{tool}.jsonl"
+                run("oasis-tool", tool, "--in", str(source), "--out", destination, cwd=root, env=tool_env)
+                source.unlink()
+                run("oasis-tool", tool, "--resume", "true", "--out", destination, cwd=root, env=tool_env)
+                assert json.loads((root / destination).read_text())["status"] == "completed"
+            assert len(Catalog.calls) == 2, Catalog.calls
+            print("PASS: batch generation/scoring CLI, checkpoint resume without duplicate requests", flush=True)
         finally:
             server.shutdown()
             thread.join()

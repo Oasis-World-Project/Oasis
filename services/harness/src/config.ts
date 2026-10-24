@@ -34,6 +34,13 @@ export const harnessEnv = {
   SANDBOX_CPUS: z.coerce.number().positive().max(64).default(2),
   SANDBOX_MEMORY_MB: positiveInt.default(2048),
   SANDBOX_PIDS_LIMIT: positiveInt.default(512),
+  OASIS_BATCH_MAX_ROWS: positiveInt.max(1000).default(1000),
+  OASIS_BATCH_CONCURRENCY: positiveInt.max(16).default(4),
+  OASIS_BATCH_MAX_TOKENS: positiveInt.max(8192).default(2048),
+  OASIS_BATCH_BUDGET_MICRO: positiveInt.max(100_000_000).default(1_000_000),
+  OASIS_BATCH_ROW_BUDGET_MICRO: positiveInt.max(10_000_000).default(200_000),
+  OASIS_BATCH_MAX_INPUT_BYTES: positiveInt.max(20 * 1024 * 1024).default(5 * 1024 * 1024),
+  OASIS_BATCH_TIMEOUT_MS: positiveInt.max(600_000).default(120_000),
 
   // ---- 运行 ----
   /** 同时进行的运行数上限，超出的排队 */

@@ -104,6 +104,9 @@ await startService({
         jobTimeoutMs: config.TOOL_JOB_TIMEOUT_MS,
         config: {
           imageModels: config.TOOL_IMAGE_MODELS,
+          visionModels: config.TOOL_VISION_MODELS,
+          visionMaxTokens: config.TOOL_VISION_MAX_TOKENS,
+          fetchMaxBytes: config.TOOL_FETCH_MAX_BYTES,
           speechModels: config.TOOL_SPEECH_MODELS,
           transcribeModels: config.TOOL_TRANSCRIBE_MODELS,
           videoModels: config.TOOL_VIDEO_MODELS,

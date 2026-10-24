@@ -44,6 +44,14 @@ export const modelGatewayEnv = {
   TOOL_IMAGE_MODELS: list(
     'bytedance-seed/seedream-4.5,black-forest-labs/flux.2-pro,google/gemini-2.5-flash-image,openai/gpt-image-2',
   ),
+  TOOL_VISION_MODELS: list('qwen/qwen3-vl-8b-instruct,google/gemini-2.5-flash'),
+  TOOL_VISION_MAX_TOKENS: z.coerce.number().int().min(1).max(8192).default(2048),
+  TOOL_FETCH_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(1024)
+    .max(20 * 1024 * 1024)
+    .default(5 * 1024 * 1024),
   TOOL_SPEECH_MODELS: list(
     'bytedance-seed/seed-audio-1-0,fish-audio/s2.1-pro,openai/gpt-4o-mini-tts-2025-12-15',
   ),

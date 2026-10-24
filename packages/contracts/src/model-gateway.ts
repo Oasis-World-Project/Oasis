@@ -33,6 +33,8 @@ export const ChatCompletionRequest = z.looseObject({
   /** 新版 OpenAI 字段，与 max_tokens 同义；agent 运行时用的是这个 */
   max_completion_tokens: OutputTokens.optional(),
   stream: z.boolean().optional(),
+  /** Oasis 派发预算：预计冻结超过此值时拒绝，不透传供应商。 */
+  max_cost_micro: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
 });
 export type ChatCompletionRequest = z.infer<typeof ChatCompletionRequest>;
 
@@ -126,7 +128,10 @@ export type ToolEntry = z.infer<typeof ToolEntry>;
 export const ToolList = z.object({ tools: z.array(ToolEntry) });
 
 /** 调用工具：参数按工具各自校验 */
-export const ToolCallBody = z.object({ args: z.record(z.string(), z.unknown()) });
+export const ToolCallBody = z.object({
+  args: z.record(z.string(), z.unknown()),
+  max_cost_micro: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+});
 
 /** 工具交回的文件（图片、音频……） */
 export const ToolFile = z.object({

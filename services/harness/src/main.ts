@@ -82,6 +82,11 @@ await startService({
         pipIndexUrl: config.SANDBOX_PIP_INDEX_URL,
       },
       maxConcurrent: config.MAX_CONCURRENT_RUNS,
+      batchEnv: Object.fromEntries(
+        Object.entries(config)
+          .filter(([key]) => key.startsWith('OASIS_BATCH_'))
+          .map(([key, value]) => [key, String(value)]),
+      ),
       timeoutMs: config.RUN_TIMEOUT_MS,
       cores: config.SANDBOX_CPUS,
       outputMaxBytes: config.OUTPUT_MAX_BYTES,

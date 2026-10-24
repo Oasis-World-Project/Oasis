@@ -12,6 +12,8 @@ export interface SandboxSpec {
 }
 
 export interface Sandbox {
+  /** 停止归档前冻结进程，避免归档期间仍产生新的外部调用。 */
+  pause(): Promise<void>;
   readonly id: string;
   readonly stdin: Writable;
   readonly stdout: Readable;
@@ -119,6 +121,7 @@ export function createDockerExecutor(deps: {
           stdout,
           stderr,
           readArchive: (path) => docker.getArchive(id, path),
+          pause: () => docker.pauseContainer(id),
           destroy,
         };
       } catch (err) {

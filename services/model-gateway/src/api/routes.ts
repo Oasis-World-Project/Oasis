@@ -86,8 +86,15 @@ export function registerRoutes(
 
   async function useTool(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
     const { key } = parseWith(ToolParams, request.params);
-    const { args } = parseWith(ToolCallBody, request.body);
-    return tools.call({ caller, key, args, requestId: request.id, signal: abortOnClose(reply) });
+    const { args, max_cost_micro } = parseWith(ToolCallBody, request.body);
+    return tools.call({
+      caller,
+      key,
+      args,
+      requestId: request.id,
+      signal: abortOnClose(reply),
+      ...(max_cost_micro === undefined ? {} : { maxCostMicro: max_cost_micro }),
+    });
   }
 
   function toolJob(caller: Caller, request: FastifyRequest, reply: FastifyReply) {

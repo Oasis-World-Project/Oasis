@@ -100,6 +100,28 @@ describe('规划门', () => {
 });
 
 describe('估算花费', () => {
+  it('批次 uses 按样本行数估价，支持数百行且拒绝超过 1000 行', () => {
+    const batchTools = [{ ...tools[0]!, key: 'text.batch', unit: '行', estimateMicro: 2_000 }];
+    const result = (uses: number) =>
+      checkPlan(
+        JSON.stringify({
+          nodes: [{ ...node('a'), tools: [{ key: 'text.batch', uses }] }],
+          edges: [],
+          deliverables: { 首页文案: 'a' },
+        }),
+        sheet,
+        catalog,
+        batchTools,
+        limits,
+      );
+    const checked = result(200);
+    expect(checked).toHaveProperty('plan');
+    if ('plan' in checked)
+      expect(
+        estimatePlan(checked.plan, { workRun: 1_000, speechRun: 1_000, computeRun: 0 }, batchTools),
+      ).toBe(481_200);
+    expect(result(1001)).toHaveProperty('problems');
+  });
   it('干活节点一次加工具（次数 × 单价）、讨论按发言次数加汇总，再留两成', () => {
     const plan = {
       nodes: [

@@ -33,7 +33,28 @@ billing.post('/internal/holds/:id/release', async (_request, reply) => {
 /** 假的 OpenRouter（生图、配音、查花费、转写、决策）和 Tavily */
 const upstream: { path: string; body: Record<string, unknown> }[] = [];
 let imageStatus = 200;
+let visionStatus = 200;
+let referenceLimit = 4;
+let pageText = '# 正文';
 const fake = Fastify();
+fake.get('/api/v1/images/models/*', async (request) => ({
+  endpoints: [
+    {
+      supported_parameters: {
+        input_references: {
+          type: 'range',
+          max: request.url.includes('seedream') ? 0 : referenceLimit,
+        },
+      },
+    },
+  ],
+}));
+fake.post('/api/v1/chat/completions', async (request, reply) => {
+  record('vision', request.body);
+  if (visionStatus === 403 && (request.body as { model: string }).model === 'vision/first')
+    return reply.code(403).send({ error: { message: 'not available in your region' } });
+  return { choices: [{ message: { content: '图中有一只杯子。' } }], usage: { cost: 0.002 } };
+});
 fake.addContentTypeParser('*', (_req, _body, done) => done(null, {}));
 const record = (path: string, body: unknown) =>
   upstream.push({ path, body: body as Record<string, unknown> });
@@ -94,7 +115,7 @@ fake.post('/tavily/search', async (request) => {
 fake.post('/tavily/extract', async (request) => {
   record('extract', request.body);
   return {
-    results: [{ url: 'https://a.com', raw_content: '# 正文' }],
+    results: [{ url: 'https://a.com', raw_content: pageText }],
     failed_results: [{ url: 'https://b.com', error: '超时' }],
   };
 });
@@ -148,6 +169,9 @@ const build = (tavilyKey: string | undefined) => {
     jobTimeoutMs: 30 * 60_000,
     config: {
       imageModels: ['bytedance-seed/seedream-4.5', 'openai/gpt-image-2'],
+      visionModels: ['vision/first', 'vision/second'],
+      visionMaxTokens: 2048,
+      fetchMaxBytes: 200_000,
       videoModels: ['alibaba/wan-2.7'],
       speechModels: ['bytedance-seed/seed-audio-1-0'],
       transcribeModels: ['openai/whisper-large-v3'],
@@ -175,6 +199,9 @@ beforeEach(() => {
   settled.length = 0;
   blocked = [];
   imageStatus = 200;
+  visionStatus = 200;
+  referenceLimit = 4;
+  pageText = '# 正文';
   videoPolls = 0;
   videoEnd = 'completed';
   jobRows.clear();
@@ -195,6 +222,89 @@ const errorOf = (p: Promise<unknown>) =>
     (e: unknown) => e as HttpError,
   );
 
+const reference = {
+  mediaType: 'image/png',
+  base64:
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO1sAAAAASUVORK5CYII=',
+};
+describe('文件场景工具', () => {
+  it('参考图仅发送给能力目录确认支持的模型，保留 data URL', async () => {
+    await call('image.generate', { prompt: '换背景', references: [reference] });
+    expect(upstream[0]?.body).toMatchObject({
+      model: 'openai/gpt-image-2',
+      input_references: [
+        { type: 'image_url', image_url: { url: `data:image/png;base64,${reference.base64}` } },
+      ],
+      provider: { require_parameters: true },
+    });
+  });
+  it('不支持参考图、数量太多和签名不符均在冻结前拒绝', async () => {
+    referenceLimit = 0;
+    await expect(
+      call('image.generate', { prompt: 'x', references: [reference] }),
+    ).rejects.toMatchObject({ code: 'reference_images_unsupported' });
+    for (const images of [Array(5).fill(reference), [{ ...reference, base64: PNG }]]) {
+      await expect(call('image.inspect', { question: 'x', images })).rejects.toMatchObject({
+        code: 'invalid_tool_args',
+      });
+    }
+    expect(billingCalls).toEqual([]);
+    expect(upstream).toEqual([]);
+  });
+  it('大图片校验不递归溢出，总字节数超限在冻结前拒绝', async () => {
+    const bytes = Buffer.alloc(6 * 1024 * 1024);
+    Buffer.from(reference.base64, 'base64').copy(bytes);
+    const large = { ...reference, base64: bytes.toString('base64') };
+    // 不支持参考图会在校验之后拒绝，避免把大请求发往假 HTTP 服务。
+    referenceLimit = 0;
+    await expect(
+      call('image.generate', { prompt: 'x', references: [large] }),
+    ).rejects.toMatchObject({ code: 'reference_images_unsupported' });
+    await expect(
+      call('image.inspect', { question: 'x', images: Array(4).fill(large) }),
+    ).rejects.toMatchObject({ code: 'invalid_tool_args' });
+    expect(billingCalls).toEqual([]);
+  });
+  it('看图按实际费用结算并归属任务；明确地区拒绝才自动换模型', async () => {
+    visionStatus = 403;
+    const result = await call('image.inspect', { images: [reference], question: '是什么？' }, TASK);
+    expect(result.text).toContain('杯子');
+    expect(upstream.map((r) => r.body.model)).toEqual(['vision/first', 'vision/second']);
+    expect(upstream[1]?.body).toMatchObject({
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: [{ type: 'text' }, { type: 'image_url' }] }],
+    });
+    expect(billingCalls.map((r) => r.path)).toEqual(['hold', 'release', 'hold', 'settle']);
+    expect(settled[0]).toMatchObject({ data: { taskId: TASK, kind: 'tool', chargedMicro: 2000 } });
+  });
+  it('网页全文不截断，保留来源与失败信息；超限明确失败', async () => {
+    pageText = '研究资料'.repeat(10_000);
+    const result = await call('web.fetch', { urls: ['https://a.com'], format: 'files' });
+    expect(Buffer.from(result.files[0]!.base64, 'base64').toString()).toContain(pageText);
+    expect(result.text.length).toBeLessThan(300);
+    expect(result.files[0]!.name).toMatch(/^1-[a-f0-9]{12}\.md$/);
+    expect(result.data).toMatchObject({ failed: [{ url: 'https://b.com' }] });
+    pageText = '汉'.repeat(100_000);
+    await expect(
+      call('web.fetch', { urls: ['https://a.com'], format: 'files' }),
+    ).rejects.toMatchObject({ code: 'web_content_too_large' });
+  });
+  it('单行预算在冻结和供应商调用前检查', async () => {
+    await expect(
+      tools.call({
+        caller: { payerId: PAYER },
+        key: 'jev.decide',
+        args: { question: '好不好' },
+        maxCostMicro: 1,
+        requestId: 'r',
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toMatchObject({ code: 'call_budget_exceeded' });
+    expect(billingCalls).toEqual([]);
+    expect(upstream).toEqual([]);
+  });
+});
+
 describe('工具目录', () => {
   it('列出全部工具；没配 Key 的、模型都用不了的标成不可用；默认模型跳过用不了的', async () => {
     blocked = ['bytedance-seed/seedream-4.5'];
@@ -202,12 +312,14 @@ describe('工具目录', () => {
     const byKey = Object.fromEntries(list.map((t) => [t.key, t]));
     expect(Object.keys(byKey)).toEqual([
       'image.generate',
+      'image.inspect',
       'audio.speech',
       'audio.transcribe',
       'web.search',
       'web.fetch',
       'video.generate',
       'jev.decide',
+      'text.batch',
     ]);
     expect(byKey['image.generate']).toMatchObject({
       available: true,
@@ -262,7 +374,7 @@ describe('调用工具', () => {
     imageStatus = 403;
     const err = await errorOf(call('image.generate', { prompt: 'x' }));
     expect(err?.code).toBe('provider_region_unavailable');
-    expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release']);
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release', 'hold', 'release']);
   });
 
   it('配音：交回 MP3；花费按生成 ID 去查', async () => {

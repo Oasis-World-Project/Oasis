@@ -1,6 +1,8 @@
 // 工具的定义（ADR 0006）：每个工具 = 参数校验 + 目录信息 + 怎么调供应商、怎么算钱。
 // 目录放在这里（和供应商适配在一起），由 model-gateway 对外提供；以后接新供应商（如 fal.ai）只在这里加。
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
+import { HttpError } from '@oasis/service-kit';
 import type { ProviderClient } from '../adapters/openrouter.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
 import { USD_TO_MICRO, type CostSource } from './pricing.ts';
@@ -10,6 +12,9 @@ const MAX_TEXT = 20_000;
 
 export interface ToolConfig {
   imageModels: string[];
+  visionModels: string[];
+  visionMaxTokens: number;
+  fetchMaxBytes: number;
   videoModels: string[];
   speechModels: string[];
   transcribeModels: string[];
@@ -94,7 +99,53 @@ const ImageArgs = z.object({
   resolution: z.enum(['1K', '2K', '4K']).optional(),
   n: z.coerce.number().int().min(1).max(4).default(1),
   model: optionalModel,
+  references: z.lazy(() => InputImages).optional(),
 });
+
+/** 不接受远程 URL；图片经既有上传/沙箱通路传入，限制请求和内存占用。 */
+const InputImages = z
+  .array(
+    z
+      .object({
+        mediaType: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+        base64: z.string().min(4).max(28_000_000),
+      })
+      .refine((image) => {
+        if (image.base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.base64))
+          return false;
+        const bytes = Buffer.from(image.base64, 'base64');
+        if (image.mediaType === 'image/png')
+          return (
+            bytes.length >= 24 &&
+            bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+          );
+        if (image.mediaType === 'image/jpeg')
+          return bytes.length >= 4 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+        return (
+          bytes.length >= 16 &&
+          bytes.toString('ascii', 0, 4) === 'RIFF' &&
+          bytes.toString('ascii', 8, 12) === 'WEBP'
+        );
+      }, '图片编码、格式或文件签名无效'),
+  )
+  .min(1)
+  .max(4)
+  .refine(
+    (images) =>
+      images.reduce((n, image) => n + Buffer.byteLength(image.base64, 'base64'), 0) <=
+      20 * 1024 * 1024,
+    '图片总大小超过 20 MiB',
+  );
+const InspectArgs = z.object({
+  images: InputImages,
+  question: z.string().trim().min(1).max(4000),
+  model: optionalModel,
+});
+const imageParts = (images: z.infer<typeof InputImages>) =>
+  images.map((image) => ({
+    type: 'image_url',
+    image_url: { url: `data:${image.mediaType};base64,${image.base64}` },
+  }));
 
 const SpeechArgs = z.object({
   text: z.string().trim().min(1).max(4000),
@@ -121,6 +172,7 @@ const SearchArgs = z.object({
 const FetchArgs = z.object({
   urls: z.array(z.url()).min(1).max(5),
   depth: z.enum(['basic', 'advanced']).default('basic'),
+  format: z.enum(['text', 'files']).default('text'),
 });
 
 const VideoArgs = z.object({
@@ -178,7 +230,7 @@ export const TOOLS: ToolDef[] = [
     name: '生成图片',
     description: '按文字描述生成图片（插画、海报、商品图、网页效果图……），结果存成 PNG 文件。',
     usage:
-      'oasis-tool image.generate --prompt "描述" [--aspect_ratio 16:9] [--resolution 2K] [--n 1] --out out/图片.png',
+      'oasis-tool image.generate --prompt "描述" [--ref materials/主图.png,materials/风格.jpg] [--aspect_ratio 16:9] [--resolution 2K] [--n 1] --out out/图片.png',
     unit: '张',
     estimateMicro: 40_000,
     holdMicro: (args) => 200_000 * (Number(args.n) || 1),
@@ -196,6 +248,12 @@ export const TOOLS: ToolDef[] = [
             prompt: a.prompt,
             n: a.n,
             output_format: 'png',
+            ...(a.references
+              ? {
+                  input_references: imageParts(a.references),
+                  provider: { require_parameters: true },
+                }
+              : {}),
             ...(a.aspect_ratio ? { aspect_ratio: a.aspect_ratio } : {}),
             ...(a.resolution ? { resolution: a.resolution } : {}),
           },
@@ -214,6 +272,51 @@ export const TOOLS: ToolDef[] = [
           typeof body.usage?.cost === 'number'
             ? provider(body.usage.cost)
             : estimate(40_000 * files.length),
+      };
+    },
+  },
+  {
+    key: 'image.inspect',
+    name: '查看图片',
+    description: '读取 1–4 张本地图片，回答画面、文字或图表问题；无法看清时应明确说明。',
+    usage: 'oasis-tool image.inspect --images materials/图.png --question "图中写了什么？"',
+    unit: '次',
+    estimateMicro: 2_000,
+    holdMicro: () => 200_000,
+    long: false,
+    provider: 'openrouter',
+    models: (config) => config.visionModels,
+    args: InspectArgs,
+    modelOf: pickModel,
+    async run(deps, args, model) {
+      const a = InspectArgs.parse(args);
+      const response = await deps.upstream(() =>
+        deps.openrouter.chatCompletions(
+          {
+            model,
+            stream: false,
+            max_tokens: deps.config.visionMaxTokens,
+            usage: { include: true },
+            messages: [
+              {
+                role: 'user',
+                content: [{ type: 'text', text: a.question }, ...imageParts(a.images)],
+              },
+            ],
+          },
+          deps.signal,
+        ),
+      );
+      const body = z
+        .object({
+          choices: z.array(z.object({ message: z.object({ content: z.string().min(1) }) })).min(1),
+          usage: z.object({ cost: z.number().nonnegative().optional() }).optional(),
+        })
+        .parse(await response.json());
+      return {
+        text: body.choices[0]!.message.content,
+        files: [],
+        cost: body.usage?.cost !== undefined ? provider(body.usage.cost) : estimate(2_000),
       };
     },
   },
@@ -345,7 +448,8 @@ export const TOOLS: ToolDef[] = [
     key: 'web.fetch',
     name: '读取网页',
     description: '读取 1–5 个网页的正文（转成 Markdown），用来细看搜索到的资料。',
-    usage: 'oasis-tool web.fetch --urls https://a.com/x,https://b.com/y [--depth basic|advanced]',
+    usage:
+      'oasis-tool web.fetch --urls https://a.com/x,https://b.com/y [--depth basic|advanced] [--out out/资料/（保存全文）]',
     unit: '次',
     estimateMicro: 8_000,
     holdMicro: (args) => (args.depth === 'advanced' ? 2 : 1) * 8_000 * 2,
@@ -363,6 +467,17 @@ export const TOOLS: ToolDef[] = [
         ),
       );
       const body = ExtractResponse.parse(await response.json());
+      if (
+        a.format === 'files' &&
+        body.results.reduce((total, r) => total + Buffer.byteLength(r.raw_content ?? ''), 0) >
+          deps.config.fetchMaxBytes
+      ) {
+        throw new HttpError(
+          413,
+          'web_content_too_large',
+          '网页正文总大小超过配置上限，请减少一次抓取的网址数',
+        );
+      }
       const perPage = Math.floor(MAX_TEXT / Math.max(1, body.results.length));
       const parts = body.results.map((r) => `## ${r.url}\n\n${clip(r.raw_content ?? '', perPage)}`);
       for (const f of body.failed_results) parts.push(`## ${f.url}\n\n（没读到：${f.error}）`);
@@ -370,8 +485,22 @@ export const TOOLS: ToolDef[] = [
         body.usage?.credits ??
         Math.ceil(body.results.length / 5) * (a.depth === 'advanced' ? 2 : 1);
       return {
-        text: parts.join('\n\n'),
-        files: [],
+        text:
+          a.format === 'files'
+            ? [
+                ...body.results.map((r) => `${r.url}：${(r.raw_content ?? '').length} 字`),
+                ...body.failed_results.map((r) => `${r.url}：没读到（${r.error}）`),
+              ].join('\n')
+            : parts.join('\n\n'),
+        data: { sources: body.results.map((r) => r.url), failed: body.failed_results },
+        files:
+          a.format === 'files'
+            ? body.results.map((r, i) => ({
+                name: `${i + 1}-${createHash('sha256').update(r.url).digest('hex').slice(0, 12)}.md`,
+                mediaType: 'text/markdown',
+                base64: Buffer.from(`来源：${r.url}\n\n${r.raw_content ?? ''}`).toString('base64'),
+              }))
+            : [],
         cost: { costMicro: credits * deps.config.tavilyCreditMicro, source: 'provider' },
       };
     },
@@ -444,7 +573,7 @@ export const TOOLS: ToolDef[] = [
     description:
       '让 Jev 对材料做一个结构化判断并给出概率：是否满足某条件、从几个选项里选一个、或按刻度打分。几乎不花钱，适合挑最好的版本、检查是否达标。',
     usage:
-      'oasis-tool jev.decide --question "哪个标题更好" --options "标题A,标题B" [--context "要判断的材料"]（或 --scale "差,一般,好"；都不给就是判断是/否）',
+      'oasis-tool jev.decide --question "哪个标题更好" --options "标题A,标题B" [--context "材料"]（或 --scale "差,一般,好"）；批量：--in 问题.jsonl --out out/评分.jsonl --budget_micro 1000000，每行 {id,question,context?,scale?}，uses 按行数计；--resume true 恢复',
     unit: '次',
     estimateMicro: 100,
     holdMicro: (args) => 2_000 + String(args.context ?? '').length,

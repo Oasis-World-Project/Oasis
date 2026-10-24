@@ -78,7 +78,7 @@ export function plannerPrompt(input: {
     '你是 Oasis 的规划员。用户已经确认了下面的任务单，你要为它排一条工作流，交给 AI 团队去做。',
     `【任务】\n${input.brief}`,
     `【可以用的模型】（节点里的 model 只能填这些；没有特别理由就用 ${input.limits.defaultModel}）\n${models}`,
-    `【可以用的工具】（干活节点的 tools 只能填这些：写成 {"key": "image.generate", "uses": 预计用几次}；节点自己写不出来的东西——图片、视频、配音、转写、联网查资料——才用工具，按次收费）\n${tools}`,
+    `【可以用的工具】（干活节点的 tools 只能填这些：写成 {"key": "image.generate", "uses": 预计用几次}；text.batch 和批量 jev.decide 的 uses 按输入行数填，如 200 行就填 200，最多 1000；按目录单位计费。批次必须设置预算，恢复不重发已完成或结果不确定的行。）\n${tools}`,
     [
       '【节点】',
       '- work（干活）：一个 AI 在独立的容器里完成一件事，能读写文件、运行命令；成果写到 out/。',

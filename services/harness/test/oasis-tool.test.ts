@@ -51,6 +51,28 @@ describe('oasis-tool', () => {
 describe('oasis-tool 长任务', () => {
   // 假的入口代理：提交视频返回任务号；job-done 已做好，job-slow 一直在做
   const fake = Fastify();
+  const received: { key: string; args: Record<string, unknown> }[] = [];
+  fake.post('/v1/tools/:key', async (request) => {
+    const { key } = request.params as { key: string };
+    const { args } = request.body as { args: Record<string, unknown> };
+    received.push({ key, args });
+    return {
+      text: '已读取',
+      costMicro: 100,
+      files:
+        key === 'web.fetch'
+          ? [
+              {
+                name: '1-012345abcdef.md',
+                mediaType: 'text/markdown',
+                base64: Buffer.from(
+                  '来源：https://example.com\n\n' + '长正文'.repeat(20_000),
+                ).toString('base64'),
+              },
+            ]
+          : [],
+    };
+  });
   fake.get('/v1/tools', async () => ({ tools: [] }));
   fake.post('/v1/tools/video.generate', async () => ({
     tool: 'video.generate',
@@ -118,5 +140,41 @@ describe('oasis-tool 长任务', () => {
     await main(['list']);
     expect(printed.join('')).toContain('libreoffice-writer 25.2');
     expect(printed.join('')).toContain('openpyxl==3.1.5');
+  });
+
+  it('参考图和看图读取本地文件，保留 MIME 与原始字节；超数量不发送', async () => {
+    const path = join(dir, 'reference.png');
+    const bytes = Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001', 'hex');
+    await writeFile(path, bytes);
+    await main(['image.generate', '--prompt', '修改背景', '--ref', JSON.stringify([path])]);
+    expect(received.at(-1)).toEqual({
+      key: 'image.generate',
+      args: {
+        prompt: '修改背景',
+        references: [{ mediaType: 'image/png', base64: bytes.toString('base64') }],
+      },
+    });
+    await main(['image.inspect', '--question', '图里是什么？', '--images', JSON.stringify([path])]);
+    expect(received.at(-1)?.args.images).toEqual([
+      { mediaType: 'image/png', base64: bytes.toString('base64') },
+    ]);
+    const count = received.length;
+    await expect(
+      main(['image.inspect', '--images', JSON.stringify(Array(5).fill(path))]),
+    ).rejects.toThrow('1–4');
+    expect(received).toHaveLength(count);
+  });
+
+  it('web.fetch --out 传全文模式并写入完整 Markdown，终端只显示摘要', async () => {
+    printed.length = 0;
+    await main(['web.fetch', '--urls', 'https://example.com', '--out', join(dir, 'sources')]);
+    expect(received.at(-1)?.args).toEqual({ urls: ['https://example.com'], format: 'files' });
+    expect(
+      (await readFile(join(dir, 'sources', '1-012345abcdef.md'), 'utf8')).endsWith(
+        '长正文'.repeat(20_000),
+      ),
+    ).toBe(true);
+    expect(printed.join('')).toContain('已保存 1 份全文');
+    expect(printed.join('')).not.toContain('长正文');
   });
 });

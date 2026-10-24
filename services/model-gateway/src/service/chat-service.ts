@@ -13,6 +13,7 @@ export interface PreparedCall extends MeteredCall {
   /** 消息之外也要计入输入的字符数（工具定义） */
   extraChars: number;
   price: ModelPrice | undefined;
+  reportCost: boolean;
 }
 
 const decoder = () => new TextDecoder();
@@ -52,6 +53,7 @@ export function createChatService(deps: {
       extraChars: call.extraChars,
     });
     await meter.settle(call, cost, usage, error);
+    return cost.costMicro;
   }
 
   return {
@@ -64,9 +66,10 @@ export function createChatService(deps: {
       if (!provider.configured) {
         throw new HttpError(503, 'provider_not_configured', '模型服务还没有配置 API Key');
       }
-      const requested = input.body.max_completion_tokens ?? input.body.max_tokens;
+      const { max_cost_micro: maxCostMicro, ...providerBody } = input.body;
+      const requested = providerBody.max_completion_tokens ?? providerBody.max_tokens;
       const maxOutputTokens = requested ?? deps.defaultMaxTokens;
-      const body = requested ? input.body : { ...input.body, max_tokens: maxOutputTokens };
+      const body = requested ? providerBody : { ...providerBody, max_tokens: maxOutputTokens };
       const extraChars = input.body.tools ? JSON.stringify(input.body.tools).length : 0;
       const price = deps.prices().get(body.model);
       const amountMicro = price
@@ -77,9 +80,17 @@ export function createChatService(deps: {
         kind: 'chat',
         model: body.model,
         amountMicro,
+        ...(maxCostMicro === undefined ? {} : { maxCostMicro }),
         requestId: input.requestId,
       });
-      return { ...call, body, maxOutputTokens, extraChars, price };
+      return {
+        ...call,
+        body,
+        maxOutputTokens,
+        extraChars,
+        price,
+        reportCost: maxCostMicro !== undefined,
+      };
     },
 
     /** 调上游。还没开始返回内容就失败时退回冻结，并抛出给调用方的错误。 */
@@ -136,8 +147,8 @@ export function createChatService(deps: {
         choices?: { message?: Parameters<typeof deltaChars>[0] }[];
       };
       const message = result.choices?.[0]?.message;
-      await settle(call, result.usage, message ? deltaChars(message) : 0);
-      return result;
+      const costMicro = await settle(call, result.usage, message ? deltaChars(message) : 0);
+      return call.reportCost ? { ...result, oasis: { costMicro } } : result;
     },
   };
 }

@@ -63,10 +63,18 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
       kind: CallKind;
       model: string;
       amountMicro: number;
+      maxCostMicro?: number;
       requestId: string;
       /** 冻结多久没结算就自动退回（长任务要更久）；不给用 billing 的默认 */
       ttlMs?: number;
     }): Promise<MeteredCall> {
+      if (input.maxCostMicro !== undefined && input.amountMicro > input.maxCostMicro) {
+        throw new HttpError(
+          400,
+          'call_budget_exceeded',
+          '本次预计冻结金额超过单次预算，未调用供应商',
+        );
+      }
       const id = randomUUID();
       const { holdId } = await billing.json('POST', '/internal/holds', {
         body: {
