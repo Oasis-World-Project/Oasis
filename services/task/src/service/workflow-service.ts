@@ -12,6 +12,7 @@ import type {
   DecisionBody,
   EdgeBody,
   NodeBody,
+  NodeRunBody,
   PlanNode,
   TaskBody,
   TaskSummary,
@@ -83,6 +84,22 @@ function toNodeBody(node: Node): NodeBody {
     spentMicro: node.spentMicro,
     startedAt: iso(node.startedAt),
     finishedAt: iso(node.finishedAt),
+  };
+}
+
+function toRunBody(run: NodeRun): NodeRunBody {
+  return {
+    id: run.id,
+    purpose: run.purpose,
+    status: run.status,
+    attempt: run.attempt,
+    round: run.meta.round ?? null,
+    participant: run.meta.participant ?? null,
+    continued: Boolean(run.request.continueFrom),
+    summary: run.summary,
+    error: run.error,
+    createdAt: run.createdAt.toISOString(),
+    finishedAt: iso(run.finishedAt),
   };
 }
 
@@ -739,13 +756,36 @@ export function createWorkflowService(deps: {
     },
 
     /** 节点的运行过程：转发它最近一次运行的事件 */
-    async nodeEvents(ownerId: string, taskId: string, nodeId: string, after: number) {
+    /** 节点的全部运行（第一次、重做、关卡退回修改、停止后继续、讨论的每次发言） */
+    async nodeRuns(ownerId: string, taskId: string, nodeId: string): Promise<NodeRunBody[]> {
+      nodeOf(await owned(ownerId, taskId), nodeId);
+      return (await store.listNodeRuns(taskId, nodeId)).map(toRunBody);
+    },
+
+    /** 一次运行的过程（按序号增量拉取）；不指定运行时看节点当前这次 */
+    async nodeEvents(
+      ownerId: string,
+      taskId: string,
+      nodeId: string,
+      after: number,
+      runId?: string,
+    ) {
       const node = nodeOf(await owned(ownerId, taskId), nodeId);
-      if (!node.currentRunId) return { events: [] };
-      return harness.json('GET', `/internal/runs/${node.currentRunId}/events?after=${after}`, {
+      const target = runId ?? node.currentRunId;
+      if (!target) return { events: [] };
+      if (runId) {
+        const run = await store.findRun(runId);
+        if (run?.taskId !== taskId || run.nodeId !== nodeId) {
+          throw new HttpError(404, 'run_not_found', '这个节点没有这次运行');
+        }
+      }
+      return harness.json('GET', `/internal/runs/${target}/events?after=${after}`, {
         schema: RunEventList,
       });
     },
+
+    /** 编辑节点时能选的模型和工具 */
+    options: () => planning.options(),
 
     /**
      * 对节点追问 / 补充要求（ADR 0004 §7），只影响这一个节点：

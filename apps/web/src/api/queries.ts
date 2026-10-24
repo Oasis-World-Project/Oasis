@@ -8,8 +8,19 @@ import {
   MessageList,
 } from '@oasis/contracts/conversation';
 import { MeBody, VerifyCodeResult } from '@oasis/contracts/identity';
-import { TaskBody, type DecisionBody, type TaskStatus } from '@oasis/contracts/task';
+import { RunEventList, type RunEventBody } from '@oasis/contracts/harness';
+import {
+  NodeRunList,
+  TaskBody,
+  WorkflowOptions,
+  type DecisionBody,
+  type PlanNode,
+  type TaskStatus,
+  type UpdateEdgeBody,
+  type UpdateNodeBody,
+} from '@oasis/contracts/task';
 import { queryOptions } from '@tanstack/react-query';
+import { z } from 'zod';
 import { api, ApiError, apiVoid } from './client.ts';
 
 export const meQuery = queryOptions({
@@ -81,6 +92,8 @@ export const cancelIntake = (conversationId: string) => intakeCall(conversationI
 export const confirmIntake = (conversationId: string) => intakeCall(conversationId, 'confirm', {});
 
 // ---- 任务 ----
+/** 任务和它下面的节点运行、运行过程都挂在 ['task', id] 下，改了任务一起刷新 */
+const taskKey = (taskId: string) => ['task', taskId] as const;
 /** 不会再变的状态：不用再轮询 */
 export const SETTLED_STATUSES: ReadonlySet<TaskStatus> = new Set([
   'succeeded',
@@ -91,7 +104,7 @@ export const SETTLED_STATUSES: ReadonlySet<TaskStatus> = new Set([
 /** 还在动的任务每 2.5 秒刷新一次（进度、花费、需要处理）；结束后不再刷新 */
 export const taskQuery = (taskId: string) =>
   queryOptions({
-    queryKey: ['task', taskId],
+    queryKey: taskKey(taskId),
     queryFn: () => api(`/task/v1/tasks/${taskId}`, TaskBody),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
@@ -120,3 +133,67 @@ export function taskFileUrl(
   const encoded = path.split('/').map(encodeURIComponent).join('/');
   return `/api/task/v1/tasks/${taskId}/files/${nodeId}/${encoded}${download ? '?download=1' : ''}`;
 }
+
+// ---- 工作流（ADR 0007 §6）----
+const taskPath = (taskId: string) => `/task/v1/tasks/${taskId}`;
+const nodePath = (taskId: string, nodeId: string) => `${taskPath(taskId)}/nodes/${nodeId}`;
+
+/** 改工作流的接口都返回改完的任务 */
+const taskChange = (path: string, method: string, body?: unknown) =>
+  api(path, TaskBody, { method, body: body ?? {} });
+
+export const runNode = (taskId: string, nodeId: string) =>
+  taskChange(`${nodePath(taskId, nodeId)}/run`, 'POST');
+export const stopNode = (taskId: string, nodeId: string) =>
+  taskChange(`${nodePath(taskId, nodeId)}/stop`, 'POST');
+export const addNode = (taskId: string, node: PlanNode) =>
+  taskChange(`${taskPath(taskId)}/nodes`, 'POST', node);
+export const updateNode = (taskId: string, nodeId: string, body: UpdateNodeBody) =>
+  taskChange(nodePath(taskId, nodeId), 'PATCH', body);
+export const deleteNode = (taskId: string, nodeId: string) =>
+  taskChange(nodePath(taskId, nodeId), 'DELETE');
+export const addEdge = (taskId: string, from: string, to: string) =>
+  taskChange(`${taskPath(taskId)}/edges`, 'POST', { from, to });
+export const updateEdge = (taskId: string, edgeId: string, body: UpdateEdgeBody) =>
+  taskChange(`${taskPath(taskId)}/edges/${edgeId}`, 'PATCH', body);
+export const deleteEdge = (taskId: string, edgeId: string) =>
+  taskChange(`${taskPath(taskId)}/edges/${edgeId}`, 'DELETE');
+
+/** 追问 / 补充要求：运行中的直接送达，还没开始、已停止的记下来，开跑时带上 */
+export const messageNode = (taskId: string, nodeId: string, text: string) =>
+  api(`${nodePath(taskId, nodeId)}/messages`, NodeMessageResult, {
+    method: 'POST',
+    body: { text },
+  });
+const NodeMessageResult = z.object({ result: z.enum(['delivered', 'noted']) });
+
+/** 节点的每次运行；节点在动时跟着任务一起刷新 */
+export const nodeRunsQuery = (taskId: string, nodeId: string, live: boolean) =>
+  queryOptions({
+    queryKey: [...taskKey(taskId), 'node', nodeId, 'runs'],
+    queryFn: async () => (await api(`${nodePath(taskId, nodeId)}/runs`, NodeRunList)).runs,
+    refetchInterval: live ? 2_500 : false,
+  });
+
+/** 一次运行的过程：运行中每 2 秒增量拉一次，接在已有的后面 */
+export const runEventsQuery = (taskId: string, nodeId: string, runId: string, live: boolean) =>
+  queryOptions({
+    queryKey: [...taskKey(taskId), 'node', nodeId, 'events', runId],
+    queryFn: async ({ client, queryKey }) => {
+      const old = client.getQueryData<RunEventBody[]>(queryKey) ?? [];
+      const after = old.at(-1)?.seq ?? -1;
+      const { events } = await api(
+        `${nodePath(taskId, nodeId)}/events?runId=${runId}&after=${after}`,
+        RunEventList,
+      );
+      return [...old, ...events];
+    },
+    refetchInterval: live ? 2_000 : false,
+  });
+
+/** 编辑节点时能选的模型和工具 */
+export const workflowOptionsQuery = queryOptions({
+  queryKey: ['workflow-options'],
+  queryFn: () => api('/task/v1/workflow/options', WorkflowOptions),
+  staleTime: 5 * 60_000,
+});

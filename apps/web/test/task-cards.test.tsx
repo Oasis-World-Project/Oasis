@@ -265,6 +265,9 @@ describe('任务卡', () => {
     expect(within(steps).getByText('：运行中')).toBeTruthy();
     expect(within(card).getByText('$0.0123')).toBeTruthy();
     expect(within(card).getByRole('button', { name: '停止' })).toBeTruthy();
+    expect(within(card).getByRole('link', { name: '看工作流' }).getAttribute('href')).toBe(
+      `/canvas/tasks/${TASK}`,
+    );
   });
 
   it('节点失败时可以再试、跳过继续或取消；取消要再确认一次', async () => {

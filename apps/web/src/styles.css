@@ -25,3 +25,51 @@
     outline-offset: 2px;
   }
 }
+
+/* 工作流图：进行中节点的进度条来回走（不知道具体进度） */
+@keyframes oasis-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+/* 工作流图的连线：已完成实线、进行中珊瑚色虚线流动、等待中浅虚线、断开的珊瑚色短虚线 */
+.oasis-flow .react-flow__edge-path {
+  stroke: var(--oasis-ink-muted);
+  stroke-opacity: 0.45;
+  stroke-width: 1.6;
+}
+.oasis-flow .oasis-edge-wait .react-flow__edge-path {
+  stroke-opacity: 0.3;
+  stroke-dasharray: 4 6;
+}
+.oasis-flow .oasis-edge-active .react-flow__edge-path {
+  stroke: var(--oasis-accent);
+  stroke-opacity: 1;
+  stroke-width: 2.2;
+}
+.oasis-flow .oasis-edge-broken .react-flow__edge-path {
+  stroke: var(--oasis-accent);
+  stroke-opacity: 0.6;
+  stroke-dasharray: 3 5;
+}
+.oasis-flow .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--oasis-accent);
+  stroke-opacity: 1;
+}
+.oasis-flow .react-flow__connection-path {
+  stroke: var(--oasis-accent);
+  stroke-width: 2;
+}
+/* React Flow 的署名：避开面板的圆角 */
+.oasis-flow .react-flow__attribution {
+  margin: 0 22px 12px 0;
+  background: transparent;
+  font-size: 10px;
+}
+.oasis-flow .react-flow__attribution a {
+  color: var(--oasis-ink-muted);
+}

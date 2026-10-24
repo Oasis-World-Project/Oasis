@@ -2,6 +2,8 @@
 // 任务还在动时每 2.5 秒刷新；状态一变就顺带刷新消息，交付消息和提醒能马上出现。
 import type { Attention, NodeStatus, TaskBody, TaskStatus } from '@oasis/contracts/task';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
+import { Workflow } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import {
   cancelTask,
@@ -297,16 +299,25 @@ export function TaskCard({
         )
       )}
       <Spend task={task} />
-      {(task.status === 'running' || task.status === 'stopped') && (
+      {task.status !== 'planning' && (
         <CardActions>
-          {task.status === 'running' ? (
+          <Link
+            to="/canvas/tasks/$taskId"
+            params={{ taskId: task.id }}
+            className="inline-flex h-10 items-center gap-1.5 rounded-full bg-solid px-4 text-[13.5px] font-medium text-on-solid no-underline"
+          >
+            <Workflow size={15} aria-hidden="true" />
+            看工作流
+          </Link>
+          {task.status === 'running' && (
             <CardButton
               onClick={() => void actions.run('stop', () => stopTask(task.id))}
               disabled={busy}
             >
               停止
             </CardButton>
-          ) : (
+          )}
+          {task.status === 'stopped' && (
             <CardButton
               tone="accent"
               onClick={() => void actions.run('run', () => runTask(task.id))}
@@ -315,13 +326,15 @@ export function TaskCard({
               继续
             </CardButton>
           )}
-          <ConfirmButton
-            label="取消任务"
-            question="取消后不能恢复，确定吗？"
-            confirmLabel="取消任务"
-            onConfirm={() => void actions.run('cancel-task', () => cancelTask(task.id))}
-            disabled={busy}
-          />
+          {(task.status === 'running' || task.status === 'stopped') && (
+            <ConfirmButton
+              label="取消任务"
+              question="取消后不能恢复，确定吗？"
+              confirmLabel="取消任务"
+              onConfirm={() => void actions.run('cancel-task', () => cancelTask(task.id))}
+              disabled={busy}
+            />
+          )}
         </CardActions>
       )}
     </CardFrame>

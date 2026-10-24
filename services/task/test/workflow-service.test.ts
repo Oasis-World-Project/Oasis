@@ -84,6 +84,10 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
         .map((task) => ({ task, nodes: snapshot(task).nodes }));
     },
     findRun: async (runId) => runs.get(runId),
+    listNodeRuns: async (taskId, nodeId) =>
+      [...runs.values()]
+        .filter((r) => r.taskId === taskId && r.nodeId === nodeId)
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
     transact(taskId, fn) {
       const previous = locks.get(taskId) ?? Promise.resolve();
       const next = previous.then(async () => {
@@ -261,6 +265,17 @@ const toolEntry = (key: string, estimateMicro: number, available: boolean) => ({
 harness.get('/internal/v1/tools', async () => ({
   tools: [toolEntry('image.generate', 40_000, true), toolEntry('web.search', 8_000, false)],
 }));
+/** 假 harness：运行过程（记下问的是哪次运行） */
+const eventRequests: string[] = [];
+harness.get('/internal/runs/:id/events', async (request) => {
+  const { id } = request.params as { id: string };
+  eventRequests.push(id);
+  return {
+    events: [
+      { seq: 0, kind: 'assistant_text', data: { text: id }, createdAt: new Date().toISOString() },
+    ],
+  };
+});
 harness.post('/internal/runs/:id/messages', async (request, reply) => {
   messages.push({
     runId: (request.params as { id: string }).id,
@@ -1256,5 +1271,40 @@ describe('用户给的素材（ADR 0007 §4）', () => {
     ]);
     expect(run!.prompt).toContain('【用户给的素材】');
     expect(run!.prompt).toContain('- materials/照片 (2).jpg');
+  });
+});
+
+describe('节点详情（ADR 0007 §6）', () => {
+  it('列出节点的每次运行；能看指定那次的运行过程，别的节点的运行看不到', async () => {
+    const task = await create(['A', 'B'], [['A', 'B']]);
+    const first = runOf('A', task);
+    gateResults = [['缺少文件 out/*.md']];
+    await finish(first.runId, 'succeeded', { outputs: [{ path: 'a.txt', size: 3 }] });
+    const rework = runOf('A', task);
+
+    const a = keyOf(task, 'A');
+    const runs = await service.nodeRuns(OWNER, task.id, a);
+    expect(runs.map((r) => [r.id, r.purpose, r.continued])).toEqual([
+      [first.runId, 'work', false],
+      [rework.runId, 'rework', true],
+    ]);
+
+    eventRequests.length = 0;
+    await service.nodeEvents(OWNER, task.id, a, -1);
+    await service.nodeEvents(OWNER, task.id, a, -1, first.runId);
+    expect(eventRequests).toEqual([rework.runId, first.runId]);
+
+    const b = keyOf(task, 'B');
+    expect(
+      (await errorOf(() => service.nodeEvents(OWNER, task.id, b, -1, first.runId))).status,
+    ).toBe(404);
+  });
+
+  it('编辑节点时能选的模型和工具：去掉用不了的', async () => {
+    unavailable = ['openai/blocked'];
+    const options = await service.options();
+    expect(options.models.map((m) => m.providerModel)).toEqual(['deepseek/x']);
+    expect(options.tools.map((t) => t.key)).toEqual(['image.generate']);
+    unavailable = [];
   });
 });

@@ -16,7 +16,10 @@ const TaskParams = z.object({ taskId: z.uuid() });
 const NodeParams = TaskParams.extend({ nodeId: z.uuid() });
 const EdgeParams = TaskParams.extend({ edgeId: z.uuid() });
 const FileParams = NodeParams.extend({ '*': z.string().min(1).max(500) });
-const EventsQuery = z.object({ after: z.coerce.number().int().min(-1).default(-1) });
+const EventsQuery = z.object({
+  after: z.coerce.number().int().min(-1).default(-1),
+  runId: z.uuid().optional(),
+});
 const FileQuery = z.object({ download: z.enum(['0', '1']).default('0') });
 
 export function registerRoutes(app: ServiceApp, workflows: WorkflowService): void {
@@ -121,11 +124,23 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
       .send(file.content);
   });
 
-  /** 节点的运行过程（按序号增量拉取） */
+  /** 节点的全部运行（ADR 0007 §6） */
+  app.get('/v1/tasks/:taskId/nodes/:nodeId/runs', async (request) => {
+    const { taskId, nodeId } = parseWith(NodeParams, request.params);
+    return { runs: await workflows.nodeRuns(requireUserId(request), taskId, nodeId) };
+  });
+
+  /** 一次运行的过程（按序号增量拉取）；不给 runId 时看节点当前这次 */
   app.get('/v1/tasks/:taskId/nodes/:nodeId/events', async (request) => {
     const { taskId, nodeId } = parseWith(NodeParams, request.params);
-    const { after } = parseWith(EventsQuery, request.query);
-    return workflows.nodeEvents(requireUserId(request), taskId, nodeId, after);
+    const { after, runId } = parseWith(EventsQuery, request.query);
+    return workflows.nodeEvents(requireUserId(request), taskId, nodeId, after, runId);
+  });
+
+  /** 编辑节点时能选的模型和工具 */
+  app.get('/v1/workflow/options', async (request) => {
+    requireUserId(request);
+    return workflows.options();
   });
 
   /** 追问 / 补充要求：运行中的直接送达（delivered），还没开始、已停止的记下来（noted） */

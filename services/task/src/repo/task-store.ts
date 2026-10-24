@@ -129,6 +129,8 @@ export interface TaskStore {
   get(taskId: string): Promise<Snapshot | undefined>;
   listByOwner(ownerId: string, limit: number): Promise<{ task: Task; nodes: Node[] }[]>;
   findRun(runId: string): Promise<NodeRun | undefined>;
+  /** 一个节点的全部运行，按开始时间排 */
+  listNodeRuns(taskId: string, nodeId: string): Promise<NodeRun[]>;
   /** 锁住任务这一行，在同一个事务里读快照、做决定、写改动 */
   transact<T>(taskId: string, fn: (snapshot: Snapshot, w: Writer) => Promise<T>): Promise<T>;
   /** 还没结束、且创建早于 before 的运行（对账用） */
@@ -202,6 +204,13 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
       const [row] = await db.select().from(nodeRuns).where(eq(nodeRuns.id, runId));
       return row;
     },
+
+    listNodeRuns: (taskId, nodeId) =>
+      db
+        .select()
+        .from(nodeRuns)
+        .where(and(eq(nodeRuns.taskId, taskId), eq(nodeRuns.nodeId, nodeId)))
+        .orderBy(asc(nodeRuns.createdAt)),
 
     transact(taskId, fn) {
       return db.transaction(async (tx) => {

@@ -307,3 +307,51 @@ export type UpdateEdgeBody = z.infer<typeof UpdateEdgeBody>;
  */
 export const DecisionBody = z.object({ choice: z.enum(['continue', 'retry', 'cancel']) });
 export type DecisionBody = z.infer<typeof DecisionBody>;
+
+/**
+ * 节点的一次运行（ADR 0007 §6）：节点详情里按时间列出，点开看这次的运行过程。
+ * work 第一次做或失败后重做；rework 关卡没过后接着原会话改；speech 讨论里一位参与者的一次发言；summary 汇总。
+ * 停止后继续也是一次新运行（接着原会话）。
+ */
+export const NodeRunBody = z.object({
+  id: z.uuid(),
+  purpose: z.enum(['work', 'rework', 'speech', 'summary']),
+  status: z.enum(['pending', 'running', 'succeeded', 'failed', 'cancelled', 'stopped']),
+  /** 第几次（含重做） */
+  attempt: z.number().int().nonnegative(),
+  /** 讨论：第几轮、谁 */
+  round: z.number().int().nullable(),
+  participant: z.string().nullable(),
+  /** 这次运行接着哪次运行的会话（停止后继续、关卡退回修改） */
+  continued: z.boolean(),
+  summary: z.string().nullable(),
+  error: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+  finishedAt: z.iso.datetime().nullable(),
+});
+export type NodeRunBody = z.infer<typeof NodeRunBody>;
+export const NodeRunList = z.object({ runs: z.array(NodeRunBody) });
+
+/** 编辑节点时能选的模型和工具（ADR 0007 §6）：和规划员看到的一样，只列现在能用的 */
+export const WorkflowOptions = z.object({
+  models: z.array(
+    z.object({
+      /** 模型目录里的 key，如 deepseek（前端用它找头像） */
+      key: z.string(),
+      name: z.string(),
+      vendor: z.string(),
+      /** 节点里写的供应商型号 */
+      providerModel: z.string(),
+    }),
+  ),
+  tools: z.array(
+    z.object({
+      key: z.string(),
+      name: z.string(),
+      description: z.string(),
+      unit: z.string(),
+      estimateMicro: z.number().int().nonnegative(),
+    }),
+  ),
+});
+export type WorkflowOptions = z.infer<typeof WorkflowOptions>;

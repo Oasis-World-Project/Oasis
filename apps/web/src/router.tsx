@@ -22,6 +22,7 @@ import { LoginPage } from './pages/LoginPage.tsx';
 import { MePage } from './pages/MePage.tsx';
 import { NotFoundPage } from './pages/NotFoundPage.tsx';
 import { PlazaPage } from './pages/PlazaPage.tsx';
+import { WorkflowPage } from './pages/WorkflowPage.tsx';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -82,6 +83,12 @@ const canvasRoute = createRoute({
   path: '/canvas',
   component: CanvasPage,
 });
+/** 任务的工作流：从私聊里的任务卡进来；成果属于画布，侧栏亮「画布」 */
+const workflowRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/canvas/tasks/$taskId',
+  component: WorkflowPage,
+});
 const groupsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/groups',
@@ -111,6 +118,7 @@ const routeTree = rootRoute.addChildren([
     homeRoute,
     aisRoute,
     canvasRoute,
+    workflowRoute,
     groupsRoute,
     dmsRoute,
     dmRoute,

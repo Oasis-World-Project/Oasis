@@ -6,6 +6,7 @@ import { OASIS_HEADERS } from '@oasis/contracts/common';
 import type { RunFinishedData } from '@oasis/contracts/events';
 import { RunBody } from '@oasis/contracts/harness';
 import { ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
+import type { WorkflowOptions } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
@@ -292,6 +293,26 @@ export function createPlanning(deps: {
 
     submit,
     onFinished,
+
+    /** 编辑节点时能选的模型和工具：和规划员看到的一样 */
+    async options(): Promise<WorkflowOptions> {
+      const [models, available] = await Promise.all([catalog(), tools()]);
+      return {
+        models: models.map(({ key, name, vendor, providerModel }) => ({
+          key,
+          name,
+          vendor,
+          providerModel,
+        })),
+        tools: available.map(({ key, name, description, unit, estimateMicro }) => ({
+          key,
+          name,
+          description,
+          unit,
+          estimateMicro,
+        })),
+      };
+    },
 
     /** 对账：规划员的结束事件丢了就补上；harness 根本没收到就重新开一次 */
     async reconcile(before: Date): Promise<void> {
