@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -41,13 +41,17 @@ describe('oasis-tool', () => {
     ];
     expect(targetsFor(files.slice(0, 1), 'out/首屏.png')).toEqual(['out/首屏.png']);
     expect(targetsFor(files, 'out/首屏.png')).toEqual(['out/首屏-1.png', 'out/首屏-2.png']);
-    expect(targetsFor(files, undefined)).toEqual(['out/image-1.png', 'out/image-2.png']);
+    expect(targetsFor(files, undefined)).toEqual([
+      join('out', 'image-1.png'),
+      join('out', 'image-2.png'),
+    ]);
   });
 });
 
 describe('oasis-tool 长任务', () => {
   // 假的入口代理：提交视频返回任务号；job-done 已做好，job-slow 一直在做
   const fake = Fastify();
+  fake.get('/v1/tools', async () => ({ tools: [] }));
   fake.post('/v1/tools/video.generate', async () => ({
     tool: 'video.generate',
     text: '生成视频已提交',
@@ -104,5 +108,15 @@ describe('oasis-tool 长任务', () => {
     printed.length = 0;
     await main(['wait', 'job-slow', '--out', 'out/v.mp4']);
     expect(printed.join('')).toContain('oasis-tool wait job-slow --out "out/v.mp4"');
+  });
+
+  it('工具目录同时展示本次沙箱实际安装的软件清单', async () => {
+    const manifest = join(dir, 'software.txt');
+    await writeFile(manifest, 'libreoffice-writer 25.2\nopenpyxl==3.1.5\n');
+    vi.stubEnv('OASIS_SOFTWARE_MANIFEST', manifest);
+    printed.length = 0;
+    await main(['list']);
+    expect(printed.join('')).toContain('libreoffice-writer 25.2');
+    expect(printed.join('')).toContain('openpyxl==3.1.5');
   });
 });

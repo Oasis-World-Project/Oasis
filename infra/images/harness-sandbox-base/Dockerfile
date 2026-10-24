@@ -1,17 +1,35 @@
 # harness 的沙箱基础镜像：Node 24 + Python 3 + 精确锁定版本的 dsh + Oasis 自己的 dsh 组合（oasis profile）+ oasis-tool。
 # 每次 agent 运行起一个这个镜像的容器（ADR 0003 §6），容器里只跑 dsh，经 stdin/stdout 说 JSON-RPC。
-# dsh 版本只在这里锁定；升级时同时改镜像标签（harness 的 SANDBOX_IMAGE 默认值）和 package.json 的 sandbox:build。
+# dsh 版本只在这里锁定；升级时同时改镜像标签（harness 和 scripts/sandbox.mjs 的 SANDBOX_IMAGE 默认值）。
 # 构建（在仓库根目录）：pnpm sandbox:build
 ARG NODE_IMAGE=node:24.21.0-trixie-slim
 FROM ${NODE_IMAGE}
 ARG DSH_VERSION=0.2.1-rc.2
-# Python 和中文字体：节点里的 AI 常用 Python 处理文档和图片（python-docx、Pillow 排中文字……），
-# 包经出口代理从软件包仓库装（ADR 0006 §7）。镜像里的 Python 是系统自带的，允许 pip 直接装进用户目录。
+# 通用文档/数据工具（ADR 0008 G1）；预装包在独立 venv 内，运行时仍可经出口代理安装任务需要的包。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pip python3-venv fonts-noto-cjk \
+    libreoffice-writer=4:25.2.3-2+deb13u8 libreoffice-calc=4:25.2.3-2+deb13u8 libreoffice-impress=4:25.2.3-2+deb13u8 \
+    ffmpeg=7:7.1.5-0+deb13u1 poppler-utils=25.03.0-5+deb13u4 libpango-1.0-0=1.56.3-1 libpangoft2-1.0-0=1.56.3-1 \
  && rm -rf /var/lib/apt/lists/*
-ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH="/opt/oasis/venv/bin:${PATH}" \
+    MPLBACKEND=Agg \
+    MPLCONFIGDIR=/home/node/.config/matplotlib \
+    OASIS_SOFTWARE_MANIFEST=/opt/oasis/software.txt
+COPY services/harness/sandbox/requirements.txt /opt/oasis/requirements.txt
+RUN --mount=type=secret,id=pip_index \
+    python3 -m venv /opt/oasis/venv \
+ && if [ -f /run/secrets/pip_index ]; then export PIP_INDEX_URL="$(cat /run/secrets/pip_index)"; fi \
+ && /opt/oasis/venv/bin/python -m pip install --no-cache-dir --only-binary=:all: -r /opt/oasis/requirements.txt \
+ && /opt/oasis/venv/bin/python -m pip check \
+ && chown -R node:node /opt/oasis/venv \
+ && mkdir -p /home/node/.config/matplotlib \
+ && printf 'font.family: sans-serif\nfont.sans-serif: Noto Sans CJK JP, DejaVu Sans\naxes.unicode_minus: False\n' > /home/node/.config/matplotlib/matplotlibrc \
+ && chown -R node:node /home/node/.config \
+ && printf '系统软件（无界面）：\n' > /opt/oasis/software.txt \
+ && dpkg-query -W -f='${Package} ${Version}\n' libreoffice-writer libreoffice-calc libreoffice-impress ffmpeg poppler-utils fonts-noto-cjk >> /opt/oasis/software.txt \
+ && printf '\nPython 包（使用 python3，无需激活环境）：\n' >> /opt/oasis/software.txt \
+ && /opt/oasis/venv/bin/python -m pip list --format=freeze >> /opt/oasis/software.txt
 # 不跑安装脚本：dsh 用到的原生组件都是预编译包
 RUN npm install --global --ignore-scripts "@deepseek-ai/dsh@${DSH_VERSION}" \
  && npm cache clean --force \

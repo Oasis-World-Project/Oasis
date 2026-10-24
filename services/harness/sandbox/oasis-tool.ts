@@ -105,6 +105,9 @@ async function list(): Promise<void> {
   for (const tool of tools.filter((t) => t.available)) {
     say(`${tool.key}（${tool.name}）：${tool.description}\n  用法：${tool.usage}\n`);
   }
+  const manifest = process.env.OASIS_SOFTWARE_MANIFEST;
+  if (manifest)
+    say(`沙箱已安装的软件（安装时生成的实际版本）：\n${await readFile(manifest, 'utf8')}`);
 }
 
 async function save(result: ToolResult, out: string | undefined): Promise<void> {

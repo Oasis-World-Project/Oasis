@@ -27,7 +27,7 @@
 
 1. **微服务边界**：每个服务独占数据库（同一个 PostgreSQL 实例里的独立 database + 独立账号，其他账号连不上）。服务之间只走 HTTP API 或 NATS 事件；跨服务 import 由 dependency-cruiser 拦截。
 2. **共享包**：`packages/*` 只放契约（contracts）、基础设施库（service-kit）、设计令牌和 tsconfig，不放业务逻辑。
-3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness（含 `profile/` 下 Oasis 自己的 dsh 组合）；dsh 版本精确锁定在沙箱镜像里。沙箱容器只能经入口代理访问 model-gateway 的 `/run/v1/*`，不得给沙箱开其他网络通路（ADR 0003）。
+3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness（含 `profile/` 下 Oasis 自己的 dsh 组合）；dsh 版本精确锁定在沙箱镜像里。沙箱只能经入口代理访问 model-gateway 的 `/run/v1/*`，以及经出口代理访问明确放行的软件包仓库；不得直连外网、宿主机或内部服务，不得开放其他网络通路（ADR 0003、ADR 0006 §7）。
 4. **模型调用**：所有模型调用（聊天、Jev、dsh 里的 agent）都经过 `services/model-gateway`，由它计量并上报 billing。
 5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。
 6. **配置外置**：配置全部来自环境变量，每个服务提供 `.env.example`；禁止硬编码地址、端口、密钥；禁止 `if (env === 'local')` 一类分支。
