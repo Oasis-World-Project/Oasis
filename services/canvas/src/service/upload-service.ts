@@ -17,10 +17,6 @@ const notFound = () => new HttpError(404, 'upload_not_found', '没有这个文�
 export function createUploadService(deps: { repo: UploadsRepo; store: ObjectStore }) {
   const { repo, store } = deps;
 
-  async function content(row: Upload) {
-    return { row, content: await store.get(row.objectKey) };
-  }
-
   return {
     /** 存下一个文件；类型按文件名的扩展名定（浏览器报的类型不可信） */
     async upload(ownerId: string, name: string, body: Buffer): Promise<UploadBody> {
@@ -33,11 +29,11 @@ export function createUploadService(deps: { repo: UploadsRepo; store: ObjectStor
       );
     },
 
-    /** 用户下载自己的文件 */
-    async download(ownerId: string, id: string) {
+    /** 用户自己的文件（下载由接口层边读边传） */
+    async owned(ownerId: string, id: string): Promise<Upload> {
       const row = await repo.find(id);
       if (row?.ownerId !== ownerId) throw notFound();
-      return content(row);
+      return row;
     },
 
     /** 内部：查这些文件，必须都存在且都是这个人的 */
@@ -53,7 +49,7 @@ export function createUploadService(deps: { repo: UploadsRepo; store: ObjectStor
     async internalContent(id: string) {
       const row = await repo.find(id);
       if (!row) throw notFound();
-      return content(row);
+      return { row, content: await store.get(row.objectKey) };
     },
   };
 }

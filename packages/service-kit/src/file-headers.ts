@@ -48,3 +48,25 @@ const CONTENT_TYPES: Record<string, string> = {
 /** 按扩展名猜文件类型；不认识的当二进制 */
 export const contentTypeOf = (path: string): string =>
   CONTENT_TYPES[path.split('.').at(-1)?.toLowerCase() ?? ''] ?? 'application/octet-stream';
+
+/**
+ * 解析请求里的 Range（只支持单段：bytes=a-b、bytes=a-、bytes=-n）。
+ * 没有或看不懂就返回 undefined（整个返回）；超出文件范围返回 'unsatisfiable'（416）。
+ */
+export function parseRange(
+  header: string | undefined,
+  size: number,
+): { start: number; end: number } | 'unsatisfiable' | undefined {
+  const match = header ? /^bytes=(\d*)-(\d*)$/.exec(header.trim()) : null;
+  if (!match || (match[1] === '' && match[2] === '')) return undefined;
+  const [, from = '', to = ''] = match;
+  if (from === '') {
+    const suffix = Number(to);
+    if (suffix === 0) return 'unsatisfiable';
+    return { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+  const start = Number(from);
+  const end = to === '' ? size - 1 : Math.min(Number(to), size - 1);
+  if (start >= size || end < start) return 'unsatisfiable';
+  return { start, end };
+}

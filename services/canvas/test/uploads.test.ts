@@ -1,10 +1,13 @@
 // 素材上传：存、下载（只能下自己的、带安全响应头）、内部核对和取内容（ADR 0007 §3）。
 import { OASIS_HEADERS } from '@oasis/contracts/common';
-import { createService, type ObjectStore } from '@oasis/service-kit';
+import { createService, createServiceClient } from '@oasis/service-kit';
+import { pino } from 'pino';
 import { describe, expect, it } from 'vitest';
 import { registerRoutes } from '../src/api/routes.ts';
 import type { Upload, UploadsRepo } from '../src/repo/uploads-repo.ts';
+import { createArtifactService } from '../src/service/artifact-service.ts';
 import { createUploadService } from '../src/service/upload-service.ts';
+import { memoryArtifacts, memoryStore } from './memory.ts';
 
 const KAI = '00000000-0000-4000-8000-000000000001';
 const MIA = '00000000-0000-4000-8000-000000000002';
@@ -26,21 +29,6 @@ function memoryRepo(): UploadsRepo {
   };
 }
 
-function memoryStore(): ObjectStore & { objects: Map<string, { body: Buffer; type: string }> } {
-  const objects = new Map<string, { body: Buffer; type: string }>();
-  return {
-    objects,
-    put: async (key, body, type) => {
-      objects.set(key, { body, type });
-    },
-    get: async (key) => {
-      const found = objects.get(key);
-      if (!found) throw new Error('missing');
-      return found.body;
-    },
-  };
-}
-
 async function app(maxBytes = 1024) {
   const store = memoryStore();
   const service = await createService(
@@ -48,7 +36,20 @@ async function app(maxBytes = 1024) {
       name: 'canvas',
       env: {},
       routes: (instance) =>
-        registerRoutes(instance, createUploadService({ repo: memoryRepo(), store }), { maxBytes }),
+        registerRoutes(
+          instance,
+          {
+            uploads: createUploadService({ repo: memoryRepo(), store }),
+            artifacts: createArtifactService({
+              repo: memoryArtifacts(),
+              store,
+              task: createServiceClient('task', 'http://127.0.0.1:9'),
+              logger: pino({ level: 'silent' }),
+            }),
+            store,
+          },
+          { maxBytes },
+        ),
     },
     { PORT: '0', LOG_LEVEL: 'silent' },
   );

@@ -25,6 +25,8 @@
     "@oasis/tsconfig": "workspace:*",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "fastify": "catalog:",
+    "pino": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

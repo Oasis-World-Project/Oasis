@@ -3,6 +3,8 @@ import { z } from 'zod';
 
 export const canvasEnv = {
   ...postgresAndEventBus.env,
+  /** 任务完成时取任务详情和成果文件（ADR 0007 §8） */
+  TASK_URL: z.url(),
   // ---- 对象存储（素材，5.5c 起还有成果） ----
   ...objectStoreEnv,
   S3_BUCKET: z.string().default('oasis-canvas'),

@@ -73,3 +73,9 @@
 .oasis-flow .react-flow__attribution a {
   color: var(--oasis-ink-muted);
 }
+
+/* 画布的点阵底（照原型 ⑨⑩） */
+@utility oasis-dots {
+  background-image: radial-gradient(var(--oasis-hairline) 1px, transparent 1.3px);
+  background-size: 22px 22px;
+}

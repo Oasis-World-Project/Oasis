@@ -29,6 +29,13 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
     return reply.code(201).send(await workflows.create(body));
   });
 
+  /** 节点交出的一个文件（canvas 登记成果时复制） */
+  app.get('/internal/tasks/:taskId/files/:nodeId/*', async (request, reply) => {
+    const { taskId, nodeId, '*': path } = parseWith(FileParams, request.params);
+    const file = await workflows.fileInternal(taskId, nodeId, path);
+    return reply.type(file.contentType).send(file.content);
+  });
+
   /** 任务详情（conversation 发交付消息用） */
   app.get('/internal/tasks/:taskId', async (request) => {
     const { taskId } = parseWith(TaskParams, request.params);

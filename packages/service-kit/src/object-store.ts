@@ -6,6 +6,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import type { Readable } from 'node:stream';
 import { z } from 'zod';
 import type { ServiceResource } from './resource.ts';
 
@@ -17,9 +18,17 @@ export const objectStoreEnv = {
   S3_SECRET_KEY: z.string().min(1),
 };
 
+/** 读对象的一段（含两端）；不给就是整个 */
+export interface ByteRange {
+  start: number;
+  end: number;
+}
+
 export interface ObjectStore {
   put(key: string, body: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<Buffer>;
+  /** 边读边传，不整个读进内存（下载、拖动视频进度用） */
+  read(key: string, range?: ByteRange): Promise<Readable>;
 }
 
 export function createObjectStore(options: {
@@ -47,6 +56,18 @@ export function createObjectStore(options: {
         const result = await client.send(new GetObjectCommand({ Bucket, Key: key }));
         if (!result.Body) throw new Error(`对象存储里没有 ${key}`);
         return Buffer.from(await result.Body.transformToByteArray());
+      },
+      async read(key, range) {
+        const result = await client.send(
+          new GetObjectCommand({
+            Bucket,
+            Key: key,
+            ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
+          }),
+        );
+        if (!result.Body) throw new Error(`对象存储里没有 ${key}`);
+        // Node 里 SDK 返回的就是可读流
+        return result.Body as Readable;
       },
     },
     /** 桶不存在就建（启动时调用一次） */

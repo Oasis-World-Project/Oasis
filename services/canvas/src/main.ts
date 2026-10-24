@@ -1,17 +1,23 @@
-// canvas：画布。现在存用户上传的素材（ADR 0007）；5.5c 起登记任务的成果、在画布里预览。
+// canvas：画布。存用户上传的素材；任务完成时把成果登记进画布，给前端列出、预览、下载（ADR 0007）。
 import { fileURLToPath } from 'node:url';
+import { TASK_STREAM, TaskStatusChanged } from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
   createObjectStore,
+  createServiceClient,
+  startEventConsumer,
   startService,
   type ObjectStore,
 } from '@oasis/service-kit';
 import { registerRoutes } from './api/routes.ts';
 import { canvasEnv } from './config.ts';
+import { createArtifactsRepo } from './repo/artifacts-repo.ts';
 import { createUploadsRepo } from './repo/uploads-repo.ts';
+import { createArtifactService, type ArtifactService } from './service/artifact-service.ts';
 import { createUploadService } from './service/upload-service.ts';
 
 let store: ObjectStore;
+let artifacts: ArtifactService;
 
 await startService({
   name: 'canvas',
@@ -29,12 +35,32 @@ await startService({
     });
     await objects.ensureBucket();
     store = objects.store;
-    return { postgres, eventBus, objectStore: objects.resource };
+    artifacts = createArtifactService({
+      repo: createArtifactsRepo(postgres.pool),
+      store,
+      // 复制成果文件可能要一会儿
+      task: createServiceClient('task', config.TASK_URL, { timeoutMs: 60_000 }),
+      logger: ctx.logger,
+    });
+    // 任务完成 → 把成果登记进画布
+    const taskStatus = startEventConsumer({
+      connection: eventBus.connection,
+      stream: TASK_STREAM,
+      durable: 'canvas-task-succeeded',
+      filterSubject: TaskStatusChanged.type,
+      logger: ctx.logger,
+      handle: (envelope) => artifacts.onTaskStatus(TaskStatusChanged.data.parse(envelope.data)),
+    });
+    return { postgres, eventBus, objectStore: objects.resource, taskStatus };
   },
   routes: (app, { config, resources }) => {
     registerRoutes(
       app,
-      createUploadService({ repo: createUploadsRepo(resources.postgres.pool), store }),
+      {
+        uploads: createUploadService({ repo: createUploadsRepo(resources.postgres.pool), store }),
+        artifacts,
+        store,
+      },
       { maxBytes: config.UPLOAD_MAX_BYTES },
     );
   },

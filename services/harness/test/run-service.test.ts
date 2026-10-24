@@ -177,6 +177,11 @@ const store: ObjectStore = {
     if (!body) throw new Error(`没有 ${key}`);
     return body;
   },
+  read: async (key) => {
+    const body = stored.get(key);
+    if (!body) throw new Error(`没有 ${key}`);
+    return Readable.from([body]);
+  },
 };
 
 /** 假 model-gateway：签发和作废临时 Key */

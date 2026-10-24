@@ -5,6 +5,8 @@ import type {
   NoticeCard as NoticeData,
 } from '@oasis/contracts/conversation';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
+import { Images } from 'lucide-react';
 import { useState } from 'react';
 import { taskFileUrl, taskQuery } from '../api/queries.ts';
 import { formatCost } from '../ui/format.ts';
@@ -75,6 +77,16 @@ export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: S
         <p className="m-0 text-[13px] text-ink-muted">
           一共花了 <span className="font-display text-ink">{formatCost(task.spentMicro)}</span>
         </p>
+      )}
+      {groups.length > 0 && (
+        <Link
+          to="/canvas"
+          search={{ task: card.taskId }}
+          className="inline-flex h-10 items-center gap-1.5 self-start rounded-full bg-solid px-4 text-[13.5px] font-medium text-on-solid no-underline"
+        >
+          <Images size={15} aria-hidden="true" />
+          在画布里看
+        </Link>
       )}
       {preview && <FilePreview file={preview} onClose={() => setPreview(null)} />}
     </CardFrame>

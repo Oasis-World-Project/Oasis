@@ -291,6 +291,7 @@ services:
       <<: [*runtime-env, *nats-env]
       PORT: 4106
       DATABASE_URL: postgres://svc_canvas:${CANVAS_DB_PASSWORD:?}@postgres:5432/canvas?sslmode=disable
+      TASK_URL: http://task:4105
       S3_ENDPOINT: http://seaweedfs:8333
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?}

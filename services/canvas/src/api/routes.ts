@@ -1,17 +1,20 @@
 // canvas 的接口。/v1/* 经 gateway 给前端（只能看自己的）；/internal/* 给 conversation 和 harness。
-import { UploadLookupBody, UploadQuery } from '@oasis/contracts/canvas';
-import { fileResponseHeaders, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
+import { ArtifactQuery, UploadLookupBody, UploadQuery } from '@oasis/contracts/canvas';
+import { parseWith, requireUserId, type ObjectStore, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
+import type { ArtifactService } from '../service/artifact-service.ts';
 import type { UploadService } from '../service/upload-service.ts';
+import { sendStored } from './send-stored.ts';
 
 const IdParams = z.object({ id: z.uuid() });
 const DownloadQuery = z.object({ download: z.enum(['0', '1']).default('0') });
 
 export function registerRoutes(
   app: ServiceApp,
-  uploads: UploadService,
+  services: { uploads: UploadService; artifacts: ArtifactService; store: ObjectStore },
   options: { maxBytes: number },
 ): void {
+  const { uploads, artifacts, store } = services;
   // 上传的请求体就是文件本身（前端一律用 application/octet-stream 发，类型按文件名定）
   app.addContentTypeParser(
     'application/octet-stream',
@@ -36,10 +39,26 @@ export function registerRoutes(
   app.get('/v1/uploads/:id', async (request, reply) => {
     const { id } = parseWith(IdParams, request.params);
     const { download } = parseWith(DownloadQuery, request.query);
-    const { row, content } = await uploads.download(requireUserId(request), id);
-    return reply
-      .headers(fileResponseHeaders(row.contentType, row.name, download === '1'))
-      .send(content);
+    const row = await uploads.owned(requireUserId(request), id);
+    return sendStored(request, reply, store, { ...row, download: download === '1' });
+  });
+
+  // ---- 成果（ADR 0007 §8–9）----
+  app.get('/v1/artifacts', async (request) => {
+    const filter = parseWith(ArtifactQuery, request.query);
+    return { artifacts: await artifacts.list(requireUserId(request), filter) };
+  });
+
+  app.get('/v1/artifacts/:id', async (request) => {
+    const { id } = parseWith(IdParams, request.params);
+    return artifacts.toBody(await artifacts.get(requireUserId(request), id));
+  });
+
+  app.get('/v1/artifacts/:id/content', async (request, reply) => {
+    const { id } = parseWith(IdParams, request.params);
+    const { download } = parseWith(DownloadQuery, request.query);
+    const row = await artifacts.get(requireUserId(request), id);
+    return sendStored(request, reply, store, { ...row, download: download === '1' });
   });
 
   app.post('/internal/uploads/lookup', async (request) => {

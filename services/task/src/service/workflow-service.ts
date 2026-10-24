@@ -579,6 +579,23 @@ export function createWorkflowService(deps: {
     return snapshot;
   }
 
+  /** 节点交出的一个文件：只能是它产出清单里有的（经 harness 读对象存储） */
+  async function readFile(snapshot: Snapshot, nodeId: string, path: string) {
+    const node = nodeOf(snapshot, nodeId);
+    const runId = node.config.outputsRunId;
+    if (!runId || !node.outputs.some((f) => f.path === path)) {
+      throw new HttpError(404, 'file_not_found', '没有这个文件');
+    }
+    const response = await harness.stream(
+      'GET',
+      `/internal/runs/${runId}/files/${path.split('/').map(encodeURIComponent).join('/')}`,
+    );
+    return {
+      contentType: response.headers.get('content-type') ?? 'application/octet-stream',
+      content: Buffer.from(await response.arrayBuffer()),
+    };
+  }
+
   /** 改任务（还没结束的）：确认归属 → 在事务里改 → 返回最新的任务 */
   async function change(
     ownerId: string,
@@ -826,21 +843,16 @@ export function createWorkflowService(deps: {
       return 'delivered';
     },
 
-    /** 下载节点交出的一个文件（交付消息和画布用） */
+    /** 下载节点交出的一个文件（交付消息、工作流视图用） */
     async file(ownerId: string, taskId: string, nodeId: string, path: string) {
-      const node = nodeOf(await owned(ownerId, taskId), nodeId);
-      const runId = node.config.outputsRunId;
-      if (!runId || !node.outputs.some((f) => f.path === path)) {
-        throw new HttpError(404, 'file_not_found', '没有这个文件');
-      }
-      const response = await harness.stream(
-        'GET',
-        `/internal/runs/${runId}/files/${path.split('/').map(encodeURIComponent).join('/')}`,
-      );
-      return {
-        contentType: response.headers.get('content-type') ?? 'application/octet-stream',
-        content: Buffer.from(await response.arrayBuffer()),
-      };
+      return readFile(await owned(ownerId, taskId), nodeId, path);
+    },
+
+    /** 内部：取节点交出的一个文件（画布登记成果时复制，ADR 0007 §8） */
+    async fileInternal(taskId: string, nodeId: string, path: string) {
+      const snapshot = await store.get(taskId);
+      if (!snapshot) throw new HttpError(404, 'task_not_found', '没有这个任务');
+      return readFile(snapshot, nodeId, path);
     },
 
     /** 运行整个工作流（先检查整张图） */

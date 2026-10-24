@@ -13,6 +13,7 @@ import { ApiError } from './api/client.ts';
 import { meQuery } from './api/queries.ts';
 import { AppShell } from './layout/AppShell.tsx';
 import { AisPage } from './pages/AisPage.tsx';
+import { ArtifactPage } from './pages/ArtifactPage.tsx';
 import { CanvasPage } from './pages/CanvasPage.tsx';
 import { DmPage } from './pages/DmPage.tsx';
 import { DmsPage } from './pages/DmsPage.tsx';
@@ -81,7 +82,17 @@ const aisRoute = createRoute({
 const canvasRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/canvas',
+  // ?task= 只看某个任务的成果（交付消息里的「在画布里看」）
+  validateSearch: (search: Record<string, unknown>): { task?: string | undefined } => ({
+    task: typeof search.task === 'string' ? search.task : undefined,
+  }),
   component: CanvasPage,
+});
+/** 在画布里打开一个成果 */
+const artifactRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/canvas/artifacts/$artifactId',
+  component: ArtifactPage,
 });
 /** 任务的工作流：从私聊里的任务卡进来；成果属于画布，侧栏亮「画布」 */
 const workflowRoute = createRoute({
@@ -119,6 +130,7 @@ const routeTree = rootRoute.addChildren([
     aisRoute,
     canvasRoute,
     workflowRoute,
+    artifactRoute,
     groupsRoute,
     dmsRoute,
     dmRoute,

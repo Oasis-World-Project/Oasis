@@ -39,3 +39,41 @@ export const Material = z.object({
   size: z.number().int().nonnegative(),
 });
 export type Material = z.infer<typeof Material>;
+
+/** 成果的类别（照原型 ⑧），由 canvas 按扩展名定 */
+export const ArtifactCategory = z.enum(['doc', 'media', 'threed', 'app', 'data']);
+export type ArtifactCategory = z.infer<typeof ArtifactCategory>;
+
+/**
+ * 画布里的一个成果（ADR 0007 §8）：任务完成时，负责交付物的节点交出的一个文件，复制进画布。
+ */
+export const ArtifactBody = z.object({
+  id: z.uuid(),
+  /** 文件名（不含目录） */
+  name: z.string(),
+  /** 节点产出里的相对路径，如 site/index.html */
+  path: z.string(),
+  size: z.number().int().nonnegative(),
+  contentType: z.string(),
+  category: ArtifactCategory,
+  /** 属于任务单里的哪样交付物 */
+  deliverable: z.string(),
+  taskId: z.uuid(),
+  taskTitle: z.string(),
+  /** 任务是在哪个私聊里交代的（回到私聊用）；没有为 null */
+  conversationId: z.uuid().nullable(),
+  /** 做它的模型（供应商型号；讨论节点是每位参与者和写结论的） */
+  models: z.array(z.string()),
+  /** 同步到电脑时放在哪：相对同步文件夹的路径，如 小木屋民宿官网首页/首页文案.md */
+  syncPath: z.string(),
+  createdAt: z.iso.datetime(),
+});
+export type ArtifactBody = z.infer<typeof ArtifactBody>;
+
+export const ArtifactList = z.object({ artifacts: z.array(ArtifactBody) });
+
+/** 列表筛选：类别、某个任务 */
+export const ArtifactQuery = z.object({
+  category: ArtifactCategory.optional(),
+  taskId: z.uuid().optional(),
+});

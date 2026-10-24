@@ -56,7 +56,8 @@ function TextPreview({ url, markdown }: { url: string; markdown: boolean }) {
   );
 }
 
-function Body({ file }: { file: PreviewFile }) {
+/** 预览内容本身：弹窗里和画布的成果页都用它 */
+export function PreviewBody({ file }: { file: PreviewFile }) {
   const name = baseName(file.path);
   switch (previewKindOf(file.path)) {
     case 'image':
@@ -147,7 +148,7 @@ export function FilePreview({ file, onClose }: { file: PreviewFile; onClose: () 
           </button>
         </header>
         <div className="min-h-0 flex-1 overflow-auto">
-          <Body file={file} />
+          <PreviewBody file={file} />
         </div>
       </div>
     </dialog>

@@ -1,6 +1,7 @@
 // 各页面用到的查询和操作。查询的 key 集中在这里，便于在操作后刷新对应数据。
 import { ModelList } from '@oasis/contracts/agent';
 import { WalletBody } from '@oasis/contracts/billing';
+import { ArtifactBody, ArtifactList } from '@oasis/contracts/canvas';
 import {
   ConversationBody,
   ConversationList,
@@ -197,3 +198,23 @@ export const workflowOptionsQuery = queryOptions({
   queryFn: () => api('/task/v1/workflow/options', WorkflowOptions),
   staleTime: 5 * 60_000,
 });
+
+// ---- 画布（ADR 0007 §8–9）----
+/** 全部成果（类别和搜索在前端筛，数量也在前端算）；可以只看某个任务的 */
+export const artifactsQuery = (taskId?: string) =>
+  queryOptions({
+    queryKey: ['artifacts', taskId ?? 'all'],
+    queryFn: async () =>
+      (await api(`/canvas/v1/artifacts${taskId ? `?taskId=${taskId}` : ''}`, ArtifactList))
+        .artifacts,
+  });
+
+export const artifactQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['artifact', id],
+    queryFn: () => api(`/canvas/v1/artifacts/${id}`, ArtifactBody),
+  });
+
+/** 成果内容：预览直接用这个地址（支持分段，视频能拖动），download 时让浏览器另存 */
+export const artifactContentUrl = (id: string, download = false) =>
+  `/api/canvas/v1/artifacts/${id}/content${download ? '?download=1' : ''}`;
