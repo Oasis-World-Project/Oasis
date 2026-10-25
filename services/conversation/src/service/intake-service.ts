@@ -19,6 +19,7 @@ import {
   parseIntakeReply,
   questionsText,
   sheetText,
+  taskBrief,
   type IntakeReply,
 } from './intake.ts';
 
@@ -393,7 +394,7 @@ export function createIntakeService(deps: {
           payerId: input.ownerId,
           conversationId: input.conversation.id,
           title: sheet.title,
-          brief: [`用户的原话：${intake.request}`, sheetText(sheet)].join('\n\n'),
+          brief: taskBrief(intake.request, intake.turns, sheet),
           sheet,
           materials,
         },

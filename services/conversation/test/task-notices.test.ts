@@ -27,6 +27,7 @@ const repo = {
 } as unknown as ConversationRepo;
 
 const task = Fastify();
+let finalFiles: { deliverable: string; nodeId: string; path: string; size: number }[] | undefined;
 task.get('/internal/tasks/:id', async () => ({
   id: TASK,
   title: '小木屋首页',
@@ -38,6 +39,7 @@ task.get('/internal/tasks/:id', async () => ({
   budgetLimitMicro: 21600,
   sheet: null,
   acceptance: { unmet: ['不超过 80 字'] },
+  ...(finalFiles === undefined ? {} : { deliveryFiles: finalFiles }),
   deliverables: [{ name: '首页文案', form: 'Markdown', nodeId: NODE }],
   nodes: [
     {
@@ -79,6 +81,7 @@ beforeAll(async () => {
 });
 afterAll(() => task.close());
 beforeEach(() => {
+  finalFiles = undefined;
   rows.length = 0;
 });
 
@@ -99,6 +102,15 @@ const event = (
 });
 
 describe('任务的结果回到私聊', () => {
+  it('使用 task 的显式最终清单；空清单不能回退到节点全部文件', async () => {
+    finalFiles = [{ deliverable: '定稿', nodeId: NODE, path: '最终.md', size: 30 }];
+    await notices.onStatusChanged(EVENT, event('succeeded'));
+    expect(rows[0]?.data.files).toEqual(finalFiles);
+    rows.length = 0;
+    finalFiles = [];
+    await notices.onStatusChanged(EVENT, event('succeeded'));
+    expect(rows[0]?.data.files).toEqual([]);
+  });
   it('完成：发交付消息（成果文件、没满足的地方、过程中的提醒）；同一个事件只发一次', async () => {
     await notices.onStatusChanged(EVENT, event('succeeded'));
     await notices.onStatusChanged(EVENT, event('succeeded'));

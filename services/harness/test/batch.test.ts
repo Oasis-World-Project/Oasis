@@ -103,6 +103,20 @@ describe('JSONL 批次持久化与费用边界', () => {
     expect(await run(request, { resume: 'true' })).toMatchObject({ uncertain: 2 });
     expect(request).toHaveBeenCalledTimes(2);
   });
+  it('推理耗尽 token 上限且没有最终正文：按已知费用记录失败，停止后续派发', async () => {
+    const request = vi.fn(async () => ({
+      choices: [{ message: { content: null }, finish_reason: 'length' }],
+      oasis: { costMicro: 12 },
+    }));
+    expect(await run(request, { concurrency: '1' })).toMatchObject({
+      failed: 1,
+      pending: 4,
+      costMicro: 12,
+      uncertain: 0,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((await readFile(output, 'utf8')).trim()).error).toContain('token 上限');
+  });
 
   it('模拟进程硬停：新容器接管旧锁，将 started 转为不确定而不重发', async () => {
     const controller = new AbortController();

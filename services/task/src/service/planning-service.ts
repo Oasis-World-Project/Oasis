@@ -44,7 +44,7 @@ const Answers = z.object({
 });
 /** 「属于这类」的概率至少这么高才附上这份手册；最多附两份 */
 const PLAYBOOK_THRESHOLD = 0.5;
-const MAX_PLAYBOOKS = 2;
+const MAX_PLAYBOOKS = 3;
 
 /** 微美元 → 给用户看的金额 */
 export function dollars(micro: number): string {

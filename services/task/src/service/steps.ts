@@ -54,6 +54,7 @@ function contextOf(snapshot: Snapshot, node: Node): NodeContext {
     userNotes: node.userNotes,
     tools: (node.config.tools ?? []).map((t) => t.key),
     materials: materialPaths(snapshot.task.materials).map((m) => m.path),
+    ...(node.config.deliver === undefined ? {} : { deliver: node.config.deliver }),
   };
 }
 

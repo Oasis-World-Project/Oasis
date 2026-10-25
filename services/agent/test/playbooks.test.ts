@@ -5,7 +5,14 @@ import { loadPlaybooks, parsePlaybook } from '../src/repo/playbooks.ts';
 describe('场景经验手册', () => {
   it('仓库里的手册都能读：有名称和「适用」', async () => {
     const list = await loadPlaybooks(fileURLToPath(new URL('../playbooks', import.meta.url)));
-    expect(list.map((p) => p.key)).toEqual(['documents', 'images']);
+    expect(list.map((p) => p.key)).toEqual([
+      'data-dashboards',
+      'deep-research',
+      'documents',
+      'images',
+      'marketing',
+      'synthetic-data',
+    ]);
     expect(list.find((p) => p.key === 'images')).toMatchObject({ name: '图片类' });
     for (const p of list) expect(p.when.length).toBeGreaterThan(5);
   });

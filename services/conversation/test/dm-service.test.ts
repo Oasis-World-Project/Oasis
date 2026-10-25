@@ -11,6 +11,7 @@ import type {
 } from '../src/repo/conversation-repo.ts';
 import { createDmService, toMessageBody } from '../src/service/dm-service.ts';
 import { createIntakeService } from '../src/service/intake-service.ts';
+import { taskBrief } from '../src/service/intake.ts';
 
 const OWNER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 const CONV = '3f2e1d0c-9b8a-4765-8432-10fedcba9876';
@@ -399,6 +400,23 @@ describe('认出任务', () => {
 });
 
 describe('接需求', () => {
+  it('任务说明保留用户补充、链接和问题卡答案，超长不会静默截断', () => {
+    const finalSheet = JSON.parse(sheet()).sheet;
+    const turns = [
+      { kind: 'user' as const, text: '改成两份，参考 https://example.com/source' },
+      {
+        kind: 'questions' as const,
+        round: 1,
+        questions: JSON.parse(questions()).questions,
+        answers: { q1: 'b' },
+      },
+    ];
+    const brief = taskBrief('最初要一份', turns, finalSheet);
+    expect(brief).toContain('改成两份，参考 https://example.com/source');
+    expect(brief).toContain('首页给谁看（第 1 轮） → 情侣');
+    expect(brief).toContain('最后确认的任务单');
+    expect(() => taskBrief('长'.repeat(20000), turns, finalSheet)).toThrow('原话未被截断');
+  });
   const conversation = () => repo.findOwned(CONV, OWNER) as Promise<Conversation>;
   const begin = async () => {
     taskProbability = 0.9;
@@ -551,6 +569,7 @@ describe('接需求', () => {
       sheet: { criteria: ['不超过 80 字', '语气温馨'] },
     });
     expect(createdTasks[0]!.brief).toContain('用户的原话：帮我写个官网首页开头');
+    expect(createdTasks[0]!.brief).toContain('最后确认的任务单');
     expect(repo.rows.find((r) => r.kind === 'sheet')?.data).toMatchObject({
       status: 'confirmed',
       taskId: TASK_ID,

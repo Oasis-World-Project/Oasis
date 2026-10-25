@@ -6,25 +6,51 @@ import { RunTextsBody, type RunOutputFile } from '@oasis/contracts/harness';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import type { Logger, ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
+import type { ExpectedFile } from '@oasis/contracts/task';
+import { patternRegExp } from './output-files.ts';
 
 export interface GateResult {
   /** 没满足的地方（普通话，会原样交给节点去改、也会作为提醒给用户看）；为空表示通过 */
   unmet: string[];
-}
-
-/** 简单通配：* 匹配一段路径里的任意字符 */
-function globToRegExp(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
-  return new RegExp(`^${escaped}$`);
+  /** 检查异常或覆盖不足，不能冒充通过，也不因此重跑节点。 */
+  unchecked?: string[];
 }
 
 /** 规则检查 */
-export function checkRules(outputs: RunOutputFile[], expects: string[]): string[] {
+export function checkRules(
+  outputs: RunOutputFile[],
+  expects: ExpectedFile[],
+  inspected?: RunTextsBody['files'],
+): string[] {
   if (outputs.length === 0) return ['out/ 里没有任何产出文件'];
   const unmet: string[] = [];
-  for (const pattern of expects) {
-    const re = globToRegExp(pattern);
+  for (const expected of expects) {
+    const pattern = typeof expected === 'string' ? expected : expected.pattern;
+    const re = patternRegExp(pattern);
     const matched = outputs.filter((f) => re.test(f.path));
+    if (typeof expected !== 'string') {
+      if (!inspected) continue; // 内容尚未读取，不能提前下有效数量结论。
+      const valid = matched.filter(
+        (f) => f.size > 0 && inspected.some((i) => i.path === f.path && i.valid === true),
+      );
+      const number = expected.exactCount ?? expected.minCount ?? 1;
+      if (expected.exactCount !== undefined ? valid.length !== number : valid.length < number)
+        unmet.push(
+          `out/${pattern} 有效文件 ${valid.length} 个，要求${expected.exactCount === undefined ? '至少' : '正好'} ${number} 个`,
+        );
+      if (expected.width || expected.height)
+        for (const file of valid) {
+          const image = inspected.find((f) => f.path === file.path)!;
+          if (
+            (expected.width && image.width !== expected.width) ||
+            (expected.height && image.height !== expected.height)
+          )
+            unmet.push(
+              `out/${file.path} 尺寸 ${image.width ?? '?'}×${image.height ?? '?'}，要求 ${expected.width ?? '不限'}×${expected.height ?? '不限'}`,
+            );
+        }
+      continue;
+    }
     if (matched.length === 0) unmet.push(`缺少文件 out/${pattern}`);
     else if (matched.every((f) => f.size === 0)) unmet.push(`文件 out/${pattern} 是空的`);
   }
@@ -51,7 +77,7 @@ interface GateInput {
   goal: string;
   runs: GateRun[];
   checks: string[];
-  expects: string[];
+  expects: ExpectedFile[];
 }
 
 export function createGate(deps: {
@@ -62,27 +88,123 @@ export function createGate(deps: {
   /** 「满足」的概率低于这个值就算没满足 */
   threshold: number;
   logger: Logger;
+  visionMaxImages?: number;
+  visionMaxBytes?: number;
 }) {
   const { harness, modelGateway, logger } = deps;
 
   /** 验收点检查：把要做的事、交付时说的话和文字产出交给 Jev，每条验收点一个问题 */
-  async function checkPoints(input: GateInput): Promise<string[]> {
+  async function checkPoints(input: GateInput): Promise<GateResult> {
     // 几次运行的文字产出一起看，总长约 8,000 字
-    const perRun = Math.max(2_000, Math.floor(8_000 / input.runs.length));
-    const state = [`要做的事：${input.goal}`];
+    const runs: GateRun[] = [];
     for (const run of input.runs) {
+      const prior = runs.find((r) => r.runId === run.runId);
+      if (!prior) runs.push({ ...run, outputs: [...run.outputs] });
+      else {
+        prior.outputs.push(
+          ...run.outputs.filter((f) => !prior.outputs.some((p) => p.path === f.path)),
+        );
+        prior.label = [prior.label, run.label].filter(Boolean).join('、');
+      }
+    }
+    const perRun = Math.max(2_000, Math.floor(8_000 / Math.max(1, runs.length)));
+    const state = [`要做的事：${input.goal}`];
+    const unchecked: string[] = [];
+    const unmet: string[] = [];
+    const vision: { runId: string; path: string }[] = [];
+    for (const run of runs) {
       const texts = await harness.json(
         'GET',
         `/internal/runs/${run.runId}/texts?maxChars=${perRun}`,
         { schema: RunTextsBody },
       );
       const who = run.label ? `「${run.label}」` : '';
+      const selected = texts.files.filter((f) => run.outputs.some((o) => o.path === f.path));
+      if (texts.truncated) unchecked.push(`${who}文件内容或解析范围有截断，未覆盖全部内容`);
+      for (const file of selected) {
+        if (file.error || file.warning)
+          unchecked.push(`${file.path}：${file.error ?? file.warning}`);
+      }
+      for (const output of run.outputs)
+        if (!selected.some((f) => f.path === output.path))
+          unchecked.push(`${output.path}：未取得内容检查结果`);
+      unmet.push(
+        ...checkRules(run.outputs, input.expects, selected).filter((u) => !unmet.includes(u)),
+      );
+      vision.push(
+        ...run.outputs
+          .filter(
+            (f) =>
+              /\.(png|jpe?g|webp)$/i.test(f.path) &&
+              selected.some((s) => s.path === f.path && s.valid === true),
+          )
+          .map((f) => ({ runId: run.runId, path: f.path })),
+      );
       state.push(
         `${who}交付时说：${run.summary ?? '（没说）'}`,
         `${who}产出文件：${run.outputs.map((f) => f.path).join('、')}`,
-        ...texts.files.map((f) => `文件 ${f.path} 的内容：\n${f.text}`),
+        ...selected.map(
+          (f) => `文件 ${f.path} 的内容：\n${f.text}${f.error ? `\n未读到：${f.error}` : ''}`,
+        ),
       );
     }
+    const count = deps.visionMaxImages ?? 4;
+    if (vision.length > count)
+      unchecked.push(
+        `视觉抽样仅覆盖 ${count}/${vision.length} 张：${vision
+          .slice(0, count)
+          .map((f) => f.path)
+          .join('、')}`,
+      );
+    if (vision.length && input.checks.length) {
+      try {
+        const images = [];
+        let bytes = 0;
+        for (const file of vision.slice(0, count)) {
+          const response = await harness.stream(
+            'GET',
+            `/internal/runs/${file.runId}/files/${file.path.split('/').map(encodeURIComponent).join('/')}`,
+          );
+          const content = Buffer.from(await response.arrayBuffer());
+          bytes += content.length;
+          if (bytes > (deps.visionMaxBytes ?? 20 * 1024 * 1024))
+            throw new Error('图片总大小超过视觉检查上限');
+          const mediaType = /\.png$/i.test(file.path)
+            ? 'image/png'
+            : /\.webp$/i.test(file.path)
+              ? 'image/webp'
+              : 'image/jpeg';
+          images.push({ mediaType, base64: content.toString('base64') });
+        }
+        const result = await modelGateway.json('POST', '/internal/v1/tools/image.inspect', {
+          body: {
+            args: {
+              images,
+              question: `逐张描述画面及可见文字，不能看清的明确说明。关注这些要求：${input.checks.join('；')}`,
+            },
+          },
+          headers: {
+            [OASIS_HEADERS.payerId]: input.payerId,
+            [OASIS_HEADERS.taskId]: input.taskId,
+            ...(input.nodeId ? { [OASIS_HEADERS.nodeId]: input.nodeId } : {}),
+          },
+          schema: z.object({ text: z.string() }),
+        });
+        state.push(
+          `图片顺序：${vision
+            .slice(0, count)
+            .map((f) => f.path)
+            .join('、')}\n视觉检查：${result.text}`,
+        );
+      } catch (err) {
+        logger.warn({ err, taskId: input.taskId }, '视觉检查未完成');
+        unchecked.push('视觉检查未完成，不能据节点说明确认画面满足要求');
+      }
+    }
+    if (unmet.length || !input.checks.length)
+      return { unmet, ...(unchecked.length ? { unchecked } : {}) };
+    if (vision.length && unchecked.some((u) => u.startsWith('视觉检查未完成')))
+      return { unmet: [], unchecked };
     const questions = Object.fromEntries(
       input.checks.map((check, i) => [
         `c${i}`,
@@ -103,7 +225,13 @@ export function createGate(deps: {
       },
       schema: DecisionAnswers,
     });
-    return input.checks.filter((_, i) => (answers[`c${i}`]?.noul ?? 1) < deps.threshold);
+    input.checks.forEach((check, i) => {
+      const probability = answers[`c${i}`]?.noul;
+      if (probability === undefined || !Number.isFinite(probability))
+        unchecked.push(`验收点「${check}」没有得到有效判断`);
+      else if (probability < deps.threshold) unmet.push(check);
+    });
+    return { unmet, ...(unchecked.length ? { unchecked } : {}) };
   }
 
   return {
@@ -116,12 +244,16 @@ export function createGate(deps: {
         input.expects,
       );
       // 规则没过就不用再问 Jev 了（连产出都没有，验收点无从谈起）
-      if (unmet.length > 0 || input.checks.length === 0) return { unmet };
+      if (
+        unmet.length > 0 ||
+        (input.checks.length === 0 && input.expects.every((e) => typeof e === 'string'))
+      )
+        return { unmet };
       try {
-        return { unmet: await checkPoints(input) };
+        return await checkPoints(input);
       } catch (err) {
         logger.warn({ err, taskId: input.taskId, nodeId: input.nodeId }, '验收点检查出错，放行');
-        return { unmet: [] };
+        return { unmet: [], unchecked: ['验收点检查服务异常，检查未完成'] };
       }
     },
   };

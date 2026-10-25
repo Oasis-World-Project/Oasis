@@ -1,5 +1,6 @@
 """沙箱真实软件验收：由 pnpm sandbox:check 在断网、2 核、2 GB 临时容器中执行。"""
 import importlib
+import csv
 import json
 import os
 from pathlib import Path
@@ -96,7 +97,19 @@ with tempfile.TemporaryDirectory(prefix="oasis-file-tools-") as tmp:
     run("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(root / "sample.wav"))
     probe = json.loads(run("ffprobe", "-v", "error", "-show_format", "-of", "json", str(root / "sample.wav")))
     assert float(probe["format"]["duration"]) == 1
+    run("ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(root / "sample.wav"), "-f", "segment", "-segment_time", "0.4", "-segment_list", str(root / "segments.csv"), "-segment_list_type", "csv", str(root / "part-%02d.wav"))
+    segments = list(csv.reader((root / "segments.csv").open()))
+    assert len(segments) >= 2
+    previous_end = 0.0
+    for filename, start, end in segments:
+        assert abs(float(start) - previous_end) < 0.001
+        assert float(end) > float(start)
+        assert Path(filename).name == filename
+        assert (root / filename).is_file()
+        previous_end = float(end)
+    assert abs(previous_end - 1.0) < 0.05
     print("PASS: ffmpeg audio generation and ffprobe", flush=True)
+    print("PASS: audio segments preserve actual source start/end times for transcript citations", flush=True)
 
     class Catalog(BaseHTTPRequestHandler):
         calls = []

@@ -17,7 +17,9 @@
 ## 交付物
 
 - 默认 Markdown，文件名用交付物的名字，如 `out/首页文案.md`。
-- 用户要 Word 或 PDF：写作节点照常交 Markdown，再由下游节点用 Python 生成（`pip install python-docx` 或 `reportlab`，沙箱里能装包），expects 写上 `*.docx` / `*.pdf`。
+- 用户要 Word、PPT、PDF：优先使用已预装的 python-docx、python-pptx、WeasyPrint、LibreOffice；先运行 oasis-tool list 核对软件，无需重复安装。任务简单时同一节点直接生成最终格式。
+- PPTX 同时用 LibreOffice 导出同名 PDF，作为预览配套文件；两者都写入 deliver。中文使用沙箱已安装字体，交付前抽查提取正文和转换后的页数。
+- deliver 只列最终文档及必要附件；提纲、章节草稿和转换中间文件不列入。expects 用于检查文件，不代替最终交付清单。
 
 ## 常见的坑
 

@@ -26,19 +26,24 @@ function deliveryCard(task: TaskBody): DeliveryCard {
   return {
     taskId: task.id,
     title: task.title,
-    files: task.deliverables.flatMap((d) => {
-      const node = d.nodeId ? byId.get(d.nodeId) : undefined;
-      return node
-        ? node.outputs.map((f) => ({
-            deliverable: d.name,
-            nodeId: node.id,
-            path: f.path,
-            size: f.size,
-          }))
-        : [];
-    }),
+    files:
+      task.deliveryFiles ??
+      task.deliverables.flatMap((d) => {
+        const node = d.nodeId ? byId.get(d.nodeId) : undefined;
+        return node
+          ? node.outputs.map((f) => ({
+              deliverable: d.name,
+              nodeId: node.id,
+              path: f.path,
+              size: f.size,
+            }))
+          : [];
+      }),
     unmet: task.acceptance?.unmet ?? [],
-    warnings: task.nodes.flatMap((n) => (n.warning ? [`「${n.title}」${n.warning}`] : [])),
+    warnings: [
+      ...task.nodes.flatMap((n) => (n.warning ? [`「${n.title}」${n.warning}`] : [])),
+      ...(task.acceptance?.unchecked ?? []).map((u) => `未完成的检查：${u}`),
+    ],
   };
 }
 

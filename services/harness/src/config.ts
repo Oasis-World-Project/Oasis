@@ -41,6 +41,15 @@ export const harnessEnv = {
   OASIS_BATCH_ROW_BUDGET_MICRO: positiveInt.max(10_000_000).default(200_000),
   OASIS_BATCH_MAX_INPUT_BYTES: positiveInt.max(20 * 1024 * 1024).default(5 * 1024 * 1024),
   OASIS_BATCH_TIMEOUT_MS: positiveInt.max(600_000).default(120_000),
+  EXTRACT_INPUT_BYTES: positiveInt.max(100 * 1024 * 1024).default(20 * 1024 * 1024),
+  EXTRACT_UNZIP_BYTES: positiveInt.max(200 * 1024 * 1024).default(50 * 1024 * 1024),
+  EXTRACT_MAX_ENTRIES: positiveInt.max(10000).default(2000),
+  EXTRACT_MAX_PAGES: positiveInt.max(1000).default(200),
+  EXTRACT_MAX_CELLS: positiveInt.max(100000).default(20000),
+  EXTRACT_MAX_PIXELS: positiveInt.max(100000000).default(25000000),
+  EXTRACT_TIMEOUT_MS: positiveInt.max(60000).default(10000),
+  EXTRACT_TOTAL_MS: positiveInt.max(120000).default(30000),
+  EXTRACT_MAX_FILES: positiveInt.max(1000).default(1000),
 
   // ---- 运行 ----
   /** 同时进行的运行数上限，超出的排队 */

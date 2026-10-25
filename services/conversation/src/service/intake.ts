@@ -5,6 +5,7 @@ import { AUTO_ANSWER, IntakeQuestion } from '@oasis/contracts/conversation';
 import type { ChatMessage } from '@oasis/contracts/model-gateway';
 import { TaskSheet } from '@oasis/contracts/task';
 import { z } from 'zod';
+import { HttpError } from '@oasis/service-kit';
 import type { IntakeTurn } from '../repo/schema.ts';
 import { materialsText } from './attachments.ts';
 
@@ -43,6 +44,9 @@ function system(name: string): string {
 - 只问普通人听得懂的需求问题：给谁看、用在哪、什么风格、多长多少、必须包含什么、有没有素材或限制。技术问题（文件格式细节、工具、实现方式）你自己定，写进任务单的 assumptions。
 - 每次最多 4 道选择题，每题 2–5 个选项，标出你推荐的默认项（default）。不要列「你看着办」，界面会自带；用户回答 ${AUTO_ANSWER} 就是「你看着办」，按你推荐的来。
 - 已经清楚的不要再问，能合理默认的也不要问；信息够了就直接给任务单。宁可少问。
+- deliverables.form 必须写到实际文件格式（如 DOCX + PDF、PPTX + 同名 PDF、PNG、XLSX、JSONL），不要只写“报告”“图片”。用户指定格式时遵从；格式影响使用时可问用途，已有合理默认值则写进 assumptions。
+- 数量要求明确写“至少”或“正好”；图片尺寸/比例、营销平台和 A/B 版本写进交付物或 criteria。不得把文件数量和数据集有效行数混为一谈。
+- 用户补充或撤回要求后更新任务单；最后确认的任务单优先于早先已经撤回的要求。
 - 用户明确说不做了、只是随便聊聊，就回答 cancel。
 - 只输出一个 JSON 对象，不要任何别的文字，不要代码块。
 
@@ -70,6 +74,24 @@ function describeTurn(turn: IntakeTurn): string {
     return `- ${q.text} → ${label}`;
   });
   return `第 ${turn.round} 轮你问的问题和用户的回答：\n${lines.join('\n')}`;
+}
+
+/** 保留接需求原话与选择答案，超长明确拒绝，不能静默丢掉后补要求。 */
+export function taskBrief(request: string, turns: IntakeTurn[], sheet: TaskSheet): string {
+  const history = turns.filter((turn) => turn.kind !== 'sheet').map(describeTurn);
+  const brief = [
+    `【执行依据】以最后确认的任务单为准；下列历史原话和答案用于保留上下文，已撤回的旧要求不再执行。`,
+    `用户的原话：${request}`,
+    ...history,
+    `【最后确认的任务单】\n${sheetText(sheet)}`,
+  ].join('\n\n');
+  if (brief.length > 20000)
+    throw new HttpError(
+      400,
+      'task_brief_too_long',
+      '需求记录超过 20,000 字，请收拢需求后重新确认；原话未被截断',
+    );
+  return brief;
 }
 
 /** 交给模型的消息 */

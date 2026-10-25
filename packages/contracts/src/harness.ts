@@ -136,7 +136,17 @@ export const RunMessageBody = z.object({ text: z.string().trim().min(1).max(20_0
 
 /** 某次运行的文字类产出（给关卡检查用；总长截断） */
 export const RunTextsBody = z.object({
-  files: z.array(z.object({ path: z.string(), text: z.string() })),
+  files: z.array(
+    z.object({
+      path: z.string(),
+      text: z.string(),
+      valid: z.boolean().optional(),
+      error: z.string().optional(),
+      warning: z.string().optional(),
+      width: z.number().int().positive().optional(),
+      height: z.number().int().positive().optional(),
+    }),
+  ),
   truncated: z.boolean(),
 });
 export type RunTextsBody = z.infer<typeof RunTextsBody>;

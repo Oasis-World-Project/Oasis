@@ -90,6 +90,17 @@ await startService({
       timeoutMs: config.RUN_TIMEOUT_MS,
       cores: config.SANDBOX_CPUS,
       outputMaxBytes: config.OUTPUT_MAX_BYTES,
+      inspectionLimits: {
+        inputBytes: config.EXTRACT_INPUT_BYTES,
+        unzipBytes: config.EXTRACT_UNZIP_BYTES,
+        entries: config.EXTRACT_MAX_ENTRIES,
+        pages: config.EXTRACT_MAX_PAGES,
+        cells: config.EXTRACT_MAX_CELLS,
+        pixels: config.EXTRACT_MAX_PIXELS,
+        timeoutMs: config.EXTRACT_TIMEOUT_MS,
+        totalMs: config.EXTRACT_TOTAL_MS,
+        files: config.EXTRACT_MAX_FILES,
+      },
       serviceName: name,
       logger,
     });

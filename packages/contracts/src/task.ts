@@ -13,9 +13,28 @@ export const NodeKey = z
 export const MAX_MATERIALS = 20;
 
 /** 应有的产出文件：out/ 下的相对路径，可以用 * 匹配一段里的任意字符（如 *.md） */
-const ExpectedFile = z
+const OutputPattern = z
   .string()
-  .regex(/^(?!\/)(?!.*\.\.)[^\n]{1,200}$/, '必须是 out/ 下的相对路径，不能有 ..');
+  .regex(
+    /^(?!\/)(?!.*\.\.)(?!.*[\\:\r\n])[^\n]{1,200}$/,
+    '必须是 out/ 下的相对路径，不能有 ..、反斜线或冒号',
+  );
+export const ExpectedFile = z.union([
+  OutputPattern,
+  z
+    .object({
+      pattern: OutputPattern,
+      minCount: z.number().int().min(1).max(1000).optional(),
+      exactCount: z.number().int().min(1).max(1000).optional(),
+      width: z.number().int().min(1).max(30000).optional(),
+      height: z.number().int().min(1).max(30000).optional(),
+    })
+    .refine(
+      (r) => r.minCount === undefined || r.exactCount === undefined,
+      'minCount 与 exactCount 不能同时设置',
+    ),
+]);
+export type ExpectedFile = z.infer<typeof ExpectedFile>;
 
 /** 两种节点共有的部分 */
 const NodeCommon = {
@@ -30,6 +49,8 @@ const NodeCommon = {
   checks: z.array(z.string().trim().min(1).max(300)).max(5).default([]),
   /** 关卡的规则检查：这些文件必须在 out/ 里且不是空的 */
   expects: z.array(ExpectedFile).max(10).default([]),
+  /** 显式选择最终交付文件；缺省保留历史任务行为。 */
+  deliver: z.array(OutputPattern).max(20).optional(),
 };
 
 /** 节点要用的外部工具（ADR 0006 §5）：工具名和预计用几次（用来估算花费，不是硬上限） */
@@ -190,7 +211,8 @@ export const NodeBody = z.object({
   goal: z.string(),
   model: z.string(),
   checks: z.array(z.string()),
-  expects: z.array(z.string()),
+  expects: z.array(ExpectedFile),
+  deliver: z.array(OutputPattern).optional(),
   /** 要用的外部工具（讨论节点没有；旧版 task 不返回时当作没有） */
   tools: z.array(NodeTool).default([]),
   /** 讨论节点的参与者、轮数和讨论记录；干活节点为 null */
@@ -243,7 +265,20 @@ export const TaskBody = z.object({
   /** 用户确认的任务单（直接给方案建的任务没有） */
   sheet: TaskSheet.nullable(),
   /** 整体验收的结果：没满足的地方（没满足也照样交付）；还没验收时为 null */
-  acceptance: z.object({ unmet: z.array(z.string()) }).nullable(),
+  acceptance: z
+    .object({ unmet: z.array(z.string()), unchecked: z.array(z.string()).optional() })
+    .nullable(),
+  /** task 生成的统一清单；缺省表示旧任务，空数组不能回退到所有产出。 */
+  deliveryFiles: z
+    .array(
+      z.object({
+        deliverable: z.string(),
+        nodeId: z.uuid(),
+        path: z.string(),
+        size: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
   /** 用户给的素材（旧版 task 不返回时当作没有） */
   materials: z.array(Material).default([]),
   /** 每样交付物由哪个节点交出（规划员定） */
@@ -282,6 +317,7 @@ export const UpdateNodeBody = z
     model: z.string().min(1).max(200),
     checks: z.array(z.string().trim().min(1).max(300)).max(5),
     expects: z.array(ExpectedFile).max(10),
+    deliver: z.array(OutputPattern).max(20),
     participants: z.array(Participant).min(2).max(5),
     rounds: z.number().int().min(1).max(5),
     tools: NodeTools,

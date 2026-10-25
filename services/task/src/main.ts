@@ -40,7 +40,9 @@ await startService({
       connection: eventBus.connection,
       logger,
     });
-    const harness = createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 15_000 });
+    const harness = createServiceClient('harness', config.HARNESS_URL, {
+      timeoutMs: config.HARNESS_CHECK_TIMEOUT_MS,
+    });
     const modelGateway = createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
       timeoutMs: 60_000,
     });
@@ -52,6 +54,8 @@ await startService({
         modelGateway,
         model: config.GATE_MODEL,
         threshold: config.GATE_THRESHOLD,
+        visionMaxImages: config.GATE_VISION_MAX_IMAGES,
+        visionMaxBytes: config.GATE_VISION_MAX_BYTES,
         logger,
       }),
       maxParallel: config.MAX_PARALLEL_NODES,

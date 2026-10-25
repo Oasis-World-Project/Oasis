@@ -41,6 +41,7 @@ const node = (key: string, model = 'deepseek/x') => ({
   kind: 'work',
   goal: 'g',
   model,
+  deliver: ['*.md'],
 });
 
 describe('规划门', () => {

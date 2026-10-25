@@ -39,6 +39,19 @@ interface DeliveredFile {
 /** 负责交付物的节点交出的文件，和交付消息列的是同一批；同一个文件只算一次（记在第一样交付物下） */
 function deliveredFiles(task: TaskBody): DeliveredFile[] {
   const byId = new Map(task.nodes.map((n) => [n.id, n]));
+  if (task.deliveryFiles !== undefined)
+    return task.deliveryFiles.map((file) => {
+      const node = byId.get(file.nodeId);
+      return {
+        ...file,
+        models: [
+          ...new Set([
+            ...(node?.discussion?.participants.map((p) => p.model) ?? []),
+            ...(node ? [node.model] : []),
+          ]),
+        ],
+      };
+    });
   const seen = new Set<string>();
   const files: DeliveredFile[] = [];
   for (const d of task.deliverables) {

@@ -373,6 +373,7 @@ const work = (key: string, title = key) => ({
   model: 'deepseek/x',
   checks: [] as string[],
   expects: [] as string[],
+  deliver: ['*.md'],
   tools: [] as { key: string; uses: number }[],
 });
 const discussion = (key: string, names: string[], rounds = 2) => ({
@@ -1142,6 +1143,10 @@ describe('整体验收（从任务单来的任务）', () => {
     });
     const detail = await service.get(OWNER, task.id);
     expect(detail).toMatchObject({ status: 'succeeded', acceptance: { unmet: ['不超过 80 字'] } });
+    expect(detail.deliveryFiles?.map((f) => [f.deliverable, f.path])).toEqual([
+      ['首页文案', '首页.md'],
+      ['海报文案', '海报.md'],
+    ]);
     expect(gateCalls.at(-1)).toEqual({
       runId: runOf('home', task).runId,
       checks: ['语气温馨', '不超过 80 字'],

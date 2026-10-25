@@ -55,6 +55,7 @@ export function plannerPrompt(input: {
         tools: [],
         checks: ['从任务单里挑和这个节点相关的验收点'],
         expects: ['初稿.md'],
+        deliver: ['初稿.md'],
       },
       {
         key: 'review',
@@ -76,6 +77,7 @@ export function plannerPrompt(input: {
   };
   return [
     '你是 Oasis 的规划员。用户已经确认了下面的任务单，你要为它排一条工作流，交给 AI 团队去做。',
+    '先运行 oasis-tool list 查看实际可用的工具和沙箱软件。',
     `【任务】\n${input.brief}`,
     `【可以用的模型】（节点里的 model 只能填这些；没有特别理由就用 ${input.limits.defaultModel}）\n${models}`,
     `【可以用的工具】（干活节点的 tools 只能填这些：写成 {"key": "image.generate", "uses": 预计用几次}；text.batch 和批量 jev.decide 的 uses 按输入行数填，如 200 行就填 200，最多 1000；按目录单位计费。批次必须设置预算，恢复不重发已完成或结果不确定的行。）\n${tools}`,
@@ -91,6 +93,8 @@ export function plannerPrompt(input: {
       '- 能同时做的就并行；一个节点只做一件事。',
       `- 任务单上每样交付物（${deliverables}）都要在 deliverables 里指定由哪个节点交出最终版。`,
       '- 每个节点的 checks 从任务单的「怎么算做好」里挑和它相关的（最多 5 条，可以为空）；expects 写它必须交出的文件名（可以用 * 通配）。',
+      '- expects 可写 {"pattern":"图片/*.png","exactCount":20,"width":1024,"height":1024}（正好 20 张），或 {"pattern":"图片/*.png","minCount":20}（至少 20 张）；只计有效非空文件。',
+      '- 每个负责交付物的节点必须给出非空 deliver 路径列表（可用 * 通配），明确最终交付哪些文件；草稿与局部素材另存目录。deliver 与 expects 独立，配套 PDF、来源清单和统计报告需要时也列入。',
       '- goal 写清楚这个节点要做什么、产出写成什么文件；节点里的 AI 不会再问用户问题。',
       '- key 只用英文字母、数字、下划线、短横线。',
     ].join('\n'),
@@ -168,6 +172,8 @@ export function checkPlan(
     const owner = plan.deliverables[d.name];
     if (!owner) problems.push(`交付物「${d.name}」没有指定由哪个节点交出`);
     else if (!keys.has(owner)) problems.push(`交付物「${d.name}」指定的节点「${owner}」不存在`);
+    else if (!plan.nodes.find((n) => n.key === owner)?.deliver?.length)
+      problems.push(`交付物「${d.name}」的节点「${owner}」没有指定最终 deliver 文件`);
   }
   return problems.length > 0 ? { problems } : { plan };
 }

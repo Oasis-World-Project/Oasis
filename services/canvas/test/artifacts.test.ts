@@ -96,7 +96,11 @@ function taskBody(id: string) {
 const fetched: string[] = [];
 let fileFailures = 0;
 const task = Fastify();
-task.get('/internal/tasks/:id', async (request) => taskBody((request.params as { id: string }).id));
+let finalFiles: { deliverable: string; nodeId: string; path: string; size: number }[] | undefined;
+task.get('/internal/tasks/:id', async (request) => ({
+  ...taskBody((request.params as { id: string }).id),
+  ...(finalFiles === undefined ? {} : { deliveryFiles: finalFiles }),
+}));
 task.get('/internal/tasks/:id/files/:nodeId/*', async (request, reply) => {
   const path = (request.params as { '*': string })['*'];
   fetched.push(path);
@@ -117,6 +121,7 @@ let service: ReturnType<typeof createArtifactService>;
 let app: Awaited<ReturnType<typeof createService>>['app'];
 
 beforeEach(async () => {
+  finalFiles = undefined;
   fetched.length = 0;
   fileFailures = 0;
   repo = memoryArtifacts();
@@ -171,6 +176,15 @@ const get = (url: string, headers: Record<string, string> = {}, user = KAI) =>
   app.inject({ url, headers: { [OASIS_HEADERS.userId]: user, ...headers } });
 
 describe('任务完成时登记成果', () => {
+  it('显式最终清单控制画布与同步，空清单不登记任何节点文件', async () => {
+    finalFiles = [{ deliverable: '最终文案', nodeId: COPY, path: '首页文案.md', size: 20 }];
+    await service.onTaskStatus(event(T1));
+    expect(repo.rows.map((r) => [r.path, r.deliverable])).toEqual([['首页文案.md', '最终文案']]);
+    expect(fetched).toEqual(['首页文案.md']);
+    finalFiles = [];
+    await service.onTaskStatus(event(T2));
+    expect(repo.rows).toHaveLength(1);
+  });
   it('只登记负责交付物的节点交出的文件，一个文件一次；没完成的任务不登记', async () => {
     await service.onTaskStatus(event(T1, 'running'));
     expect(repo.rows).toHaveLength(0);

@@ -4,6 +4,30 @@ import { describe, expect, it } from 'vitest';
 import { checkRules, createGate } from '../src/service/gate.ts';
 
 describe('关卡的规则检查', () => {
+  it('精确和至少数量只计有效非空文件，并核对图片尺寸', () => {
+    const outputs = [
+      { path: '图/a.png', size: 1 },
+      { path: '图/b.png', size: 1 },
+      { path: '图/c.png', size: 0 },
+    ];
+    const inspected = [
+      { path: '图/a.png', text: '', valid: true, width: 100, height: 200 },
+      { path: '图/b.png', text: '', valid: false, error: '不能解码' },
+    ];
+    expect(
+      checkRules(
+        outputs,
+        [{ pattern: '图/*.png', minCount: 1, width: 100, height: 200 }],
+        inspected,
+      ),
+    ).toEqual([]);
+    expect(checkRules(outputs, [{ pattern: '图/*.png', exactCount: 2 }], inspected)[0]).toContain(
+      '有效文件 1 个',
+    );
+    expect(
+      checkRules(outputs, [{ pattern: '图/*.png', exactCount: 1, width: 200 }], inspected)[0],
+    ).toContain('尺寸 100×200');
+  });
   it('没有产出、缺文件、文件是空的都算没过；通配只匹配一段路径', () => {
     expect(checkRules([], [])).toEqual(['out/ 里没有任何产出文件']);
     const outputs = [
@@ -50,6 +74,51 @@ const input = {
 };
 
 describe('关卡的验收点检查', () => {
+  it('视觉工具取得真实图片并保留支付归属；失败明确未检查且不问 Jev', async () => {
+    const images = [{ path: 'a.png', size: 3 }];
+    const harness = {
+      ...fakeClient(() => ({
+        files: [{ path: 'a.png', text: '', valid: true, width: 1, height: 1 }],
+        truncated: false,
+      })).client,
+      stream: async () => new Response(Buffer.from('png')),
+    } as ServiceClient;
+    const gateway = fakeClient((path) =>
+      path.includes('image.inspect') ? { text: '一只杯子' } : { answers: { c0: { noul: 0.9 } } },
+    );
+    const gate = createGate({
+      harness,
+      modelGateway: gateway.client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    expect(
+      await gate.check({
+        ...input,
+        checks: ['有杯子'],
+        expects: [],
+        runs: [{ runId: 'r', summary: null, outputs: images }],
+      }),
+    ).toEqual({ unmet: [] });
+    expect(gateway.calls[0]).toMatchObject({
+      path: '/internal/v1/tools/image.inspect',
+      headers: { 'x-oasis-payer-id': PAYER, 'x-oasis-task-id': TASK, 'x-oasis-node-id': NODE },
+    });
+    expect((gateway.calls[1]?.body as { state: string[] }).state.join('\n')).toContain('一只杯子');
+    const broken = fakeClient(() => {
+      throw new Error('视觉服务不可用');
+    });
+    const unchecked = await createGate({
+      harness,
+      modelGateway: broken.client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    }).check({ ...input, expects: [], runs: [{ runId: 'r', summary: null, outputs: images }] });
+    expect(unchecked.unchecked?.join('')).toContain('视觉检查未完成');
+    expect(broken.calls).toHaveLength(1);
+  });
   it('每条验收点问一个是否满足；低于阈值的算没满足；记在付钱的人账上', async () => {
     const harness = fakeClient(() => ({
       files: [{ path: '介绍.md', text: '欢迎光临' }],
@@ -96,12 +165,20 @@ describe('关卡的验收点检查', () => {
       unmet: ['out/ 里没有任何产出文件'],
     });
     expect(gateway.calls).toHaveLength(0);
-    expect(await gate.check(input)).toEqual({ unmet: [] });
+    expect(await gate.check(input)).toEqual({
+      unmet: [],
+      unchecked: ['验收点检查服务异常，检查未完成'],
+    });
   });
 
   it('整体验收：几个节点的运行一起看（各自标上名字），不带节点归属', async () => {
     const harness = fakeClient((path) => ({
-      files: [{ path: 'x.md', text: path.includes('run-2') ? '第二份' : '第一份' }],
+      files: [
+        {
+          path: path.includes('run-2') ? 'b.md' : '介绍.md',
+          text: path.includes('run-2') ? '第二份' : '第一份',
+        },
+      ],
       truncated: false,
     }));
     const gateway = fakeClient(() => ({ answers: { c0: { type: 'noul', noul: 0.9 } } }));

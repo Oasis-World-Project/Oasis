@@ -1,0 +1,271 @@
+import { extname, posix } from 'node:path';
+import { parentPort, workerData } from 'node:worker_threads';
+import { Unzip, UnzipInflate } from 'fflate';
+import { XMLParser, XMLValidator } from 'fast-xml-parser';
+import sharp from 'sharp';
+import { getDocumentProxy } from 'unpdf';
+import type { InspectionLimits, InspectedFile } from './file-inspection.ts';
+
+const data = workerData as {
+  path: string;
+  content: Uint8Array;
+  limits: InspectionLimits;
+  maxChars: number;
+};
+type XmlNode = Record<string, unknown>;
+const node = (value: unknown): XmlNode =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as XmlNode) : {};
+const array = (value: unknown): XmlNode[] =>
+  (value === undefined ? [] : Array.isArray(value) ? value : [value]).map(node);
+const child = (value: unknown, ...keys: string[]): unknown =>
+  keys.reduce((value, key) => node(value)[key], value);
+const textOf = (value: unknown): string =>
+  typeof value === 'string' ? value : String(node(value)['#text'] ?? '');
+const runsText = (value: unknown) =>
+  textOf(child(value, 't')) ||
+  array(child(value, 'r'))
+    .map((run) => textOf(run.t))
+    .join('');
+globalThis.fetch = () => Promise.reject(new Error('文件解析不允许网络访问'));
+
+function xml(bytes: Uint8Array, ordered = false, removeNSPrefix = true): unknown {
+  const source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  if (/<!\s*(DOCTYPE|ENTITY)/i.test(source)) throw new Error('不接受含 DTD 或自定义实体的 XML');
+  if (XMLValidator.validate(source) !== true) throw new Error('XML 结构损坏');
+  return new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '@',
+    removeNSPrefix,
+    preserveOrder: ordered,
+    parseTagValue: false,
+    trimValues: false,
+  }).parse(source);
+}
+
+function officeParts(bytes: Uint8Array, limits: InspectionLimits): Map<string, Uint8Array> {
+  const parts = new Map<string, Uint8Array>();
+  let entries = 0;
+  let size = 0;
+  const unzip = new Unzip((file) => {
+    if (++entries > limits.entries) throw new Error('ZIP 条目超过上限');
+    if (file.originalSize !== undefined && file.originalSize > limits.unzipBytes)
+      throw new Error('ZIP 解压体积超过上限');
+    if (!/^(word|ppt|xl)\/.+\.(xml|rels)$/.test(file.name)) return;
+    const chunks: Uint8Array[] = [];
+    file.ondata = (error, chunk, final) => {
+      if (error) throw error;
+      size += chunk.length;
+      if (size > limits.unzipBytes) {
+        file.terminate();
+        throw new Error('ZIP 解压体积超过上限');
+      }
+      chunks.push(chunk);
+      if (final) parts.set(file.name, Buffer.concat(chunks));
+    };
+    file.start();
+  });
+  unzip.register(UnzipInflate);
+  // 小块输入，避免一个压缩块在回调前生成巨量输出。
+  for (let i = 0; i < bytes.length; i += 4096)
+    unzip.push(bytes.subarray(i, i + 4096), i + 4096 >= bytes.length);
+  return parts;
+}
+
+function paragraphs(tree: unknown): string {
+  if (!Array.isArray(tree)) return '';
+  return tree
+    .map((item: unknown) =>
+      Object.entries(node(item))
+        .map(([tag, value]) => {
+          if (tag === '#text') return String(value);
+          if (tag === ':@') return '';
+          if (tag === 'tab') return '\t';
+          if (tag === 'br') return '\n';
+          return paragraphs(value) + (['p', 'tr'].includes(tag) ? '\n' : tag === 'tc' ? '\t' : '');
+        })
+        .join(''),
+    )
+    .join('');
+}
+
+function spreadsheet(
+  parts: Map<string, Uint8Array>,
+  limits: InspectionLimits,
+): { text: string; warning?: string } {
+  const read = (name: string) => {
+    const bytes = parts.get(name);
+    if (!bytes) throw new Error(`缺少 Office 部件 ${name}`);
+    return xml(bytes);
+  };
+  const workbook = child(read('xl/workbook.xml'), 'workbook');
+  const relationships = array(
+    child(read('xl/_rels/workbook.xml.rels'), 'Relationships', 'Relationship'),
+  );
+  const shared = parts.has('xl/sharedStrings.xml')
+    ? array(child(read('xl/sharedStrings.xml'), 'sst', 'si')).map(runsText)
+    : [];
+  let cells = 0;
+  let missingCache = false;
+  const lines: string[] = [];
+  for (const sheet of array(child(workbook, 'sheets', 'sheet'))) {
+    const rel = relationships.find((r) => r['@Id'] === sheet['@id']);
+    if (!rel || rel['@TargetMode'] === 'External') throw new Error('工作表引用无效');
+    const target = String(rel['@Target'] ?? '');
+    const name = posix.normalize(
+      target.startsWith('/') ? target.slice(1) : posix.join('xl', target),
+    );
+    if (!name.startsWith('xl/worksheets/')) throw new Error('工作表引用超出允许范围');
+    lines.push(`【工作表：${sheet['@name']}】`);
+    for (const row of array(child(read(name), 'worksheet', 'sheetData', 'row')))
+      for (const cell of array(row.c)) {
+        if (++cells > limits.cells) throw new Error('单元格数量超过解析上限');
+        const type = cell['@t'];
+        let value = textOf(cell.v);
+        if (type === 's') {
+          const index = Number(value);
+          if (!Number.isInteger(index) || shared[index] === undefined)
+            throw new Error('共享字符串引用无效');
+          value = shared[index]!;
+        } else if (type === 'inlineStr') value = runsText(cell.is);
+        const formula = cell.f === undefined ? '' : textOf(cell.f);
+        if (cell.f !== undefined && (cell.v === undefined || value === '' || type === 'e'))
+          missingCache = true;
+        lines.push(`${cell['@r'] ?? '?'}：${formula ? `公式 =${formula}；缓存值 ` : ''}${value}`);
+      }
+  }
+  if (!lines.length) throw new Error('工作簿没有可读取的工作表');
+  return {
+    text: lines.join('\n'),
+    ...(missingCache
+      ? { warning: '公式缓存缺失或错误，尚未验证计算结果；须在沙箱重算后核对' }
+      : {}),
+  };
+}
+
+async function inspect(): Promise<InspectedFile & { truncated?: boolean }> {
+  const bytes = Buffer.from(data.content);
+  const ext = extname(data.path).toLowerCase();
+  let text = '';
+  let warning: string | undefined;
+  let dimensions: { width?: number; height?: number } = {};
+  if (['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
+    const image = sharp(bytes, { limitInputPixels: data.limits.pixels, failOn: 'warning' });
+    const meta = await image.metadata();
+    const expected = ext === '.jpg' || ext === '.jpeg' ? 'jpeg' : ext.slice(1);
+    if (meta.format !== expected || !meta.width || !meta.height || (meta.pages ?? 1) > 1)
+      throw new Error('图片格式与扩展名不符或不是单帧图片');
+    await image.stats();
+    dimensions = { width: meta.width, height: meta.height };
+  } else if (['.docx', '.pptx', '.xlsx'].includes(ext)) {
+    const parts = officeParts(bytes, data.limits);
+    if (ext === '.xlsx') ({ text, warning } = spreadsheet(parts, data.limits));
+    else if (ext === '.docx') {
+      const document = parts.get('word/document.xml');
+      if (!document) throw new Error('缺少 Word 正文');
+      text = paragraphs(xml(document, true));
+    } else {
+      let slides = [...parts.keys()]
+        .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+        .sort(
+          (a, b) => Number(a.match(/slide(\d+)\.xml/)![1]) - Number(b.match(/slide(\d+)\.xml/)![1]),
+        );
+      if (parts.has('ppt/presentation.xml') && parts.has('ppt/_rels/presentation.xml.rels')) {
+        const local = (value: unknown, name: string) =>
+          Object.entries(node(value)).find(
+            ([key]) => key === name || key.endsWith(`:${name}`),
+          )?.[1];
+        const presentation = local(
+          xml(parts.get('ppt/presentation.xml')!, false, false),
+          'presentation',
+        );
+        const ids = array(local(local(presentation, 'sldIdLst'), 'sldId'));
+        const relationships = array(
+          child(
+            xml(parts.get('ppt/_rels/presentation.xml.rels')!),
+            'Relationships',
+            'Relationship',
+          ),
+        );
+        slides = ids.map((slide) => {
+          const id = Object.entries(slide).find(
+            ([key]) => key.startsWith('@') && key.endsWith(':id'),
+          )?.[1];
+          const relation = relationships.find((r) => r['@Id'] === id);
+          if (!relation || relation['@TargetMode'] === 'External')
+            throw new Error('幻灯片引用无效');
+          const target = String(relation['@Target'] ?? '');
+          const name = posix.normalize(
+            target.startsWith('/') ? target.slice(1) : posix.join('ppt', target),
+          );
+          if (!name.startsWith('ppt/slides/') || !parts.has(name))
+            throw new Error('幻灯片引用超出范围或部件缺失');
+          return name;
+        });
+      }
+      if (!slides.length || slides.length > data.limits.pages)
+        throw new Error('PPT 页数为空或超过上限');
+      text = slides
+        .map((name, i) => `【幻灯片 ${i + 1}】\n${paragraphs(xml(parts.get(name)!, true))}`)
+        .join('\n');
+    }
+    if (!text.trim()) warning = '未提取到正文，内容检查未完成';
+  } else if (ext === '.pdf') {
+    const pdf = await getDocumentProxy(new Uint8Array(bytes), {
+      useSystemFonts: false,
+      disableFontFace: true,
+      useWorkerFetch: false,
+      verbosity: 0,
+    });
+    try {
+      if (pdf.numPages > data.limits.pages) throw new Error('PDF 页数超过上限');
+      const pages: string[] = [];
+      for (let n = 1; n <= pdf.numPages; n++) {
+        const page = await pdf.getPage(n);
+        const content = await page.getTextContent();
+        pages.push(
+          `【第 ${n} 页】\n${content.items.map((item) => ('str' in item ? item.str : '')).join(' ')}`,
+        );
+        page.cleanup();
+      }
+      text = pages.join('\n');
+      if (!text.replace(/【第 \d+ 页】/g, '').trim())
+        warning = 'PDF 无可提取正文（可能为扫描件），内容检查未完成';
+    } finally {
+      await pdf.loadingTask.destroy();
+    }
+  } else if (
+    /\.(md|markdown|txt|html?|css|js|mjs|ts|tsx|jsx|jsonl?|csv|tsv|xml|ya?ml|py|sql|svg)$/.test(ext)
+  ) {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    if (text.includes('\0')) throw new Error('文本包含二进制内容');
+    if (ext === '.json') JSON.parse(text);
+    if (ext === '.jsonl')
+      for (const line of text.split(/\r?\n/).filter((line) => line.trim())) JSON.parse(line);
+  } else
+    return {
+      path: data.path,
+      text: '',
+      valid: false,
+      warning: '此格式未解析，需查看配套说明或人工核对',
+    };
+  const truncated = text.length > data.maxChars;
+  return {
+    path: data.path,
+    text: text.slice(0, data.maxChars),
+    valid: true,
+    ...dimensions,
+    ...(warning ? { warning } : {}),
+    ...(truncated ? { truncated: true } : {}),
+  };
+}
+
+void inspect()
+  .then((result) => parentPort!.postMessage(result))
+  .catch((error: unknown) => {
+    parentPort!.postMessage({
+      path: data.path,
+      text: '',
+      valid: false,
+      error: error instanceof Error ? error.message : '文件解析失败',
+    });
+  });

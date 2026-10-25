@@ -26,12 +26,9 @@ import {
 import type { Executor, Sandbox } from '../executor/executor.ts';
 import { extractFiles, listFiles, packFiles, readLimited } from '../executor/tar.ts';
 import type { Run, RunOutcome, RunsRepo } from '../repo/runs-repo.ts';
+import { inspectFiles, type InspectionLimits } from './file-inspection.ts';
 
 type Status = RunBody['status'];
-
-/** 关卡检查时读得懂的文字类产出 */
-const TEXT_FILE =
-  /\.(md|markdown|txt|html?|css|js|mjs|ts|tsx|jsx|json|csv|tsv|xml|ya?ml|py|sql|svg)$/i;
 
 /** 放进 out/ 的占位文件：保证目录存在且属于沙箱用户，不算产出 */
 const KEEP_FILE = '.oasis-keep';
@@ -124,6 +121,7 @@ export function createRunService(deps: {
   modelBaseUrl: string;
   packages: SandboxPackages;
   batchEnv?: Record<string, string>;
+  inspectionLimits?: InspectionLimits;
   maxConcurrent: number;
   timeoutMs: number;
   /** 沙箱的 CPU 核数（算力按 时长 × 核数 计费） */
@@ -544,26 +542,11 @@ export function createRunService(deps: {
     /** 文字类产出（给关卡检查用）：按路径顺序读，总长超过 maxChars 就截断 */
     async texts(id: string, maxChars: number): Promise<RunTextsBody> {
       const row = await owned(id);
-      const files: RunTextsBody['files'] = [];
-      if (!row.outputKey) return { files, truncated: false };
-      let left = maxChars;
-      let truncated = false;
-      for (const file of await extractFiles(await store.get(row.outputKey))) {
-        if (isPrivateOutput(file.path) || !TEXT_FILE.test(file.path) || file.content.includes(0))
-          continue;
-        if (left <= 0) {
-          truncated = true;
-          break;
-        }
-        let text = file.content.toString('utf8');
-        if (text.length > left) {
-          text = text.slice(0, left);
-          truncated = true;
-        }
-        left -= text.length;
-        files.push({ path: file.path, text });
-      }
-      return { files, truncated };
+      if (!row.outputKey) return { files: [], truncated: false };
+      const files = (await extractFiles(await store.get(row.outputKey))).filter(
+        (file) => !isPrivateOutput(file.path),
+      );
+      return inspectFiles(files, maxChars, deps.inspectionLimits);
     },
 
     /** 读一个产出文件（下载成果、读规划员写的方案用）；没有这个文件时 404 */

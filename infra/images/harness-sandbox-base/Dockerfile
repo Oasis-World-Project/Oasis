@@ -6,8 +6,9 @@ ARG NODE_IMAGE=node:24.21.0-trixie-slim
 FROM ${NODE_IMAGE}
 ARG DSH_VERSION=0.2.1-rc.2
 # 通用文档/数据工具（ADR 0008 G1）；预装包在独立 venv 内，运行时仍可经出口代理安装任务需要的包。
-RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-pip python3-venv fonts-noto-cjk \
+ARG APT_RETRIES=3
+RUN apt-get -o Acquire::Retries=${APT_RETRIES} update \
+ && apt-get -o Acquire::Retries=${APT_RETRIES} install -y --no-install-recommends python3 python3-pip python3-venv fonts-noto-cjk \
     libreoffice-writer=4:25.2.3-2+deb13u8 libreoffice-calc=4:25.2.3-2+deb13u8 libreoffice-impress=4:25.2.3-2+deb13u8 \
     ffmpeg=7:7.1.5-0+deb13u1 poppler-utils=25.03.0-5+deb13u4 libpango-1.0-0=1.56.3-1 libpangoft2-1.0-0=1.56.3-1 \
  && rm -rf /var/lib/apt/lists/*

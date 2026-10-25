@@ -11,6 +11,14 @@ export const taskEnv = {
   GATE_MODEL: z.string().min(1).default('typesafe/jev-1.14'),
   /** 「满足验收点」的概率低于这个值算没满足 */
   GATE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
+  GATE_VISION_MAX_IMAGES: z.coerce.number().int().min(1).max(4).default(4),
+  GATE_VISION_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(20 * 1024 * 1024)
+    .default(20 * 1024 * 1024),
+  HARNESS_CHECK_TIMEOUT_MS: z.coerce.number().int().min(10000).max(180000).default(40000),
   /** 关卡没过时最多退回修改几次（ADR 0004：1） */
   MAX_NODE_REWORKS: z.coerce.number().int().min(0).max(3).default(1),
   /** 一个任务同时最多跑几个节点（ADR 0004：3） */

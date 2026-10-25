@@ -57,6 +57,7 @@ export function nodeRow(n: PlanNode, id: string, status: 'waiting' | 'draft') {
   const config: NodeConfig = {
     checks: n.checks,
     expects: n.expects,
+    ...(n.deliver === undefined ? {} : { deliver: n.deliver }),
     ...(n.kind === 'discussion'
       ? { participants: n.participants, rounds: n.rounds, round: 0, transcript: [] }
       : { tools: n.tools }),

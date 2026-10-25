@@ -35,6 +35,7 @@ import {
   requireNotStarted,
 } from './graph.ts';
 import { materialPaths } from './materials.ts';
+import { deliveryManifest, selectDeliverables } from './output-files.ts';
 import { nodeRow, planToRows, validatePlan } from './plan.ts';
 import { createPlanning, dollars, type PlanningConfig } from './planning-service.ts';
 import { decide } from './schedule.ts';
@@ -60,6 +61,7 @@ function toNodeBody(node: Node): NodeBody {
     model: node.model,
     checks: c.checks ?? [],
     expects: c.expects ?? [],
+    ...(c.deliver === undefined ? {} : { deliver: c.deliver }),
     tools: c.tools ?? [],
     discussion:
       node.kind === 'discussion'
@@ -104,6 +106,7 @@ function toRunBody(run: NodeRun): NodeRunBody {
 }
 
 function toTaskBody({ task, nodes, edges }: Snapshot): TaskBody {
+  const deliveryFiles = deliveryManifest(task.deliverables, nodes);
   return {
     id: task.id,
     title: task.title,
@@ -117,6 +120,7 @@ function toTaskBody({ task, nodes, edges }: Snapshot): TaskBody {
     materials: task.materials,
     acceptance: task.acceptance,
     deliverables: task.deliverables,
+    ...(deliveryFiles === undefined ? {} : { deliveryFiles }),
     nodes: nodes.map(toNodeBody),
     edges: edges.map((e): EdgeBody => ({ id: e.id, from: e.fromNodeId, to: e.toNodeId })),
     createdAt: task.createdAt.toISOString(),
@@ -271,16 +275,18 @@ export function createWorkflowService(deps: {
     const { task } = snapshot;
     const { sheet } = snapshot.task;
     const missing: string[] = [];
-    const runs = task.deliverables.flatMap((d) => {
+    const deliverables = selectDeliverables(task.deliverables, snapshot.nodes);
+    const runs = deliverables.flatMap((d) => {
       const node = snapshot.nodes.find((n) => n.id === d.nodeId);
       const runId = node?.config.outputsRunId;
-      if (!node || !runId || node.outputs.length === 0) {
+      const outputs = d.files ?? node?.outputs ?? [];
+      if (!node || !runId || outputs.length === 0) {
         missing.push(`「${d.name}」没有交出文件`);
         return [];
       }
-      return [{ runId, summary: node.summary, outputs: node.outputs, label: d.name }];
+      return [{ runId, summary: node.summary, outputs, label: d.name }];
     });
-    const { unmet } =
+    const { unmet, unchecked } =
       runs.length > 0
         ? await gate.check({
             payerId: task.payerId,
@@ -291,11 +297,12 @@ export function createWorkflowService(deps: {
             checks: sheet.criteria,
             expects: [],
           })
-        : { unmet: [] };
+        : { unmet: [], unchecked: undefined };
     await store.transact(taskId, async (fresh, w) => {
       if (fresh.task.status !== 'accepting') return;
       await w.setTask({
-        acceptance: { unmet: [...missing, ...unmet] },
+        acceptance: { unmet: [...missing, ...unmet], ...(unchecked?.length ? { unchecked } : {}) },
+        deliverables,
         status: 'succeeded',
         finishedAt: new Date(),
       });
@@ -403,7 +410,7 @@ export function createWorkflowService(deps: {
     const snapshot = await store.get(taskId);
     const node = snapshot?.nodes.find((n) => n.id === nodeId);
     if (!snapshot || node?.status !== 'checking' || node.currentRunId !== runId) return;
-    const { unmet } = await gate.check({
+    const { unmet, unchecked } = await gate.check({
       payerId: snapshot.task.payerId,
       taskId,
       nodeId,
@@ -417,7 +424,17 @@ export function createWorkflowService(deps: {
       const current = fresh.nodes.find((n) => n.id === nodeId);
       if (current?.status !== 'checking' || current.currentRunId !== runId) return;
       if (unmet.length === 0) {
-        await w.setNode(nodeId, { status: 'succeeded', finishedAt: new Date() });
+        await w.setNode(nodeId, {
+          status: 'succeeded',
+          finishedAt: new Date(),
+          ...(unchecked?.length
+            ? {
+                warning: [current.warning, `未完成的检查：${unchecked.join('；')}`]
+                  .filter(Boolean)
+                  .join('；'),
+              }
+            : {}),
+        });
       } else if (current.reworks < deps.maxReworks) {
         logger.info({ nodeId, unmet }, '关卡没过，退回修改');
         await w.setNode(nodeId, { reworks: current.reworks + 1 });
@@ -426,7 +443,11 @@ export function createWorkflowService(deps: {
         await w.setNode(nodeId, {
           status: 'succeeded',
           finishedAt: new Date(),
-          warning: [current.warning, `交付前检查没完全通过：${unmet.join('；')}`]
+          warning: [
+            current.warning,
+            `交付前检查没完全通过：${unmet.join('；')}`,
+            ...(unchecked?.length ? [`未完成的检查：${unchecked.join('；')}`] : []),
+          ]
             .filter(Boolean)
             .join('；'),
         });

@@ -21,6 +21,7 @@ export interface NodeContext {
   tools: string[];
   /** 用户给的素材在沙箱里的路径（materials/…） */
   materials: string[];
+  deliver?: string[];
 }
 
 export interface Speech {
@@ -35,6 +36,10 @@ function context(c: NodeContext, goalLabel: string): string[] {
   const parts = [`【整个任务】\n${c.brief}`];
   if (c.role.trim()) parts.push(`【你的角色】\n${c.role}`);
   parts.push(`【${goalLabel}】\n${c.goal}`);
+  if (c.deliver !== undefined)
+    parts.push(
+      `【最终交付文件】\n${c.deliver.map((p) => `- out/${p}`).join('\n')}\n只从这些路径选择最终成果；草稿与局部素材放其他目录，配套文件也应按上述路径产出。`,
+    );
   if (c.upstream.length > 0) {
     const lines = c.upstream.map((u) => {
       const files = u.outputs.length

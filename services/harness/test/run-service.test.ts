@@ -430,7 +430,7 @@ describe('一次 agent 运行', () => {
     const run = await service.start({ ...base, prompt: '写' });
     await finished(run.id);
     expect(await service.texts(run.id, 3)).toEqual({
-      files: [{ path: 'result.md', text: '# 成' }],
+      files: [{ path: 'result.md', text: '# 成', valid: true }],
       truncated: true,
     });
   });

@@ -1,13 +1,20 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
 import type { RunOutputFile } from '@oasis/contracts/harness';
 import type { Material } from '@oasis/contracts/canvas';
-import type { Attention, NodeStatus, TaskSheet, TaskStatus } from '@oasis/contracts/task';
+import type {
+  Attention,
+  ExpectedFile,
+  NodeStatus,
+  TaskSheet,
+  TaskStatus,
+} from '@oasis/contracts/task';
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /** 节点配置：关卡的验收点和应有文件；讨论节点还有参与者、轮数、进行到第几轮和讨论记录 */
 export interface NodeConfig {
   checks?: string[];
-  expects?: string[];
+  expects?: ExpectedFile[];
+  deliver?: string[];
   /** 干活节点要用的外部工具 */
   tools?: { key: string; uses: number }[];
   participants?: { name: string; model: string; stance: string }[];
@@ -40,6 +47,7 @@ export interface Deliverable {
   name: string;
   form: string;
   nodeId: string | null;
+  files?: RunOutputFile[];
 }
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
@@ -62,7 +70,7 @@ export const tasks = pgTable('tasks', {
   deliverables: jsonb('deliverables').$type<Deliverable[]>().notNull().default([]),
   plannerRunId: uuid('planner_run_id'),
   planAttempts: integer('plan_attempts').notNull().default(0),
-  acceptance: jsonb('acceptance').$type<{ unmet: string[] }>(),
+  acceptance: jsonb('acceptance').$type<{ unmet: string[]; unchecked?: string[] }>(),
   createdAt: at('created_at').notNull().defaultNow(),
   updatedAt: at('updated_at').notNull().defaultNow(),
   finishedAt: at('finished_at'),

@@ -307,7 +307,7 @@ export async function runBatch(input: {
               signal: AbortSignal.timeout(timeout),
             },
           )) as {
-            choices?: { message?: { content?: string } }[];
+            choices?: { message?: { content?: string }; finish_reason?: string }[];
             oasis?: { costMicro?: number };
             costMicro?: number;
             text?: string;
@@ -316,6 +316,23 @@ export async function runBatch(input: {
           const text =
             kind === 'text.batch' ? response.choices?.[0]?.message?.content : response.text;
           const cost = kind === 'text.batch' ? response.oasis?.costMicro : response.costMicro;
+          if (
+            kind === 'text.batch' &&
+            response.choices?.[0]?.finish_reason === 'length' &&
+            !text &&
+            Number.isSafeInteger(cost) &&
+            cost! >= 0
+          ) {
+            result.status = 'failed';
+            result.error =
+              '输出 token 上限已用尽但没有最终正文；本行已计费，未自动重试。请核对费用后另建批次并调整上限。';
+            result.costMicro = cost!;
+            used += cost! - meta.rowBudget;
+            stopped = true;
+            await atomic(pathOf(row.id), result);
+            results.set(row.id, result);
+            break;
+          }
           if (typeof text !== 'string' || !Number.isSafeInteger(cost) || cost! < 0)
             throw new Error('响应没有完整结果或计费信息');
           result.status = 'completed';
