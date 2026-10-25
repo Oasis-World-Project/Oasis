@@ -36,7 +36,12 @@ RUN --mount=type=secret,id=pip_index \
  && printf '\nPython 包（使用 python3，无需激活环境）：\n' >> /opt/oasis/software.txt \
  && /opt/oasis/venv/bin/python -m pip list --format=freeze >> /opt/oasis/software.txt
 # 不跑安装脚本：dsh 用到的原生组件都是预编译包
-RUN npm install --global --ignore-scripts "@deepseek-ai/dsh@${DSH_VERSION}" \
+ARG NPM_RETRIES=3
+RUN attempt=0 \
+ && until npm install --global --ignore-scripts "@deepseek-ai/dsh@${DSH_VERSION}"; do \
+      attempt=$((attempt + 1)); \
+      if [ "$attempt" -ge "$NPM_RETRIES" ]; then exit 1; fi; \
+    done \
  && npm cache clean --force \
  && mkdir -p /workspace/in /workspace/out \
  && chown -R node:node /workspace
