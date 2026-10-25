@@ -99,9 +99,55 @@ describe('JSONL 批次持久化与费用边界', () => {
       .fn()
       .mockRejectedValueOnce(new Error('connection lost'))
       .mockResolvedValueOnce({});
-    expect(await run(request)).toMatchObject({ uncertain: 2, costMicro: 400_000 });
+    expect(await run(request, { concurrency: '1' })).toMatchObject({
+      uncertain: 1,
+      pending: 1,
+      costMicro: 200_000,
+    });
+    expect(await run(request, { resume: 'true', concurrency: '1' })).toMatchObject({
+      uncertain: 2,
+      pending: 0,
+      costMicro: 400_000,
+    });
     expect(await run(request, { resume: 'true' })).toMatchObject({ uncertain: 2 });
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('一行结果不确定后停止新派发，仍保存另一行在途成功结果', async () => {
+    let rejectFirst!: (error: Error) => void;
+    let finishSecond!: (value: ReturnType<typeof reply>) => void;
+    let secondStarted!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    const request = vi.fn(() => {
+      if (request.mock.calls.length === 1)
+        return new Promise<ReturnType<typeof reply>>((_resolve, reject) => {
+          rejectFirst = reject;
+        });
+      if (request.mock.calls.length === 2)
+        return new Promise<ReturnType<typeof reply>>((resolve) => {
+          finishSecond = resolve;
+          secondStarted();
+        });
+      return Promise.resolve(reply());
+    });
+    const running = run(request, { concurrency: '2' });
+    await ready;
+    rejectFirst(new Error('connection lost'));
+    finishSecond(reply());
+    expect(await running).toMatchObject({
+      completed: 1,
+      uncertain: 1,
+      pending: 3,
+      costMicro: 200_010,
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+    const saved = (await readFile(output, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(saved.map((row) => row.status).sort()).toEqual(['completed', 'uncertain']);
   });
   it('推理耗尽 token 上限且没有最终正文：按已知费用记录失败，停止后续派发', async () => {
     const request = vi.fn(async () => ({

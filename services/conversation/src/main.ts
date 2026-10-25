@@ -41,7 +41,9 @@ await startService({
   routes: (app, { config, resources, logger }) => {
     const repo = createConversationRepo(resources.postgres.pool);
     const agent = createServiceClient('agent', config.AGENT_URL, { timeoutMs: 3_000 });
-    const modelGateway = createServiceClient('model-gateway', config.MODEL_GATEWAY_URL);
+    const modelGateway = createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
+      timeoutMs: config.MODEL_GATEWAY_TIMEOUT_MS,
+    });
     const intake = createIntakeService({
       repo,
       agent,

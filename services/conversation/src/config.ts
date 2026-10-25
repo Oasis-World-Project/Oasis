@@ -5,6 +5,8 @@ export const conversationEnv = {
   ...postgresAndEventBus.env,
   AGENT_URL: z.url(),
   MODEL_GATEWAY_URL: z.url(),
+  /** 非流式模型生成需要覆盖正常推理时长，不沿用普通服务查询的短超时。 */
+  MODEL_GATEWAY_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(180_000),
   /** 每次回复带上最近多少条消息作为上下文 */
   HISTORY_LIMIT: z.coerce.number().int().min(1).max(200).default(20),
   /** 一次回复最多多少 token */
@@ -23,5 +25,5 @@ export const conversationEnv = {
   INTAKE_FALLBACK_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
   /** 最多问几轮（用户定：3） */
   INTAKE_MAX_ROUNDS: z.coerce.number().int().min(1).max(5).default(3),
-  INTAKE_MAX_TOKENS: z.coerce.number().int().min(256).max(8000).default(2000),
+  INTAKE_MAX_TOKENS: z.coerce.number().int().min(256).max(8000).default(4096),
 };

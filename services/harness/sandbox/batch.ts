@@ -351,8 +351,8 @@ export async function runBatch(input: {
           ].includes(code ?? '');
           result.status = rejected ? 'failed' : 'uncertain';
           result.error = error instanceof Error ? error.message : String(error);
-          // 明确在派发前拒绝也保留预留金额，避免反复失败继续消耗整批。
-          if (rejected) stopped = true;
+          // 费用不明或明确拒绝都停止新派发，已在途的行继续保存结果。
+          stopped = true;
         }
         await atomic(pathOf(row.id), result);
         results.set(row.id, result);
