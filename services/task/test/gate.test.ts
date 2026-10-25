@@ -74,6 +74,79 @@ const input = {
 };
 
 describe('关卡的验收点检查', () => {
+  it.each([
+    { name: '正文截断', files: [{ path: '介绍.md', text: '部分正文' }], truncated: true },
+    { name: '内容缺失', files: [], truncated: false },
+    {
+      name: '解析受限',
+      files: [{ path: '介绍.md', text: '', warning: '解析范围受限' }],
+      truncated: false,
+    },
+  ])('$name 时报告未检查，不把证据不足转成语义失败', async ({ files, truncated }) => {
+    const gateway = fakeClient(() => ({ answers: { c0: { noul: 0 }, c1: { noul: 0 } } }));
+    const gate = createGate({
+      harness: fakeClient(() => ({ files, truncated })).client,
+      modelGateway: gateway.client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    const result = await gate.check(input);
+    expect(result.unmet).toEqual([]);
+    expect(result.unchecked?.length).toBeGreaterThan(0);
+    expect(gateway.calls).toHaveLength(0);
+  });
+
+  it.each([100, 200])(
+    '视觉仅抽样时不让语义检查推断全部文件，确定性尺寸要求 %i 仍有效',
+    async (width) => {
+      const images = Array.from({ length: 5 }, (_, i) => ({ path: `${i}.png`, size: 3 }));
+      const harness = {
+        ...fakeClient(() => ({
+          files: images.map((image) => ({
+            ...image,
+            text: '',
+            valid: true,
+            width: 100,
+            height: 100,
+          })),
+          truncated: false,
+        })).client,
+        stream: async () => new Response(Buffer.from('png')),
+      } as ServiceClient;
+      const gateway = fakeClient((path) =>
+        path.includes('image.inspect')
+          ? { text: '抽样的两张图没有文字' }
+          : { answers: { c0: { noul: 0 } } },
+      );
+      const gate = createGate({
+        harness,
+        modelGateway: gateway.client,
+        model: 'jev',
+        threshold: 0.5,
+        visionMaxImages: 2,
+        logger: pino({ level: 'silent' }),
+      });
+      const result = await gate.check({
+        ...input,
+        checks: ['全部五张图片无文字'],
+        expects: [{ pattern: '*.png', exactCount: 5, width }],
+        runs: [{ runId: 'images', summary: null, outputs: images }],
+      });
+      if (width === 100) {
+        expect(result.unmet).toEqual([]);
+        expect(result.unchecked?.join('')).toContain('2/5');
+        expect(gateway.calls.map((call) => call.path)).toEqual([
+          '/internal/v1/tools/image.inspect',
+        ]);
+      } else {
+        expect(result.unmet).toHaveLength(5);
+        expect(result.unmet.every((message) => message.includes('尺寸 100×100'))).toBe(true);
+        expect(gateway.calls).toHaveLength(0);
+      }
+    },
+  );
+
   it('视觉工具取得真实图片并保留支付归属；失败明确未检查且不问 Jev', async () => {
     const images = [{ path: 'a.png', size: 3 }];
     const harness = {
@@ -158,7 +231,10 @@ describe('关卡的验收点检查', () => {
       throw new Error('连不上');
     });
     const gate = createGate({
-      harness: fakeClient(() => ({ files: [], truncated: false })).client,
+      harness: fakeClient(() => ({
+        files: [{ path: '介绍.md', text: '完整正文' }],
+        truncated: false,
+      })).client,
       modelGateway: gateway.client,
       model: 'typesafe/jev-1.14',
       threshold: 0.5,

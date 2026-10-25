@@ -151,6 +151,8 @@ export function createGate(deps: {
         ),
       );
     }
+    if (unmet.length || !input.checks.length)
+      return { unmet, ...(unchecked.length ? { unchecked } : {}) };
     const count = deps.visionMaxImages ?? 4;
     if (vision.length > count)
       unchecked.push(
@@ -204,10 +206,8 @@ export function createGate(deps: {
         unchecked.push('视觉检查未完成，不能据节点说明确认画面满足要求');
       }
     }
-    if (unmet.length || !input.checks.length)
-      return { unmet, ...(unchecked.length ? { unchecked } : {}) };
-    if (vision.length && unchecked.some((u) => u.startsWith('视觉检查未完成')))
-      return { unmet: [], unchecked };
+    // 二元问题会把「看不出满足」判成失败；覆盖不足只能报告未检查，不能因此重做。
+    if (unchecked.length) return { unmet: [], unchecked };
     const questions = Object.fromEntries(
       input.checks.map((check, i) => [
         `c${i}`,
