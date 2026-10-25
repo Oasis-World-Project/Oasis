@@ -150,3 +150,9 @@ export const RunTextsBody = z.object({
   truncated: z.boolean(),
 });
 export type RunTextsBody = z.infer<typeof RunTextsBody>;
+
+/** 先在该次运行的输出集合中选取，再解析正文；空清单不回退为全部文件。 */
+export const RunInspectBody = z.object({
+  paths: z.array(z.string().min(1).max(500)).max(1000),
+  maxChars: z.number().int().min(1).max(50_000).default(8000),
+});

@@ -61,7 +61,17 @@ await startService({
         artifacts,
         store,
       },
-      { maxBytes: config.UPLOAD_MAX_BYTES },
+      {
+        maxBytes: config.UPLOAD_MAX_BYTES,
+        preview: {
+          inputBytes: config.PREVIEW_MAX_BYTES,
+          unzipBytes: config.PREVIEW_UNZIP_MAX_BYTES,
+          entries: config.PREVIEW_MAX_ENTRIES,
+          timeoutMs: config.PREVIEW_TIMEOUT_MS,
+          concurrency: config.PREVIEW_CONCURRENCY,
+        },
+        archive: { bytes: config.ARCHIVE_MAX_BYTES, files: config.ARCHIVE_MAX_FILES },
+      },
     );
   },
 });

@@ -8,6 +8,25 @@ export const canvasEnv = {
   // ---- 对象存储（素材，5.5c 起还有成果） ----
   ...objectStoreEnv,
   S3_BUCKET: z.string().default('oasis-canvas'),
+  PREVIEW_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(20 * 1024 * 1024),
+  PREVIEW_UNZIP_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(50 * 1024 * 1024),
+  PREVIEW_MAX_ENTRIES: z.coerce.number().int().positive().default(2000),
+  PREVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  PREVIEW_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  ARCHIVE_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(100 * 1024 * 1024),
+  ARCHIVE_MAX_FILES: z.coerce.number().int().positive().default(1000),
   /** 单个上传文件的大小上限；现在整个文件读进内存再存，调大之前要改成流式（ADR 0007） */
   UPLOAD_MAX_BYTES: z.coerce
     .number()

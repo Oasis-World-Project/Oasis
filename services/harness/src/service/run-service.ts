@@ -540,11 +540,11 @@ export function createRunService(deps: {
     },
 
     /** 文字类产出（给关卡检查用）：按路径顺序读，总长超过 maxChars 就截断 */
-    async texts(id: string, maxChars: number): Promise<RunTextsBody> {
+    async texts(id: string, maxChars: number, paths?: string[]): Promise<RunTextsBody> {
       const row = await owned(id);
       if (!row.outputKey) return { files: [], truncated: false };
       const files = (await extractFiles(await store.get(row.outputKey))).filter(
-        (file) => !isPrivateOutput(file.path),
+        (file) => !isPrivateOutput(file.path) && (paths === undefined || paths.includes(file.path)),
       );
       return inspectFiles(files, maxChars, deps.inspectionLimits);
     },

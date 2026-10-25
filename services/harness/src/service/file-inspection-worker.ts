@@ -1,5 +1,7 @@
 import { extname, posix } from 'node:path';
 import { parentPort, workerData } from 'node:worker_threads';
+import { DashboardData } from '@oasis/contracts/canvas';
+import { parse as parseHtml, type DefaultTreeAdapterMap } from 'parse5';
 import { Unzip, UnzipInflate } from 'fflate';
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import sharp from 'sharp';
@@ -12,6 +14,63 @@ const data = workerData as {
   limits: InspectionLimits;
   maxChars: number;
 };
+
+function htmlContent(bytes: Buffer): { text: string; warning?: string } {
+  const source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  const root = parseHtml(source);
+  const pieces: string[] = [];
+  let warning: string | undefined;
+  let count = 0;
+  function visit(node: DefaultTreeAdapterMap['node'], depth = 0): void {
+    if (++count > 100_000 || depth > 100) throw new Error('HTML 结构超过解析上限');
+    if (node.nodeName === '#text' && 'value' in node) {
+      pieces.push(node.value);
+      return;
+    }
+    if ('tagName' in node) {
+      if (['style', 'template', 'noscript'].includes(node.tagName)) return;
+      if (node.tagName === 'script') {
+        const attrs = new Map(node.attrs.map((a) => [a.name, a.value]));
+        if (attrs.get('id') === 'oasis-dashboard' && attrs.get('type') === 'application/json') {
+          try {
+            pieces.push(
+              '\n【看板数据】\n' +
+                JSON.stringify(
+                  DashboardData.parse(
+                    JSON.parse(node.childNodes.map((n) => ('value' in n ? n.value : '')).join('')),
+                  ),
+                ),
+            );
+          } catch {
+            warning = '看板数据无效，未完成图表内容检查';
+          }
+        }
+        return;
+      }
+      if (
+        ['p', 'div', 'section', 'article', 'tr', 'h1', 'h2', 'h3', 'li', 'br'].includes(
+          node.tagName,
+        )
+      )
+        pieces.push('\n');
+      if (node.tagName === 'a') {
+        const href = node.attrs.find((a) => a.name === 'href')?.value;
+        if (href && /^https?:\/\//i.test(href)) pieces.push(`【来源：${href}】`);
+      }
+    }
+    if ('childNodes' in node) for (const child of node.childNodes) visit(child, depth + 1);
+  }
+  visit(root);
+  const text = pieces
+    .join('')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n/g, '\n')
+    .trim();
+  return {
+    text,
+    ...(warning ? { warning } : !text ? { warning: 'HTML 未提取到正文，内容检查未完成' } : {}),
+  };
+}
 type XmlNode = Record<string, unknown>;
 const node = (value: unknown): XmlNode =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as XmlNode) : {};
@@ -233,6 +292,8 @@ async function inspect(): Promise<InspectedFile & { truncated?: boolean }> {
     } finally {
       await pdf.loadingTask.destroy();
     }
+  } else if (ext === '.html' || ext === '.htm') {
+    ({ text, warning } = htmlContent(bytes));
   } else if (
     /\.(md|markdown|txt|html?|css|js|mjs|ts|tsx|jsx|jsonl?|csv|tsv|xml|ya?ml|py|sql|svg)$/.test(ext)
   ) {

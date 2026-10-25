@@ -1,6 +1,7 @@
 // 成果文件按扩展名分成几类，决定怎么预览、文件图标上写什么。
 
-export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'page' | 'none';
+export type PreviewKind =
+  'image' | 'video' | 'audio' | 'pdf' | 'text' | 'page' | 'document' | 'presentation' | 'none';
 
 const KINDS: Record<string, PreviewKind> = {
   png: 'image',
@@ -19,9 +20,14 @@ const KINDS: Record<string, PreviewKind> = {
   pdf: 'pdf',
   md: 'text',
   txt: 'text',
-  csv: 'text',
+  csv: 'document',
+  tsv: 'document',
+  xlsx: 'document',
+  docx: 'document',
+  pptx: 'presentation',
+  ppt: 'presentation',
   json: 'text',
-  jsonl: 'text',
+  jsonl: 'document',
   css: 'text',
   js: 'text',
   ts: 'text',

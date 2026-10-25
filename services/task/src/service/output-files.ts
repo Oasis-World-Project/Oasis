@@ -1,11 +1,26 @@
 // 文件匹配与交付选择属于 task；消费者直接使用 task 产出的最终清单。
 import type { RunOutputFile } from '@oasis/contracts/harness';
-import type { TaskBody } from '@oasis/contracts/task';
+import type { TaskBody, ExpectedFile } from '@oasis/contracts/task';
 import type { Deliverable } from '../repo/schema.ts';
 import type { Node } from '../repo/task-store.ts';
 
 export function patternRegExp(pattern: string): RegExp {
   return new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}$`);
+}
+
+/** 关卡只读取明确期望或交付的文件，过程脚本不能先耗尽正文额度。 */
+export function filesForInspection(
+  outputs: RunOutputFile[],
+  expects: ExpectedFile[],
+  deliver?: string[],
+): RunOutputFile[] {
+  const patterns = [
+    ...expects.map((e) => (typeof e === 'string' ? e : e.pattern)),
+    ...(deliver ?? []),
+  ].map(patternRegExp);
+  return patterns.length
+    ? outputs.filter((file) => patterns.some((re) => re.test(file.path)))
+    : outputs;
 }
 
 export function selectDeliverables(deliverables: Deliverable[], nodes: Node[]): Deliverable[] {

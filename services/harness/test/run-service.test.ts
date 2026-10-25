@@ -433,6 +433,14 @@ describe('一次 agent 运行', () => {
       files: [{ path: 'result.md', text: '# 成', valid: true }],
       truncated: true,
     });
+    expect(await service.texts(run.id, 100, [])).toEqual({ files: [], truncated: false });
+    expect(await service.texts(run.id, 100, ['missing.md'])).toEqual({
+      files: [],
+      truncated: false,
+    });
+    expect((await service.texts(run.id, 100, ['result.md'])).files.map((f) => f.path)).toEqual([
+      'result.md',
+    ]);
   });
 
   it('运行中追问：排在当前这一轮之后处理，处理完才收尾；结束后再追问是 409', async () => {

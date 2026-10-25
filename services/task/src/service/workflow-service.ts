@@ -35,7 +35,7 @@ import {
   requireNotStarted,
 } from './graph.ts';
 import { materialPaths } from './materials.ts';
-import { deliveryManifest, selectDeliverables } from './output-files.ts';
+import { deliveryManifest, filesForInspection, selectDeliverables } from './output-files.ts';
 import { nodeRow, planToRows, validatePlan } from './plan.ts';
 import { createPlanning, dollars, type PlanningConfig } from './planning-service.ts';
 import { decide } from './schedule.ts';
@@ -415,7 +415,13 @@ export function createWorkflowService(deps: {
       taskId,
       nodeId,
       goal: node.goal,
-      runs: [{ runId, summary: node.summary, outputs: node.outputs }],
+      runs: [
+        {
+          runId,
+          summary: node.summary,
+          outputs: filesForInspection(node.outputs, node.config.expects ?? [], node.config.deliver),
+        },
+      ],
       checks: node.config.checks ?? [],
       expects: node.config.expects ?? [],
     });

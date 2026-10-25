@@ -11,6 +11,7 @@ export const taskEnv = {
   GATE_MODEL: z.string().min(1).default('typesafe/jev-1.14'),
   /** 「满足验收点」的概率低于这个值算没满足 */
   GATE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
+  GATE_TEXT_MAX_CHARS: z.coerce.number().int().min(1).max(50_000).default(50_000),
   GATE_VISION_MAX_IMAGES: z.coerce.number().int().min(1).max(4).default(4),
   GATE_VISION_MAX_BYTES: z.coerce
     .number()

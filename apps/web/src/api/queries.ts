@@ -218,3 +218,5 @@ export const artifactQuery = (id: string) =>
 /** 成果内容：预览直接用这个地址（支持分段，视频能拖动），download 时让浏览器另存 */
 export const artifactContentUrl = (id: string, download = false) =>
   `/api/canvas/v1/artifacts/${id}/content${download ? '?download=1' : ''}`;
+
+export const taskArchiveUrl = (taskId: string) => `/api/canvas/v1/tasks/${taskId}/archive`;

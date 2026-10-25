@@ -49,6 +49,44 @@ function pdf(pages: number): Buffer {
 }
 
 describe('隔离文件解析', () => {
+  it('HTML 内嵌库不耗正文额度，保留可见文字、来源和受校验看板数据', async () => {
+    const chart = {
+      title: '看板',
+      charts: [
+        {
+          title: '月销售',
+          type: 'bar',
+          labels: ['一月'],
+          series: [{ name: '金额', values: [123] }],
+        },
+      ],
+    };
+    const source =
+      '<style>body{color:red}</style><script>' +
+      'x'.repeat(100000) +
+      '</script><h1>运营报告</h1><a href="https://example.com/source">来源一</a><script id="oasis-dashboard" type="application/json">' +
+      JSON.stringify(chart) +
+      '</script>';
+    const result = await inspectFiles([file('看板.html', source)], 2000);
+    expect(result.truncated).toBe(false);
+    expect(result.files[0]?.text).toContain('运营报告');
+    expect(result.files[0]?.text).toContain('https://example.com/source');
+    expect(result.files[0]?.text).toContain('123');
+    expect(result.files[0]?.text).not.toContain('color:red');
+    expect(
+      (
+        await inspectFiles(
+          [
+            file(
+              '坏图表.html',
+              '<p>报告</p><script id="oasis-dashboard" type="application/json">{}</script>',
+            ),
+          ],
+          1000,
+        )
+      ).files[0]?.warning,
+    ).toContain('看板数据无效');
+  });
   it('中文 Word 段落和表格、PPT 幻灯片按序提取', async () => {
     const ppt = office('汇报.pptx', {
       'ppt/slides/slide2.xml':

@@ -59,6 +59,8 @@ export const ArtifactBody = z.object({
   /** 属于任务单里的哪样交付物 */
   deliverable: z.string(),
   taskId: z.uuid(),
+  /** 新成果带节点来源；历史响应可省略 */
+  nodeId: z.string().optional(),
   taskTitle: z.string(),
   /** 任务是在哪个私聊里交代的（回到私聊用）；没有为 null */
   conversationId: z.uuid().nullable(),
@@ -77,3 +79,52 @@ export const ArtifactQuery = z.object({
   category: ArtifactCategory.optional(),
   taskId: z.uuid().optional(),
 });
+
+const PreviewCell = z.union([z.string().max(20_000), z.number().finite(), z.boolean(), z.null()]);
+export const FilePreviewBody = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('html'), html: z.string().max(2 * 1024 * 1024) }),
+  z.object({
+    kind: z.literal('table'),
+    sheets: z
+      .array(
+        z.object({
+          name: z.string().max(200),
+          rows: z.array(z.array(PreviewCell).max(100)).max(1000),
+          truncated: z.boolean(),
+        }),
+      )
+      .max(20),
+    warning: z.string().optional(),
+  }),
+]);
+export type FilePreviewBody = z.infer<typeof FilePreviewBody>;
+
+/** 单文件看板的数据契约；不接受 ECharts 配置或可执行表达式。 */
+export const DashboardData = z.object({
+  title: z.string().max(200),
+  charts: z
+    .array(
+      z
+        .object({
+          title: z.string().max(200),
+          type: z.enum(['bar', 'line', 'pie']),
+          labels: z.array(z.string().max(200)).min(1).max(200),
+          series: z
+            .array(
+              z.object({
+                name: z.string().max(200),
+                values: z.array(z.number().finite()).min(1).max(200),
+              }),
+            )
+            .min(1)
+            .max(10),
+        })
+        .refine(
+          (c) => c.series.every((s) => s.values.length === c.labels.length),
+          '图表数据长度不一致',
+        ),
+    )
+    .min(1)
+    .max(20),
+});
+export type DashboardData = z.infer<typeof DashboardData>;

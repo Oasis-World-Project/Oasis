@@ -3,7 +3,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ArrowLeft, Download, MessageCircle, Workflow } from 'lucide-react';
-import { artifactContentUrl, artifactQuery } from '../api/queries.ts';
+import {
+  artifactContentUrl,
+  artifactQuery,
+  artifactsQuery,
+  taskArchiveUrl,
+} from '../api/queries.ts';
 import { PreviewBody } from '../chat/FilePreview.tsx';
 import { formatBytes } from '../ui/format.ts';
 
@@ -15,6 +20,20 @@ const pill =
 export function ArtifactPage() {
   const { artifactId } = route.useParams();
   const { data: artifact, isPending, isError } = useQuery(artifactQuery(artifactId));
+  const { data: siblings = [] } = useQuery({
+    ...artifactsQuery(artifact?.taskId),
+    enabled: !!artifact,
+  });
+  const position = siblings.findIndex((item) => item.id === artifactId);
+  const candidates = artifact
+    ? siblings.filter(
+        (item) =>
+          item.path === artifact.path.replace(/\.pptx?$/i, '.pdf') &&
+          item.taskId === artifact.taskId &&
+          (!artifact.nodeId || item.nodeId === artifact.nodeId),
+      )
+    : [];
+  const pdf = candidates.length === 1 ? candidates[0] : undefined;
 
   return (
     <section
@@ -53,6 +72,26 @@ export function ArtifactPage() {
         </div>
         {artifact && (
           <div className="flex flex-wrap items-center gap-1.5">
+            {[-1, 1].map((offset) => {
+              const sibling = position >= 0 ? siblings[position + offset] : undefined;
+              return sibling ? (
+                <Link
+                  key={offset}
+                  to="/canvas/artifacts/$artifactId"
+                  params={{ artifactId: sibling.id }}
+                  className={`${pill} bg-glass-active text-ink shadow-edge-strong`}
+                >
+                  {offset < 0 ? '上一个' : '下一个'}
+                </Link>
+              ) : null;
+            })}
+            <a
+              href={taskArchiveUrl(artifact.taskId)}
+              download
+              className={`${pill} bg-glass-active text-ink shadow-edge-strong`}
+            >
+              打包下载
+            </a>
             <Link
               to="/canvas/tasks/$taskId"
               params={{ taskId: artifact.taskId }}
@@ -93,6 +132,7 @@ export function ArtifactPage() {
               size: artifact.size,
               url: artifactContentUrl(artifact.id),
               downloadUrl: artifactContentUrl(artifact.id, true),
+              ...(pdf ? { pdfUrl: artifactContentUrl(pdf.id) } : {}),
             }}
           />
         )}

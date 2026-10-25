@@ -15,6 +15,9 @@
       // 解析 worker 由 Worker URL 按源码/编译后扩展名加载，静态 import 图不可见。
       "entry": ["sandbox/oasis-tool.ts", "src/service/file-inspection-worker.ts"],
     },
+    "services/canvas": {
+      "entry": ["src/service/preview-worker.ts"],
+    },
     // preload 由 Electron 按路径加载（BrowserWindow 的 webPreferences.preload），不经 import
     "apps/desktop": {
       "entry": ["src/main.ts", "src/preload.cts"],

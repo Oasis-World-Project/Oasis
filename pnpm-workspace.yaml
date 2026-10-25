@@ -17,7 +17,9 @@ catalog:
   dbmate: 2.37.0
   drizzle-orm: 0.45.4
   fastify: 5.12.7
+  fflate: 0.8.3
   pg: 8.23.1
+  parse5: 8.0.1
   pino: 10.4.0
   typescript: 6.0.3
   vite: 8.3.4

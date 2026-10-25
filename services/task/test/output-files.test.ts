@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '../src/repo/task-store.ts';
-import { deliveryManifest, selectDeliverables } from '../src/service/output-files.ts';
+import {
+  deliveryManifest,
+  filesForInspection,
+  selectDeliverables,
+} from '../src/service/output-files.ts';
 
 const node = (deliver?: string[]) =>
   ({
@@ -15,6 +19,18 @@ const node = (deliver?: string[]) =>
   }) as Node;
 const deliverables = [{ name: '报告', form: 'DOCX+PDF', nodeId: 'node' }];
 describe('最终文件清单', () => {
+  it('关卡按期望与交付文件的并集选取，脚本不挤占正文；旧节点不改变行为', () => {
+    const outputs = [
+      { path: '工作/build.py', size: 90000 },
+      { path: '报告.docx', size: 100 },
+      { path: '配套.pdf', size: 100 },
+    ];
+    expect(
+      filesForInspection(outputs, [{ pattern: '*.docx' }], ['*.pdf']).map((f) => f.path),
+    ).toEqual(['报告.docx', '配套.pdf']);
+    expect(filesForInspection(outputs, [])).toBe(outputs);
+    expect(filesForInspection(outputs, ['不存在.md'])).toEqual([]);
+  });
   it('按独立 deliver 选择实际文件，保留配套 PDF，排除草稿和空文件；不会修改节点产出', () => {
     const nodes = [node(['最终/*.docx', '最终/*.pdf'])];
     const selected = selectDeliverables(deliverables, nodes);

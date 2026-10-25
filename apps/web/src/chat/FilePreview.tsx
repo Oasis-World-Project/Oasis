@@ -1,20 +1,65 @@
-// 成果预览窗：图片、视频、音频、PDF、文字类和静态网页直接看；其他格式提示下载后打开。
-// 网页放在不带 allow-same-origin 的 iframe 里，服务端还加了 CSP sandbox，AI 写的脚本碰不到登录状态。
+// 预览窗和画布共享格式预览；网页使用清洗后的无脚本 srcdoc。
 import { Download, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { formatBytes } from '../ui/format.ts';
 import { baseName, previewKindOf } from './files.ts';
 import { Markdown } from './Markdown.tsx';
+const DocumentPreview = lazy(() =>
+  import('../canvas/DocumentPreview.tsx').then((module) => ({ default: module.DocumentPreview })),
+);
 
 export interface PreviewFile {
   path: string;
   size: number;
   url: string;
   downloadUrl: string;
+  pdfUrl?: string;
 }
 
 /** 文字类文件最多显示这么多，再多请下载 */
 const TEXT_LIMIT = 200_000;
+
+function PresentationPreview({ file }: { file: PreviewFile }) {
+  const taskPdf = /^\/api\/task\/v1\/tasks\/[^/]+\/files\/[^/]+\//.test(file.url)
+    ? file.url.replace(/\.pptx?(?=\?|$)/i, '.pdf')
+    : undefined;
+  const candidate = file.pdfUrl ?? taskPdf;
+  const [ready, setReady] = useState<string | null>(null);
+  useEffect(() => {
+    if (!candidate) return;
+    const controller = new AbortController();
+    void fetch(candidate, {
+      credentials: 'same-origin',
+      signal: controller.signal,
+      headers: { Range: 'bytes=0-4' },
+    })
+      .then(async (response) => {
+        const reader = response.body?.getReader();
+        if (!reader) return;
+        try {
+          const chunk = await reader.read();
+          if (
+            response.ok &&
+            chunk.value &&
+            new TextDecoder().decode(chunk.value.subarray(0, 5)) === '%PDF-' &&
+            !controller.signal.aborted
+          )
+            setReady(candidate);
+        } finally {
+          await reader.cancel();
+        }
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [candidate]);
+  if (ready && ready === candidate)
+    return <iframe title={baseName(file.path)} src={ready} className="size-full border-0" />;
+  return (
+    <p className="m-0 p-6 text-sm text-ink-muted">
+      未找到同一来源的配套 PDF，请下载演示文稿后查看。
+    </p>
+  );
+}
 
 function TextPreview({ url, markdown }: { url: string; markdown: boolean }) {
   const [text, setText] = useState<string | null>(null);
@@ -86,13 +131,18 @@ export function PreviewBody({ file }: { file: PreviewFile }) {
       return <iframe title={name} src={file.url} className="size-full border-0" />;
     case 'page':
       return (
-        <iframe
-          title={name}
-          src={file.url}
-          sandbox=""
-          className="size-full border-0 bg-glass-active"
-        />
+        <Suspense fallback={<p className="p-6 text-sm text-ink-muted">正在打开…</p>}>
+          <DocumentPreview key={file.url} url={file.url} name={name} html />
+        </Suspense>
       );
+    case 'document':
+      return (
+        <Suspense fallback={<p className="p-6 text-sm text-ink-muted">正在打开…</p>}>
+          <DocumentPreview key={file.url} url={file.url} name={name} />
+        </Suspense>
+      );
+    case 'presentation':
+      return <PresentationPreview key={file.url} file={file} />;
     case 'text':
       return <TextPreview url={file.url} markdown={file.path.toLowerCase().endsWith('.md')} />;
     default:

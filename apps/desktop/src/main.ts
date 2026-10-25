@@ -70,9 +70,13 @@ function createWindow(): BrowserWindow {
       preload: path.join(import.meta.dirname, 'preload.cjs'),
     },
   });
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    openInBrowser(url);
+  win.webContents.setWindowOpenHandler(({ url, disposition }) => {
+    // 文件框没有脚本/弹窗能力；仅主页面的用户点击交给系统浏览器。
+    if (disposition !== 'new-window') openInBrowser(url);
     return { action: 'deny' };
+  });
+  win.webContents.on('will-frame-navigate', (event) => {
+    if (!event.isMainFrame) event.preventDefault();
   });
   win.webContents.on('will-navigate', (event, url) => {
     if (!isExternal(url)) return;
@@ -85,7 +89,8 @@ function createWindow(): BrowserWindow {
 /** 只接受本应用自己页面发来的请求 */
 function fromApp(event: IpcMainInvokeEvent): void {
   const url = event.senderFrame?.url ?? '';
-  if (isExternal(url)) throw new Error('不接受这个页面的请求');
+  if (event.senderFrame !== event.sender.mainFrame || isExternal(url))
+    throw new Error('不接受这个页面的请求');
 }
 
 /** 同步到电脑：选文件夹、看状态、写文件、打开文件夹 */

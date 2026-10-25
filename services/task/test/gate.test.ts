@@ -135,7 +135,10 @@ describe('关卡的验收点检查', () => {
       logger: pino({ level: 'silent' }),
     });
     expect(await gate.check(input)).toEqual({ unmet: ['提到了价格'] });
-    expect(harness.calls[0]?.path).toBe('/internal/runs/run-1/texts?maxChars=8000');
+    expect(harness.calls[0]).toMatchObject({
+      path: '/internal/runs/run-1/texts',
+      body: { paths: ['介绍.md'], maxChars: 50000 },
+    });
     expect(harness.calls).toHaveLength(1);
     const call = gateway.calls[0] as {
       body: { state: string[]; questions: object };
@@ -200,8 +203,12 @@ describe('关卡的验收点检查', () => {
     });
     expect(result).toEqual({ unmet: [] });
     expect(harness.calls.map((c) => c.path)).toEqual([
-      '/internal/runs/run-1/texts?maxChars=4000',
-      '/internal/runs/run-2/texts?maxChars=4000',
+      '/internal/runs/run-1/texts',
+      '/internal/runs/run-2/texts',
+    ]);
+    expect(harness.calls.map((c) => c.body)).toEqual([
+      { paths: ['介绍.md'], maxChars: 25000 },
+      { paths: ['b.md'], maxChars: 25000 },
     ]);
     const call = gateway.calls[0] as { body: { state: string[] }; headers: object };
     expect(call.headers).toEqual({ 'x-oasis-payer-id': PAYER, 'x-oasis-task-id': TASK });

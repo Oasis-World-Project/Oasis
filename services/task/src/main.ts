@@ -54,6 +54,7 @@ await startService({
         modelGateway,
         model: config.GATE_MODEL,
         threshold: config.GATE_THRESHOLD,
+        textMaxChars: config.GATE_TEXT_MAX_CHARS,
         visionMaxImages: config.GATE_VISION_MAX_IMAGES,
         visionMaxBytes: config.GATE_VISION_MAX_BYTES,
         logger,

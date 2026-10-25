@@ -90,12 +90,13 @@ export function createGate(deps: {
   logger: Logger;
   visionMaxImages?: number;
   visionMaxBytes?: number;
+  textMaxChars?: number;
 }) {
   const { harness, modelGateway, logger } = deps;
 
   /** 验收点检查：把要做的事、交付时说的话和文字产出交给 Jev，每条验收点一个问题 */
   async function checkPoints(input: GateInput): Promise<GateResult> {
-    // 几次运行的文字产出一起看，总长约 8,000 字
+    // 只读取调用方已选出的文件，总正文额度按运行分配。
     const runs: GateRun[] = [];
     for (const run of input.runs) {
       const prior = runs.find((r) => r.runId === run.runId);
@@ -107,17 +108,19 @@ export function createGate(deps: {
         prior.label = [prior.label, run.label].filter(Boolean).join('、');
       }
     }
-    const perRun = Math.max(2_000, Math.floor(8_000 / Math.max(1, runs.length)));
+    const perRun = Math.max(
+      1,
+      Math.floor((deps.textMaxChars ?? 50_000) / Math.max(1, runs.length)),
+    );
     const state = [`要做的事：${input.goal}`];
     const unchecked: string[] = [];
     const unmet: string[] = [];
     const vision: { runId: string; path: string }[] = [];
     for (const run of runs) {
-      const texts = await harness.json(
-        'GET',
-        `/internal/runs/${run.runId}/texts?maxChars=${perRun}`,
-        { schema: RunTextsBody },
-      );
+      const texts = await harness.json('POST', `/internal/runs/${run.runId}/texts`, {
+        body: { paths: run.outputs.map((file) => file.path), maxChars: perRun },
+        schema: RunTextsBody,
+      });
       const who = run.label ? `「${run.label}」` : '';
       const selected = texts.files.filter((f) => run.outputs.some((o) => o.path === f.path));
       if (texts.truncated) unchecked.push(`${who}文件内容或解析范围有截断，未覆盖全部内容`);

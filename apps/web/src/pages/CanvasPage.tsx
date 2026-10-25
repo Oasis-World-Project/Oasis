@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { Search, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { artifactsQuery } from '../api/queries.ts';
+import { artifactsQuery, taskArchiveUrl } from '../api/queries.ts';
 import { ArtifactCard } from '../canvas/ArtifactCard.tsx';
 import { DesktopSyncBar } from '../desktop/DesktopSync.tsx';
 import { EmptyHint } from '../ui/Panel.tsx';
@@ -89,10 +89,19 @@ export function CanvasPage() {
           );
         })}
         {task && (
+          <a
+            href={taskArchiveUrl(task)}
+            download
+            className="ml-auto inline-flex h-9 items-center rounded-full bg-glass-active px-3.5 text-[13px] text-ink no-underline shadow-edge-strong"
+          >
+            打包下载
+          </a>
+        )}
+        {task && (
           <Link
             to="/canvas"
             search={{}}
-            className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-full bg-solid px-3.5 text-[13px] text-on-solid no-underline"
+            className="inline-flex h-9 items-center gap-1.5 rounded-full bg-solid px-3.5 text-[13px] text-on-solid no-underline"
           >
             只看「{taskTitle ?? '这个任务'}」
             <X size={14} aria-label="看全部" />

@@ -1,5 +1,6 @@
 // 成果登记进画布（ADR 0007 §8–10）：任务完成时复制交付文件、幂等、同步路径；列表、读取（分段）。
 import { OASIS_HEADERS } from '@oasis/contracts/common';
+import { unzipSync, strFromU8 } from 'fflate';
 import type { TaskStatusChangedData } from '@oasis/contracts/events';
 import { createService, createServiceClient } from '@oasis/service-kit';
 import Fastify from 'fastify';
@@ -176,6 +177,43 @@ const get = (url: string, headers: Record<string, string> = {}, user = KAI) =>
   app.inject({ url, headers: { [OASIS_HEADERS.userId]: user, ...headers } });
 
 describe('任务完成时登记成果', () => {
+  it('打包只包含自己的最终成果，ZIP 路径与桌面同步一致；超限或穿越拒绝', async () => {
+    await service.onTaskStatus(event(T1));
+    const response = await get(`/v1/tasks/${T1}/archive`);
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('application/zip');
+    expect(response.headers['content-disposition']).toContain('attachment');
+    const entries = unzipSync(response.rawPayload);
+    expect(Object.keys(entries).sort()).toEqual(repo.rows.map((r) => r.syncPath).sort());
+    for (const row of repo.rows) expect(strFromU8(entries[row.syncPath]!)).toBe(files[row.path]);
+    expect((await get(`/v1/tasks/${T1}/archive`, {}, MIA)).statusCode).toBe(404);
+    await expect(service.archive(KAI, T1, { bytes: 1, files: 100 })).rejects.toThrow();
+    repo.rows[0]!.syncPath = '../逃逸.txt';
+    expect((await get(`/v1/tasks/${T1}/archive`)).statusCode).toBe(422);
+  });
+  it('转换要求用户身份与二进制请求，按文件内容返回表格', async () => {
+    const request = {
+      method: 'POST' as const,
+      url: '/v1/previews?name=a.csv',
+      payload: Buffer.from('标题,值\n甲,10'),
+      headers: { [OASIS_HEADERS.userId]: KAI, 'content-type': 'application/octet-stream' },
+    };
+    expect((await app.inject(request)).json()).toMatchObject({
+      kind: 'table',
+      sheets: [
+        {
+          rows: [
+            ['标题', '值'],
+            ['甲', '10'],
+          ],
+        },
+      ],
+    });
+    expect(
+      (await app.inject({ ...request, headers: { 'content-type': 'application/octet-stream' } }))
+        .statusCode,
+    ).toBe(401);
+  });
   it('显式最终清单控制画布与同步，空清单不登记任何节点文件', async () => {
     finalFiles = [{ deliverable: '最终文案', nodeId: COPY, path: '首页文案.md', size: 20 }];
     await service.onTaskStatus(event(T1));

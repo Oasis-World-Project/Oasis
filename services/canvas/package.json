@@ -12,13 +12,16 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --maxWorkers=1 --testTimeout=15000"
   },
   "dependencies": {
     "@oasis/contracts": "workspace:*",
     "@oasis/service-kit": "workspace:*",
     "drizzle-orm": "catalog:",
+    "fflate": "catalog:",
+    "mammoth": "1.13.0",
     "pg": "catalog:",
+    "read-excel-file": "9.3.12",
     "zod": "catalog:"
   },
   "devDependencies": {

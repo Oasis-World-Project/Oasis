@@ -1,5 +1,6 @@
 // 成果（ADR 0007 §8）：任务完成时把负责交付物的节点交出的文件复制进画布；给前端列出、读取。
 import { randomUUID } from 'node:crypto';
+import { zipSync } from 'fflate';
 import type { ArtifactBody, ArtifactCategory } from '@oasis/contracts/canvas';
 import type { TaskStatusChangedData } from '@oasis/contracts/events';
 import { TaskBody } from '@oasis/contracts/task';
@@ -22,6 +23,7 @@ const toBody = (row: Artifact): ArtifactBody => ({
   category: row.category,
   deliverable: row.deliverable,
   taskId: row.taskId,
+  nodeId: row.nodeId,
   taskTitle: row.taskTitle,
   conversationId: row.conversationId,
   models: row.models,
@@ -150,6 +152,49 @@ export function createArtifactService(deps: {
       const row = await repo.find(id);
       if (row?.ownerId !== ownerId) throw new HttpError(404, 'artifact_not_found', '没有这个成果');
       return row;
+    },
+
+    /** 和桌面同步使用完全相同的最终文件集合与 syncPath。 */
+    async archive(ownerId: string, taskId: string, limits: { bytes: number; files: number }) {
+      const rows = (await repo.listByTask(taskId)).filter((row) => row.ownerId === ownerId);
+      if (!rows.length) throw new HttpError(404, 'artifact_not_found', '没有这个任务的成果');
+      if (rows.length > limits.files || rows.reduce((n, row) => n + row.size, 0) > limits.bytes)
+        throw new HttpError(413, 'archive_size', '成果超过打包上限，请分别下载');
+      const entries: Record<string, Uint8Array> = Object.create(null) as Record<string, Uint8Array>;
+      const seen = new Set<string>();
+      let size = 0;
+      for (const row of rows) {
+        const name = row.syncPath;
+        if (
+          !name ||
+          name.includes('\\') ||
+          name.startsWith('/') ||
+          name
+            .split('/')
+            // eslint-disable-next-line no-control-regex
+            .some((p) => !p || p === '.' || p === '..' || /[:\u0000-\u001f]/.test(p)) ||
+          seen.has(name.toLowerCase())
+        )
+          throw new HttpError(422, 'archive_path', '成果目录异常，不能安全打包');
+        seen.add(name.toLowerCase());
+        const stream = await store.read(row.objectKey);
+        const chunks: Buffer[] = [];
+        try {
+          for await (const chunk of stream) {
+            const bytes = Buffer.from(chunk as Uint8Array);
+            size += bytes.length;
+            if (size > limits.bytes) throw new HttpError(413, 'archive_size', '成果超过打包上限');
+            chunks.push(bytes);
+          }
+        } finally {
+          stream.destroy();
+        }
+        entries[name] = Buffer.concat(chunks);
+      }
+      return {
+        name: `${safeSegment(rows[0]!.taskTitle)}.zip`,
+        content: zipSync(entries, { level: 0 }),
+      };
     },
 
     toBody,
