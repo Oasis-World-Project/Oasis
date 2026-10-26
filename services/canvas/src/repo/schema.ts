@@ -5,8 +5,10 @@ import { bigint, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-co
 export const uploads = pgTable('uploads', {
   id: uuid('id').primaryKey(),
   ownerId: uuid('owner_id').notNull(),
+  state: text('state').notNull().default('ready'),
   name: text('name').notNull(),
   size: bigint('size', { mode: 'number' }).notNull(),
+  sha256: text('sha256'),
   contentType: text('content_type').notNull(),
   objectKey: text('object_key').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -22,6 +24,7 @@ export const artifacts = pgTable('artifacts', {
   path: text('path').notNull(),
   name: text('name').notNull(),
   deliverable: text('deliverable').notNull(),
+  sha256: text('sha256'),
   size: bigint('size', { mode: 'number' }).notNull(),
   contentType: text('content_type').notNull(),
   category: text('category').$type<ArtifactCategory>().notNull(),

@@ -1,5 +1,6 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import type { ToolResult } from '@oasis/contracts/model-gateway';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
@@ -50,6 +51,14 @@ export const toolJobs = pgTable('tool_jobs', {
   id: uuid('id').primaryKey(),
   tool: text('tool').notNull(),
   providerJobId: text('provider_job_id').notNull(),
+  requestKey: uuid('request_key').unique(),
+  requestHash: text('request_hash'),
+  phase: text('phase').notNull().default('pending'),
+  result: jsonb('result').$type<ToolResult>(),
+  cost: jsonb('cost').$type<{ costMicro: number; source: 'provider' | 'estimate' | 'tokens' }>(),
+  leaseToken: uuid('lease_token'),
+  leaseUntil: at('lease_until'),
+  expiresAt: at('expires_at'),
   status: text('status', { enum: ['pending', 'completed', 'failed'] }).notNull(),
   call: jsonb('call').$type<Record<string, unknown>>().notNull(),
   error: text('error'),

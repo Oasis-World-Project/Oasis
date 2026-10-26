@@ -1,10 +1,12 @@
 // 能力网关（ADR 0006）：工具目录，以及每一次工具调用的计量——校验参数 → 冻结额度 → 调供应商 →
 // 按实际花费（或估算）结算。属于任务的调用照样发 model-gateway.call.settled，计入任务花费。
-// 长任务（视频）：提交时冻结并记下供应商的任务号，调用方之后来取结果，做好时结算、失败或超时退回。
-import { randomUUID } from 'node:crypto';
+// 长任务（音乐/视频）：提交时冻结并持久化意图，先保存结果再结算；未知结果保留对账状态。
+import { Readable } from 'node:stream';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ToolEntry, ToolJobBody, ToolResult } from '@oasis/contracts/model-gateway';
-import { HttpError, type Logger } from '@oasis/service-kit';
+import { HttpError, type Logger, type ObjectStore } from '@oasis/service-kit';
 import type { ProviderClient } from '../adapters/openrouter.ts';
+import type { FalClient } from '../adapters/fal.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
 import type { ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
 import type { Caller, Meter, MeteredCall } from './metering.ts';
@@ -18,6 +20,11 @@ export function createToolService(deps: {
   tavily: SearchClient;
   meter: Meter;
   jobs: ToolJobsRepo;
+  store: ObjectStore;
+  fal?: FalClient;
+  resultMaxBytes?: number;
+  retentionMs?: number;
+  submitTimeoutMs?: number;
   /** 长任务最多等多久 */
   jobTimeoutMs: number;
   config: ToolConfig;
@@ -26,12 +33,182 @@ export function createToolService(deps: {
   const { meter, config, jobs } = deps;
   const byKey = new Map(TOOLS.map((t) => [t.key, t]));
   const configured = (tool: ToolDef) =>
-    tool.provider === 'tavily' ? deps.tavily.configured : deps.openrouter.configured;
+    tool.provider === 'tavily'
+      ? deps.tavily.configured
+      : tool.provider === 'fal'
+        ? Boolean(deps.fal?.configured)
+        : deps.openrouter.configured;
 
   /** 这个工具现在能用的模型：去掉当前网络用不了的 */
   async function usableModels(tool: ToolDef): Promise<string[]> {
     const blocked = new Set(await meter.regionBlockedModels());
     return tool.models(config).filter((m) => !blocked.has(m));
+  }
+
+  const resultKey = (jobId: string, fileId: string) => `tool-results/${jobId}/${fileId}`;
+  const inFlight = new Map<string, Promise<void>>();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let ticking = false;
+  async function processOne(id: string) {
+    const prior = inFlight.get(id);
+    if (prior) return prior;
+    const work = (async () => {
+      const token = randomUUID();
+      if (!(await jobs.claim(id, token, new Date(Date.now() + 180_000)))) return;
+      let lostLease = false;
+      const heartbeat = setInterval(() => {
+        void jobs
+          .claim(id, token, new Date(Date.now() + 180_000))
+          .then((owned) => {
+            if (!owned) lostLease = true;
+          })
+          .catch((err: unknown) => deps.logger.warn({ err, jobId: id }, '媒体任务租约续期失败'));
+      }, 30_000);
+      heartbeat.unref();
+      try {
+        const job = await jobs.get(id);
+        if (
+          !job ||
+          job.phase === 'expired' ||
+          job.phase === 'uncertain' ||
+          job.status === 'failed' ||
+          (job.status === 'completed' && job.result)
+        )
+          return;
+        if (!job.providerJobId) {
+          if (job.phase === 'submitting' && Date.now() - job.createdAt.getTime() < 120_000) return;
+          await jobs.update(id, {
+            phase: 'uncertain',
+            error: '提交结果未确认；未自动重发，请核对供应商账单',
+          });
+          return;
+        }
+        const call = job.call as unknown as MeteredCall;
+        let result = job.result;
+        let cost = job.cost;
+        if (!result || !cost) {
+          const tool = byKey.get(job.tool);
+          if (!tool?.long) throw new Error('长任务工具不存在');
+          const state = await tool
+            .check(
+              {
+                openrouter: deps.openrouter,
+                tavily: deps.tavily,
+                fal: deps.fal,
+                config,
+                signal: AbortSignal.timeout(120_000),
+                upstream: (request) => request(),
+              },
+              job.providerJobId,
+            )
+            .catch(async (error: unknown) => {
+              if (Date.now() - job.createdAt.getTime() > deps.jobTimeoutMs) {
+                await jobs.update(id, {
+                  phase: 'uncertain',
+                  error: '供应商结果无法取回，费用与文件待核对；未重新生成',
+                });
+                return { state: 'pending' as const };
+              }
+              throw error;
+            });
+          if (state.state === 'failed') {
+            await meter.fail(call, state.error);
+            await jobs.finish(id, 'failed', state.error);
+            return;
+          }
+          if (state.state === 'pending') {
+            if (Date.now() - job.createdAt.getTime() > deps.jobTimeoutMs)
+              await jobs.update(id, {
+                phase: 'uncertain',
+                error: '供应商长任务超过等待上限，费用待核对；未自动重发或认定免费',
+              });
+            return;
+          }
+          cost = state.outcome.cost;
+          const files: ToolResult['files'] = [];
+          for (const [index, file] of state.outcome.files.entries()) {
+            const fileId = String(index);
+            const source = file.body ?? Readable.from([Buffer.from(file.base64 ?? '', 'base64')]);
+            const saved = await deps.store.putStream(
+              resultKey(id, fileId),
+              source,
+              file.mediaType,
+              { maxBytes: deps.resultMaxBytes ?? 512 * 1024 * 1024 },
+            );
+            files.push({
+              id: fileId,
+              name: file.name,
+              mediaType: file.mediaType,
+              base64: '',
+              ...saved,
+            });
+          }
+          result = {
+            tool: tool.key,
+            text: state.outcome.text,
+            files,
+            costMicro: cost.costMicro,
+            job: { id },
+          };
+          await jobs.update(id, {
+            result,
+            cost,
+            phase: 'stored',
+            expiresAt: new Date(Date.now() + (deps.retentionMs ?? 7 * 24 * 3600_000)),
+          });
+        }
+        if (lostLease || !(await jobs.claim(id, token, new Date(Date.now() + 180_000))))
+          throw new Error('媒体任务租约已被接管');
+        if (!(await meter.settle(call, cost, undefined))) {
+          if (Date.now() - job.createdAt.getTime() > deps.jobTimeoutMs + HOLD_MARGIN_MS)
+            await jobs.update(id, {
+              phase: 'uncertain',
+              error: '媒体结果已保存，但费用未闭合，请核对账单',
+            });
+          throw new Error('长任务结算未确认，将重试');
+        }
+        await jobs.finish(id, 'completed');
+      } finally {
+        clearInterval(heartbeat);
+        await jobs.unlock(id, token);
+      }
+    })();
+    inFlight.set(id, work);
+    try {
+      await work;
+    } finally {
+      inFlight.delete(id);
+    }
+  }
+  async function tick() {
+    if (ticking) return;
+    ticking = true;
+    try {
+      for (const job of await jobs.pending(10))
+        await processOne(job.id).catch((err: unknown) =>
+          deps.logger.warn({ err, jobId: job.id }, '恢复媒体任务失败，保留状态重试'),
+        );
+      for (const job of await jobs.expired(new Date(), 10)) {
+        for (const file of job.result?.files ?? [])
+          if (file.id !== undefined) await deps.store.delete(resultKey(job.id, file.id));
+        await jobs.update(job.id, { result: null, phase: 'expired' });
+      }
+    } finally {
+      ticking = false;
+    }
+  }
+  async function ownedJob(caller: Caller, id: string) {
+    const job = await jobs.get(id);
+    const call = job?.call as unknown as MeteredCall | undefined;
+    if (
+      !job ||
+      !call ||
+      call.caller.payerId !== caller.payerId ||
+      (call.caller.taskId && call.caller.taskId !== caller.taskId) ||
+      (!call.caller.taskId && call.caller.runId && call.caller.runId !== caller.runId)
+    )
+      throw new HttpError(404, 'tool_job_not_found', '没有这个任务号');
+    return job;
   }
 
   return {
@@ -78,12 +255,10 @@ export function createToolService(deps: {
       requestId: string;
       signal: AbortSignal;
       maxCostMicro?: number;
+      idempotencyKey?: string;
     }): Promise<ToolResult> {
       const tool = byKey.get(input.key);
       if (!tool) throw new HttpError(404, 'tool_not_found', `没有工具 ${input.key}`);
-      if (!configured(tool) || (tool.provider !== 'tavily' && !tool.models(config).length)) {
-        throw new HttpError(503, 'tool_unavailable', `${tool.name}还没有配置好，现在用不了`);
-      }
       const parsed = tool.args.safeParse(input.args);
       if (!parsed.success) {
         const issues = parsed.error.issues.map(
@@ -92,6 +267,29 @@ export function createToolService(deps: {
         throw new HttpError(400, 'invalid_tool_args', `参数不对：${issues.join('；')}`);
       }
       const args = parsed.data;
+      const requestHash = createHash('sha256')
+        .update(JSON.stringify({ key: tool.key, args }))
+        .digest('hex');
+      const resume = async (id: string): Promise<ToolResult> => {
+        const prior = await ownedJob(input.caller, id);
+        if (prior.requestHash !== requestHash || prior.tool !== tool.key)
+          throw new HttpError(409, 'tool_request_conflict', '同一请求号的工具参数不一致');
+        return {
+          tool: tool.key,
+          text: `沿用已提交的任务号 ${id}，未重新调用供应商。`,
+          files: [],
+          costMicro: 0,
+          job: { id },
+        };
+      };
+      if (tool.long && input.idempotencyKey) {
+        const prior = await jobs.byRequest(input.idempotencyKey);
+        if (prior) return resume(prior.id);
+      }
+      if (!configured(tool) || (tool.provider !== 'tavily' && !tool.models(config).length)) {
+        throw new HttpError(503, 'tool_unavailable', `${tool.name}还没有配置好，现在用不了`);
+      }
+
       if (typeof args.model === 'string' && !tool.models(config).includes(args.model)) {
         throw new HttpError(400, 'invalid_tool_args', `${tool.name}不能用模型 ${args.model}`);
       }
@@ -140,6 +338,7 @@ export function createToolService(deps: {
         const toolDeps = {
           openrouter: deps.openrouter,
           tavily: deps.tavily,
+          fal: deps.fal,
           config,
           signal: input.signal,
           upstream: async (request: () => Promise<Response>) => {
@@ -150,9 +349,62 @@ export function createToolService(deps: {
         };
         try {
           if (tool.long) {
-            const providerJobId = await tool.start(toolDeps, args, model);
             const id = randomUUID();
-            await jobs.insert({ id, tool: tool.key, providerJobId, call: { ...call } });
+            if (
+              !(await jobs.insert({
+                id,
+                tool: tool.key,
+                providerJobId: '',
+                call: { ...call },
+                requestKey: input.idempotencyKey ?? null,
+                requestHash,
+              }))
+            ) {
+              await meter.fail(call, '重复工具请求，未提交供应商');
+              const prior = input.idempotencyKey
+                ? await jobs.byRequest(input.idempotencyKey)
+                : undefined;
+              if (!prior) throw new Error('重复工具请求无法恢复');
+              return resume(prior.id);
+            }
+            try {
+              const providerJobId = await tool.start(
+                {
+                  ...toolDeps,
+                  signal: AbortSignal.any([
+                    input.signal,
+                    AbortSignal.timeout(deps.submitTimeoutMs ?? 60_000),
+                  ]),
+                  upstream: async (request) => {
+                    // POST 断连无法判断供应商是否接受，不释放冻结或自动重发。
+                    const response = await request();
+                    if (response.status >= 500) {
+                      await response.body?.cancel();
+                      throw new Error('供应商服务器响应未确认');
+                    }
+                    if (!response.ok) {
+                      await meter.fail(call, `供应商拒绝：${response.status}`);
+                      await jobs.finish(id, 'failed', '供应商拒绝了提交');
+                      throw new HttpError(502, 'provider_error', '供应商拒绝了提交');
+                    }
+                    accepted = true;
+                    return response;
+                  },
+                },
+                args,
+                model,
+              );
+              await jobs.update(id, { providerJobId, phase: 'pending' });
+            } catch (error) {
+              const row = await jobs.get(id);
+              if (row?.status !== 'failed')
+                await jobs.update(id, {
+                  phase: 'uncertain',
+                  error: '供应商提交结果未确认，未自动重发',
+                });
+              deps.logger.warn({ jobId: id }, '供应商长任务提交未确认');
+              if (row?.status === 'failed') throw error;
+            }
             return {
               tool: tool.key,
               text: `${tool.name}已提交，要等几分钟；任务号 ${id}。`,
@@ -190,59 +442,52 @@ export function createToolService(deps: {
       throw lastError;
     },
 
-    /**
-     * 长任务的进度。做好了就结算并交回结果；供应商说失败或等太久就退回冻结。
-     * 多个请求同时来取时，只有把记录从 pending 改掉的那一个结算。
-     */
-    async job(caller: Caller, jobId: string, signal: AbortSignal): Promise<ToolJobBody> {
-      const job = await jobs.get(jobId);
-      const call = job?.call as MeteredCall | undefined;
-      if (!job || !call || call.caller.payerId !== caller.payerId) {
-        throw new HttpError(404, 'tool_job_not_found', `没有任务号 ${jobId}`);
-      }
-      const tool = byKey.get(job.tool);
-      if (!tool?.long) throw new HttpError(404, 'tool_job_not_found', `没有任务号 ${jobId}`);
+    async job(caller: Caller, jobId: string, _signal: AbortSignal): Promise<ToolJobBody> {
+      await ownedJob(caller, jobId);
+      const work = processOne(jobId).catch((err: unknown) =>
+        deps.logger.warn({ err, jobId }, '检查媒体任务失败，保留状态重试'),
+      );
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        work,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, 750);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+      const job = await ownedJob(caller, jobId);
+      if (job.phase === 'expired' || (job.expiresAt && job.expiresAt.getTime() < Date.now()))
+        throw new HttpError(410, 'tool_result_expired', '工具结果已过期，请使用已交付的成果');
+      if (job.phase === 'uncertain')
+        return { status: 'uncertain', error: job.error ?? '供应商结果未确认' };
       if (job.status === 'failed') return { status: 'failed', error: job.error ?? '没做出来' };
-
-      const toolDeps = {
-        openrouter: deps.openrouter,
-        tavily: deps.tavily,
-        config,
-        signal,
-        upstream: (request: () => Promise<Response>) => request(),
-      };
-      const timedOut = Date.now() - job.createdAt.getTime() > deps.jobTimeoutMs;
-      let state;
-      try {
-        state = await tool.check(toolDeps, job.providerJobId);
-      } catch (err) {
-        deps.logger.warn({ err, jobId }, '查长任务进度失败');
-        if (job.status === 'completed') {
-          throw new HttpError(503, 'provider_unavailable', '结果暂时取不回来，请稍后再试');
-        }
-        state = { state: 'pending' as const };
+      if (job.status === 'completed' && job.result)
+        return { status: 'completed', result: job.result };
+      return { status: 'pending' };
+    },
+    async file(caller: Caller, jobId: string, fileId: string) {
+      const job = await ownedJob(caller, jobId);
+      if (job.phase === 'expired' || !job.expiresAt || job.expiresAt.getTime() < Date.now())
+        throw new HttpError(410, 'tool_result_expired', '工具结果已过期');
+      const file =
+        job.status === 'completed'
+          ? job.result?.files.find((file) => file.id === fileId)
+          : undefined;
+      if (!file) throw new HttpError(404, 'tool_file_not_found', '没有这个结果文件');
+      return { ...file, content: await deps.store.read(resultKey(jobId, fileId)) };
+    },
+    start() {
+      if (!timer) {
+        timer = setInterval(() => {
+          void tick().catch((err: unknown) => deps.logger.warn({ err }, '媒体任务巡检失败'));
+        }, 10_000);
+        timer.unref();
+        void tick().catch((err: unknown) => deps.logger.warn({ err }, '媒体任务恢复失败'));
       }
-      if (state.state === 'completed') {
-        if (await jobs.finish(jobId, 'completed')) {
-          await meter.settle(call, state.outcome.cost, undefined);
-        }
-        return {
-          status: 'completed',
-          result: { ...resultOf(tool, state.outcome), job: { id: jobId } },
-        };
-      }
-      if (job.status === 'completed') {
-        throw new HttpError(503, 'provider_unavailable', '结果暂时取不回来，请稍后再试');
-      }
-      const error =
-        state.state === 'failed'
-          ? state.error
-          : timedOut
-            ? `等了 ${Math.round(deps.jobTimeoutMs / 60_000)} 分钟还没做好，已放弃`
-            : undefined;
-      if (!error) return { status: 'pending' };
-      if (await jobs.finish(jobId, 'failed', error)) await meter.fail(call, error);
-      return { status: 'failed', error };
+    },
+    async close() {
+      if (timer) clearInterval(timer);
+      await Promise.allSettled(inFlight.values());
     },
   };
 }
@@ -252,7 +497,7 @@ function resultOf(
   outcome: {
     text: string;
     data?: unknown;
-    files: ToolResult['files'];
+    files: { name: string; mediaType: string; base64?: string }[];
     cost: { costMicro: number };
   },
 ): ToolResult {
@@ -260,7 +505,11 @@ function resultOf(
     tool: tool.key,
     text: outcome.text,
     ...(outcome.data === undefined ? {} : { data: outcome.data }),
-    files: outcome.files,
+    files: outcome.files.map((file) => ({
+      name: file.name,
+      mediaType: file.mediaType,
+      base64: file.base64 ?? '',
+    })),
     costMicro: outcome.cost.costMicro,
   };
 }

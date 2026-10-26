@@ -7,7 +7,11 @@
 //   oasis-tool audio.transcribe --file in/录音.mp3
 //   oasis-tool video.generate --prompt "…" --out out/视频.mp4   长任务：提交后自己等，等不到就给任务号
 //   oasis-tool wait <任务号> --out out/视频.mp4                   接着等长任务
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile, rename, rm } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { basename, dirname, extname, join } from 'node:path';
 import { runBatch } from './batch.ts';
 
@@ -19,6 +23,9 @@ interface ToolFile {
   name: string;
   mediaType: string;
   base64: string;
+  id?: string;
+  size?: number;
+  sha256?: string;
 }
 interface ToolResult {
   text: string;
@@ -27,7 +34,7 @@ interface ToolResult {
   job?: { id: string };
 }
 interface ToolJob {
-  status: 'pending' | 'completed' | 'failed';
+  status: 'pending' | 'completed' | 'failed' | 'uncertain';
   result?: ToolResult;
   error?: string;
 }
@@ -85,7 +92,7 @@ export function targetsFor(files: ToolFile[], out: string | undefined): string[]
 /** 命令的输出（AI 读的就是这些） */
 const say = (text: string) => process.stdout.write(`${text}\n`);
 
-async function request(path: string, init: RequestInit = {}): Promise<unknown> {
+async function openRequest(path: string, init: RequestInit = {}): Promise<Response> {
   const base = process.env.OASIS_MODEL_BASE_URL;
   // 在 dsh 的命令里只有 OASIS_TOOL_AUTH（OASIS_RUN_KEY 会被 dsh 去掉）
   const key = process.env.OASIS_TOOL_AUTH ?? process.env.OASIS_RUN_KEY;
@@ -94,15 +101,17 @@ async function request(path: string, init: RequestInit = {}): Promise<unknown> {
     ...init,
     headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
   });
+  if (response.ok) return response;
   const body = (await response.json().catch(() => ({}))) as {
     error?: { message?: string; code?: string };
   };
-  if (!response.ok)
-    throw Object.assign(new Error(body.error?.message ?? `工具服务返回 ${response.status}`), {
-      code: body.error?.code,
-      status: response.status,
-    });
-  return body;
+  throw Object.assign(new Error(body.error?.message ?? `工具服务返回 ${response.status}`), {
+    code: body.error?.code,
+    status: response.status,
+  });
+}
+async function request(path: string, init: RequestInit = {}): Promise<unknown> {
+  return (await openRequest(path, init)).json();
 }
 
 async function list(): Promise<void> {
@@ -119,9 +128,45 @@ async function save(result: ToolResult, out: string | undefined): Promise<void> 
   say(result.text);
   const targets = targetsFor(result.files, out);
   for (const [i, f] of result.files.entries()) {
+    if (basename(f.name) !== f.name || f.name.includes('\\')) throw new Error('工具文件名不安全');
     const target = targets[i] ?? join('out', f.name);
     await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, Buffer.from(f.base64, 'base64'));
+    if (f.id !== undefined) {
+      if (
+        !result.job ||
+        !/^\d{1,3}$/.test(f.id) ||
+        !/^[a-f0-9-]{36}$/.test(result.job.id) ||
+        !Number.isSafeInteger(f.size) ||
+        !f.sha256
+      )
+        throw new Error('工具文件引用不完整');
+      const response = await openRequest(`/tools/jobs/${result.job.id}/files/${f.id}`);
+      if (!response.body) throw new Error('工具文件没有内容流');
+      const partial = `${target}.${randomUUID()}.partial`;
+      const hash = createHash('sha256');
+      let size = 0;
+      const check = new Transform({
+        transform(chunk: Buffer, _encoding, done) {
+          size += chunk.length;
+          if (size > f.size! || size > 512 * 1024 * 1024)
+            return done(new Error('工具文件超过大小上限'));
+          hash.update(chunk);
+          done(null, chunk);
+        },
+      });
+      try {
+        await pipeline(
+          Readable.fromWeb(response.body),
+          check,
+          createWriteStream(partial, { flags: 'wx' }),
+        );
+        if (size !== f.size || hash.digest('hex') !== f.sha256)
+          throw new Error('工具文件大小或校验和不一致');
+        await rename(partial, target);
+      } finally {
+        await rm(partial, { force: true });
+      }
+    } else await writeFile(target, Buffer.from(f.base64, 'base64'));
     say(`已保存：${target}`);
   }
   say(`花费：$${(result.costMicro / 1_000_000).toFixed(4)}`);
@@ -133,7 +178,8 @@ async function wait(id: string, out: string | undefined): Promise<void> {
   for (;;) {
     const job = (await request(`/tools/jobs/${encodeURIComponent(id)}`)) as ToolJob;
     if (job.status === 'completed' && job.result) return save(job.result, out);
-    if (job.status === 'failed') throw new Error(job.error ?? '没做出来');
+    if (job.status === 'failed' || job.status === 'uncertain')
+      throw new Error(`${job.error ?? '没做出来'}；任务号 ${id}，不要重新提交以免重复收费`);
     if (Date.now() + POLL_MS > deadline) {
       const again = `oasis-tool wait ${id}${out ? ` --out ${JSON.stringify(out)}` : ''}`;
       say(`还没做好（任务号 ${id}）。先做别的，过一会儿运行：${again}`);
@@ -145,6 +191,53 @@ async function wait(id: string, out: string | undefined): Promise<void> {
 
 async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
+  if (key === 'audio.music' && args.lyrics_file !== undefined) {
+    if (typeof args.lyrics_file !== 'string' || (await stat(args.lyrics_file)).size > 14_000)
+      throw new Error('歌词文件超过上限');
+    args.lyrics = await readFile(args.lyrics_file, 'utf8');
+    delete args.lyrics_file;
+  }
+  const forceNew = args.new === 'true';
+  delete args.new;
+  const maxCost = args.max_cost_micro === undefined ? undefined : Number(args.max_cost_micro);
+  delete args.max_cost_micro;
+  let statePath: string | undefined;
+  let requestState: { key: string; jobId?: string } | undefined;
+  if (key === 'audio.music' || key === 'video.generate') {
+    const fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          key,
+          out,
+          args: Object.fromEntries(Object.entries(args).sort(([a], [b]) => a.localeCompare(b))),
+        }),
+      )
+      .digest('hex');
+    const folder = process.env.OASIS_TOOL_STATE_DIR ?? join('out', '.oasis-tools');
+    await mkdir(folder, { recursive: true });
+    statePath = join(folder, `${fingerprint}.json`);
+    const scope = process.env.OASIS_TOOL_SCOPE;
+    const hash = createHash('sha256')
+      .update(`${scope ?? ''}:${fingerprint}`)
+      .digest('hex');
+    const stableKey = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+    const fresh = { key: scope && !forceNew ? stableKey : randomUUID() };
+    if (forceNew) await writeFile(statePath, JSON.stringify(fresh));
+    else {
+      try {
+        await writeFile(statePath, JSON.stringify(fresh), { flag: 'wx' });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+    }
+    requestState = JSON.parse(await readFile(statePath, 'utf8')) as { key: string; jobId?: string };
+    if (!/^[a-f0-9-]{36}$/.test(requestState.key))
+      throw new Error('工具恢复记录损坏，未提交供应商');
+    if (requestState.jobId) {
+      say(`沿用任务号 ${requestState.jobId}，未重新提交。`);
+      return wait(requestState.jobId, out);
+    }
+  }
   if (
     key === 'text.batch' ||
     (key === 'jev.decide' && (args.in !== undefined || args.resume !== undefined))
@@ -188,13 +281,28 @@ async function run(key: string, argv: string[]): Promise<void> {
   if (file) {
     const format = extname(file).slice(1).toLowerCase();
     if (!AUDIO_FORMATS.has(format)) throw new Error(`不支持的音频格式：${format}`);
+    if ((await stat(file)).size > 20 * 1024 * 1024)
+      throw new Error('转写输入超过 20 MiB，请先分段');
     args.audio_base64 = (await readFile(file)).toString('base64');
     args.format = format;
   }
   const result = (await request(`/tools/${encodeURIComponent(key)}`, {
     method: 'POST',
-    body: JSON.stringify({ args }),
+    body: JSON.stringify({
+      args,
+      ...(requestState ? { idempotency_key: requestState.key } : {}),
+      ...(maxCost === undefined ? {} : { max_cost_micro: maxCost }),
+    }),
   })) as ToolResult;
+  if (result.job && statePath && requestState) {
+    const partial = `${statePath}.${randomUUID()}.partial`;
+    try {
+      await writeFile(partial, JSON.stringify({ ...requestState, jobId: result.job.id }));
+      await rename(partial, statePath);
+    } finally {
+      await rm(partial, { force: true });
+    }
+  }
   if (key === 'web.fetch' && out) {
     for (const f of result.files) {
       if (

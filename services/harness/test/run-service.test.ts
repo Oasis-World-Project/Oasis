@@ -1,3 +1,4 @@
+import { extract } from 'tar-stream';
 import { PassThrough, Readable } from 'node:stream';
 import type { EventEnvelope } from '@oasis/contracts/events';
 import { createServiceClient, HttpError } from '@oasis/service-kit';
@@ -6,7 +7,7 @@ import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Executor, Sandbox, SandboxSpec } from '../src/executor/executor.ts';
 import { extractFiles, packFiles } from '../src/executor/tar.ts';
-import type { ObjectStore } from '@oasis/service-kit';
+import { checkedParts, type ObjectStore } from '@oasis/service-kit';
 import type { Run, RunEvent, RunsRepo } from '../src/repo/runs-repo.ts';
 import { createRunService } from '../src/service/run-service.ts';
 
@@ -90,7 +91,26 @@ let startDelayMs = 0;
 const executor: Executor = {
   check: async () => {},
   async start(spec) {
-    started.push(spec);
+    const groups = new Map<string, { path: string; content: Buffer }[]>();
+    for (const input of spec.files) {
+      const parser = extract();
+      if (Buffer.isBuffer(input.tar)) parser.end(input.tar);
+      else input.tar.pipe(parser);
+      const collected = groups.get(input.dir) ?? [];
+      for await (const entry of parser) {
+        const chunks: Buffer[] = [];
+        for await (const value of entry) chunks.push(Buffer.from(value as Uint8Array));
+        if (entry.header.type === 'file')
+          collected.push({ path: entry.header.name, content: Buffer.concat(chunks) });
+      }
+      groups.set(input.dir, collected);
+    }
+    started.push({
+      ...spec,
+      files: await Promise.all(
+        [...groups].map(async ([dir, files]) => ({ dir, tar: await packFiles(files) })),
+      ),
+    });
     await sleep(startDelayMs);
     const stdin = new PassThrough();
     const stdout = new PassThrough();
@@ -179,6 +199,21 @@ const repo: RunsRepo = {
 
 const stored = new Map<string, Buffer>();
 const store: ObjectStore = {
+  delete: async (key) => {
+    stored.delete(key);
+  },
+  putStream: async (key, source, _type, limits) => {
+    const iterator = checkedParts(source, limits);
+    const chunks: Buffer[] = [];
+    for (;;) {
+      const part = await iterator.next();
+      if (part.done) {
+        stored.set(key, Buffer.concat(chunks));
+        return part.value;
+      }
+      chunks.push(part.value);
+    }
+  },
   put: async (key, body) => void stored.set(key, body),
   get: async (key) => {
     const body = stored.get(key);
@@ -223,6 +258,22 @@ modelGateway.post('/internal/run-keys/:id/revoke', async (request, reply) => {
 /** 假 canvas（和假 model-gateway 共用一个服务器）：用户上传的素材 */
 const PHOTO = '6a6a6a6a-6a6a-4a6a-8a6a-6a6a6a6a6a6a';
 const BIG = '6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b';
+modelGateway.post('/internal/uploads/lookup', async (request, reply) => {
+  const { ids } = request.body as { ids: string[] };
+  if (ids.some((id) => id !== PHOTO && id !== BIG))
+    return reply
+      .code(404)
+      .send({ error: { code: 'upload_not_found', message: '没有这个文件', requestId: 'r' } });
+  return {
+    uploads: ids.map((id) => ({
+      id,
+      name: 'x',
+      size: id === PHOTO ? 11 : 4096,
+      contentType: 'application/octet-stream',
+      createdAt: new Date().toISOString(),
+    })),
+  };
+});
 modelGateway.get('/internal/uploads/:id/content', async (request, reply) => {
   const { id } = request.params as { id: string };
   if (id === PHOTO) return reply.type('image/jpeg').send(Buffer.from('photo-bytes'));
@@ -304,7 +355,7 @@ describe('一次 agent 运行', () => {
     const row = await finished(run.id);
 
     expect(row.status).toBe('succeeded');
-    expect(row.outputs).toEqual([{ path: 'result.md', size: Buffer.byteLength('# 成果') }]);
+    expect(row.outputs).toMatchObject([{ path: 'result.md', size: Buffer.byteLength('# 成果') }]);
     expect(stored.has(`runs/${run.id}/outputs.tar`)).toBe(true);
     expect(stored.has(`runs/${run.id}/session.tar`)).toBe(true);
     expect(issued[0]).toMatchObject({ runId: run.id, payerId: PAYER });

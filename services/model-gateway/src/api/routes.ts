@@ -7,7 +7,12 @@ import {
   DecisionRequest,
   ToolCallBody,
 } from '@oasis/contracts/model-gateway';
-import { parseWith, requirePayerId, type ServiceApp } from '@oasis/service-kit';
+import {
+  fileResponseHeaders,
+  parseWith,
+  requirePayerId,
+  type ServiceApp,
+} from '@oasis/service-kit';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { ChatService } from '../service/chat-service.ts';
@@ -86,8 +91,9 @@ export function registerRoutes(
 
   async function useTool(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
     const { key } = parseWith(ToolParams, request.params);
-    const { args, max_cost_micro } = parseWith(ToolCallBody, request.body);
+    const { args, max_cost_micro, idempotency_key } = parseWith(ToolCallBody, request.body);
     return tools.call({
+      idempotencyKey: idempotency_key,
       caller,
       key,
       args,
@@ -191,4 +197,24 @@ export function registerRoutes(
   app.get('/run/v1/tools/jobs/:jobId', async (request, reply) =>
     toolJob(await runKeys.authenticate(request.headers.authorization), request, reply),
   );
+  const fileParams = JobParams.extend({ fileId: z.string().regex(/^\d{1,3}$/) });
+  app.get('/run/v1/tools/jobs/:jobId/files/:fileId', async (request, reply) => {
+    const caller = await runKeys.authenticate(request.headers.authorization);
+    const { jobId, fileId } = parseWith(fileParams, request.params);
+    const file = await tools.file(caller, jobId, fileId);
+    return reply
+      .headers(fileResponseHeaders(file.mediaType, file.name, true))
+      .header('content-length', file.size)
+      .header('x-oasis-file-sha256', file.sha256)
+      .send(file.content);
+  });
+  app.get('/internal/v1/tools/jobs/:jobId/files/:fileId', async (request, reply) => {
+    const { jobId, fileId } = parseWith(fileParams, request.params);
+    const file = await tools.file(internalCaller(request), jobId, fileId);
+    return reply
+      .type(file.mediaType)
+      .header('content-length', file.size)
+      .header('x-oasis-file-sha256', file.sha256)
+      .send(file.content);
+  });
 }

@@ -7,7 +7,8 @@
   "files": [
     "dist",
     "migrations",
-    "seccomp-profile.json"
+    "seccomp-profile.json",
+    "media"
   ],
   "scripts": {
     "dev": "node --env-file-if-exists=.env --watch src/main.ts",

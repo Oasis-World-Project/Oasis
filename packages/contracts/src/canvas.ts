@@ -21,6 +21,11 @@ export const UploadBody = z.object({
   name: z.string(),
   size: z.number().int().nonnegative(),
   contentType: z.string(),
+  sha256: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable()
+    .optional(),
   createdAt: z.iso.datetime(),
 });
 export type UploadBody = z.infer<typeof UploadBody>;
@@ -84,6 +89,11 @@ export type ApplicationBundle = z.infer<typeof ApplicationBundle>;
  * 画布里的一个成果（ADR 0007 §8）：任务完成时，负责交付物的节点交出的一个文件，复制进画布。
  */
 export const ArtifactBody = z.object({
+  sha256: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable()
+    .optional(),
   id: z.uuid(),
   /** 文件名（不含目录） */
   name: z.string(),

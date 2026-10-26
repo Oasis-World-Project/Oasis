@@ -1,6 +1,8 @@
 // 成果（ADR 0007 §8）：任务完成时把负责交付物的节点交出的文件复制进画布；给前端列出、读取。
 import { randomUUID } from 'node:crypto';
-import { zipSync } from 'fflate';
+import { PassThrough, Readable } from 'node:stream';
+import { once } from 'node:events';
+import { Zip, ZipPassThrough } from 'fflate';
 import { ApplicationSpec, type ArtifactBody, type ArtifactCategory } from '@oasis/contracts/canvas';
 import type { TaskStatusChangedData } from '@oasis/contracts/events';
 import { TaskBody } from '@oasis/contracts/task';
@@ -19,6 +21,7 @@ const toBody = (row: Artifact): ArtifactBody => ({
   name: row.name,
   path: row.path,
   size: row.size,
+  sha256: row.sha256,
   contentType: row.contentType,
   category: row.category,
   application: row.appSpec,
@@ -89,6 +92,8 @@ export function createArtifactService(deps: {
   store: ObjectStore;
   task: ServiceClient;
   logger: Logger;
+  maxFileBytes?: number;
+  transferTimeoutMs?: number;
 }) {
   const { repo, store, task, logger } = deps;
 
@@ -120,12 +125,26 @@ export function createArtifactService(deps: {
         const response = await task.stream(
           'GET',
           `/internal/tasks/${event.taskId}/files/${file.nodeId}/${file.path.split('/').map(encodeURIComponent).join('/')}`,
+          { signal: AbortSignal.timeout(deps.transferTimeoutMs ?? 600_000) },
         );
-        const content = Buffer.from(await response.arrayBuffer());
+        if (!response.body) throw new Error('成果文件没有内容流');
         const contentType = contentTypeOf(file.path);
         // 键由任务、节点、路径决定：事件重投时覆盖同一个对象，不会留下孤儿
         const objectKey = `artifacts/${event.taskId}/${file.nodeId}/${file.path}`;
-        await store.put(objectKey, content, contentType);
+        const saved = await store.putStream(
+          objectKey,
+          Readable.fromWeb(response.body),
+          contentType,
+          {
+            maxBytes: deps.maxFileBytes ?? 512 * 1024 * 1024,
+            ...(response.headers.get('content-length')
+              ? { size: Number(response.headers.get('content-length')) }
+              : {}),
+            ...(response.headers.get('x-oasis-file-sha256')
+              ? { sha256: response.headers.get('x-oasis-file-sha256')! }
+              : {}),
+          },
+        );
         const relative = uniqueName(safePath(file.path), takenInDir, true);
         takenInDir.add(relative.toLowerCase());
         const inserted = await repo.insert({
@@ -138,7 +157,7 @@ export function createArtifactService(deps: {
           path: file.path,
           name: file.path.split('/').at(-1) ?? file.path,
           deliverable: file.deliverable,
-          size: content.length,
+          ...saved,
           contentType,
           category: categoryOf(file.path),
           appSpec: null,
@@ -234,9 +253,7 @@ export function createArtifactService(deps: {
       if (!rows.length) throw new HttpError(404, 'artifact_not_found', '没有这个任务的成果');
       if (rows.length > limits.files || rows.reduce((n, row) => n + row.size, 0) > limits.bytes)
         throw new HttpError(413, 'archive_size', '成果超过打包上限，请分别下载');
-      const entries: Record<string, Uint8Array> = Object.create(null) as Record<string, Uint8Array>;
       const seen = new Set<string>();
-      let size = 0;
       for (const row of rows) {
         const name = row.syncPath;
         if (
@@ -251,23 +268,52 @@ export function createArtifactService(deps: {
         )
           throw new HttpError(422, 'archive_path', '成果目录异常，不能安全打包');
         seen.add(name.toLowerCase());
-        const stream = await store.read(row.objectKey);
-        const chunks: Buffer[] = [];
-        try {
-          for await (const chunk of stream) {
-            const bytes = Buffer.from(chunk as Uint8Array);
-            size += bytes.length;
-            if (size > limits.bytes) throw new HttpError(413, 'archive_size', '成果超过打包上限');
-            chunks.push(bytes);
-          }
-        } finally {
-          stream.destroy();
-        }
-        entries[name] = Buffer.concat(chunks);
       }
+      const content = new PassThrough();
+      const cancel = new AbortController();
+      const zip = new Zip((error, bytes, final) => {
+        if (error) content.destroy(error);
+        else {
+          content.write(bytes);
+          if (final) content.end();
+        }
+      });
+      content.on('close', () => {
+        cancel.abort();
+        zip.terminate();
+      });
+      void (async () => {
+        let total = 0;
+        for (const row of rows) {
+          if (content.destroyed) return;
+          const file = new ZipPassThrough(row.syncPath);
+          zip.add(file);
+          const source = await store.read(row.objectKey);
+          let size = 0;
+          try {
+            for await (const chunk of source) {
+              const bytes = Buffer.from(chunk as Uint8Array);
+              size += bytes.length;
+              total += bytes.length;
+              if (size > row.size || total > limits.bytes) throw new Error('成果内容大小不一致');
+              file.push(bytes);
+              if (content.writableNeedDrain)
+                await once(content, 'drain', { signal: cancel.signal });
+              if (content.destroyed) return;
+            }
+            if (size !== row.size) throw new Error('成果内容大小不一致');
+            file.push(new Uint8Array(), true);
+          } finally {
+            source.destroy();
+          }
+        }
+        zip.end();
+      })().catch((error: unknown) =>
+        content.destroy(error instanceof Error ? error : new Error(String(error))),
+      );
       return {
         name: `${safeSegment(rows[0]!.taskTitle)}.zip`,
-        content: zipSync(entries, { level: 0 }),
+        content,
       };
     },
 

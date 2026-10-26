@@ -1,8 +1,15 @@
 import { PassThrough, Readable } from 'node:stream';
+import { pack } from 'tar-stream';
 import { describe, expect, it } from 'vitest';
 import { defaultDockerSocket } from '../src/executor/docker-api.ts';
 import { demultiplex } from '../src/executor/executor.ts';
-import { listFiles, packFiles, readLimited } from '../src/executor/tar.ts';
+import {
+  listFiles,
+  packFiles,
+  packStreams,
+  readLimited,
+  scanArchive,
+} from '../src/executor/tar.ts';
 
 const frame = (stream: 1 | 2, text: string) => {
   const payload = Buffer.from(text);
@@ -49,5 +56,33 @@ describe('tar 小工具', () => {
     await expect(
       readLimited(Readable.from([Buffer.alloc(10), Buffer.alloc(10)]), 15),
     ).rejects.toThrow('产出超过上限');
+  });
+
+  it('流式归档拒绝越界、重复路径和符号链接', async () => {
+    const oversized = await packFiles([{ path: 'out/a.wav', content: Buffer.alloc(10) }]);
+    await expect(scanArchive(Readable.from([oversized]), 9)).rejects.toThrow('归档大小');
+    const duplicated = await packFiles([
+      { path: 'out/a.wav', content: Buffer.from('a') },
+      { path: 'out/a.wav', content: Buffer.from('b') },
+    ]);
+    await expect(scanArchive(Readable.from([duplicated]), 100)).rejects.toThrow('文件名');
+    const unsafe = await packFiles([{ path: 'out/../a', content: Buffer.from('a') }]);
+    await expect(scanArchive(Readable.from([unsafe]), 100)).rejects.toThrow('不安全路径');
+    const linked = pack();
+    linked.entry({ name: 'out/a.wav', type: 'symlink', linkname: '/etc/passwd' });
+    linked.finalize();
+    await expect(scanArchive(Readable.from(linked), 100)).rejects.toThrow('非常规文件');
+  });
+
+  it('流式组包的来源校验失败时中止，不能把损坏材料送入沙箱', async () => {
+    const stream = packStreams([
+      {
+        path: 'materials/a.wav',
+        size: 3,
+        sha256: '0'.repeat(64),
+        open: async () => Readable.from([Buffer.from('abc')]),
+      },
+    ]);
+    await expect(readLimited(stream, 10000)).rejects.toThrow('校验和不一致');
   });
 });

@@ -32,6 +32,8 @@ await startService({
       accessKey: config.S3_ACCESS_KEY,
       secretKey: config.S3_SECRET_KEY,
       bucket: config.S3_BUCKET,
+      multipartMaxAgeMs: config.S3_MULTIPART_MAX_AGE_MS,
+      logger: ctx.logger,
     });
     await objects.ensureBucket();
     store = objects.store;
@@ -41,6 +43,8 @@ await startService({
       // 复制成果文件可能要一会儿
       task: createServiceClient('task', config.TASK_URL, { timeoutMs: 60_000 }),
       logger: ctx.logger,
+      maxFileBytes: config.UPLOAD_MAX_BYTES,
+      transferTimeoutMs: config.FILE_TRANSFER_TIMEOUT_MS,
     });
     // 任务完成 → 把成果登记进画布
     const taskStatus = startEventConsumer({
@@ -53,17 +57,28 @@ await startService({
     });
     return { postgres, eventBus, objectStore: objects.resource, taskStatus };
   },
-  routes: (app, { config, resources }) => {
+  routes: (app, { config, resources, logger }) => {
+    const uploads = createUploadService({
+      repo: createUploadsRepo(resources.postgres.pool),
+      store,
+      logger,
+    });
+    uploads.start();
+    app.addHook('onClose', () => {
+      uploads.close();
+    });
     registerRoutes(
       app,
       {
-        uploads: createUploadService({ repo: createUploadsRepo(resources.postgres.pool), store }),
+        uploads,
         artifacts,
         store,
         harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 60_000 }),
       },
       {
         maxBytes: config.UPLOAD_MAX_BYTES,
+        uploadConcurrency: config.UPLOAD_CONCURRENCY,
+        transferTimeoutMs: config.FILE_TRANSFER_TIMEOUT_MS,
         preview: {
           inputBytes: config.PREVIEW_MAX_BYTES,
           unzipBytes: config.PREVIEW_UNZIP_MAX_BYTES,

@@ -4,6 +4,8 @@ import { MODEL_GATEWAY_STREAM } from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
   createServiceClient,
+  createObjectStore,
+  type ObjectStore,
   ensureStream,
   startOutboxRelay,
   startService,
@@ -27,6 +29,7 @@ import { createMeter } from './service/metering.ts';
 import { createRunKeyService } from './service/run-key-service.ts';
 import { createToolService } from './service/tool-service.ts';
 import { createTavilyClient } from './adapters/tavily.ts';
+import { createFalClient } from './adapters/fal.ts';
 
 /** 定时刷新价格表；拉取失败时保留上一版，1 分钟后重试。 */
 function startPriceBook(provider: ProviderClient, refreshMs: number, logger: Logger) {
@@ -53,6 +56,7 @@ function startPriceBook(provider: ProviderClient, refreshMs: number, logger: Log
 
 let priceBook: ReturnType<typeof startPriceBook>;
 let provider: ProviderClient;
+let toolStore: ObjectStore;
 
 await startService({
   name: 'model-gateway',
@@ -67,6 +71,17 @@ await startService({
     if (!provider.configured) ctx.logger.warn('没有配置 OPENROUTER_API_KEY：模型调用会返回 503');
     priceBook = startPriceBook(provider, ctx.config.PRICING_REFRESH_MS, ctx.logger);
     const { postgres, eventBus } = await connectPostgresAndEventBus(ctx);
+    const objects = createObjectStore({
+      endpoint: ctx.config.S3_ENDPOINT,
+      region: ctx.config.S3_REGION,
+      accessKey: ctx.config.S3_ACCESS_KEY,
+      secretKey: ctx.config.S3_SECRET_KEY,
+      bucket: ctx.config.S3_BUCKET,
+      multipartMaxAgeMs: ctx.config.S3_MULTIPART_MAX_AGE_MS,
+      logger: ctx.logger,
+    });
+    await objects.ensureBucket();
+    toolStore = objects.store;
     await ensureStream(eventBus.connection, MODEL_GATEWAY_STREAM);
     // 属于任务的调用结算后发 model-gateway.call.settled（task 累加花费）
     const outbox = startOutboxRelay({
@@ -74,7 +89,7 @@ await startService({
       connection: eventBus.connection,
       logger: ctx.logger,
     });
-    return { postgres, eventBus, outbox, priceBook: priceBook.resource };
+    return { postgres, eventBus, outbox, objects: objects.resource, priceBook: priceBook.resource };
   },
   routes: (app, { config, resources, logger }) => {
     const callsRepo = createCallsRepo(resources.postgres.pool);
@@ -89,33 +104,47 @@ await startService({
       prices: priceBook.current,
       fallbackHoldMicro: config.FALLBACK_HOLD_MICRO,
     };
+    const tools = createToolService({
+      openrouter: provider,
+      fal: createFalClient({
+        baseUrl: config.FAL_BASE_URL,
+        apiKey: config.FAL_API_KEY,
+        mediaHosts: config.FAL_MEDIA_HOSTS,
+      }),
+      store: toolStore,
+      resultMaxBytes: config.TOOL_RESULT_MAX_BYTES,
+      retentionMs: config.TOOL_RESULT_RETENTION_MS,
+      submitTimeoutMs: config.TOOL_SUBMIT_TIMEOUT_MS,
+      tavily: createTavilyClient({
+        baseUrl: config.TAVILY_BASE_URL,
+        apiKey: config.TAVILY_API_KEY,
+      }),
+      meter,
+      jobs: createToolJobsRepo(resources.postgres.pool),
+      jobTimeoutMs: config.TOOL_JOB_TIMEOUT_MS,
+      config: {
+        imageModels: config.TOOL_IMAGE_MODELS,
+        visionModels: config.TOOL_VISION_MODELS,
+        visionMaxTokens: config.TOOL_VISION_MAX_TOKENS,
+        fetchMaxBytes: config.TOOL_FETCH_MAX_BYTES,
+        speechModels: config.TOOL_SPEECH_MODELS,
+        transcribeModels: config.TOOL_TRANSCRIBE_MODELS,
+        videoModels: config.TOOL_VIDEO_MODELS,
+        jevModel: config.TOOL_JEV_MODEL,
+        tavilyCreditMicro: config.TAVILY_CREDIT_MICRO,
+        speechMicroPerChar: config.TOOL_SPEECH_MICRO_PER_CHAR,
+        musicModels: config.TOOL_MUSIC_MODELS,
+        musicMicroPerGeneration: config.TOOL_MUSIC_MICRO_PER_GENERATION,
+      },
+      logger,
+    });
+    tools.start();
+    app.addHook('onClose', () => tools.close());
     registerRoutes(app, {
       chat: createChatService({ ...common, defaultMaxTokens: config.DEFAULT_MAX_TOKENS }),
       decisions: createDecisionService(common),
       runKeys: createRunKeyService({ repo: createRunKeysRepo(resources.postgres.pool) }),
-      tools: createToolService({
-        openrouter: provider,
-        tavily: createTavilyClient({
-          baseUrl: config.TAVILY_BASE_URL,
-          apiKey: config.TAVILY_API_KEY,
-        }),
-        meter,
-        jobs: createToolJobsRepo(resources.postgres.pool),
-        jobTimeoutMs: config.TOOL_JOB_TIMEOUT_MS,
-        config: {
-          imageModels: config.TOOL_IMAGE_MODELS,
-          visionModels: config.TOOL_VISION_MODELS,
-          visionMaxTokens: config.TOOL_VISION_MAX_TOKENS,
-          fetchMaxBytes: config.TOOL_FETCH_MAX_BYTES,
-          speechModels: config.TOOL_SPEECH_MODELS,
-          transcribeModels: config.TOOL_TRANSCRIBE_MODELS,
-          videoModels: config.TOOL_VIDEO_MODELS,
-          jevModel: config.TOOL_JEV_MODEL,
-          tavilyCreditMicro: config.TAVILY_CREDIT_MICRO,
-          speechMicroPerChar: config.TOOL_SPEECH_MICRO_PER_CHAR,
-        },
-        logger,
-      }),
+      tools,
       compute: createComputeService({
         meter,
         repo: callsRepo,

@@ -3,8 +3,19 @@
 // - 已经有同名文件就不覆盖（可能是用户自己改过的），只记为已同步；
 // - 先写临时文件再改名，写到一半断了不会留下半个文件；
 // - 哪些成果同步过记在桌面端自己的数据目录里，按文件夹分开记（换了文件夹会重新同步一遍）。
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+  open,
+  link,
+  realpath,
+  type FileHandle,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { DESKTOP_SYNC_MAX_BYTES, type DesktopSyncStatus } from '@oasis/contracts/desktop';
 
@@ -12,6 +23,7 @@ interface SyncRecord {
   folder: string | null;
   /** 文件夹 → 同步过的成果 id */
   synced: Record<string, string[]>;
+  pending?: Record<string, { folder: string; relative: string }>;
 }
 
 const EMPTY: SyncRecord = { folder: null, synced: {} };
@@ -55,7 +67,11 @@ export function createSyncFolder(recordFile: string) {
   async function load(): Promise<SyncRecord> {
     try {
       const parsed = JSON.parse(await readFile(recordFile, 'utf8')) as Partial<SyncRecord>;
-      return { folder: parsed.folder ?? null, synced: parsed.synced ?? {} };
+      return {
+        folder: parsed.folder ?? null,
+        synced: parsed.synced ?? {},
+        pending: parsed.pending ?? {},
+      };
     } catch {
       return { ...EMPTY, synced: {} };
     }
@@ -76,7 +92,46 @@ export function createSyncFolder(recordFile: string) {
     return next;
   };
 
+  const transfers = new Map<
+    string,
+    {
+      file: FileHandle;
+      target: string;
+      partial: string;
+      folder: string;
+      id: string;
+      size: number;
+      count: number;
+      hash: ReturnType<typeof createHash>;
+      sha256?: string | null;
+    }
+  >();
+  async function discard(token: string) {
+    const item = transfers.get(token);
+    if (item) {
+      await item.file.close();
+      await rm(item.partial, { force: true });
+      transfers.delete(token);
+    }
+    const record = await load();
+    delete record.pending?.[token];
+    await save(record);
+  }
   return {
+    recover: () =>
+      serial(async () => {
+        const record = await load();
+        for (const [token, item] of Object.entries(record.pending ?? {})) {
+          if (!/^[a-f0-9-]{36}$/.test(token)) throw new Error('同步恢复记录不合格');
+          const target = resolveInside(item.folder, item.relative);
+          const parent = await realpath(path.dirname(target)).catch(() => null);
+          const root = await realpath(item.folder).catch(() => null);
+          if (parent && root && !path.relative(root, parent).startsWith('..'))
+            await rm(`${target}.oasis-${token}.partial`, { force: true });
+        }
+        record.pending = {};
+        await save(record);
+      }),
     async status(): Promise<DesktopSyncStatus> {
       const record = await load();
       return {
@@ -95,35 +150,103 @@ export function createSyncFolder(recordFile: string) {
         await save({ ...record, folder: path.resolve(folder) });
       }),
 
-    /** 写一个成果；返回实际写了没有（已有同名文件时不写） */
-    write: (artifactId: string, relative: string, data: ArrayBuffer | Uint8Array) =>
+    begin: (artifactId: string, relative: string, size: number, sha256?: string | null) =>
       serial(async () => {
         const record = await load();
         if (!record.folder) throw new Error('还没选同步文件夹');
-        if (typeof artifactId !== 'string' || !/^[0-9a-f-]{36}$/i.test(artifactId)) {
-          throw new Error('成果 id 不合格');
-        }
-        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-        if (bytes.byteLength > DESKTOP_SYNC_MAX_BYTES) throw new Error('文件太大，没有同步');
+        if (!/^[0-9a-f-]{36}$/i.test(artifactId)) throw new Error('成果 id 不合格');
+        if (!Number.isSafeInteger(size) || size < 0 || size > DESKTOP_SYNC_MAX_BYTES)
+          throw new Error('文件太大，没有同步');
+        if (sha256 != null && !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('校验和不合格');
+        if (transfers.size >= 4) throw new Error('同步任务过多');
         const target = resolveInside(record.folder, relative);
-        let written = false;
-        if (!existsSync(target)) {
-          await mkdir(path.dirname(target), { recursive: true });
-          const partial = `${target}.oasis-partial`;
-          try {
-            await writeFile(partial, bytes);
-            await rename(partial, target);
-          } catch (err) {
-            await rm(partial, { force: true });
-            throw err;
-          }
-          written = true;
+        await mkdir(path.dirname(target), { recursive: true });
+        const root = await realpath(record.folder);
+        const parent = await realpath(path.dirname(target));
+        if (
+          path.relative(root, parent).startsWith('..') ||
+          path.isAbsolute(path.relative(root, parent))
+        )
+          throw new Error('同步目录包含越界链接');
+        if (existsSync(target)) {
+          record.synced[record.folder] = [
+            ...new Set([...(record.synced[record.folder] ?? []), artifactId]),
+          ];
+          await save(record);
+          return null;
         }
-        const done = new Set(record.synced[record.folder] ?? []);
-        done.add(artifactId);
-        await save({ ...record, synced: { ...record.synced, [record.folder]: [...done] } });
-        return written;
+        const token = randomUUID();
+        const partial = `${target}.oasis-${token}.partial`;
+        const file = await open(partial, 'wx');
+        transfers.set(token, {
+          file,
+          target,
+          partial,
+          folder: record.folder,
+          id: artifactId,
+          size,
+          count: 0,
+          hash: createHash('sha256'),
+          sha256,
+        });
+        record.pending ??= {};
+        record.pending[token] = { folder: record.folder, relative };
+        try {
+          await save(record);
+        } catch (error) {
+          await file.close();
+          await rm(partial, { force: true });
+          transfers.delete(token);
+          throw error;
+        }
+        return token;
       }),
+    append: (token: string, bytes: Uint8Array) =>
+      serial(async () => {
+        const item = transfers.get(token);
+        if (!item) throw new Error('同步会话不存在');
+        if (bytes.byteLength > 1024 * 1024 || item.count + bytes.byteLength > item.size) {
+          await discard(token);
+          throw new Error('同步分块大小不合格');
+        }
+        try {
+          let offset = 0;
+          while (offset < bytes.length) {
+            const written = await item.file.write(bytes, offset, bytes.length - offset);
+            if (!written.bytesWritten) throw new Error('写入未完成');
+            offset += written.bytesWritten;
+          }
+          item.hash.update(bytes);
+          item.count += bytes.length;
+        } catch (error) {
+          await discard(token);
+          throw error;
+        }
+      }),
+    finish: (token: string) =>
+      serial(async () => {
+        const item = transfers.get(token);
+        if (!item) throw new Error('同步会话不存在');
+        if (item.count !== item.size || (item.sha256 && item.hash.digest('hex') !== item.sha256)) {
+          await discard(token);
+          throw new Error('同步大小或校验和不一致');
+        }
+        await item.file.sync();
+        await item.file.close();
+        transfers.delete(token);
+        try {
+          await link(item.partial, item.target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        } finally {
+          await rm(item.partial, { force: true });
+        }
+        const record = await load();
+        delete record.pending?.[token];
+        record.synced[item.folder] = [...new Set([...(record.synced[item.folder] ?? []), item.id])];
+        await save(record);
+      }),
+    abort: (token: string) => serial(() => discard(token)),
   };
 }
 

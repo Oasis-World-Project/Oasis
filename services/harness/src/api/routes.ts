@@ -22,6 +22,14 @@ const EventsQuery = z.object({
 });
 
 export function registerRoutes(app: ServiceApp, runs: RunService, previews?: PreviewService): void {
+  app.post('/internal/runs/:runId/audio-check', async (request) => {
+    const { runId } = parseWith(RunParams, request.params);
+    const { payerId, taskId } = parseWith(
+      z.object({ payerId: z.uuid(), taskId: z.uuid() }),
+      request.body,
+    );
+    return runs.audioCheck(runId, payerId, taskId);
+  });
   if (previews) {
     app.post('/internal/runs/:runId/application-check', async (request) => {
       const { runId } = parseWith(RunParams, request.params);
@@ -91,8 +99,12 @@ export function registerRoutes(app: ServiceApp, runs: RunService, previews?: Pre
   /** 读一个产出文件（out/ 下的相对路径） */
   app.get('/internal/runs/:runId/files/*', async (request, reply) => {
     const { runId, '*': path } = parseWith(FileParams, request.params);
-    const file = await runs.file(runId, path);
-    return reply.type(file.contentType).send(file.content);
+    const file = await runs.fileStream(runId, path);
+    return reply
+      .type(file.contentType)
+      .header('content-length', file.size)
+      .header('x-oasis-file-sha256', file.sha256 ?? '')
+      .send(file.content);
   });
 
   /** 用户追问或补充要求（只对运行中的节点有效） */

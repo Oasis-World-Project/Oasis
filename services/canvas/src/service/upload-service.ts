@@ -1,7 +1,14 @@
 // 素材：用户随消息发的文件。文件本身存对象存储，库里记是谁的、叫什么（ADR 0007 §3）。
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type { UploadBody } from '@oasis/contracts/canvas';
-import { contentTypeOf, HttpError, type ObjectStore } from '@oasis/service-kit';
+import {
+  contentTypeOf,
+  HttpError,
+  type ObjectStore,
+  type StreamLimits,
+  type Logger,
+} from '@oasis/service-kit';
 import type { Upload, UploadsRepo } from '../repo/uploads-repo.ts';
 
 const toUploadBody = (row: Upload): UploadBody => ({
@@ -9,30 +16,78 @@ const toUploadBody = (row: Upload): UploadBody => ({
   name: row.name,
   size: row.size,
   contentType: row.contentType,
+  sha256: row.sha256,
   createdAt: row.createdAt.toISOString(),
 });
 
 const notFound = () => new HttpError(404, 'upload_not_found', '没有这个文件');
 
-export function createUploadService(deps: { repo: UploadsRepo; store: ObjectStore }) {
+export function createUploadService(deps: {
+  repo: UploadsRepo;
+  store: ObjectStore;
+  logger?: Logger;
+}) {
   const { repo, store } = deps;
 
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const cleanup = async () => {
+    for (const row of await repo.stale(new Date(Date.now() - 24 * 3600_000))) {
+      await store.delete(row.objectKey);
+      await repo.remove(row.id);
+    }
+  };
   return {
+    start() {
+      if (!timer) {
+        const recover = () => {
+          void cleanup().catch((err: unknown) =>
+            deps.logger?.warn({ err }, '未完成上传清理失败，将重试'),
+          );
+        };
+        timer = setInterval(recover, 3600_000);
+        timer.unref();
+        recover();
+      }
+    },
+    close() {
+      if (timer) clearInterval(timer);
+    },
     /** 存下一个文件；类型按文件名的扩展名定（浏览器报的类型不可信） */
-    async upload(ownerId: string, name: string, body: Buffer): Promise<UploadBody> {
+    async upload(
+      ownerId: string,
+      name: string,
+      body: Buffer | Readable,
+      limits: StreamLimits = { maxBytes: 100 * 1024 * 1024 },
+    ): Promise<UploadBody> {
       const id = randomUUID();
       const objectKey = `uploads/${ownerId}/${id}`;
       const contentType = contentTypeOf(name);
-      await store.put(objectKey, body, contentType);
-      return toUploadBody(
-        await repo.insert({ id, ownerId, name, size: body.length, contentType, objectKey }),
-      );
+      const source = Buffer.isBuffer(body) ? Readable.from([body]) : body;
+      try {
+        await repo.insert({
+          id,
+          ownerId,
+          name,
+          size: 0,
+          sha256: null,
+          state: 'uploading',
+          contentType,
+          objectKey,
+        });
+        const saved = await store.putStream(objectKey, source, contentType, limits);
+        return toUploadBody(await repo.complete(id, saved));
+      } catch (error) {
+        source.destroy();
+        await store.delete(objectKey);
+        await repo.remove(id);
+        throw error;
+      }
     },
 
     /** 用户自己的文件（下载由接口层边读边传） */
     async owned(ownerId: string, id: string): Promise<Upload> {
       const row = await repo.find(id);
-      if (row?.ownerId !== ownerId) throw notFound();
+      if (row?.ownerId !== ownerId || row.state !== 'ready') throw notFound();
       return row;
     },
 
@@ -48,8 +103,8 @@ export function createUploadService(deps: { repo: UploadsRepo; store: ObjectStor
     /** 内部：取文件内容（harness 放进沙箱）；是不是付费人的文件，conversation 收附件时已核对 */
     async internalContent(id: string) {
       const row = await repo.find(id);
-      if (!row) throw notFound();
-      return { row, content: await store.get(row.objectKey) };
+      if (!row || row.state !== 'ready') throw notFound();
+      return { row, content: await store.read(row.objectKey) };
     },
   };
 }

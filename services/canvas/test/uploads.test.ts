@@ -4,30 +4,12 @@ import { createService, createServiceClient } from '@oasis/service-kit';
 import { pino } from 'pino';
 import { describe, expect, it } from 'vitest';
 import { registerRoutes } from '../src/api/routes.ts';
-import type { Upload, UploadsRepo } from '../src/repo/uploads-repo.ts';
 import { createArtifactService } from '../src/service/artifact-service.ts';
 import { createUploadService } from '../src/service/upload-service.ts';
-import { memoryArtifacts, memoryStore } from './memory.ts';
+import { memoryArtifacts, memoryStore, memoryUploads } from './memory.ts';
 
 const KAI = '00000000-0000-4000-8000-000000000001';
 const MIA = '00000000-0000-4000-8000-000000000002';
-
-function memoryRepo(): UploadsRepo {
-  const rows = new Map<string, Upload>();
-  return {
-    insert: async (upload) => {
-      const row = { ...upload, createdAt: new Date('2026-10-23T08:00:00Z') };
-      rows.set(row.id, row);
-      return row;
-    },
-    find: async (id) => rows.get(id),
-    findOwned: async (ownerId, ids) =>
-      ids.flatMap((id) => {
-        const row = rows.get(id);
-        return row?.ownerId === ownerId ? [row] : [];
-      }),
-  };
-}
 
 async function app(maxBytes = 1024) {
   const store = memoryStore();
@@ -39,7 +21,7 @@ async function app(maxBytes = 1024) {
         registerRoutes(
           instance,
           {
-            uploads: createUploadService({ repo: memoryRepo(), store }),
+            uploads: createUploadService({ repo: memoryUploads(), store }),
             artifacts: createArtifactService({
               repo: memoryArtifacts(),
               store,

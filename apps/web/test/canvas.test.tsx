@@ -120,9 +120,15 @@ describe('桌面端同步到电脑', () => {
     const api: OasisDesktop = {
       syncStatus: vi.fn(async () => ({ folder, synced: [...synced, ...written.map((w) => w[0])] })),
       chooseSyncFolder: vi.fn(async () => folder),
-      writeSyncedFile: vi.fn(async (id: string, path: string, data: ArrayBuffer) => {
-        written.push([id, path, data.byteLength]);
+      beginSyncedFile: vi.fn(async (id: string, path: string) => {
+        written.push([id, path, 0]);
+        return id;
       }),
+      appendSyncedFile: vi.fn(async (id: string, data: Uint8Array) => {
+        written.find((item) => item[0] === id)![2] += data.byteLength;
+      }),
+      finishSyncedFile: vi.fn(async () => undefined),
+      abortSyncedFile: vi.fn(async () => undefined),
       openSyncFolder: vi.fn(async () => undefined),
     };
     return { api, written };
@@ -154,7 +160,7 @@ describe('桌面端同步到电脑', () => {
 
     const idle = bridge([], null);
     await syncOnce(idle.api, ARTIFACTS, await idle.api.syncStatus());
-    expect(idle.api.writeSyncedFile).not.toHaveBeenCalled();
+    expect(idle.api.beginSyncedFile).not.toHaveBeenCalled();
     expect(pendingOf(ARTIFACTS, { folder: null, synced: ARTIFACTS.map((a) => a.id) })).toEqual([]);
   });
 

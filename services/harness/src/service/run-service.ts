@@ -4,8 +4,16 @@
 // 用户「停止」时不等 dsh 说完：直接从还在跑的沙箱里取出产出和会话存档，再销毁沙箱；
 // 之后用 continueFrom 接着这次运行，AI 记得停下之前做到哪了（ADR 0004 §4）。
 import { randomUUID } from 'node:crypto';
+import { PassThrough, Readable } from 'node:stream';
+import { UploadLookupResult } from '@oasis/contracts/canvas';
 import { RunFinished } from '@oasis/contracts/events';
-import type { RunBody, RunEventBody, RunTextsBody, StartRunBody } from '@oasis/contracts/harness';
+import {
+  AudioCheckResult,
+  type RunBody,
+  type RunEventBody,
+  type RunTextsBody,
+  type StartRunBody,
+} from '@oasis/contracts/harness';
 import { ComputeHold, RunKeyCreated } from '@oasis/contracts/model-gateway';
 import {
   contentTypeOf,
@@ -24,9 +32,16 @@ import {
   type AgentConnection,
 } from '../adapter/dsh.ts';
 import type { Executor, Sandbox } from '../executor/executor.ts';
-import { extractFiles, listFiles, packFiles, readLimited } from '../executor/tar.ts';
+import {
+  archiveFile,
+  packFiles,
+  packStreams,
+  readLimited,
+  rewriteArchive,
+  scanArchive,
+} from '../executor/tar.ts';
 import type { Run, RunOutcome, RunsRepo } from '../repo/runs-repo.ts';
-import { inspectFiles, type InspectionLimits } from './file-inspection.ts';
+import { defaultInspectionLimits, inspectFiles, type InspectionLimits } from './file-inspection.ts';
 
 type Status = RunBody['status'];
 
@@ -34,7 +49,8 @@ type Status = RunBody['status'];
 const KEEP_FILE = '.oasis-keep';
 /** 批次恢复状态随 tar 存档，但不是成果，也不传给下游节点。 */
 const isPrivateOutput = (path: string) =>
-  path === KEEP_FILE || path === '.oasis-batches' || path.startsWith('.oasis-batches/');
+  path === KEEP_FILE ||
+  ['.oasis-batches', '.oasis-tools'].some((dir) => path === dir || path.startsWith(`${dir}/`));
 
 interface LiveRun {
   readonly abort: AbortController;
@@ -118,6 +134,7 @@ export function createRunService(deps: {
   canvas: ServiceClient;
   /** 一次运行的素材加起来最多多大 */
   materialsMaxBytes: number;
+  transferTimeoutMs?: number;
   modelBaseUrl: string;
   packages: SandboxPackages;
   batchEnv?: Record<string, string>;
@@ -163,16 +180,57 @@ export function createRunService(deps: {
   async function archive(sandbox: Sandbox, path: string, key: string) {
     const stream = await sandbox.readArchive(path);
     if (!stream) return undefined;
-    const tar = await readLimited(stream, deps.outputMaxBytes);
-    const files = await listFiles(tar);
-    if (files.length === 0) return undefined;
-    await store.put(key, tar, 'application/x-tar');
-    return { key, files };
+    const upload = new PassThrough();
+    const index = new PassThrough();
+    const fail = (error: Error) => {
+      stream.destroy(error);
+      upload.destroy(error);
+      index.destroy(error);
+    };
+    stream.on('error', fail);
+    const storing = store.putStream(key, upload, 'application/x-tar', {
+      maxBytes: deps.outputMaxBytes,
+    });
+    const scanning = scanArchive(index, deps.outputMaxBytes);
+    stream.pipe(upload);
+    stream.pipe(index);
+    try {
+      const [, files] = await Promise.all([storing, scanning]);
+      if (!files.length) {
+        await store.delete(key);
+        return undefined;
+      }
+      return { key, files };
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error(String(error)));
+      await Promise.allSettled([storing, scanning]);
+      await store.delete(key);
+      throw error;
+    }
   }
 
   /** 取出产出和会话存档（会话存档失败不影响结果） */
   async function save(sandbox: Sandbox, id: string): Promise<Saved> {
     const outputs = await archive(sandbox, SANDBOX_PATHS.outputs, `runs/${id}/outputs.tar`);
+    if (
+      outputs &&
+      sandbox.inspectAudio &&
+      !live.get(id)?.abort.signal.aborted &&
+      outputs.files.some((file) => /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i.test(file.path))
+    ) {
+      try {
+        const report = AudioCheckResult.parse(
+          await sandbox.inspectAudio(await store.read(outputs.key)),
+        );
+        await store.put(
+          `runs/${id}/audio-check.json`,
+          Buffer.from(JSON.stringify(report)),
+          'application/json',
+        );
+      } catch (err) {
+        logger.warn({ err, runId: id }, '音频检查未完成，关卡将保留未检查提醒');
+      }
+    }
     const session = await archive(sandbox, SANDBOX_PATHS.sessions, `runs/${id}/session.tar`).catch(
       (err: unknown) => {
         logger.warn({ err, runId: id }, '会话存档失败（不影响运行结果）');
@@ -184,14 +242,19 @@ export function createRunService(deps: {
 
   /** 上游运行的产出：解出来放到 in/<as>/ 下 */
   async function upstreamFiles(row: Run) {
-    const files: { path: string; content: Buffer }[] = [];
+    const files: { dir: string; tar: Readable }[] = [];
     for (const ref of row.inputsFrom) {
       const upstream = await repo.get(ref.runId);
       if (!upstream?.outputKey) continue;
-      for (const file of await extractFiles(await store.get(upstream.outputKey))) {
-        if (!isPrivateOutput(file.path))
-          files.push({ path: `in/${ref.as}/${file.path}`, content: file.content });
-      }
+      files.push({
+        dir: SANDBOX_PATHS.workdir,
+        tar: rewriteArchive(
+          await store.read(upstream.outputKey),
+          `in/${ref.as}`,
+          (path) => !isPrivateOutput(path),
+          deps.outputMaxBytes,
+        ),
+      });
     }
     return files;
   }
@@ -202,41 +265,66 @@ export function createRunService(deps: {
    */
   async function continuation(row: Run) {
     const previous = row.continueFrom ? await repo.get(row.continueFrom) : undefined;
-    if (!previous) return { workspace: [], dshHome: [] };
+    if (!previous) return [];
     const workspace = previous.outputKey
-      ? (await extractFiles(await store.get(previous.outputKey)))
-          .filter((f) => f.path !== KEEP_FILE)
-          .map((f) => ({ path: `out/${f.path}`, content: f.content }))
+      ? [
+          {
+            dir: SANDBOX_PATHS.workdir,
+            tar: rewriteArchive(
+              await store.read(previous.outputKey),
+              'out',
+              (path) => path !== KEEP_FILE,
+              deps.outputMaxBytes,
+            ),
+          },
+        ]
       : [];
     const dshHome = previous.sessionKey
-      ? (await extractFiles(await store.get(previous.sessionKey)))
-          .filter((f) => !isSessionLock(f.path))
-          .map((f) => ({ path: `sessions/${f.path}`, content: f.content }))
+      ? [
+          {
+            dir: SANDBOX_PATHS.dshHome,
+            tar: rewriteArchive(
+              await store.read(previous.sessionKey),
+              'sessions',
+              (path) => !isSessionLock(path),
+              deps.outputMaxBytes,
+            ),
+          },
+        ]
       : [];
-    return { workspace, dshHome };
+    return [...workspace, ...dshHome];
   }
 
   /** 用户给的素材：向 canvas 取出来，放到 materials/ 下（路径已由 task 定好、契约校验过） */
-  async function materialFiles(materials: Material[], runId: string) {
-    const files: { path: string; content: Buffer }[] = [];
+  async function materialFiles(materials: Material[], runId: string, ownerId: string) {
+    if (!materials.length) return [];
+    const { uploads } = await deps.canvas.json('POST', '/internal/uploads/lookup', {
+      body: { ownerId, ids: materials.map((file) => file.uploadId) },
+      schema: UploadLookupResult,
+      requestId: runId,
+    });
+    const metadata = new Map(uploads.map((file) => [file.id, file]));
     let total = 0;
-    for (const m of materials) {
-      const response = await deps.canvas.stream(
-        'GET',
-        `/internal/uploads/${encodeURIComponent(m.uploadId)}/content`,
-        { requestId: runId },
-      );
-      const content = Buffer.from(await response.arrayBuffer());
-      total += content.length;
-      if (total > deps.materialsMaxBytes) {
-        throw new StopRun(
-          'failed',
-          `素材加起来超过 ${Math.round(deps.materialsMaxBytes / 1024 / 1024)} MB，放不进沙箱`,
-        );
-      }
-      files.push({ path: m.path, content });
-    }
-    return files;
+    return materials.map((m) => {
+      const info = metadata.get(m.uploadId);
+      if (!info) throw new Error('素材元数据缺失');
+      total += info.size;
+      if (total > deps.materialsMaxBytes) throw new StopRun('failed', '素材加起来超过运行上限');
+      return {
+        path: m.path,
+        size: info.size,
+        sha256: info.sha256,
+        open: async () => {
+          const response = await deps.canvas.stream(
+            'GET',
+            `/internal/uploads/${encodeURIComponent(m.uploadId)}/content`,
+            { requestId: runId, signal: AbortSignal.timeout(deps.transferTimeoutMs ?? 600_000) },
+          );
+          if (!response.body) throw new Error('素材没有内容流');
+          return Readable.fromWeb(response.body);
+        },
+      };
+    });
   }
 
   async function execute(
@@ -306,9 +394,6 @@ export function createRunService(deps: {
       const restored = await continuation(row);
       const files = [
         ...inputs.map((f) => ({ path: `in/${f.path}`, content: f.content })),
-        ...(await materialFiles(materials, id)),
-        ...(await upstreamFiles(row)),
-        ...restored.workspace,
         // 保证 out/ 目录存在且属于沙箱用户
         { path: `out/${KEEP_FILE}`, content: Buffer.alloc(0) },
       ];
@@ -317,6 +402,7 @@ export function createRunService(deps: {
         runId: id,
         env: {
           ...deps.batchEnv,
+          OASIS_TOOL_SCOPE: row.nodeId ?? row.sessionId ?? id,
           ...sandboxEnv({
             modelBaseUrl: deps.modelBaseUrl,
             runKey: key.key,
@@ -326,9 +412,12 @@ export function createRunService(deps: {
         },
         files: [
           { dir: SANDBOX_PATHS.workdir, tar: await packFiles(files) },
-          ...(restored.dshHome.length > 0
-            ? [{ dir: SANDBOX_PATHS.dshHome, tar: await packFiles(restored.dshHome) }]
-            : []),
+          {
+            dir: SANDBOX_PATHS.workdir,
+            tar: packStreams(await materialFiles(materials, id, row.payerId)),
+          },
+          ...(await upstreamFiles(row)),
+          ...restored,
         ],
       });
       const box = sandbox;
@@ -543,19 +632,122 @@ export function createRunService(deps: {
     async texts(id: string, maxChars: number, paths?: string[]): Promise<RunTextsBody> {
       const row = await owned(id);
       if (!row.outputKey) return { files: [], truncated: false };
-      const files = (await extractFiles(await store.get(row.outputKey))).filter(
-        (file) => !isPrivateOutput(file.path) && (paths === undefined || paths.includes(file.path)),
+      const result: RunTextsBody = { files: [], truncated: false };
+      const limits = deps.inspectionLimits ?? defaultInspectionLimits;
+      const started = Date.now();
+      let left = maxChars;
+      let audio: ReturnType<typeof AudioCheckResult.parse> | undefined;
+      try {
+        audio = AudioCheckResult.parse(
+          JSON.parse((await store.get(`runs/${id}/audio-check.json`)).toString('utf8')),
+        );
+      } catch {
+        /* 没有受信音频报告时保留未检查 */
+      }
+      await scanArchive(
+        await store.read(row.outputKey),
+        deps.outputMaxBytes,
+        async (path, size, stream) => {
+          if (isPrivateOutput(path) || (paths !== undefined && !paths.includes(path))) return;
+          if (result.files.length >= limits.files || Date.now() - started > limits.totalMs) {
+            result.truncated = true;
+            return;
+          }
+          if (/\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i.test(path)) {
+            const checked = audio?.files.find(
+              (file) =>
+                file.path === path &&
+                file.size === size &&
+                file.sha256 === row.outputs.find((output) => output.path === path)?.sha256 &&
+                Boolean(file.sha256),
+            );
+            result.files.push({
+              path,
+              valid: checked?.valid ?? false,
+              text: checked ? JSON.stringify(checked) : '',
+              ...(checked?.error
+                ? { error: checked.error }
+                : {
+                    warning: checked
+                      ? '音频已探测并解码；发音、歌词和音乐内容仍需试听核对'
+                      : '音频解码检查未完成',
+                  }),
+            });
+            return;
+          }
+          if (size > limits.inputBytes) {
+            result.files.push({ path, text: '', valid: false, error: '文件超过解析大小上限' });
+            return;
+          }
+          const checked = await inspectFiles(
+            [{ path, content: await readLimited(stream, limits.inputBytes) }],
+            left,
+            limits,
+          );
+          result.files.push(...checked.files);
+          result.truncated ||= checked.truncated;
+          left -= checked.files.reduce((sum, file) => sum + file.text.length, 0);
+        },
       );
-      return inspectFiles(files, maxChars, deps.inspectionLimits);
+      return result;
     },
 
     /** 读一个产出文件（下载成果、读规划员写的方案用）；没有这个文件时 404 */
     async file(id: string, path: string): Promise<{ content: Buffer; contentType: string }> {
       const row = await owned(id);
-      const files = row.outputKey ? await extractFiles(await store.get(row.outputKey)) : [];
-      const found = files.find((f) => f.path === path && !isPrivateOutput(f.path));
+      const found = row.outputs.find((f) => f.path === path && !isPrivateOutput(f.path));
       if (!found) throw new HttpError(404, 'file_not_found', '没有这个文件');
-      return { content: found.content, contentType: contentTypeOf(path) };
+      return {
+        content: await readLimited(
+          archiveFile(await store.read(row.outputKey!), path),
+          deps.inspectionLimits?.inputBytes ?? 100 * 1024 * 1024,
+        ),
+        contentType: contentTypeOf(path),
+      };
+    },
+
+    async fileStream(id: string, path: string) {
+      const row = await owned(id);
+      const found = row.outputs.find((file) => file.path === path && !isPrivateOutput(path));
+      if (!found || !row.outputKey) throw new HttpError(404, 'file_not_found', '没有这个文件');
+      return {
+        content: archiveFile(await store.read(row.outputKey), path),
+        contentType: contentTypeOf(path),
+        size: found.size,
+        sha256: found.sha256,
+      };
+    },
+
+    async audioCheck(id: string, payerId: string, taskId: string) {
+      const row = await owned(id);
+      if (row.payerId !== payerId || row.taskId !== taskId)
+        throw new HttpError(404, 'run_not_found', '没有这次运行');
+      const expected = row.outputs.filter((file) =>
+        /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i.test(file.path),
+      );
+      let report: ReturnType<typeof AudioCheckResult.parse>;
+      try {
+        report = AudioCheckResult.parse(
+          JSON.parse((await store.get(`runs/${id}/audio-check.json`)).toString('utf8')),
+        );
+      } catch {
+        return { files: [], unchecked: expected.map((file) => file.path) };
+      }
+      const files = report.files.filter((file) =>
+        expected.some(
+          (output) =>
+            output.path === file.path &&
+            output.size === file.size &&
+            output.sha256 === file.sha256 &&
+            Boolean(file.sha256),
+        ),
+      );
+      return {
+        files,
+        unchecked: expected
+          .filter((output) => !files.some((file) => file.path === output.path))
+          .map((file) => file.path),
+      };
     },
 
     /** 用户在运行中追问：排在当前这一轮之后处理。运行没在进行时 409。 */

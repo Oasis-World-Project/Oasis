@@ -56,7 +56,30 @@ export async function syncOnce(
     for (const [index, artifact] of pending.entries()) {
       const response = await fetch(artifactContentUrl(artifact.id), { credentials: 'same-origin' });
       if (!response.ok) throw new Error(`下载「${artifact.name}」失败（${response.status}）`);
-      await bridge.writeSyncedFile(artifact.id, artifact.syncPath, await response.arrayBuffer());
+      if (!response.body) throw new Error('下载内容为空');
+      const token = await bridge.beginSyncedFile(
+        artifact.id,
+        artifact.syncPath,
+        artifact.size,
+        artifact.sha256,
+      );
+      if (token) {
+        const reader = response.body.getReader();
+        try {
+          for (;;) {
+            const next = await reader.read();
+            if (next.done) break;
+            for (let offset = 0; offset < next.value.length; offset += 1024 * 1024)
+              await bridge.appendSyncedFile(token, next.value.slice(offset, offset + 1024 * 1024));
+          }
+          await bridge.finishSyncedFile(token);
+        } catch (error) {
+          await bridge.abortSyncedFile(token);
+          throw error;
+        } finally {
+          await reader.cancel().catch(() => undefined);
+        }
+      } else await response.body.cancel();
       update({ done: index + 1 });
     }
   } catch (err) {

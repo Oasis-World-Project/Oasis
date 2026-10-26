@@ -115,19 +115,34 @@ function registerSync(sync: SyncFolder): void {
     return sync.folder();
   });
   ipcMain.handle(
-    DESKTOP_CHANNELS.write,
-    async (event, artifactId: unknown, relativePath: unknown, data: unknown) => {
+    DESKTOP_CHANNELS.begin,
+    (event, id: unknown, relative: unknown, size: unknown, sha256: unknown) => {
       fromApp(event);
       if (
-        typeof artifactId !== 'string' ||
-        typeof relativePath !== 'string' ||
-        !(data instanceof ArrayBuffer || data instanceof Uint8Array)
-      ) {
+        typeof id !== 'string' ||
+        typeof relative !== 'string' ||
+        typeof size !== 'number' ||
+        (sha256 != null && typeof sha256 !== 'string')
+      )
         throw new Error('参数不合格');
-      }
-      await sync.write(artifactId, relativePath, data);
+      return sync.begin(id, relative, size, sha256 as string | null | undefined);
     },
   );
+  ipcMain.handle(DESKTOP_CHANNELS.append, (event, token: unknown, data: unknown) => {
+    fromApp(event);
+    if (typeof token !== 'string' || !(data instanceof Uint8Array)) throw new Error('参数不合格');
+    return sync.append(token, data);
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.finish, (event, token: unknown) => {
+    fromApp(event);
+    if (typeof token !== 'string') throw new Error('参数不合格');
+    return sync.finish(token);
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.abort, (event, token: unknown) => {
+    fromApp(event);
+    if (typeof token !== 'string') throw new Error('参数不合格');
+    return sync.abort(token);
+  });
   ipcMain.handle(DESKTOP_CHANNELS.open, async (event) => {
     fromApp(event);
     const folder = await sync.folder();
@@ -151,7 +166,9 @@ app.whenReady().then(
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) =>
       callback(false),
     );
-    registerSync(createSyncFolder(path.join(app.getPath('userData'), 'sync.json')));
+    const sync = createSyncFolder(path.join(app.getPath('userData'), 'sync.json'));
+    await sync.recover();
+    registerSync(sync);
     handleDownloads();
     await loadWithRetry(createWindow(), webUrl);
 

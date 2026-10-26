@@ -1103,7 +1103,9 @@ describe('下载成果', () => {
     plans.set(run.runId, '# 小木屋');
     await finish(run.runId, 'succeeded', { outputs: [{ path: '首页.md', size: 11 }] });
     const file = await service.file(OWNER, task.id, keyOf(task, 'A'), '首页.md');
-    expect(file.content.toString()).toBe('# 小木屋');
+    const chunks: Buffer[] = [];
+    for await (const chunk of file.content) chunks.push(Buffer.from(chunk as Uint8Array));
+    expect(Buffer.concat(chunks).toString()).toBe('# 小木屋');
     expect(
       (await errorOf(() => service.file(OWNER, task.id, keyOf(task, 'A'), '别的.md'))).status,
     ).toBe(404);

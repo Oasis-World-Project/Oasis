@@ -132,7 +132,10 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
       cost: { costMicro: number; source: CostSource },
       usage: Usage | undefined,
       error?: string,
-    ): Promise<void> {
+    ): Promise<boolean> {
+      const previous = await repo.get(call.id);
+      if (previous?.chargedMicro !== null && previous?.chargedMicro !== undefined)
+        return previous.status === 'succeeded';
       let chargedMicro: number | null = null;
       try {
         ({ chargedMicro } = await billing.json('POST', `/internal/holds/${call.holdId}/settle`, {
@@ -177,6 +180,7 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
         },
         settled,
       );
+      return chargedMicro !== null;
     },
   };
 }

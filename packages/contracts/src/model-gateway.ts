@@ -138,6 +138,7 @@ export const ToolList = z.object({ tools: z.array(ToolEntry) });
 /** 调用工具：参数按工具各自校验 */
 export const ToolCallBody = z.object({
   args: z.record(z.string(), z.unknown()),
+  idempotency_key: z.uuid().optional(),
   max_cost_micro: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
 });
 
@@ -145,7 +146,16 @@ export const ToolCallBody = z.object({
 export const ToolFile = z.object({
   name: z.string(),
   mediaType: z.string(),
-  base64: z.string(),
+  base64: z.string().default(''),
+  id: z
+    .string()
+    .regex(/^\d{1,3}$/)
+    .optional(),
+  size: z.number().int().nonnegative().optional(),
+  sha256: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
 });
 
 /** 工具的结果：给 AI 看的文字、结构化数据（可选）、文件，以及这次花了多少钱 */
@@ -162,7 +172,7 @@ export type ToolResult = z.infer<typeof ToolResult>;
 
 /** 长任务的进度：还在做 / 做好了（带结果）/ 失败了（带原因） */
 export const ToolJobBody = z.object({
-  status: z.enum(['pending', 'completed', 'failed']),
+  status: z.enum(['pending', 'completed', 'failed', 'uncertain']),
   result: ToolResult.optional(),
   error: z.string().optional(),
 });

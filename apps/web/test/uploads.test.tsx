@@ -146,14 +146,14 @@ describe('上传素材', () => {
     expect(screen.queryByRole('list', { name: '要发送的文件' })).toBeNull();
   });
 
-  it('超过 100 MB 的文件不上传，并说明原因；可以移除文件', async () => {
+  it('超过 512 MB 的文件不上传，并说明原因；可以移除文件', async () => {
     vi.stubGlobal('XMLHttpRequest', FakeXhr);
     chat();
     await openChat();
     const big = photo();
-    Object.defineProperty(big, 'size', { value: 101 * 1024 * 1024 });
+    Object.defineProperty(big, 'size', { value: 513 * 1024 * 1024 });
     fireEvent.change(screen.getByLabelText('选择文件'), { target: { files: [big, photo()] } });
-    expect(await screen.findByText(/超过 100 MB，没有添加/)).toBeTruthy();
+    expect(await screen.findByText(/超过 512 MB，没有添加/)).toBeTruthy();
     expect(FakeXhr.sent).toHaveLength(1);
     fireEvent.click(await screen.findByRole('button', { name: '移除 民宿照片.jpg' }));
     expect(screen.queryByRole('list', { name: '要发送的文件' })).toBeNull();

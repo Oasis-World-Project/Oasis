@@ -1,7 +1,7 @@
 // Docker Engine API 的最小客户端：只用 Node 自带的 http，经 Unix socket 或 Windows 命名管道访问。
 // harness 只需要建容器、拷文件进出、接上 stdin/stdout、停止和列出容器，用不着完整的 SDK。
 import http from 'node:http';
-import type { Duplex, Readable } from 'node:stream';
+import { Readable, type Duplex } from 'node:stream';
 
 /** API 版本：Docker Engine 25 起支持 */
 const API = '/v1.44';
@@ -29,7 +29,7 @@ export function createDockerApi(socketPath: string) {
   function send(
     method: string,
     path: string,
-    options: { json?: unknown; body?: Buffer; contentType?: string } = {},
+    options: { json?: unknown; body?: Buffer | Readable; contentType?: string } = {},
   ): Promise<http.IncomingMessage> {
     const body =
       options.json === undefined ? options.body : Buffer.from(JSON.stringify(options.json));
@@ -42,13 +42,17 @@ export function createDockerApi(socketPath: string) {
           path: `${API}${path}`,
           headers: {
             ...(contentType ? { 'content-type': contentType } : {}),
-            ...(body ? { 'content-length': body.length } : {}),
+            ...(Buffer.isBuffer(body) ? { 'content-length': body.length } : {}),
           },
         },
         resolve,
       );
       req.on('error', reject);
-      req.end(body);
+      if (body instanceof Readable) {
+        body.on('error', (error) => req.destroy(error));
+        req.on('close', () => body.destroy());
+        body.pipe(req);
+      } else req.end(body);
     });
   }
 
@@ -107,8 +111,22 @@ export function createDockerApi(socketPath: string) {
     pauseContainer: async (id: string) => {
       await readAll(await call('POST', `/containers/${id}/pause`));
     },
+    async exec(id: string, cmd: string[]) {
+      const created = await json<{ Id: string }>('POST', `/containers/${id}/exec`, {
+        AttachStdout: true,
+        AttachStderr: true,
+        Cmd: cmd,
+      });
+      return {
+        id: created.Id,
+        stream: await call('POST', `/exec/${created.Id}/start`, {
+          json: { Detach: false, Tty: false },
+        }),
+      };
+    },
+    inspectExec: (id: string) => json<{ ExitCode: number | null }>('GET', `/exec/${id}/json`),
     /** 把一个 tar 包解到容器里的目录（目录必须已存在） */
-    putArchive: async (id: string, dir: string, tar: Buffer) => {
+    putArchive: async (id: string, dir: string, tar: Buffer | Readable) => {
       const query = `path=${encodeURIComponent(dir)}`;
       await readAll(
         await call('PUT', `/containers/${id}/archive?${query}`, {

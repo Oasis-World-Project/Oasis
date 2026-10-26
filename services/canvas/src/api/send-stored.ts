@@ -7,11 +7,19 @@ export async function sendStored(
   request: FastifyRequest,
   reply: FastifyReply,
   store: ObjectStore,
-  file: { objectKey: string; size: number; contentType: string; name: string; download: boolean },
+  file: {
+    objectKey: string;
+    size: number;
+    contentType: string;
+    name: string;
+    download: boolean;
+    sha256?: string | null;
+  },
 ) {
   const headers = {
     ...fileResponseHeaders(file.contentType, file.name, file.download),
     'accept-ranges': 'bytes',
+    ...(file.sha256 ? { 'x-oasis-file-sha256': file.sha256 } : {}),
   };
   const range = parseRange(request.headers.range, file.size);
   if (range === 'unsatisfiable') {

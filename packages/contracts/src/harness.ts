@@ -81,8 +81,38 @@ export const StartRunBody = z.object({
 export type StartRunBody = z.input<typeof StartRunBody>;
 
 /** 运行产出的文件（沙箱里 /workspace/out 下的内容） */
-export const RunOutputFile = z.object({ path: z.string(), size: z.number().int().nonnegative() });
+export const RunOutputFile = z.object({
+  path: z.string(),
+  size: z.number().int().nonnegative(),
+  sha256: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
+});
 export type RunOutputFile = z.infer<typeof RunOutputFile>;
+
+export const AudioCheckResult = z.object({
+  files: z
+    .array(
+      z.object({
+        path: z.string(),
+        valid: z.boolean(),
+        size: z.number().int().nonnegative().optional(),
+        sha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        durationMs: z.number().int().positive().optional(),
+        codec: z.string().optional(),
+        sampleRate: z.number().positive().optional(),
+        channels: z.number().int().positive().optional(),
+        peakDb: z.number().optional(),
+        error: z.string().optional(),
+      }),
+    )
+    .max(100),
+  unchecked: z.array(z.string()).max(1000),
+});
 
 export const RunBody = z.object({
   id: z.uuid(),

@@ -1,5 +1,5 @@
 import type { EventEnvelope } from '@oasis/contracts/events';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { calls, outbox } from './schema.ts';
@@ -58,11 +58,12 @@ export function createCallsRepo(pool: pg.Pool): CallsRepo {
 
     async finish(id, outcome, event) {
       await db.transaction(async (tx) => {
-        await tx
+        const changed = await tx
           .update(calls)
           .set({ ...outcome, finishedAt: new Date() })
-          .where(eq(calls.id, id));
-        if (event) {
+          .where(and(eq(calls.id, id), isNull(calls.chargedMicro)))
+          .returning({ id: calls.id });
+        if (event && changed.length > 0) {
           await tx.insert(outbox).values({ id: event.id, subject: event.type, payload: event });
         }
       });

@@ -4,7 +4,7 @@ import { ErrorBody } from '@oasis/contracts/common';
 import { ApiError } from './client.ts';
 
 /** 和 canvas 的默认上限一致；超过的不用传上去再被拒 */
-export const UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+export const UPLOAD_MAX_BYTES = 512 * 1024 * 1024;
 
 export const uploadUrl = (id: string, download = false) =>
   `/api/canvas/v1/uploads/${id}${download ? '?download=1' : ''}`;

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -100,12 +101,49 @@ describe('oasis-tool 长任务', () => {
         }
       : { status: 'pending' },
   );
+  const musicId = '00000000-0000-4000-8000-000000000099';
+  let musicSubmissions = 0;
+  let corruptMusic = false;
+  const musicHash = createHash('sha256').update('ID3music').digest('hex');
+  fake.post('/v1/tools/audio.music', async () => {
+    musicSubmissions++;
+    return {
+      tool: 'audio.music',
+      text: 'submitted',
+      files: [],
+      costMicro: 0,
+      job: { id: musicId },
+    };
+  });
+  fake.get(`/v1/tools/jobs/${musicId}`, async () => ({
+    status: 'completed',
+    result: {
+      tool: 'audio.music',
+      text: 'done',
+      files: [
+        {
+          id: '0',
+          name: 'music.mp3',
+          mediaType: 'audio/mpeg',
+          base64: '',
+          size: 8,
+          sha256: musicHash,
+        },
+      ],
+      costMicro: 150000,
+      job: { id: musicId },
+    },
+  }));
+  fake.get(`/v1/tools/jobs/${musicId}/files/0`, async (_request, reply) =>
+    reply.type('audio/mpeg').send(Buffer.from(corruptMusic ? 'badmusic' : 'ID3music')),
+  );
   let dir = '';
   const printed: string[] = [];
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'oasis-tool-'));
     vi.stubEnv('OASIS_MODEL_BASE_URL', `${await fake.listen({ port: 0, host: '127.0.0.1' })}/v1`);
     vi.stubEnv('OASIS_TOOL_AUTH', 'k');
+    vi.stubEnv('OASIS_TOOL_STATE_DIR', join(dir, '.oasis-tools'));
     vi.stubEnv('OASIS_TOOL_WAIT_SECONDS', '1');
     vi.spyOn(process.stdout, 'write').mockImplementation((text) => {
       printed.push(String(text));
@@ -119,6 +157,26 @@ describe('oasis-tool 长任务', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it('流式结果校验后落盘；重复命令沿用任务，损坏的字节不覆盖文件', async () => {
+    const out = join(dir, 'music.mp3');
+    const command = [
+      'audio.music',
+      '--prompt',
+      'A complete instrumental song',
+      '--instrumental',
+      'true',
+      '--out',
+      out,
+    ];
+    await main(command);
+    expect(await readFile(out, 'utf8')).toBe('ID3music');
+    await main(command);
+    expect(musicSubmissions).toBe(1);
+    corruptMusic = true;
+    await expect(main(command)).rejects.toThrow('校验和');
+    expect(await readFile(out, 'utf8')).toBe('ID3music');
+    corruptMusic = false;
+  });
   it('提交后自己等：做好了就保存到 --out', async () => {
     const out = join(dir, '视频.mp4');
     await main(['video.generate', '--prompt', '木屋', '--out', out]);

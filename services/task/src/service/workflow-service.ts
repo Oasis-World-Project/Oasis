@@ -4,6 +4,7 @@
 // 节点真正的执行在 harness；这里只管图、状态和决定。所有决定都在锁住任务行的事务里做，
 // 对外的调用（提交运行、关卡检查、通知停止或取消）在事务之外。
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type { CallSettledData, RunFinishedData } from '@oasis/contracts/events';
 import { RunBody, RunEventList } from '@oasis/contracts/harness';
 import type {
@@ -619,7 +620,9 @@ export function createWorkflowService(deps: {
     );
     return {
       contentType: response.headers.get('content-type') ?? 'application/octet-stream',
-      content: Buffer.from(await response.arrayBuffer()),
+      size: node.outputs.find((file) => file.path === path)!.size,
+      sha256: response.headers.get('x-oasis-file-sha256'),
+      content: response.body ? Readable.fromWeb(response.body) : Readable.from([]),
     };
   }
 

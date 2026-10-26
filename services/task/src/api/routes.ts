@@ -33,7 +33,11 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
   app.get('/internal/tasks/:taskId/files/:nodeId/*', async (request, reply) => {
     const { taskId, nodeId, '*': path } = parseWith(FileParams, request.params);
     const file = await workflows.fileInternal(taskId, nodeId, path);
-    return reply.type(file.contentType).send(file.content);
+    return reply
+      .type(file.contentType)
+      .header('content-length', file.size)
+      .header('x-oasis-file-sha256', file.sha256 ?? '')
+      .send(file.content);
   });
 
   /** 任务详情（conversation 发交付消息用） */
@@ -128,6 +132,8 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
     const file = await workflows.file(requireUserId(request), taskId, nodeId, path);
     return reply
       .headers(fileResponseHeaders(file.contentType, path, download === '1'))
+      .header('content-length', file.size)
+      .header('x-oasis-file-sha256', file.sha256 ?? '')
       .send(file.content);
   });
 

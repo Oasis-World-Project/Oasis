@@ -1,6 +1,7 @@
 // 测试用的内存版对象存储和成果仓库。
 import { Readable } from 'node:stream';
-import type { ObjectStore } from '@oasis/service-kit';
+import { checkedParts, type ObjectStore } from '@oasis/service-kit';
+import type { Upload, UploadsRepo } from '../src/repo/uploads-repo.ts';
 import type { Artifact, ArtifactsRepo } from '../src/repo/artifacts-repo.ts';
 
 export function memoryStore(): ObjectStore & {
@@ -9,6 +10,21 @@ export function memoryStore(): ObjectStore & {
   const objects = new Map<string, { body: Buffer; type: string }>();
   return {
     objects,
+    delete: async (key) => {
+      objects.delete(key);
+    },
+    putStream: async (key, source, type, limits) => {
+      const iterator = checkedParts(source, limits);
+      const chunks: Buffer[] = [];
+      for (;;) {
+        const part = await iterator.next();
+        if (part.done) {
+          objects.set(key, { body: Buffer.concat(chunks), type });
+          return part.value;
+        }
+        chunks.push(part.value);
+      }
+    },
     put: async (key, body, type) => {
       objects.set(key, { body, type });
     },
@@ -71,5 +87,31 @@ export function memoryArtifacts(): ArtifactsRepo & { rows: Artifact[] } {
           .map((r) => r.syncPath.split('/')[0] ?? ''),
       ),
     ],
+  };
+}
+
+export function memoryUploads(): UploadsRepo {
+  const rows = new Map<string, Upload>();
+  return {
+    async insert(upload) {
+      const row = { ...upload, createdAt: new Date() };
+      rows.set(row.id, row);
+      return row;
+    },
+    find: async (id) => rows.get(id),
+    findOwned: async (ownerId, ids) =>
+      [...rows.values()].filter(
+        (row) => row.ownerId === ownerId && row.state === 'ready' && ids.includes(row.id),
+      ),
+    async complete(id, info) {
+      const row = rows.get(id)!;
+      Object.assign(row, info, { state: 'ready' });
+      return row;
+    },
+    async remove(id) {
+      rows.delete(id);
+    },
+    stale: async (before) =>
+      [...rows.values()].filter((row) => row.state === 'uploading' && row.createdAt < before),
   };
 }

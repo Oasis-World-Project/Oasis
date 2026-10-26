@@ -10,7 +10,7 @@ import { registerRoutes } from '../src/api/routes.ts';
 import { createArtifactService } from '../src/service/artifact-service.ts';
 import { categoryOf, safeSegment, uniqueName } from '../src/service/naming.ts';
 import { createUploadService } from '../src/service/upload-service.ts';
-import { memoryArtifacts, memoryStore } from './memory.ts';
+import { memoryArtifacts, memoryStore, memoryUploads } from './memory.ts';
 
 const KAI = '00000000-0000-4000-8000-000000000001';
 const MIA = '00000000-0000-4000-8000-000000000002';
@@ -142,13 +142,7 @@ beforeEach(async () => {
           instance,
           {
             uploads: createUploadService({
-              repo: {
-                insert: async () => {
-                  throw new Error('不用');
-                },
-                find: async () => undefined,
-                findOwned: async () => [],
-              },
+              repo: memoryUploads(),
               store,
             }),
             artifacts: service,

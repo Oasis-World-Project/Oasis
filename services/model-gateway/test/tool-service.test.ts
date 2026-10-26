@@ -1,9 +1,16 @@
+import { Readable } from 'node:stream';
 import type { EventEnvelope } from '@oasis/contracts/events';
-import { createServiceClient, type HttpError } from '@oasis/service-kit';
+import {
+  checkedParts,
+  createServiceClient,
+  type ObjectStore,
+  type HttpError,
+} from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createOpenRouterClient } from '../src/adapters/openrouter.ts';
+import { createFalClient } from '../src/adapters/fal.ts';
 import { createTavilyClient } from '../src/adapters/tavily.ts';
 import type { CallOutcome, CallsRepo } from '../src/repo/calls-repo.ts';
 import type { ToolJob, ToolJobsRepo } from '../src/repo/tool-jobs-repo.ts';
@@ -16,12 +23,14 @@ const HOLD = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const PNG = Buffer.from('fake-png').toString('base64');
 
 const billingCalls: { path: string; body: Record<string, unknown> }[] = [];
+let settleFails = false;
 const billing = Fastify();
 billing.post('/internal/holds', async (request, reply) => {
   billingCalls.push({ path: 'hold', body: request.body as Record<string, unknown> });
   return reply.code(201).send({ holdId: HOLD, heldMicro: 1 });
 });
-billing.post('/internal/holds/:id/settle', async (request) => {
+billing.post('/internal/holds/:id/settle', async (request, reply) => {
+  if (settleFails) return reply.code(503).send({ error: 'temporary' });
   billingCalls.push({ path: 'settle', body: request.body as Record<string, unknown> });
   return { chargedMicro: (request.body as { costMicro: number }).costMicro };
 });
@@ -136,28 +145,119 @@ const repo: CallsRepo = {
 const jobRows = new Map<string, ToolJob>();
 const jobs: ToolJobsRepo = {
   async insert(job) {
+    if (job.requestKey && [...jobRows.values()].some((row) => row.requestKey === job.requestKey))
+      return false;
     jobRows.set(job.id, {
       ...job,
       status: 'pending',
+      phase: job.providerJobId ? 'pending' : 'submitting',
+      result: null,
+      cost: null,
+      leaseToken: null,
+      leaseUntil: null,
+      expiresAt: null,
       error: null,
       createdAt: new Date(),
       finishedAt: null,
     });
+    return true;
   },
+  byRequest: async (key) => [...jobRows.values()].find((row) => row.requestKey === key),
   get: async (id) => jobRows.get(id),
+  async update(id, patch) {
+    Object.assign(jobRows.get(id)!, patch);
+  },
+  async claim(id, token, until) {
+    const row = jobRows.get(id);
+    if (!row || (row.leaseToken !== token && row.leaseUntil && row.leaseUntil > new Date()))
+      return false;
+    row.leaseToken = token;
+    row.leaseUntil = until;
+    return true;
+  },
+  async unlock(id, token) {
+    const row = jobRows.get(id)!;
+    if (row.leaseToken === token) {
+      row.leaseToken = null;
+      row.leaseUntil = null;
+    }
+  },
+  pending: async () =>
+    [...jobRows.values()].filter((row) => row.status === 'pending' && row.phase !== 'uncertain'),
+  expired: async (now) =>
+    [...jobRows.values()].filter(
+      (row) => row.expiresAt && row.expiresAt < now && row.phase === 'completed',
+    ),
   async finish(id, status, error) {
     const row = jobRows.get(id);
-    if (row?.status !== 'pending') return false;
-    jobRows.set(id, { ...row, status, error: error ?? null, finishedAt: new Date() });
+    if (!row) return false;
+    jobRows.set(id, {
+      ...row,
+      status,
+      phase: status,
+      error: error ?? null,
+      finishedAt: new Date(),
+    });
     return true;
   },
 };
 
+const mediaFiles = new Map<string, Buffer>();
+const mediaStore: ObjectStore = {
+  put: async (key, body) => {
+    mediaFiles.set(key, body);
+  },
+  get: async (key) => mediaFiles.get(key)!,
+  read: async (key) => Readable.from([mediaFiles.get(key)!]),
+  delete: async (key) => {
+    mediaFiles.delete(key);
+  },
+  async putStream(key, source, _type, limits) {
+    const parts = checkedParts(source, limits);
+    const chunks: Buffer[] = [];
+    for (;;) {
+      const part = await parts.next();
+      if (part.done) {
+        mediaFiles.set(key, Buffer.concat(chunks));
+        return part.value;
+      }
+      chunks.push(part.value);
+    }
+  },
+};
 let tools: ReturnType<typeof createToolService>;
 let urls = { billing: '', fake: '' };
-const build = (tavilyKey: string | undefined) => {
+const falCalls: { url: string; input?: Record<string, unknown> }[] = [];
+let falSubmitFails = false;
+const build = (tavilyKey: string | undefined, withMusic = false) => {
   const logger = pino({ level: 'silent' });
   return createToolService({
+    fal: withMusic
+      ? createFalClient({
+          baseUrl: 'https://queue.fal.run',
+          apiKey: 'test',
+          mediaHosts: ['fal.media'],
+          fetcher: async (input, init) => {
+            const url = String(input);
+            const body = init?.body
+              ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+              : undefined;
+            falCalls.push({ url, input: body });
+            if (init?.method === 'POST') {
+              if (falSubmitFails) throw new Error('connection lost');
+              return Response.json({
+                request_id: 'music-one',
+                status_url: 'https://queue.fal.run/fal-ai/minimax-music/requests/music-one/status',
+                response_url: 'https://queue.fal.run/fal-ai/minimax-music/requests/music-one',
+              });
+            }
+            if (url.endsWith('/status')) return Response.json({ status: 'COMPLETED' });
+            if (url.includes('fal.media'))
+              return new Response('ID3music', { headers: { 'content-type': 'audio/mpeg' } });
+            return Response.json({ audio: { url: 'https://v3.fal.media/music.mp3' } });
+          },
+        })
+      : undefined,
     openrouter: createOpenRouterClient({
       baseUrl: `${urls.fake}/api/v1`,
       decisionsUrl: `${urls.fake}/api/alpha/decisions`,
@@ -166,8 +266,10 @@ const build = (tavilyKey: string | undefined) => {
     tavily: createTavilyClient({ baseUrl: `${urls.fake}/tavily`, apiKey: tavilyKey }),
     meter: createMeter({ billing: createServiceClient('billing', urls.billing), repo, logger }),
     jobs,
+    store: mediaStore,
     jobTimeoutMs: 30 * 60_000,
     config: {
+      musicModels: ['fal-ai/minimax-music/v2.6'],
       imageModels: ['bytedance-seed/seedream-4.5', 'openai/gpt-image-2'],
       visionModels: ['vision/first', 'vision/second'],
       visionMaxTokens: 2048,
@@ -194,6 +296,10 @@ afterAll(async () => {
 });
 beforeEach(() => {
   billingCalls.length = 0;
+  settleFails = false;
+  falSubmitFails = false;
+  falCalls.length = 0;
+  mediaFiles.clear();
   upstream.length = 0;
   finished.length = 0;
   settled.length = 0;
@@ -317,6 +423,7 @@ describe('工具目录', () => {
       'audio.transcribe',
       'web.search',
       'web.fetch',
+      'audio.music',
       'video.generate',
       'jev.decide',
       'text.batch',
@@ -446,7 +553,7 @@ describe('调用工具', () => {
 
 describe('长任务（视频）', () => {
   const job = (id: string, payerId = PAYER) =>
-    tools.job({ payerId }, id, new AbortController().signal);
+    tools.job({ payerId, taskId: TASK }, id, new AbortController().signal);
 
   it('提交时冻结（留够时间）并交回任务号；做好前是 pending；做好后按实际花费结算一次', async () => {
     videoPolls = 1;
@@ -465,7 +572,12 @@ describe('长任务（视频）', () => {
       status: 'completed',
       result: { costMicro: 500_000, files: [{ name: 'video.mp4', mediaType: 'video/mp4' }] },
     });
-    expect(Buffer.from(done.result!.files[0]!.base64, 'base64').toString()).toBe('mp4');
+    const file = await tools.file({ payerId: PAYER, taskId: TASK }, id, done.result!.files[0]!.id!);
+    const chunks: Buffer[] = [];
+    for await (const chunk of file.content) chunks.push(Buffer.from(chunk as Uint8Array));
+    expect(Buffer.concat(chunks).toString()).toBe('mp4');
+    videoPolls = 99;
+    videoEnd = 'failed';
     expect(settled[0]).toMatchObject({
       data: { kind: 'tool', taskId: TASK, chargedMicro: 500_000 },
     });
@@ -485,20 +597,142 @@ describe('长任务（视频）', () => {
     expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release']);
   });
 
-  it('等太久：算失败并退回', async () => {
+  it('等太久：保留未确认状态，不自动退回或重发', async () => {
     videoPolls = 99;
     const id = (await call('video.generate', { prompt: 'x' })).job?.id ?? '';
     const row = jobRows.get(id)!;
     jobRows.set(id, { ...row, createdAt: new Date(Date.now() - 31 * 60_000) });
     expect(await job(id)).toMatchObject({
-      status: 'failed',
-      error: expect.stringContaining('30 分钟'),
+      status: 'uncertain',
+      error: expect.stringContaining('费用待核对'),
     });
-    expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release']);
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold']);
   });
 
   it('别人的任务号：查不到', async () => {
     const id = (await call('video.generate', { prompt: 'x' })).job?.id ?? '';
     expect((await errorOf(job(id, TASK)))?.statusCode).toBe(404);
+  });
+});
+
+describe('音乐长任务', () => {
+  it('提交尚在途时查询保持 pending，只有遗留提交才转为未确认且不重发', async () => {
+    tools = build('key', true);
+    const id = '00000000-0000-4000-8000-000000000097';
+    await jobs.insert({
+      id,
+      tool: 'audio.music',
+      providerJobId: '',
+      requestKey: null,
+      requestHash: 'test',
+      call: { caller: { payerId: PAYER, taskId: TASK } },
+    });
+    expect(
+      await tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000)),
+    ).toEqual({ status: 'pending' });
+    jobRows.get(id)!.createdAt = new Date(Date.now() - 121_000);
+    expect(
+      await tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000)),
+    ).toMatchObject({ status: 'uncertain' });
+    expect(falCalls).toEqual([]);
+    expect(billingCalls).toEqual([]);
+  });
+  it('相同幂等键的并发提交只生成一次，重复冻结退回，改参数不能复用键', async () => {
+    tools = build('key', true);
+    const input = {
+      caller: { payerId: PAYER, taskId: TASK },
+      key: 'audio.music',
+      args: { prompt: 'A complete instrumental with a warm ending', instrumental: true },
+      requestId: 'test',
+      idempotencyKey: '00000000-0000-4000-8000-000000000098',
+      signal: AbortSignal.timeout(5000),
+    };
+    const [first, second] = await Promise.all([tools.call(input), tools.call(input)]);
+    expect(first.job?.id).toBe(second.job?.id);
+    expect(falCalls.filter((call) => call.input)).toHaveLength(1);
+    await tools.job(input.caller, first.job!.id, AbortSignal.timeout(1000));
+    expect(billingCalls.filter((call) => call.path === 'settle')).toHaveLength(1);
+    await expect(
+      tools.call({
+        ...input,
+        args: { ...input.args, prompt: 'Different complete instrumental song' },
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+  it('器乐与歌词参数明确；结果保存后进程重建不再调供应商，其他任务不能访问', async () => {
+    tools = build('key', true);
+    const id = (
+      await call(
+        'audio.music',
+        { prompt: 'Warm piano and strings with a complete ending', instrumental: 'true' },
+        TASK,
+      )
+    ).job!.id;
+    expect(falCalls[0]?.input).toMatchObject({ is_instrumental: true, lyrics: '' });
+    const done = await tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000));
+    expect(done.status).toBe('completed');
+    expect(done.result?.files[0]).toMatchObject({ id: '0', size: 8 });
+    const count = falCalls.length;
+    await tools.close();
+    tools = build('key', true);
+    expect(
+      (await tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000))).status,
+    ).toBe('completed');
+    expect(falCalls).toHaveLength(count);
+    expect(billingCalls.map((call) => call.path)).toEqual(['hold', 'settle']);
+    await expect(tools.file({ payerId: PAYER, taskId: PAYER }, id, '0')).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    const missing = await errorOf(
+      call('audio.music', {
+        prompt: 'A complete vocal song with accompaniment',
+        instrumental: 'false',
+      }),
+    );
+    expect(missing?.code).toBe('invalid_tool_args');
+    const song = await call('audio.music', {
+      prompt: 'A complete vocal song with accompaniment',
+      instrumental: 'false',
+      lyrics: '[Verse] 测试歌词',
+    });
+    expect(song.job).toBeTruthy();
+    expect(falCalls.at(-1)?.input).toMatchObject({
+      is_instrumental: false,
+      lyrics: '[Verse] 测试歌词',
+    });
+  });
+  it('提交断连不重新提交；结算失败从已存文件继续而不重新生成或下载', async () => {
+    tools = build('key', true);
+    falSubmitFails = true;
+    const unknown = (
+      await call('audio.music', {
+        prompt: 'A warm instrumental track with a soft ending',
+        instrumental: true,
+      })
+    ).job!.id;
+    expect((await tools.job({ payerId: PAYER }, unknown, AbortSignal.timeout(1000))).status).toBe(
+      'uncertain',
+    );
+    expect(falCalls).toHaveLength(1);
+    expect(billingCalls.map((call) => call.path)).toEqual(['hold']);
+    falSubmitFails = false;
+    settleFails = true;
+    const id = (
+      await call('audio.music', {
+        prompt: 'A warm instrumental track with a soft ending',
+        instrumental: true,
+      })
+    ).job!.id;
+    expect((await tools.job({ payerId: PAYER }, id, AbortSignal.timeout(1000))).status).toBe(
+      'pending',
+    );
+    expect(jobRows.get(id)?.phase).toBe('stored');
+    const count = falCalls.length;
+    settleFails = false;
+    tools = build('key', true);
+    expect((await tools.job({ payerId: PAYER }, id, AbortSignal.timeout(1000))).status).toBe(
+      'completed',
+    );
+    expect(falCalls).toHaveLength(count);
   });
 });

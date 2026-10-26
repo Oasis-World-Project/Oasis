@@ -13,18 +13,29 @@ export interface OasisDesktop {
   /** 弹出系统对话框选文件夹；用户取消时返回 null */
   chooseSyncFolder(): Promise<string | null>;
   /** 把一个成果写进同步文件夹的 relativePath（相对路径，不能跳出文件夹） */
-  writeSyncedFile(artifactId: string, relativePath: string, data: ArrayBuffer): Promise<void>;
+  beginSyncedFile(
+    artifactId: string,
+    relativePath: string,
+    size: number,
+    sha256?: string | null,
+  ): Promise<string | null>;
+  appendSyncedFile(token: string, data: Uint8Array): Promise<void>;
+  finishSyncedFile(token: string): Promise<void>;
+  abortSyncedFile(token: string): Promise<void>;
   /** 在文件管理器里打开同步文件夹 */
   openSyncFolder(): Promise<void>;
 }
 
 /** 单个同步文件的大小上限（主进程也会检查） */
-export const DESKTOP_SYNC_MAX_BYTES = 500 * 1024 * 1024;
+export const DESKTOP_SYNC_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
 /** 主进程和 preload 之间的 IPC 频道名 */
 export const DESKTOP_CHANNELS = {
   status: 'oasis:sync-status',
   choose: 'oasis:sync-choose',
-  write: 'oasis:sync-write',
+  begin: 'oasis:sync-begin',
+  append: 'oasis:sync-append',
+  finish: 'oasis:sync-finish',
+  abort: 'oasis:sync-abort',
   open: 'oasis:sync-open',
 } as const;

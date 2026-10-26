@@ -48,6 +48,8 @@ await startService({
       accessKey: config.S3_ACCESS_KEY,
       secretKey: config.S3_SECRET_KEY,
       bucket: config.S3_BUCKET,
+      multipartMaxAgeMs: config.S3_MULTIPART_MAX_AGE_MS,
+      logger: ctx.logger,
     });
     await objects.ensureBucket();
     store = objects.store;
@@ -60,6 +62,12 @@ await startService({
       memoryMb: config.SANDBOX_MEMORY_MB,
       pidsLimit: config.SANDBOX_PIDS_LIMIT,
       workdir: SANDBOX_PATHS.workdir,
+      mediaCheck: {
+        files: config.MEDIA_CHECK_MAX_FILES,
+        timeoutMs: config.MEDIA_CHECK_TIMEOUT_MS,
+        durationMs: config.MEDIA_CHECK_MAX_DURATION_MS,
+        maxBytes: config.OUTPUT_MAX_BYTES,
+      },
     });
     // 就绪 = Docker 可用、沙箱镜像和网络都在；关闭时先让进行中的运行收尾
     const sandboxes: ServiceResource = {
@@ -82,6 +90,7 @@ await startService({
       }),
       canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 60_000 }),
       materialsMaxBytes: config.MATERIALS_MAX_BYTES,
+      transferTimeoutMs: config.FILE_TRANSFER_TIMEOUT_MS,
       modelBaseUrl: config.SANDBOX_MODEL_BASE_URL,
       packages: {
         egressProxy: config.SANDBOX_EGRESS_PROXY,

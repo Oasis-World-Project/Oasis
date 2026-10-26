@@ -26,12 +26,14 @@ export const canvasEnv = {
     .number()
     .int()
     .positive()
-    .default(100 * 1024 * 1024),
+    .default(2 * 1024 * 1024 * 1024),
   ARCHIVE_MAX_FILES: z.coerce.number().int().positive().default(1000),
-  /** 单个上传文件的大小上限；现在整个文件读进内存再存，调大之前要改成流式（ADR 0007） */
+  /** 上传与成果按流处理；单文件和并发仍有硬上限。 */
+  UPLOAD_CONCURRENCY: z.coerce.number().int().positive().max(16).default(2),
+  FILE_TRANSFER_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
   UPLOAD_MAX_BYTES: z.coerce
     .number()
     .int()
     .positive()
-    .default(100 * 1024 * 1024),
+    .default(512 * 1024 * 1024),
 };

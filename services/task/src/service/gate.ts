@@ -2,7 +2,12 @@
 // 1. 规则检查（不花钱）：out/ 里有产出；方案里写明的文件都在且不是空的。
 // 2. 验收点检查（Jev，几乎不花钱）：每条验收点问一个「是否满足」，概率低于阈值算没满足。
 // 检查本身出错（Jev 连不上等）就放行，不卡用户。
-import { ApplicationCheckResult, RunTextsBody, type RunOutputFile } from '@oasis/contracts/harness';
+import {
+  AudioCheckResult,
+  ApplicationCheckResult,
+  RunTextsBody,
+  type RunOutputFile,
+} from '@oasis/contracts/harness';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import type { Logger, ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
@@ -251,23 +256,45 @@ export function createGate(deps: {
       const unchecked: string[] = [];
       if (input.nodeId)
         for (const run of input.runs) {
-          if (!run.outputs.some((file) => file.path.endsWith('/oasis-app.json'))) continue;
-          try {
-            const result = await harness.json(
-              'POST',
-              `/internal/runs/${run.runId}/application-check`,
-              {
+          if (run.outputs.some((file) => file.path.endsWith('/oasis-app.json'))) {
+            try {
+              const result = await harness.json(
+                'POST',
+                `/internal/runs/${run.runId}/application-check`,
+                {
+                  body: { payerId: input.payerId, taskId: input.taskId },
+                  schema: ApplicationCheckResult,
+                },
+              );
+              if (!result.passed)
+                unmet.push(`浏览器实际运行检查失败：${result.reason ?? '原因未返回'}`);
+            } catch (err) {
+              logger.warn({ err, taskId: input.taskId, runId: run.runId }, '浏览器检查未完成');
+              unchecked.push('浏览器实际运行检查未完成');
+            }
+          }
+          const audio = run.outputs.filter((file) =>
+            /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i.test(file.path),
+          );
+          if (audio.length) {
+            try {
+              const result = await harness.json('POST', `/internal/runs/${run.runId}/audio-check`, {
                 body: { payerId: input.payerId, taskId: input.taskId },
-                schema: ApplicationCheckResult,
-              },
-            );
-            if (!result.passed)
-              unmet.push(`浏览器实际运行检查失败：${result.reason ?? '原因未返回'}`);
-          } catch (err) {
-            logger.warn({ err, taskId: input.taskId, runId: run.runId }, '浏览器检查未完成');
-            unchecked.push('浏览器实际运行检查未完成');
+                schema: AudioCheckResult,
+              });
+              for (const file of audio) {
+                const checked = result.files.find((item) => item.path === file.path);
+                if (!checked) unchecked.push(`音频「${file.path}」未完成解码检查`);
+                else if (!checked.valid)
+                  unmet.push(`音频「${file.path}」${checked.error ?? '探测或完整解码失败'}`);
+              }
+            } catch (err) {
+              logger.warn({ err, runId: run.runId }, '音频检查未完成');
+              unchecked.push('音频解码检查未完成');
+            }
           }
         }
+
       if (
         unmet.length > 0 ||
         (input.checks.length === 0 && input.expects.every((e) => typeof e === 'string'))

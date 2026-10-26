@@ -74,6 +74,35 @@ const input = {
 };
 
 describe('关卡的验收点检查', () => {
+  it('音频只用受信解码结果判断文件有效，缺少报告保持未检查', async () => {
+    const gate = createGate({
+      harness: fakeClient(() => ({
+        files: [{ path: 'broken.mp3', valid: false, error: '解码失败' }],
+        unchecked: ['song.mp3'],
+      })).client,
+      modelGateway: fakeClient(() => ({})).client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    const result = await gate.check({
+      ...input,
+      checks: [],
+      expects: ['*.mp3'],
+      runs: [
+        {
+          runId: 'run-1',
+          summary: null,
+          outputs: [
+            { path: 'broken.mp3', size: 3 },
+            { path: 'song.mp3', size: 10 },
+          ],
+        },
+      ],
+    });
+    expect(result.unmet).toEqual(['音频「broken.mp3」解码失败']);
+    expect(result.unchecked).toEqual(['音频「song.mp3」未完成解码检查']);
+  });
   it('应用清单必须经过隔离浏览器打开；运行失败进入未满足项', async () => {
     const harness = fakeClient((path) =>
       path.endsWith('/application-check')

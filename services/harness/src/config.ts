@@ -61,12 +61,16 @@ export const harnessEnv = {
   // ---- 运行 ----
   /** 同时进行的运行数上限，超出的排队 */
   MAX_CONCURRENT_RUNS: positiveInt.default(4),
+  MEDIA_CHECK_MAX_FILES: positiveInt.max(100).default(20),
+  MEDIA_CHECK_TIMEOUT_MS: positiveInt.max(300_000).default(90_000),
+  MEDIA_CHECK_MAX_DURATION_MS: positiveInt.max(3600_000).default(20 * 60_000),
+  FILE_TRANSFER_TIMEOUT_MS: positiveInt.default(600_000),
   /** 一次运行最长多久（到点视为失败并销毁容器） */
   RUN_TIMEOUT_MS: positiveInt.default(30 * 60_000),
   /** 一次运行的素材（用户上传的文件）加起来的大小上限 */
-  MATERIALS_MAX_BYTES: positiveInt.default(300 * 1024 * 1024),
+  MATERIALS_MAX_BYTES: positiveInt.default(1024 * 1024 * 1024),
   /** 产出文件打包后的大小上限 */
-  OUTPUT_MAX_BYTES: positiveInt.default(200 * 1024 * 1024),
+  OUTPUT_MAX_BYTES: positiveInt.default(2 * 1024 * 1024 * 1024),
 
   // ---- 对象存储（产出与会话存档） ----
   ...objectStoreEnv,

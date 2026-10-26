@@ -10,6 +10,9 @@ export {
   objectStoreEnv,
   type ByteRange,
   type ObjectStore,
+  checkedParts,
+  type StreamLimits,
+  type StoredStream,
 } from './object-store.ts';
 export { startOutboxRelay } from './outbox.ts';
 export { createPostgres, databaseEnv, type PostgresResource } from './postgres.ts';

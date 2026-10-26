@@ -2,9 +2,11 @@
 // 目录放在这里（和供应商适配在一起），由 model-gateway 对外提供；以后接新供应商（如 fal.ai）只在这里加。
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { HttpError } from '@oasis/service-kit';
 import type { ProviderClient } from '../adapters/openrouter.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
+import type { FalClient } from '../adapters/fal.ts';
 import { USD_TO_MICRO, type CostSource } from './pricing.ts';
 
 /** 工具交回给 AI 的文字最多这么长 */
@@ -23,11 +25,14 @@ export interface ToolConfig {
   tavilyCreditMicro: number;
   /** 配音拿不到实际花费时，每个字估多少钱（微美元） */
   speechMicroPerChar: number;
+  musicModels?: string[];
+  musicMicroPerGeneration?: number;
 }
 
 interface ToolDeps {
   openrouter: ProviderClient;
   tavily: SearchClient;
+  fal?: FalClient;
   config: ToolConfig;
   /** 发请求给供应商：还没产生费用就失败时，由计量那边退回冻结并抛出给调用方看的错误 */
   upstream: (request: () => Promise<Response>) => Promise<Response>;
@@ -37,7 +42,7 @@ interface ToolDeps {
 interface ToolOutcome {
   text: string;
   data?: unknown;
-  files: { name: string; mediaType: string; base64: string }[];
+  files: { name: string; mediaType: string; base64?: string; body?: Readable }[];
   cost: { costMicro: number; source: CostSource };
 }
 
@@ -51,7 +56,7 @@ interface ToolBase {
   /** 调用前冻结多少（微美元），按参数算 */
   holdMicro: (args: Record<string, unknown>) => number;
   /** 依赖哪个供应商（没配 Key 就不能用） */
-  provider: 'openrouter' | 'tavily';
+  provider: 'openrouter' | 'tavily' | 'fal';
   /** 可以选的模型；不需要模型的工具返回空 */
   models: (config: ToolConfig) => string[];
   args: z.ZodType<Record<string, unknown>>;
@@ -153,6 +158,21 @@ const SpeechArgs = z.object({
   instructions: z.string().max(500).optional(),
   model: optionalModel,
 });
+
+const MusicArgs = z
+  .object({
+    prompt: z.string().trim().min(10).max(2000),
+    instrumental: z.union([
+      z.boolean(),
+      z.enum(['true', 'false']).transform((value) => value === 'true'),
+    ]),
+    lyrics: z.string().max(3500).optional(),
+    model: optionalModel,
+  })
+  .refine(
+    (args) => args.instrumental || Boolean(args.lyrics?.trim()),
+    '歌曲必须提供歌词；器乐请指定 instrumental=true',
+  );
 
 const TranscribeArgs = z.object({
   audio_base64: z.string().min(1),
@@ -506,6 +526,68 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    key: 'audio.music',
+    name: '生成音乐',
+    description: '生成完整器乐曲或带歌词的歌曲；结果为混合音频，不保证分轨或精确时长。',
+    usage:
+      'oasis-tool audio.music --prompt "音乐风格和段落要求" --instrumental true|false [--lyrics "歌词"] --out out/音乐.mp3',
+    unit: '首',
+    estimateMicro: 150_000,
+    holdMicro: () => 500_000,
+    long: true,
+    provider: 'fal',
+    models: (config) => config.musicModels ?? [],
+    args: MusicArgs,
+    modelOf: pickModel,
+    async start(deps, args, model) {
+      if (!deps.fal) throw new Error('音乐供应商未配置');
+      const a = MusicArgs.parse(args);
+      const response = await deps.upstream(() =>
+        deps.fal!.submit(
+          model,
+          {
+            prompt: a.prompt,
+            is_instrumental: a.instrumental,
+            lyrics: a.instrumental ? '' : a.lyrics,
+            audio_setting: { sample_rate: '44100', bitrate: '256000', format: 'mp3' },
+          },
+          deps.signal,
+        ),
+      );
+      return deps.fal.handle(await response.json());
+    },
+    async check(deps, id) {
+      if (!deps.fal) throw new Error('音乐供应商未配置');
+      const status = await deps.fal.status(id);
+      if (!status.ok) throw new Error(`查音乐进度失败：${status.status}`);
+      const state = z
+        .object({ status: z.enum(['IN_QUEUE', 'IN_PROGRESS', 'COMPLETED']) })
+        .parse(await status.json());
+      if (state.status !== 'COMPLETED') return { state: 'pending' };
+      const response = await deps.fal.result(id);
+      if (response.status === 422 || response.status === 400)
+        return { state: 'failed', error: '音乐供应商报告生成失败' };
+      if (!response.ok) throw new Error(`取音乐结果失败：${response.status}`);
+      const result = z.object({ audio: z.object({ url: z.url() }) }).parse(await response.json());
+      const media = await deps.fal.media(result.audio.url);
+      if (
+        !media.body ||
+        !/^(audio\/|application\/octet-stream)/.test(media.headers.get('content-type') ?? '')
+      )
+        throw new Error('音乐返回格式不合格');
+      return {
+        state: 'completed',
+        outcome: {
+          text: '音乐生成完成；这是供应商返回的混合音轨。',
+          files: [
+            { name: 'music.mp3', mediaType: 'audio/mpeg', body: Readable.fromWeb(media.body) },
+          ],
+          cost: estimate(deps.config.musicMicroPerGeneration ?? 150_000),
+        },
+      };
+    },
+  },
+  {
     key: 'video.generate',
     name: '生成视频',
     description:
@@ -549,16 +631,16 @@ export const TOOLS: ToolDef[] = [
       if (body.status !== 'completed') return { state: 'pending' };
       const content = await deps.openrouter.videoContent(id, 0);
       if (!content.ok) throw new Error(`下载视频失败：${content.status}`);
-      const video = Buffer.from(await content.arrayBuffer());
+      if (!content.body) throw new Error('视频没有内容流');
       return {
         state: 'completed',
         outcome: {
-          text: `视频生成好了（${video.length} 字节）。`,
+          text: '视频生成好了。',
           files: [
             {
               name: 'video.mp4',
               mediaType: content.headers.get('content-type') ?? 'video/mp4',
-              base64: video.toString('base64'),
+              body: Readable.fromWeb(content.body),
             },
           ],
           cost:

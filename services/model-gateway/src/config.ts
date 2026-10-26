@@ -1,4 +1,4 @@
-import { postgresAndEventBus } from '@oasis/service-kit';
+import { objectStoreEnv, postgresAndEventBus } from '@oasis/service-kit';
 import { z } from 'zod';
 
 /** 逗号分隔的列表 */
@@ -15,6 +15,28 @@ const list = (fallback: string) =>
 
 export const modelGatewayEnv = {
   ...postgresAndEventBus.env,
+  ...objectStoreEnv,
+  S3_BUCKET: z.string().default('oasis-model-gateway'),
+  FAL_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value || undefined),
+  FAL_BASE_URL: z.url().default('https://queue.fal.run'),
+  FAL_MEDIA_HOSTS: list('fal.media'),
+  TOOL_MUSIC_MODELS: list('fal-ai/minimax-music/v2.6'),
+  TOOL_MUSIC_MICRO_PER_GENERATION: z.coerce.number().int().positive().max(500_000).default(150_000),
+  TOOL_RESULT_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(2 * 1024 ** 3)
+    .default(512 * 1024 ** 2),
+  TOOL_RESULT_RETENTION_MS: z.coerce
+    .number()
+    .int()
+    .min(3600_000)
+    .default(7 * 24 * 3600_000),
+  TOOL_SUBMIT_TIMEOUT_MS: z.coerce.number().int().min(5000).max(120_000).default(60_000),
   BILLING_URL: z.url(),
   OPENROUTER_BASE_URL: z.url().default('https://openrouter.ai/api/v1'),
   /** Jev 等结构化决策模型的接口 */

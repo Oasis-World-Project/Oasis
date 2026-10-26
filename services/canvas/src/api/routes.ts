@@ -17,6 +17,7 @@ import {
   type ServiceApp,
 } from '@oasis/service-kit';
 import { z } from 'zod';
+import { Readable } from 'node:stream';
 import type { ArtifactService } from '../service/artifact-service.ts';
 import type { UploadService } from '../service/upload-service.ts';
 import {
@@ -39,6 +40,8 @@ export function registerRoutes(
   },
   options: {
     maxBytes: number;
+    uploadConcurrency?: number;
+    transferTimeoutMs?: number;
     preview?: PreviewLimits;
     archive?: { bytes: number; files: number };
   },
@@ -47,16 +50,15 @@ export function registerRoutes(
   const previewLimits = options.preview ?? defaultPreviewLimits;
   const preview = createPreviewService(previewLimits);
   let archiving = false;
+  let uploading = 0;
   // 上传的请求体就是文件本身（前端一律用 application/octet-stream 发，类型按文件名定）
-  app.addContentTypeParser(
-    'application/octet-stream',
-    { parseAs: 'buffer', bodyLimit: options.maxBytes },
-    (_request, body, done) => done(null, body),
+  app.addContentTypeParser('application/octet-stream', {}, (_request, body, done) =>
+    done(null, body),
   );
 
   app.post('/v1/uploads', { bodyLimit: options.maxBytes }, async (request, reply) => {
     const { name } = parseWith(UploadQuery, request.query);
-    if (!Buffer.isBuffer(request.body)) {
+    if (!(request.body instanceof Readable)) {
       return reply.code(415).send({
         error: {
           code: 'unsupported_media_type',
@@ -65,7 +67,28 @@ export function registerRoutes(
         },
       });
     }
-    return reply.code(201).send(await uploads.upload(requireUserId(request), name, request.body));
+    const length = Number(request.headers['content-length']);
+    if (Number.isFinite(length) && length > options.maxBytes)
+      throw new HttpError(413, 'upload_size', '文件超过上传上限');
+    if (uploading >= (options.uploadConcurrency ?? 2))
+      throw new HttpError(503, 'upload_busy', '上传任务较多，请稍后重试');
+    uploading++;
+    const source = request.body;
+    const timer = setTimeout(
+      () => source.destroy(new Error('上传超时')),
+      options.transferTimeoutMs ?? 600_000,
+    );
+    try {
+      return reply.code(201).send(
+        await uploads.upload(requireUserId(request), name, source, {
+          maxBytes: options.maxBytes,
+          ...(request.headers['content-length'] ? { size: length } : {}),
+        }),
+      );
+    } finally {
+      clearTimeout(timer);
+      uploading--;
+    }
   });
 
   app.get('/v1/uploads/:id', async (request, reply) => {
@@ -166,7 +189,7 @@ export function registerRoutes(
   app.post('/v1/previews', { bodyLimit: previewLimits.inputBytes }, async (request, reply) => {
     requireUserId(request);
     const { name } = parseWith(UploadQuery, request.query);
-    if (!Buffer.isBuffer(request.body))
+    if (!(request.body instanceof Readable))
       return reply.code(415).send({
         error: {
           code: 'unsupported_media_type',
@@ -174,7 +197,16 @@ export function registerRoutes(
           requestId: request.id,
         },
       });
-    return preview(name, request.body);
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of request.body) {
+      const bytes = Buffer.from(chunk as Uint8Array);
+      size += bytes.length;
+      if (size > previewLimits.inputBytes)
+        throw new HttpError(413, 'preview_size', '文件超过预览上限');
+      chunks.push(bytes);
+    }
+    return preview(name, Buffer.concat(chunks));
   });
 
   app.get('/v1/tasks/:id/archive', async (request, reply) => {
@@ -185,6 +217,9 @@ export function registerRoutes(
         error: { code: 'archive_busy', message: '正在打包，请稍后重试', requestId: request.id },
       });
     archiving = true;
+    reply.raw.once('close', () => {
+      archiving = false;
+    });
     try {
       const result = await artifacts.archive(
         owner,
@@ -194,8 +229,9 @@ export function registerRoutes(
       return reply
         .headers(fileResponseHeaders('application/zip', result.name, true))
         .send(result.content);
-    } finally {
+    } catch (error) {
       archiving = false;
+      throw error;
     }
   });
 
@@ -207,7 +243,11 @@ export function registerRoutes(
   app.get('/internal/uploads/:id/content', async (request, reply) => {
     const { id } = parseWith(IdParams, request.params);
     const { row, content } = await uploads.internalContent(id);
-    return reply.type(row.contentType).send(content);
+    return reply
+      .type(row.contentType)
+      .header('content-length', row.size)
+      .header('x-oasis-file-sha256', row.sha256 ?? '')
+      .send(content);
   });
   app.post('/internal/applications/lookup', async (request) => {
     const { ownerId, artifactId } = parseWith(
