@@ -4,6 +4,27 @@ import { describe, expect, it } from 'vitest';
 import { checkRules, createGate } from '../src/service/gate.ts';
 
 describe('关卡的规则检查', () => {
+  it('未支持的工程 ZIP 和遗漏报告不触发无意义重做，确定损坏或数量不可能满足时仍退回', () => {
+    const outputs = [{ path: 'project.zip', size: 100 }];
+    const unparsed = [
+      { path: 'project.zip', text: '', valid: false, warning: '此格式未解析，需人工核对' },
+    ];
+    expect(checkRules(outputs, [{ pattern: '*.zip' }], unparsed)).toEqual([]);
+    expect(checkRules(outputs, [{ pattern: '*.zip' }], [])).toEqual([]);
+    expect(checkRules(outputs, [{ pattern: '*.zip', exactCount: 2 }], unparsed)[0]).toContain(
+      '有效文件 0 个',
+    );
+    expect(
+      checkRules(
+        outputs,
+        [{ pattern: '*.zip' }],
+        [{ path: 'project.zip', text: '', valid: false, error: 'ZIP 损坏' }],
+      )[0],
+    ).toContain('有效文件 0 个');
+    expect(checkRules([{ path: 'empty.zip', size: 0 }], [{ pattern: '*.zip' }], [])[0]).toContain(
+      '有效文件 0 个',
+    );
+  });
   it('精确和至少数量只计有效非空文件，并核对图片尺寸', () => {
     const outputs = [
       { path: '图/a.png', size: 1 },
@@ -187,7 +208,7 @@ describe('关卡的验收点检查', () => {
     { name: '内容缺失', files: [], truncated: false },
     {
       name: '解析受限',
-      files: [{ path: '介绍.md', text: '', warning: '解析范围受限' }],
+      files: [{ path: '介绍.md', text: '', valid: false, warning: '解析范围受限' }],
       truncated: false,
     },
   ])('$name 时报告未检查，不把证据不足转成语义失败', async ({ files, truncated }) => {
@@ -199,7 +220,7 @@ describe('关卡的验收点检查', () => {
       threshold: 0.5,
       logger: pino({ level: 'silent' }),
     });
-    const result = await gate.check(input);
+    const result = await gate.check({ ...input, expects: [{ pattern: '介绍.md' }] });
     expect(result.unmet).toEqual([]);
     expect(result.unchecked?.length).toBeGreaterThan(0);
     expect(gateway.calls).toHaveLength(0);

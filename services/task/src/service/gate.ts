@@ -39,8 +39,21 @@ export function checkRules(
       const valid = matched.filter(
         (f) => f.size > 0 && inspected.some((i) => i.path === f.path && i.valid === true),
       );
+      // 未支持的格式或遗漏的报告只能保留为未检查，不能据此断言文件损坏并重跑。
+      const unknown = matched.filter((f) => {
+        if (f.size === 0) return false;
+        const report = inspected.find((i) => i.path === f.path);
+        return (
+          !report ||
+          (!report.error &&
+            (report.valid === undefined || (!report.valid && Boolean(report.warning))))
+        );
+      });
       const number = expected.exactCount ?? expected.minCount ?? 1;
-      if (expected.exactCount !== undefined ? valid.length !== number : valid.length < number)
+      if (
+        valid.length + unknown.length < number ||
+        (expected.exactCount !== undefined && valid.length > number)
+      )
         unmet.push(
           `out/${pattern} 有效文件 ${valid.length} 个，要求${expected.exactCount === undefined ? '至少' : '正好'} ${number} 个`,
         );
