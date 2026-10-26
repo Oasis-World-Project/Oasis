@@ -25,7 +25,7 @@ export interface Sandbox {
   readArchive(path: string): Promise<Readable | undefined>;
   /** 销毁沙箱（运行中也立即结束）；可重复调用 */
   destroy(): Promise<void>;
-  inspectAudio?(snapshot: Readable): Promise<unknown>;
+  inspectMedia?(snapshot: Readable): Promise<unknown>;
 }
 
 export interface Executor {
@@ -65,19 +65,19 @@ export function demultiplex(source: Readable, stdout: PassThrough, stderr: PassT
   });
 }
 
-interface AudioInspectionLimits {
+interface MediaInspectionLimits {
   files: number;
   timeoutMs: number;
   durationMs: number;
   maxBytes: number;
 }
-export async function inspectSandboxAudio(
+export async function inspectSandboxMedia(
   docker: DockerApi,
   id: string,
   snapshot: Readable,
-  limits: AudioInspectionLimits,
+  limits: MediaInspectionLimits,
 ): Promise<unknown> {
-  const prefix = `oasis-audio-${randomUUID()}`;
+  const prefix = `oasis-media-${randomUUID()}`;
   // 从已保存快照复制到 root 所有、node 只读的目录；应用不能改动本次检查的字节。
   await docker.putArchive(
     id,
@@ -85,12 +85,15 @@ export async function inspectSandboxAudio(
     rewriteArchive(
       snapshot,
       prefix,
-      (path) => /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i.test(path),
+      (path) =>
+        /\.(wav|mp3|m4a|flac|ogg|webm|aac|mp4|mov|mkv|avi|mlt|json|srt|png|jpe?g|webp)$/i.test(
+          path,
+        ),
       limits.maxBytes,
       true,
     ),
   );
-  const script = readFileSync(new URL('../../media/audio-check.mjs', import.meta.url), 'utf8');
+  const script = readFileSync(new URL('../../media/media-check.mjs', import.meta.url), 'utf8');
   const execution = await docker.exec(id, [
     'node',
     '--input-type=module',
@@ -104,7 +107,7 @@ export async function inspectSandboxAudio(
   errors.resume();
   demultiplex(execution.stream, output, errors);
   const timeout = setTimeout(
-    () => execution.stream.destroy(new Error('音频检查超时')),
+    () => execution.stream.destroy(new Error('媒体检查超时')),
     limits.timeoutMs + 10_000,
   );
   try {
@@ -113,11 +116,11 @@ export async function inspectSandboxAudio(
     for await (const value of output) {
       const chunk = Buffer.from(value as Uint8Array);
       size += chunk.length;
-      if (size > 2 * 1024 * 1024) throw new Error('音频检查报告过大');
+      if (size > 2 * 1024 * 1024) throw new Error('媒体检查报告过大');
       chunks.push(chunk);
     }
     const state = await docker.inspectExec(execution.id);
-    if (state.ExitCode !== 0) throw new Error('音频检查进程失败');
+    if (state.ExitCode !== 0) throw new Error('媒体检查进程失败');
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
   } finally {
     clearTimeout(timeout);
@@ -189,8 +192,8 @@ export function createDockerExecutor(deps: {
           pause: () => docker.pauseContainer(id),
           ...(deps.mediaCheck
             ? {
-                inspectAudio: (snapshot: Readable) =>
-                  inspectSandboxAudio(docker, id, snapshot, deps.mediaCheck!),
+                inspectMedia: (snapshot: Readable) =>
+                  inspectSandboxMedia(docker, id, snapshot, deps.mediaCheck!),
               }
             : {}),
           destroy,

@@ -27,6 +27,7 @@
     "preview:smoke": "node scripts/preview.mjs smoke",
     "media:smoke": "node --max-old-space-size=128 scripts/media.mjs",
     "media:recover": "node scripts/media.mjs recover",
+    "video:smoke": "node scripts/video.mjs",
     "check:engineering": "node scripts/check-engineering.mjs",
     "cleanup": "node scripts/cleanup-task.mjs",
     "prepare": "lefthook install"

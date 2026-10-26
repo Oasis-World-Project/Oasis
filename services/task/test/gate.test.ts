@@ -74,6 +74,52 @@ const input = {
 };
 
 describe('关卡的验收点检查', () => {
+  it('视频、工程与字幕使用可信检查；损坏退回，黑帧/音画差及语义检查保留提醒', async () => {
+    const harness = fakeClient((path) => {
+      expect(path).toContain('/video-check');
+      return {
+        files: [
+          {
+            path: 'final.mp4',
+            valid: true,
+            blackIntervals: [{ startMs: 0, endMs: 500 }],
+            avDeltaMs: 200,
+          },
+          { path: 'project/project.mlt', valid: false, error: '工程摘要不符' },
+        ],
+        unchecked: ['subtitles.srt'],
+      };
+    });
+    const gate = createGate({
+      harness: harness.client,
+      modelGateway: fakeClient(() => ({})).client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    const result = await gate.check({
+      ...input,
+      checks: [],
+      expects: ['*.mp4'],
+      runs: [
+        {
+          runId: 'run-1',
+          summary: null,
+          outputs: [
+            { path: 'final.mp4', size: 100 },
+            { path: 'project/project.mlt', size: 80 },
+            { path: 'subtitles.srt', size: 10 },
+          ],
+        },
+      ],
+    });
+    expect(result.unmet).toContain('视频/工程/字幕「project/project.mlt」工程摘要不符');
+    expect(result.unchecked?.join('\n')).toContain('黑帧');
+    expect(result.unchecked?.join('\n')).toContain('200 毫秒');
+    expect(result.unchecked?.join('\n')).toContain('subtitles.srt');
+    expect(result.unchecked?.join('\n')).toContain('Shotcut');
+    expect(harness.calls[0]?.body).toEqual({ payerId: PAYER, taskId: TASK });
+  });
   it('音频只用受信解码结果判断文件有效，缺少报告保持未检查', async () => {
     const gate = createGate({
       harness: fakeClient(() => ({

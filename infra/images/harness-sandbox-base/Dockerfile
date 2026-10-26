@@ -11,7 +11,8 @@ RUN apt-get -o Acquire::Retries=${APT_RETRIES} update \
  && attempt=0 \
  && until apt-get -o Acquire::Retries=${APT_RETRIES} install -y --no-install-recommends python3 python3-pip python3-venv fonts-noto-cjk \
     libreoffice-writer=4:25.2.3-2+deb13u8 libreoffice-calc=4:25.2.3-2+deb13u8 libreoffice-impress=4:25.2.3-2+deb13u8 \
-    ffmpeg=7:7.1.5-0+deb13u1 poppler-utils=25.03.0-5+deb13u4 libpango-1.0-0=1.56.3-1 libpangoft2-1.0-0=1.56.3-1; do \
+    ffmpeg=7:7.1.5-0+deb13u1 poppler-utils=25.03.0-5+deb13u4 libpango-1.0-0=1.56.3-1 libpangoft2-1.0-0=1.56.3-1 \
+    melt=7.30.0-1+b2 frei0r-plugins=2.3.3-1+b1; do \
       attempt=$((attempt + 1)); \
       if [ "$attempt" -ge "$APT_RETRIES" ]; then exit 1; fi; \
     done \
@@ -32,13 +33,15 @@ RUN --mount=type=secret,id=pip_index \
  && printf 'font.family: sans-serif\nfont.sans-serif: Noto Sans CJK JP, DejaVu Sans\naxes.unicode_minus: False\n' > /home/node/.config/matplotlib/matplotlibrc \
  && chown -R node:node /home/node/.config \
  && printf '系统软件（无界面）：\n' > /opt/oasis/software.txt \
- && dpkg-query -W -f='${Package} ${Version}\n' libreoffice-writer libreoffice-calc libreoffice-impress ffmpeg poppler-utils fonts-noto-cjk >> /opt/oasis/software.txt \
+ && dpkg-query -W -f='${Package} ${Version}\n' libreoffice-writer libreoffice-calc libreoffice-impress ffmpeg poppler-utils fonts-noto-cjk melt frei0r-plugins >> /opt/oasis/software.txt \
  && printf '\nPython 包（使用 python3，无需激活环境）：\n' >> /opt/oasis/software.txt \
  && /opt/oasis/venv/bin/python -m pip list --format=freeze >> /opt/oasis/software.txt
 # 不跑安装脚本：dsh 用到的原生组件都是预编译包
 ARG NPM_RETRIES=3
-RUN attempt=0 \
- && until npm install --global --ignore-scripts "@deepseek-ai/dsh@${DSH_VERSION}"; do \
+RUN --mount=type=secret,id=npm_registry \
+    if [ -f /run/secrets/npm_registry ]; then export npm_config_registry="$(cat /run/secrets/npm_registry)"; fi \
+ && attempt=0 \
+ && until npm install --global --ignore-scripts --fetch-retries=0 --fetch-timeout=60000 "@deepseek-ai/dsh@${DSH_VERSION}"; do \
       attempt=$((attempt + 1)); \
       if [ "$attempt" -ge "$NPM_RETRIES" ]; then exit 1; fi; \
     done \
@@ -55,9 +58,11 @@ COPY --chown=node:node services/harness/src/adapter/profile/cordis.patch.yml /ho
 # 沙箱里调用 Oasis 工具的命令（ADR 0006）：Node 直接运行 TypeScript
 COPY services/harness/sandbox/oasis-tool.ts /opt/oasis/oasis-tool.ts
 COPY services/harness/sandbox/batch.ts /opt/oasis/batch.ts
+COPY services/harness/sandbox/media.py /opt/oasis/media.py
 USER root
 RUN printf '#!/bin/sh\nexec node --no-warnings /opt/oasis/oasis-tool.ts "$@"\n' > /usr/local/bin/oasis-tool \
- && chmod 755 /usr/local/bin/oasis-tool
+ && printf '#!/bin/sh\nexec python3 /opt/oasis/media.py "$@"\n' > /usr/local/bin/oasis-media \
+ && chmod 755 /usr/local/bin/oasis-tool /usr/local/bin/oasis-media
 USER node
 WORKDIR /workspace
 ENTRYPOINT ["dsh", "--profile", "oasis"]

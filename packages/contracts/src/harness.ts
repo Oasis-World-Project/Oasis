@@ -114,6 +114,42 @@ export const AudioCheckResult = z.object({
   unchecked: z.array(z.string()).max(1000),
 });
 
+/** 视频/平台工程的受信检查；语义画面与 Shotcut 实际重导出不由解码结果代替。 */
+export const VideoCheckResult = z.object({
+  files: z
+    .array(
+      AudioCheckResult.shape.files.element.extend({
+        width: z.number().int().positive().optional(),
+        height: z.number().int().positive().optional(),
+        frameRate: z.number().positive().optional(),
+        audioCodec: z.string().optional(),
+        audioDurationMs: z.number().int().nonnegative().optional(),
+        avDeltaMs: z.number().int().optional(),
+        blackIntervals: z
+          .array(z.object({ startMs: z.number(), endMs: z.number() }))
+          .max(200)
+          .optional(),
+        silentIntervals: z
+          .array(z.object({ startMs: z.number(), endMs: z.number() }))
+          .max(200)
+          .optional(),
+        samples: z
+          .array(
+            z.object({
+              atMs: z.number().nonnegative(),
+              sha256: z.string().regex(/^[a-f0-9]{64}$/),
+            }),
+          )
+          .max(3)
+          .optional(),
+        projectSources: z.number().int().positive().optional(),
+        subtitleCues: z.number().int().nonnegative().optional(),
+      }),
+    )
+    .max(100),
+  unchecked: z.array(z.string()).max(1000),
+});
+
 export const RunBody = z.object({
   id: z.uuid(),
   payerId: z.uuid(),

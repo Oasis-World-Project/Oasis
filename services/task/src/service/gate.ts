@@ -4,6 +4,7 @@
 // 检查本身出错（Jev 连不上等）就放行，不卡用户。
 import {
   AudioCheckResult,
+  VideoCheckResult,
   ApplicationCheckResult,
   RunTextsBody,
   type RunOutputFile,
@@ -273,24 +274,56 @@ export function createGate(deps: {
               unchecked.push('浏览器实际运行检查未完成');
             }
           }
-          const audio = run.outputs.filter((file) =>
-            /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i.test(file.path),
-          );
-          if (audio.length) {
+          for (const kind of [
+            {
+              name: 'audio',
+              label: '音频',
+              pattern: /\.(wav|mp3|m4a|flac|ogg|aac)$/i,
+              schema: AudioCheckResult,
+            },
+            {
+              name: 'video',
+              label: '视频/工程/字幕',
+              pattern: /\.(mp4|mov|mkv|avi|webm|mlt|srt)$/i,
+              schema: VideoCheckResult,
+            },
+          ]) {
+            const media = run.outputs.filter((file) => kind.pattern.test(file.path));
+            if (!media.length) continue;
             try {
-              const result = await harness.json('POST', `/internal/runs/${run.runId}/audio-check`, {
-                body: { payerId: input.payerId, taskId: input.taskId },
-                schema: AudioCheckResult,
-              });
-              for (const file of audio) {
+              const result = await harness.json(
+                'POST',
+                `/internal/runs/${run.runId}/${kind.name}-check`,
+                {
+                  body: { payerId: input.payerId, taskId: input.taskId },
+                  schema: kind.schema,
+                },
+              );
+              for (const file of media) {
                 const checked = result.files.find((item) => item.path === file.path);
-                if (!checked) unchecked.push(`音频「${file.path}」未完成解码检查`);
+                if (!checked) unchecked.push(`${kind.label}「${file.path}」未完成解码检查`);
                 else if (!checked.valid)
-                  unmet.push(`音频「${file.path}」${checked.error ?? '探测或完整解码失败'}`);
+                  unmet.push(
+                    `${kind.label}「${file.path}」${checked.error ?? '探测或完整解码失败'}`,
+                  );
+                else if (kind.name === 'video') {
+                  const video = VideoCheckResult.shape.files.element.parse(checked);
+                  if (video.blackIntervals?.length)
+                    unchecked.push(`视频「${file.path}」检出黑帧区间，需核对是否有意留黑`);
+                  if (video.silentIntervals?.length)
+                    unchecked.push(`视频「${file.path}」检出静音区间，需核对是否符合要求`);
+                  if (video.avDeltaMs !== undefined && Math.abs(video.avDeltaMs) > 150)
+                    unchecked.push(
+                      `视频「${file.path}」音画长度差 ${video.avDeltaMs} 毫秒，需核对`,
+                    );
+                  unchecked.push(
+                    `${kind.label}「${file.path}」画面/字幕语义、音画同步和实际 Shotcut 重导出仍需核对`,
+                  );
+                }
               }
             } catch (err) {
-              logger.warn({ err, runId: run.runId }, '音频检查未完成');
-              unchecked.push('音频解码检查未完成');
+              logger.warn({ err, runId: run.runId }, `${kind.label}检查未完成`);
+              unchecked.push(`${kind.label}解码检查未完成`);
             }
           }
         }

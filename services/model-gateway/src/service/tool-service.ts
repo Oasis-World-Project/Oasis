@@ -125,6 +125,14 @@ export function createToolService(deps: {
             return;
           }
           cost = state.outcome.cost;
+          const quoted = Number(job.call.videoEstimateMicro);
+          if (
+            job.tool === 'video.generate' &&
+            cost.source === 'estimate' &&
+            Number.isSafeInteger(quoted) &&
+            quoted > 0
+          )
+            cost = { costMicro: quoted, source: 'estimate' };
           const files: ToolResult['files'] = [];
           for (const [index, file] of state.outcome.files.entries()) {
             const fileId = String(index);
@@ -294,6 +302,59 @@ export function createToolService(deps: {
         throw new HttpError(400, 'invalid_tool_args', `${tool.name}不能用模型 ${args.model}`);
       }
       let models = await usableModels(tool);
+      let videoHoldMicro: number | undefined;
+      let videoEstimateMicro: number | undefined;
+      if (tool.key === 'video.generate') {
+        const catalogue = await deps.openrouter.listVideoModels().catch(() => []);
+        const compatible = catalogue.filter(
+          (entry) =>
+            models.includes(entry.id) &&
+            entry.supported_durations?.includes(Number(args.duration)) &&
+            entry.supported_resolutions?.includes(String(args.resolution)) &&
+            (!args.aspect_ratio ||
+              entry.supported_aspect_ratios?.includes(String(args.aspect_ratio))) &&
+            (!args.first_frame || entry.supported_frame_images?.includes('first_frame')),
+        );
+        models = models.filter((model) => compatible.some((entry) => entry.id === model));
+        const selected = compatible.find((entry) => entry.id === tool.modelOf(args, models));
+        const pricing = selected?.pricing_skus ?? {};
+        const resolution = String(args.resolution);
+        // 当前目录同时存在按美分和按美元/秒命名的 SKU；音频默认由供应商决定，冻结取较高档。
+        const rates = [
+          'duration_seconds',
+          'duration_seconds_with_audio',
+          `duration_seconds_${resolution}`,
+          `duration_seconds_${resolution}_with_audio`,
+          `${args.first_frame ? 'image' : 'text'}_to_video_duration_seconds_${resolution}`,
+        ]
+          .filter((key) => pricing[key] !== undefined)
+          .map((key) => Number(pricing[key]));
+        for (const key of [
+          'cents_per_video_output_second',
+          `cents_per_video_output_second_${resolution}`,
+        ])
+          if (pricing[key] !== undefined) rates.push(Number(pricing[key]) / 100);
+        const rate = rates.length ? Math.max(...rates) : NaN;
+        const referenceCost = args.first_frame
+          ? Number(selected?.pricing_skus?.cents_per_image_input ?? 0)
+          : 0;
+        if (
+          !selected ||
+          !Number.isFinite(rate) ||
+          rate <= 0 ||
+          !Number.isFinite(referenceCost) ||
+          referenceCost < 0
+        )
+          throw new HttpError(
+            400,
+            'video_parameters_unsupported',
+            '无法确认视频模型支持所选参数/首帧及价格；未提交供应商',
+          );
+        videoEstimateMicro = Math.ceil(
+          (rate * Number(args.duration) + referenceCost / 100) * 1_000_000,
+        );
+        videoHoldMicro = Math.max(tool.holdMicro(args), videoEstimateMicro);
+      }
       if (tool.key === 'image.generate' && Array.isArray(args.references)) {
         const count = args.references.length;
         const compatible: string[] = [];
@@ -328,7 +389,7 @@ export function createToolService(deps: {
           caller: input.caller,
           kind: 'tool',
           model,
-          amountMicro: tool.holdMicro(args),
+          amountMicro: videoHoldMicro ?? tool.holdMicro(args),
           ...(input.maxCostMicro === undefined ? {} : { maxCostMicro: input.maxCostMicro }),
           requestId: input.requestId,
           ...(tool.long ? { ttlMs: deps.jobTimeoutMs + HOLD_MARGIN_MS } : {}),
@@ -355,7 +416,10 @@ export function createToolService(deps: {
                 id,
                 tool: tool.key,
                 providerJobId: '',
-                call: { ...call },
+                call: {
+                  ...call,
+                  ...(videoEstimateMicro === undefined ? {} : { videoEstimateMicro }),
+                },
                 requestKey: input.idempotencyKey ?? null,
                 requestHash,
               }))

@@ -75,13 +75,17 @@ describe('oasis-tool 长任务', () => {
     };
   });
   fake.get('/v1/tools', async () => ({ tools: [] }));
-  fake.post('/v1/tools/video.generate', async () => ({
-    tool: 'video.generate',
-    text: '生成视频已提交',
-    files: [],
-    costMicro: 0,
-    job: { id: 'job-done' },
-  }));
+  const videoRequests: { args: Record<string, unknown>; idempotency_key: string }[] = [];
+  fake.post('/v1/tools/video.generate', async (request) => {
+    videoRequests.push(request.body as (typeof videoRequests)[number]);
+    return {
+      tool: 'video.generate',
+      text: '生成视频已提交',
+      files: [],
+      costMicro: 0,
+      job: { id: 'job-done' },
+    };
+  });
   fake.get('/v1/tools/jobs/:id', async (request) =>
     (request.params as { id: string }).id === 'job-done'
       ? {
@@ -182,6 +186,33 @@ describe('oasis-tool 长任务', () => {
     await main(['video.generate', '--prompt', '木屋', '--out', out]);
     expect(await readFile(out, 'utf8')).toBe('mp4');
     expect(printed.join('')).toContain('花费：$0.5000');
+  });
+  it('视频首帧读取本地字节；同一图片复用，图片内容改变则生成不同幂等键', async () => {
+    const source = join(dir, 'first.png'),
+      output = join(dir, 'image-video.mp4');
+    const bytes = Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001', 'hex');
+    await writeFile(source, bytes);
+    const command = [
+      'video.generate',
+      '--prompt',
+      '镜头推进',
+      '--first_frame',
+      source,
+      '--out',
+      output,
+    ];
+    const before = videoRequests.length;
+    await main(command);
+    await main(command);
+    expect(videoRequests.length - before).toBe(1);
+    expect(videoRequests.at(-1)?.args.first_frame).toEqual([
+      { mediaType: 'image/png', base64: bytes.toString('base64') },
+    ]);
+    const prior = videoRequests.at(-1)?.idempotency_key;
+    await writeFile(source, Buffer.concat([bytes, Buffer.from('changed')]));
+    await main(command);
+    expect(videoRequests.length - before).toBe(2);
+    expect(videoRequests.at(-1)?.idempotency_key).not.toBe(prior);
   });
 
   it('等到上限还没好：告诉 AI 用 wait 接着等', async () => {

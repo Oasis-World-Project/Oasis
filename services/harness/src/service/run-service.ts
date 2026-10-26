@@ -9,6 +9,7 @@ import { UploadLookupResult } from '@oasis/contracts/canvas';
 import { RunFinished } from '@oasis/contracts/events';
 import {
   AudioCheckResult,
+  VideoCheckResult,
   type RunBody,
   type RunEventBody,
   type RunTextsBody,
@@ -47,6 +48,8 @@ type Status = RunBody['status'];
 
 /** 放进 out/ 的占位文件：保证目录存在且属于沙箱用户，不算产出 */
 const KEEP_FILE = '.oasis-keep';
+const audioPath = /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i;
+const videoPath = /\.(mp4|mov|mkv|avi|webm|mlt|srt)$/i;
 /** 批次恢复状态随 tar 存档，但不是成果，也不传给下游节点。 */
 const isPrivateOutput = (path: string) =>
   path === KEEP_FILE ||
@@ -214,21 +217,31 @@ export function createRunService(deps: {
     const outputs = await archive(sandbox, SANDBOX_PATHS.outputs, `runs/${id}/outputs.tar`);
     if (
       outputs &&
-      sandbox.inspectAudio &&
+      sandbox.inspectMedia &&
       !live.get(id)?.abort.signal.aborted &&
-      outputs.files.some((file) => /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i.test(file.path))
+      outputs.files.some((file) => audioPath.test(file.path) || videoPath.test(file.path))
     ) {
       try {
-        const report = AudioCheckResult.parse(
-          await sandbox.inspectAudio(await store.read(outputs.key)),
+        const report = VideoCheckResult.parse(
+          await sandbox.inspectMedia(await store.read(outputs.key)),
         );
-        await store.put(
-          `runs/${id}/audio-check.json`,
-          Buffer.from(JSON.stringify(report)),
-          'application/json',
-        );
+        for (const [kind, pattern] of [
+          ['audio', audioPath],
+          ['video', videoPath],
+        ] as const) {
+          await store.put(
+            `runs/${id}/${kind}-check.json`,
+            Buffer.from(
+              JSON.stringify({
+                files: report.files.filter((file) => pattern.test(file.path)),
+                unchecked: report.unchecked.filter((file) => pattern.test(file)),
+              }),
+            ),
+            'application/json',
+          );
+        }
       } catch (err) {
-        logger.warn({ err, runId: id }, '音频检查未完成，关卡将保留未检查提醒');
+        logger.warn({ err, runId: id }, '媒体检查未完成，关卡将保留未检查提醒');
       }
     }
     const session = await archive(sandbox, SANDBOX_PATHS.sessions, `runs/${id}/session.tar`).catch(
@@ -545,6 +558,43 @@ export function createRunService(deps: {
     return row;
   }
 
+  async function checkedMedia(
+    id: string,
+    payerId: string,
+    taskId: string,
+    kind: 'audio' | 'video',
+  ) {
+    const row = await owned(id);
+    if (row.payerId !== payerId || row.taskId !== taskId)
+      throw new HttpError(404, 'run_not_found', '没有这次运行');
+    const expected = row.outputs.filter((file) =>
+      (kind === 'audio' ? audioPath : videoPath).test(file.path),
+    );
+    let report: ReturnType<typeof VideoCheckResult.parse>;
+    try {
+      report = VideoCheckResult.parse(
+        JSON.parse((await store.get(`runs/${id}/${kind}-check.json`)).toString('utf8')),
+      );
+    } catch {
+      return { files: [], unchecked: expected.map((file) => file.path) };
+    }
+    const files = report.files.filter((file) =>
+      expected.some(
+        (output) =>
+          output.path === file.path &&
+          output.size === file.size &&
+          output.sha256 === file.sha256 &&
+          Boolean(file.sha256),
+      ),
+    );
+    return {
+      files,
+      unchecked: expected
+        .filter((output) => !files.some((file) => file.path === output.path))
+        .map((file) => file.path),
+    };
+  }
+
   return {
     async start(
       body: StartRunBody & Required<Pick<StartRunBody, 'inputs' | 'inputsFrom'>>,
@@ -644,6 +694,14 @@ export function createRunService(deps: {
       } catch {
         /* 没有受信音频报告时保留未检查 */
       }
+      let video: ReturnType<typeof VideoCheckResult.parse> | undefined;
+      try {
+        video = VideoCheckResult.parse(
+          JSON.parse((await store.get(`runs/${id}/video-check.json`)).toString('utf8')),
+        );
+      } catch {
+        /* 历史运行没有视频报告时，保留未检查。 */
+      }
       await scanArchive(
         await store.read(row.outputKey),
         deps.outputMaxBytes,
@@ -653,8 +711,9 @@ export function createRunService(deps: {
             result.truncated = true;
             return;
           }
-          if (/\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i.test(path)) {
-            const checked = audio?.files.find(
+          if (audioPath.test(path) || videoPath.test(path)) {
+            const reports = videoPath.test(path) ? video : audio;
+            const checked = reports?.files.find(
               (file) =>
                 file.path === path &&
                 file.size === size &&
@@ -669,8 +728,10 @@ export function createRunService(deps: {
                 ? { error: checked.error }
                 : {
                     warning: checked
-                      ? '音频已探测并解码；发音、歌词和音乐内容仍需试听核对'
-                      : '音频解码检查未完成',
+                      ? videoPath.test(path)
+                        ? '视频/工程/字幕已完成受信结构检查；画面、音画语义及 Shotcut 重导出仍需核对'
+                        : '音频已探测并解码；发音、歌词和音乐内容仍需试听核对'
+                      : '媒体检查未完成',
                   }),
             });
             return;
@@ -719,35 +780,10 @@ export function createRunService(deps: {
     },
 
     async audioCheck(id: string, payerId: string, taskId: string) {
-      const row = await owned(id);
-      if (row.payerId !== payerId || row.taskId !== taskId)
-        throw new HttpError(404, 'run_not_found', '没有这次运行');
-      const expected = row.outputs.filter((file) =>
-        /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i.test(file.path),
-      );
-      let report: ReturnType<typeof AudioCheckResult.parse>;
-      try {
-        report = AudioCheckResult.parse(
-          JSON.parse((await store.get(`runs/${id}/audio-check.json`)).toString('utf8')),
-        );
-      } catch {
-        return { files: [], unchecked: expected.map((file) => file.path) };
-      }
-      const files = report.files.filter((file) =>
-        expected.some(
-          (output) =>
-            output.path === file.path &&
-            output.size === file.size &&
-            output.sha256 === file.sha256 &&
-            Boolean(file.sha256),
-        ),
-      );
-      return {
-        files,
-        unchecked: expected
-          .filter((output) => !files.some((file) => file.path === output.path))
-          .map((file) => file.path),
-      };
+      return checkedMedia(id, payerId, taskId, 'audio');
+    },
+    async videoCheck(id: string, payerId: string, taskId: string) {
+      return checkedMedia(id, payerId, taskId, 'video');
     },
 
     /** 用户在运行中追问：排在当前这一轮之后处理。运行没在进行时 409。 */

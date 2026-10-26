@@ -20,7 +20,7 @@ import {
   createDockerApi,
   defaultDockerSocket,
 } from '../services/harness/dist/executor/docker-api.js';
-import { demultiplex, inspectSandboxAudio } from '../services/harness/src/executor/executor.ts';
+import { demultiplex, inspectSandboxMedia } from '../services/harness/src/executor/executor.ts';
 import { packStreams } from '../services/harness/dist/executor/tar.js';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -99,6 +99,14 @@ if (process.argv[2] === 'recover') {
   }
   process.exit(0);
 }
+const output = path.resolve(
+  root,
+  process.env.MEDIA_SMOKE_OUTPUT ?? 'out/media-foundation-acceptance',
+);
+assert(
+  output.startsWith(path.join(root, 'out') + path.sep) && !existsSync(output),
+  '选择 out/ 下新的媒体验收目录，不能覆盖已有报告',
+);
 const keys = new Set();
 let journalPath;
 let journal;
@@ -383,7 +391,7 @@ try {
   const snapshot = await docker.getArchive(container, '/workspace/out');
   const snapshotKey = `media-test/${taskId}/audio-snapshot.tar`;
   await store.putStream(snapshotKey, snapshot, 'application/x-tar', { maxBytes: 32 * 1024 * 1024 });
-  const audio = await inspectSandboxAudio(docker, container, await store.read(snapshotKey), {
+  const audio = await inspectSandboxMedia(docker, container, await store.read(snapshotKey), {
     files: 20,
     timeoutMs: 90_000,
     durationMs: 1200_000,
@@ -396,17 +404,16 @@ try {
   await exec([
     'node',
     '-e',
-    "const fs=require('node:fs');const d=fs.readdirSync('/tmp').find(n=>n.startsWith('oasis-audio-'));try{fs.writeFileSync('/tmp/'+d+'/tone.wav','changed');process.exit(2)}catch(e){if(e.code!=='EACCES')throw e}",
+    "const fs=require('node:fs');const d=fs.readdirSync('/tmp').find(n=>n.startsWith('oasis-media-'));try{fs.writeFileSync('/tmp/'+d+'/tone.wav','changed');process.exit(2)}catch(e){if(e.code!=='EACCES')throw e}",
   ]);
   checked('受信检查快照对沙箱用户只读');
   report.peakRssBytes = peak;
   if (bytes >= 256 * 1024 * 1024) assert(peak < bytes, `内存峰值 ${peak} 未达到流式目标`);
-  const output = path.join(root, 'out/media-foundation-acceptance-20261026');
   await mkdir(output, { recursive: true });
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
   await writeFile(
     path.join(output, 'README.md'),
-    `# 5.8a 免费工程验证\n\n输入 ${bytes / 1024 ** 2} MiB，SHA-256 ${expected.sha256}。\n\n${report.checks.map((check) => `- 通过：${check}`).join('\n')}\n\nNode RSS 峰值 ${(peak / 1024 ** 2).toFixed(1)} MiB。本轮未发起模型或供应商请求；不等同于真实音乐成品验收。测试对象、文件与容器在 finally 回收。\n`,
+    `# 媒体数据面免费工程验证\n\n输入 ${bytes / 1024 ** 2} MiB，SHA-256 ${expected.sha256}。\n\n${report.checks.map((check) => `- 通过：${check}`).join('\n')}\n\nNode RSS 峰值 ${(peak / 1024 ** 2).toFixed(1)} MiB。本轮未发起模型或供应商请求；不等同于真实音乐成品验收。测试对象、文件与容器在 finally 回收。\n`,
   );
   console.log(
     `媒体基础验证通过：${bytes / 1024 ** 2} MiB，RSS 峰值 ${(peak / 1024 ** 2).toFixed(1)} MiB，${report.checks.length} 项；报告 ${output}`,

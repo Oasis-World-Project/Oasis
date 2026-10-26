@@ -13,6 +13,7 @@ describe('场景经验手册', () => {
       'images',
       'marketing',
       'synthetic-data',
+      'video',
       'web-apps',
     ]);
     expect(list.find((p) => p.key === 'images')).toMatchObject({ name: '图片类' });

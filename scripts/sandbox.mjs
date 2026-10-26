@@ -27,6 +27,9 @@ if (command === 'build') {
       ...(process.env.SANDBOX_PIP_INDEX_URL
         ? ['--secret', 'id=pip_index,env=SANDBOX_PIP_INDEX_URL']
         : []),
+      ...(process.env.SANDBOX_NPM_REGISTRY
+        ? ['--secret', 'id=npm_registry,env=SANDBOX_NPM_REGISTRY']
+        : []),
       '.',
     ],
     { cwd: root, stdio: 'inherit' },

@@ -22,14 +22,16 @@ const EventsQuery = z.object({
 });
 
 export function registerRoutes(app: ServiceApp, runs: RunService, previews?: PreviewService): void {
-  app.post('/internal/runs/:runId/audio-check', async (request) => {
-    const { runId } = parseWith(RunParams, request.params);
-    const { payerId, taskId } = parseWith(
-      z.object({ payerId: z.uuid(), taskId: z.uuid() }),
-      request.body,
-    );
-    return runs.audioCheck(runId, payerId, taskId);
-  });
+  for (const kind of ['audio', 'video'] as const) {
+    app.post(`/internal/runs/:runId/${kind}-check`, async (request) => {
+      const { runId } = parseWith(RunParams, request.params);
+      const { payerId, taskId } = parseWith(
+        z.object({ payerId: z.uuid(), taskId: z.uuid() }),
+        request.body,
+      );
+      return runs[`${kind}Check`](runId, payerId, taskId);
+    });
+  }
   if (previews) {
     app.post('/internal/runs/:runId/application-check', async (request) => {
       const { runId } = parseWith(RunParams, request.params);

@@ -345,6 +345,44 @@ const base = {
 };
 
 describe('一次 agent 运行', () => {
+  it('视频报告必须绑定归档摘要及归属；篡改摘要或缺少报告均保持未检查', async () => {
+    const taskId = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
+    const run = await service.start({ ...base, taskId, prompt: '做一次' });
+    const row = await finished(run.id);
+    const sha256 = 'a'.repeat(64);
+    rows.set(run.id, { ...row, outputs: [{ path: 'final.mp4', size: 5, sha256 }] });
+    const key = `runs/${run.id}/video-check.json`;
+    expect(await service.videoCheck(run.id, PAYER, taskId)).toEqual({
+      files: [],
+      unchecked: ['final.mp4'],
+    });
+    stored.set(
+      key,
+      Buffer.from(
+        JSON.stringify({
+          files: [{ path: 'final.mp4', size: 5, sha256, valid: true, width: 1280, height: 720 }],
+          unchecked: [],
+        }),
+      ),
+    );
+    expect((await service.videoCheck(run.id, PAYER, taskId)).files[0]?.width).toBe(1280);
+    await expect(service.videoCheck(run.id, PAYER, PAYER)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    stored.set(
+      key,
+      Buffer.from(
+        JSON.stringify({
+          files: [{ path: 'final.mp4', size: 5, sha256: 'b'.repeat(64), valid: true }],
+          unchecked: [],
+        }),
+      ),
+    );
+    expect(await service.videoCheck(run.id, PAYER, taskId)).toEqual({
+      files: [],
+      unchecked: ['final.mp4'],
+    });
+  });
   it('跑完：签发 Key → 起沙箱 → 交任务 → 收产出和会话存档 → 销毁沙箱、作废 Key → 发事件', async () => {
     const run = await service.start({
       ...base,

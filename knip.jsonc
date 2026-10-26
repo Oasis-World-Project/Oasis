@@ -20,7 +20,7 @@
         "sandbox/oasis-tool.ts",
         "src/service/file-inspection-worker.ts",
         "preview/controller.mjs",
-        "media/audio-check.mjs",
+        "media/media-check.mjs",
       ],
     },
     "services/canvas": {

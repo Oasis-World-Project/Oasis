@@ -98,4 +98,5 @@ docs/       工程方向、架构决策记录（ADR）
 | `pnpm infra:ps` / `pnpm infra:down` | 查看 / 停止全部容器 |
 | `pnpm sandbox:build` | 构建 agent 沙箱镜像（dsh 版本锁定在镜像标签里） |
 | `pnpm sandbox:check` | 在断网、2 核、2 GB 临时容器中验收文档转换、公式重算和软件清单，不调用模型 |
+| `pnpm media:smoke` / `pnpm video:smoke` | 免费验证大文件传输 / 视频剪辑、MLT 渲染、工程移动与打包；均不调用模型供应商 |
 | `pnpm stack:up` / `pnpm stack:logs` | 容器里跑全套 / 看日志 |

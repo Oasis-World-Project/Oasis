@@ -189,6 +189,31 @@ async function wait(id: string, out: string | undefined): Promise<void> {
   }
 }
 
+async function localImages(paths: unknown): Promise<{ mediaType: string; base64: string }[]> {
+  if (
+    !Array.isArray(paths) ||
+    paths.length < 1 ||
+    paths.length > 4 ||
+    paths.some((p) => typeof p !== 'string')
+  )
+    throw new Error('请提供 1–4 个图片路径');
+  let total = 0;
+  const images = [];
+  for (const path of paths as string[]) {
+    const mediaType = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp',
+    }[extname(path).toLowerCase()];
+    if (!mediaType) throw new Error('图片只支持 PNG、JPEG、WebP');
+    total += (await stat(path)).size;
+    if (total > 20 * 1024 * 1024) throw new Error('图片总大小超过 20 MiB');
+    images.push({ mediaType, base64: (await readFile(path)).toString('base64') });
+  }
+  return images;
+}
+
 async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
   if (key === 'audio.music' && args.lyrics_file !== undefined) {
@@ -196,6 +221,11 @@ async function run(key: string, argv: string[]): Promise<void> {
       throw new Error('歌词文件超过上限');
     args.lyrics = await readFile(args.lyrics_file, 'utf8');
     delete args.lyrics_file;
+  }
+  if (key === 'video.generate' && args.first_frame !== undefined) {
+    if (typeof args.first_frame !== 'string') throw new Error('--first_frame 需要一个本地图片路径');
+    // 编码在幂等键计算前完成：同一路径换了图片也不能取回旧视频。
+    args.first_frame = await localImages([args.first_frame]);
   }
   const forceNew = args.new === 'true';
   delete args.new;
@@ -253,29 +283,8 @@ async function run(key: string, argv: string[]): Promise<void> {
   const paths =
     key === 'image.generate' ? args.ref : key === 'image.inspect' ? args.images : undefined;
   if (paths !== undefined) {
-    if (
-      !Array.isArray(paths) ||
-      paths.length < 1 ||
-      paths.length > 4 ||
-      paths.some((p) => typeof p !== 'string')
-    )
-      throw new Error('请提供 1–4 个图片路径');
-    let total = 0;
-    const images = [];
-    for (const path of paths as string[]) {
-      const mediaType = {
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.webp': 'image/webp',
-      }[extname(path).toLowerCase()];
-      if (!mediaType) throw new Error('图片只支持 PNG、JPEG、WebP');
-      total += (await stat(path)).size;
-      if (total > 20 * 1024 * 1024) throw new Error('图片总大小超过 20 MiB');
-      images.push({ mediaType, base64: (await readFile(path)).toString('base64') });
-    }
     delete args.ref;
-    args[key === 'image.generate' ? 'references' : 'images'] = images;
+    args[key === 'image.generate' ? 'references' : 'images'] = await localImages(paths);
   }
   if (key === 'web.fetch' && out) args.format = 'files';
   if (file) {

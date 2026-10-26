@@ -19,11 +19,22 @@ export interface ModelPrice {
   completion: number;
 }
 
+const VideoModel = z.looseObject({
+  id: z.string(),
+  supported_durations: z.array(z.number()).nullable().optional(),
+  supported_resolutions: z.array(z.string()).nullable().optional(),
+  supported_aspect_ratios: z.array(z.string()).nullable().optional(),
+  supported_frame_images: z.array(z.string()).nullable().optional(),
+  pricing_skus: z.record(z.string(), z.string()).nullable().optional(),
+});
+type VideoModel = z.infer<typeof VideoModel>;
+
 export interface ProviderClient {
   readonly configured: boolean;
   listPrices(): Promise<Map<string, ModelPrice>>;
   /** 所有支持参考图的端点中，最保守的参考图数量上限；未知或不支持返回 0。 */
   imageReferenceLimit(model: string): Promise<number>;
+  listVideoModels(): Promise<VideoModel[]>;
   chatCompletions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   decisions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   images(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
@@ -62,6 +73,12 @@ export function createOpenRouterClient(options: {
     });
   return {
     configured: Boolean(options.apiKey),
+
+    async listVideoModels() {
+      const response = await get(`${base}/videos/models`, 15_000);
+      if (!response.ok) throw new Error(`读取视频能力失败：${response.status}`);
+      return z.object({ data: z.array(VideoModel) }).parse(await response.json()).data;
+    },
 
     async imageReferenceLimit(model) {
       const slug = model.split('/').map(encodeURIComponent).join('/');

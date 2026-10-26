@@ -88,6 +88,27 @@ fake.post('/api/v1/audio/transcriptions', async (request) => {
 /** 假的视频接口：前 videoPolls 次查询还在做，之后按 videoEnd 结束 */
 let videoPolls = 0;
 let videoEnd: 'completed' | 'failed' = 'completed';
+let videoUsageCost: number | undefined = 0.5;
+let videoFramesSupported = true;
+let videoCentsPerSecond = '5';
+let videoUsdTariff = true;
+fake.get('/api/v1/videos/models', async () => ({
+  data: [
+    {
+      id: 'alibaba/wan-2.7',
+      supported_durations: Array.from({ length: 20 }, (_, i) => i + 1),
+      supported_resolutions: ['480p', '720p', '1080p'],
+      supported_aspect_ratios: ['16:9', '9:16'],
+      supported_frame_images: videoFramesSupported ? ['first_frame'] : [],
+      pricing_skus: {
+        ...(videoUsdTariff
+          ? { duration_seconds_720p: String(Number(videoCentsPerSecond) / 100) }
+          : { cents_per_video_output_second_720p: videoCentsPerSecond }),
+        cents_per_image_input: '1',
+      },
+    },
+  ],
+}));
 fake.post('/api/v1/videos', async (request, reply) => {
   record('video', request.body);
   return reply
@@ -100,7 +121,11 @@ fake.get('/api/v1/videos/:id', async () => {
     return { id: 'vid-1', status: 'in_progress' };
   }
   return videoEnd === 'completed'
-    ? { id: 'vid-1', status: 'completed', usage: { cost: 0.5 } }
+    ? {
+        id: 'vid-1',
+        status: 'completed',
+        ...(videoUsageCost === undefined ? {} : { usage: { cost: videoUsageCost } }),
+      }
     : { id: 'vid-1', status: 'failed', error: '内容不合规' };
 });
 fake.get('/api/v1/videos/:id/content', async (_request, reply) =>
@@ -310,6 +335,10 @@ beforeEach(() => {
   pageText = '# 正文';
   videoPolls = 0;
   videoEnd = 'completed';
+  videoUsageCost = 0.5;
+  videoFramesSupported = true;
+  videoCentsPerSecond = '5';
+  videoUsdTariff = true;
   jobRows.clear();
   tools = build('tvly-k');
 });
@@ -555,6 +584,61 @@ describe('长任务（视频）', () => {
   const job = (id: string, payerId = PAYER) =>
     tools.job({ payerId, taskId: TASK }, id, new AbortController().signal);
 
+  it('供应商不回费用时使用持久化的时长/模型报价，重建服务不会变成固定短镜头价格', async () => {
+    videoUsageCost = undefined;
+    const submitted = await call('video.generate', { prompt: 'x', duration: 20 }, TASK);
+    const id = submitted.job!.id;
+    expect(jobRows.get(id)?.call.videoEstimateMicro).toBe(1_000_000);
+    // 之后目录变价也不改变原报价；新的工具服务只从同一持久作业取回结果。
+    videoCentsPerSecond = '20';
+    tools = build('tvly-k');
+    const done = await job(id);
+    expect(done.result?.costMicro).toBe(1_000_000);
+    expect(billingCalls.at(-1)?.body.costMicro).toBe(1_000_000);
+    await job(id);
+    expect(billingCalls.filter((x) => x.path === 'settle')).toHaveLength(1);
+  });
+
+  it('私有首帧以内联图像传给供应商；不支持时在冻结前拒绝，不能退化为文生视频', async () => {
+    const base64 = Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001', 'hex').toString(
+      'base64',
+    );
+    const args = {
+      prompt: '保持原商品，镜头缓慢推进',
+      first_frame: [{ mediaType: 'image/png', base64 }],
+    };
+    videoFramesSupported = false;
+    expect((await errorOf(call('video.generate', args)))?.code).toBe(
+      'video_parameters_unsupported',
+    );
+    expect(billingCalls).toHaveLength(0);
+    expect(upstream).toHaveLength(0);
+    videoFramesSupported = true;
+    const result = await call('video.generate', args, TASK);
+    expect(result.job).toBeDefined();
+    expect(upstream[0]?.body.frame_images).toEqual([
+      {
+        type: 'image_url',
+        frame_type: 'first_frame',
+        image_url: { url: `data:image/png;base64,${base64}` },
+      },
+    ]);
+  });
+
+  it('参数和价格预检失败不冻结；高价模型冻结覆盖实时目录而非固定单价', async () => {
+    expect((await errorOf(call('video.generate', { prompt: 'x', duration: 21 })))?.statusCode).toBe(
+      400,
+    );
+    expect((await errorOf(call('video.generate', { prompt: 'x', resolution: '768p' })))?.code).toBe(
+      'video_parameters_unsupported',
+    );
+    expect(billingCalls).toHaveLength(0);
+    videoCentsPerSecond = '50';
+    videoUsdTariff = false;
+    await call('video.generate', { prompt: 'x', duration: 6 });
+    expect(billingCalls[0]?.body.amountMicro).toBe(3_000_000);
+  });
+
   it('提交时冻结（留够时间）并交回任务号；做好前是 pending；做好后按实际花费结算一次', async () => {
     videoPolls = 1;
     const submitted = await call('video.generate', { prompt: '木屋的清晨', duration: '6' }, TASK);
@@ -562,7 +646,7 @@ describe('长任务（视频）', () => {
     expect(submitted).toMatchObject({ tool: 'video.generate', costMicro: 0, files: [] });
     expect(upstream[0]).toEqual({
       path: 'video',
-      body: { model: 'alibaba/wan-2.7', prompt: '木屋的清晨', duration: 6 },
+      body: { model: 'alibaba/wan-2.7', prompt: '木屋的清晨', duration: 6, resolution: '720p' },
     });
     expect(billingCalls[0]?.body).toMatchObject({ amountMicro: 1_500_000, ttlMs: 40 * 60_000 });
 
