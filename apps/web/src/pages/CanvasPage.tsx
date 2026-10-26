@@ -30,15 +30,28 @@ export function CanvasPage() {
   const [search, setSearch] = useState('');
 
   const keyword = search.trim().toLowerCase();
-  const matching = useMemo(
-    () =>
-      (artifacts ?? []).filter(
-        (a) =>
-          !keyword ||
-          [a.name, a.taskTitle, a.deliverable].some((text) => text.toLowerCase().includes(keyword)),
-      ),
-    [artifacts, keyword],
-  );
+  const matching = useMemo(() => {
+    const all = artifacts ?? [];
+    const apps = all.filter((item) => item.application);
+    const parentOf = (item: (typeof all)[number]) =>
+      apps.find(
+        (app) =>
+          app.id !== item.id &&
+          app.taskId === item.taskId &&
+          app.nodeId === item.nodeId &&
+          item.path.startsWith(`${app.application!.root}/`),
+      );
+    return all.filter((item) => {
+      const parent = parentOf(item);
+      if (parent) return false;
+      if (!keyword) return true;
+      const own = [item.name, item.taskTitle, item.deliverable];
+      const members = item.application
+        ? all.filter((file) => parentOf(file)?.id === item.id).map((file) => file.path)
+        : [];
+      return [...own, ...members].some((text) => text.toLowerCase().includes(keyword));
+    });
+  }, [artifacts, keyword]);
   const shown = category === 'all' ? matching : matching.filter((a) => a.category === category);
   const taskTitle = task ? artifacts?.[0]?.taskTitle : undefined;
 

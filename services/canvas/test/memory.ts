@@ -46,6 +46,13 @@ export function memoryArtifacts(): ArtifactsRepo & { rows: Artifact[] } {
       return true;
     },
     find: async (id) => rows.find((r) => r.id === id),
+    async setApplication(id, spec) {
+      const row = rows.find((r) => r.id === id);
+      if (row) {
+        row.appSpec = spec;
+        row.category = 'app';
+      }
+    },
     list: async (ownerId, filter, limit) =>
       rows
         .filter(

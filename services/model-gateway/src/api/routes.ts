@@ -127,6 +127,20 @@ export function registerRoutes(
   );
 
   /** 算力（harness 用）：开沙箱前冻结，销毁后按实际时长结算 */
+  app.get('/internal/v1/compute/quote', async (request) => {
+    const { cores, maxMs } = parseWith(
+      z.object({
+        cores: z.coerce.number().positive().max(64),
+        maxMs: z.coerce
+          .number()
+          .int()
+          .positive()
+          .max(24 * 3600_000),
+      }),
+      request.query,
+    );
+    return services.compute.quote(cores, maxMs);
+  });
   app.post('/internal/v1/compute', async (request, reply) => {
     const body = parseWith(ComputeHoldBody, request.body);
     return reply.code(201).send(await services.compute.hold({ ...body, requestId: request.id }));
@@ -135,6 +149,10 @@ export function registerRoutes(
     const { callId } = parseWith(CallIdParams, request.params);
     await services.compute.settle(callId, parseWith(ComputeSettleBody, request.body));
     return reply.code(204).send();
+  });
+  app.get('/internal/v1/compute/:callId', async (request) => {
+    const { callId } = parseWith(CallIdParams, request.params);
+    return services.compute.outcome(callId);
   });
 
   /** 在当前网络用不了的模型（task 的规划员挑模型时排除它们） */

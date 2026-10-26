@@ -60,6 +60,7 @@ await startService({
         uploads: createUploadService({ repo: createUploadsRepo(resources.postgres.pool), store }),
         artifacts,
         store,
+        harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 60_000 }),
       },
       {
         maxBytes: config.UPLOAD_MAX_BYTES,

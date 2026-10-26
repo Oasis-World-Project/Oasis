@@ -50,4 +50,20 @@ describe('最终文件清单', () => {
     );
     expect(deliveryManifest(selected, nodes)).toHaveLength(1);
   });
+  it('应用目录的 ** 交付嵌套资源，单星号不会越过目录', () => {
+    const outputs = [
+      { path: 'site/oasis-app.json', size: 50 },
+      { path: 'site/index.html', size: 100 },
+      { path: 'site/assets/js/game.js', size: 200 },
+      { path: 'other/secret.txt', size: 9 },
+    ];
+    const appNode = { ...node(['site/**']), outputs } as Node;
+    expect(selectDeliverables(deliverables, [appNode])[0]?.files?.map((f) => f.path)).toEqual(
+      outputs.slice(0, 3).map((f) => f.path),
+    );
+    expect(filesForInspection(outputs, [], ['site/*']).map((f) => f.path)).toEqual([
+      'site/oasis-app.json',
+      'site/index.html',
+    ]);
+  });
 });

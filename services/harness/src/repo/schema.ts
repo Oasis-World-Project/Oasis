@@ -1,6 +1,15 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
 import type { RunEventKind, RunOutputFile, RunStatus } from '@oasis/contracts/harness';
-import { integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
@@ -45,4 +54,25 @@ export const outbox = pgTable('outbox', {
   payload: jsonb('payload').notNull(),
   createdAt: at('created_at').notNull().defaultNow(),
   publishedAt: at('published_at'),
+});
+
+/** 交付后可重复开启的临时浏览器，不是 agent run。 */
+export const previewSessions = pgTable('preview_sessions', {
+  id: uuid('id').primaryKey(),
+  artifactId: uuid('artifact_id').notNull(),
+  ownerId: uuid('owner_id').notNull(),
+  taskId: uuid('task_id').notNull(),
+  status: text('status')
+    .$type<'starting' | 'running' | 'stopping' | 'stopped' | 'expired' | 'failed'>()
+    .notNull(),
+  containerId: text('container_id'),
+  computeCallId: uuid('compute_call_id'),
+  heldMicro: bigint('held_micro', { mode: 'number' }).notNull().default(0),
+  spentMicro: bigint('spent_micro', { mode: 'number' }),
+  startedAt: at('started_at'),
+  lastInputAt: at('last_input_at'),
+  deadlineAt: at('deadline_at').notNull(),
+  stoppedAt: at('stopped_at'),
+  error: text('error'),
+  createdAt: at('created_at').notNull().defaultNow(),
 });

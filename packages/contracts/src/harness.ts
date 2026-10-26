@@ -156,3 +156,64 @@ export const RunInspectBody = z.object({
   paths: z.array(z.string().min(1).max(500)).max(1000),
   maxChars: z.number().int().min(1).max(50_000).default(8000),
 });
+
+/** 运行结束后独立开启的私有预览；应用脚本只在服务端运行。 */
+export const PreviewSessionBody = z.object({
+  id: z.uuid(),
+  artifactId: z.uuid(),
+  status: z.enum(['starting', 'running', 'stopping', 'stopped', 'expired', 'failed']),
+  heldMicro: z.number().int().nonnegative(),
+  spentMicro: z.number().int().nonnegative().nullable(),
+  startedAt: z.iso.datetime().nullable(),
+  deadlineAt: z.iso.datetime(),
+  error: z.string().nullable(),
+});
+export type PreviewSessionBody = z.infer<typeof PreviewSessionBody>;
+
+export const PreviewStartBody = z.object({
+  artifactId: z.uuid(),
+  ownerId: z.uuid(),
+  taskId: z.uuid(),
+});
+export const PreviewInputBody = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('pointer'),
+    x: z.number().int().min(0).max(1279),
+    y: z.number().int().min(0).max(719),
+    action: z.enum(['move', 'down', 'up']),
+  }),
+  z.object({
+    kind: z.literal('key'),
+    key: z.string().min(1).max(32),
+    action: z.enum(['down', 'up']),
+  }),
+  z.object({
+    kind: z.literal('scroll'),
+    x: z.number().int().min(0).max(1279),
+    y: z.number().int().min(0).max(719),
+    deltaY: z.number().int().min(-1000).max(1000),
+  }),
+]);
+export type PreviewInputBody = z.infer<typeof PreviewInputBody>;
+
+export const PreviewFrameBody = z.object({
+  jpegBase64: z.string().max(2 * 1024 * 1024),
+  seq: z.number().int().nonnegative(),
+});
+export const PreviewAudioBody = z.object({
+  chunks: z
+    .array(
+      z.object({ seq: z.number().int().nonnegative(), webmBase64: z.string().max(128 * 1024) }),
+    )
+    .max(20),
+});
+export const PreviewQuoteBody = z.object({
+  maxMicro: z.number().int().nonnegative(),
+  maxMs: z.number().int().positive(),
+  idleMs: z.number().int().positive(),
+});
+export const ApplicationCheckResult = z.object({
+  passed: z.boolean(),
+  reason: z.string().nullable(),
+  frameCaptured: z.boolean(),
+});

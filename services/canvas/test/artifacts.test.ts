@@ -2,7 +2,7 @@
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import { unzipSync, strFromU8 } from 'fflate';
 import type { TaskStatusChangedData } from '@oasis/contracts/events';
-import { createService, createServiceClient } from '@oasis/service-kit';
+import { createService, createServiceClient, type ServiceClient } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -153,6 +153,9 @@ beforeEach(async () => {
             }),
             artifacts: service,
             store,
+            harness: {
+              json: async () => ({ maxMicro: 500, maxMs: 60_000, idleMs: 20_000 }),
+            } as unknown as ServiceClient,
           },
           { maxBytes: 1024 },
         ),
@@ -177,6 +180,59 @@ const get = (url: string, headers: Record<string, string> = {}, user = KAI) =>
   app.inject({ url, headers: { [OASIS_HEADERS.userId]: user, ...headers } });
 
 describe('任务完成时登记成果', () => {
+  it('仅同节点最终文件可组成应用，重放补齐描述且按属主取离线包', async () => {
+    files['site/oasis-app.json'] = JSON.stringify({
+      version: 1,
+      kind: 'static',
+      root: 'site',
+      entry: 'index.html',
+    });
+    files['site/index.html'] = '<!doctype html><title>测试</title>';
+    files['site/assets/game.js'] = 'document.title = "运行"';
+    finalFiles = ['site/oasis-app.json', 'site/index.html', 'site/assets/game.js'].map((path) => ({
+      deliverable: '应用',
+      nodeId: COPY,
+      path,
+      size: files[path]!.length,
+    }));
+    await service.onTaskStatus(event(T1));
+    const manifest = repo.rows.find((row) => row.path === 'site/oasis-app.json')!;
+    expect(manifest.category).toBe('app');
+    expect(manifest.appSpec?.entry).toBe('index.html');
+    expect((await service.application(KAI, manifest.id)).files.map((file) => file.path)).toEqual([
+      'oasis-app.json',
+      'index.html',
+      'assets/game.js',
+    ]);
+    await expect(service.application(MIA, manifest.id)).rejects.toThrow();
+    expect((await get(`/v1/artifacts/${manifest.id}/preview/quote`)).statusCode).toBe(200);
+    expect((await get(`/v1/artifacts/${manifest.id}/preview/quote`, {}, MIA)).statusCode).toBe(404);
+    manifest.appSpec = null;
+    await service.onTaskStatus(event(T1));
+    expect(repo.rows.find((row) => row.id === manifest.id)?.appSpec).toMatchObject({
+      root: 'site',
+    });
+  });
+  it('含隐藏文件的运行包不登记为应用，不能启动预览', async () => {
+    files['site/oasis-app.json'] = JSON.stringify({
+      version: 1,
+      kind: 'static',
+      root: 'site',
+      entry: 'index.html',
+    });
+    files['site/index.html'] = '<!doctype html><title>测试</title>';
+    files['site/.env'] = 'PRIVATE=sample';
+    finalFiles = ['site/oasis-app.json', 'site/index.html', 'site/.env'].map((path) => ({
+      deliverable: '应用',
+      nodeId: COPY,
+      path,
+      size: files[path]!.length,
+    }));
+    await service.onTaskStatus(event(T2));
+    const manifest = repo.rows.find((row) => row.path === 'site/oasis-app.json')!;
+    expect(manifest.appSpec).toBeNull();
+    expect((await get(`/v1/artifacts/${manifest.id}/preview/quote`)).statusCode).toBe(422);
+  });
   it('打包只包含自己的最终成果，ZIP 路径与桌面同步一致；超限或穿越拒绝', async () => {
     await service.onTaskStatus(event(T1));
     const response = await get(`/v1/tasks/${T1}/archive`);

@@ -12,6 +12,7 @@ describe('场景经验手册', () => {
       'images',
       'marketing',
       'synthetic-data',
+      'web-apps',
     ]);
     expect(list.find((p) => p.key === 'images')).toMatchObject({ name: '图片类' });
     for (const p of list) expect(p.when.length).toBeGreaterThan(5);

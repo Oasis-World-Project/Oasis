@@ -11,6 +11,7 @@ export interface ArtifactsRepo {
   /** 已经登记过（同一个任务、节点、路径）就什么也不做，返回 false */
   insert(artifact: NewArtifact): Promise<boolean>;
   find(id: string): Promise<Artifact | undefined>;
+  setApplication(id: string, spec: Artifact['appSpec']): Promise<void>;
   list(
     ownerId: string,
     filter: { category?: ArtifactCategory; taskId?: string },
@@ -37,6 +38,12 @@ export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
     async find(id) {
       const [row] = await db.select().from(artifacts).where(eq(artifacts.id, id));
       return row;
+    },
+    async setApplication(id, spec) {
+      await db
+        .update(artifacts)
+        .set({ appSpec: spec, category: 'app' })
+        .where(eq(artifacts.id, id));
     },
     list: (ownerId, filter, limit) =>
       db

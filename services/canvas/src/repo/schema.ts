@@ -1,5 +1,5 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
-import type { ArtifactCategory } from '@oasis/contracts/canvas';
+import type { ApplicationSpec, ArtifactCategory } from '@oasis/contracts/canvas';
 import { bigint, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const uploads = pgTable('uploads', {
@@ -25,6 +25,7 @@ export const artifacts = pgTable('artifacts', {
   size: bigint('size', { mode: 'number' }).notNull(),
   contentType: text('content_type').notNull(),
   category: text('category').$type<ArtifactCategory>().notNull(),
+  appSpec: jsonb('app_spec').$type<ApplicationSpec>(),
   models: jsonb('models').$type<string[]>().notNull().default([]),
   objectKey: text('object_key').notNull(),
   syncPath: text('sync_path').notNull(),

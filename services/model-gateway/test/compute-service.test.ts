@@ -96,7 +96,29 @@ describe('算力计费', () => {
   });
 
   it('单价为 0：不冻结，也不用结算', async () => {
-    expect(await build(0).hold({ ...run, cores: 2, maxMs: 60_000 })).toEqual({ callId: null });
+    expect(await build(0).hold({ ...run, cores: 2, maxMs: 60_000 })).toEqual({
+      callId: null,
+      heldMicro: 0,
+    });
     expect(billingCalls).toHaveLength(0);
+  });
+  it('预览与浏览器关卡的调用类型单独标识', async () => {
+    const compute = build(15_000);
+    const preview = await compute.hold({
+      ...run,
+      requestId: 'preview',
+      cores: 2,
+      maxMs: 60_000,
+      purpose: 'preview',
+    });
+    expect(rows.get(preview.callId!)?.model).toBe('preview');
+    const check = await compute.hold({
+      ...run,
+      requestId: 'check',
+      cores: 2,
+      maxMs: 60_000,
+      purpose: 'application-check',
+    });
+    expect(rows.get(check.callId!)?.model).toBe('application-check');
   });
 });

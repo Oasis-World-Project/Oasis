@@ -8,7 +8,6 @@ const HOUR_MS = 3_600_000;
 /** 冻结比最长运行时间多留这么久，免得结算前就被自动退回 */
 const HOLD_MARGIN_MS = 10 * 60_000;
 /** 调用记录里的「模型」一栏 */
-const COMPUTE_MODEL = 'sandbox';
 
 export function createComputeService(deps: {
   meter: Meter;
@@ -21,6 +20,9 @@ export function createComputeService(deps: {
     Math.ceil((cores * ms * deps.pricePerCoreHourMicro) / HOUR_MS);
 
   return {
+    quote(cores: number, maxMs: number) {
+      return { maxMicro: cost(cores, maxMs) };
+    },
     async hold(input: {
       runId: string;
       payerId: string;
@@ -28,9 +30,11 @@ export function createComputeService(deps: {
       nodeId: string | null;
       cores: number;
       maxMs: number;
+      purpose?: 'run' | 'preview' | 'application-check';
       requestId: string;
-    }): Promise<{ callId: string | null }> {
-      if (deps.pricePerCoreHourMicro === 0) return { callId: null };
+    }): Promise<{ callId: string | null; heldMicro: number }> {
+      if (deps.pricePerCoreHourMicro === 0) return { callId: null, heldMicro: 0 };
+      const heldMicro = Math.max(1, cost(input.cores, input.maxMs));
       const call = await meter.hold({
         caller: {
           payerId: input.payerId,
@@ -39,12 +43,17 @@ export function createComputeService(deps: {
           ...(input.nodeId ? { nodeId: input.nodeId } : {}),
         },
         kind: 'compute',
-        model: COMPUTE_MODEL,
-        amountMicro: Math.max(1, cost(input.cores, input.maxMs)),
+        model:
+          input.purpose === 'preview'
+            ? 'preview'
+            : input.purpose === 'application-check'
+              ? 'application-check'
+              : 'sandbox',
+        amountMicro: heldMicro,
         requestId: input.requestId,
         ttlMs: input.maxMs + HOLD_MARGIN_MS,
       });
-      return { callId: call.id };
+      return { callId: call.id, heldMicro };
     },
 
     /** 按实际时长结算；已经结算过的不再结算 */
@@ -71,6 +80,11 @@ export function createComputeService(deps: {
         { costMicro: cost(input.cores, input.elapsedMs), source: 'estimate' },
         undefined,
       );
+    },
+    async outcome(callId: string) {
+      const row = await repo.get(callId);
+      if (row?.kind !== 'compute') throw new HttpError(404, 'call_not_found', '没有这次算力调用');
+      return { status: row.status, chargedMicro: row.chargedMicro };
     },
   };
 }

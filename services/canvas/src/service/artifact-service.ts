@@ -1,7 +1,7 @@
 // 成果（ADR 0007 §8）：任务完成时把负责交付物的节点交出的文件复制进画布；给前端列出、读取。
 import { randomUUID } from 'node:crypto';
 import { zipSync } from 'fflate';
-import type { ArtifactBody, ArtifactCategory } from '@oasis/contracts/canvas';
+import { ApplicationSpec, type ArtifactBody, type ArtifactCategory } from '@oasis/contracts/canvas';
 import type { TaskStatusChangedData } from '@oasis/contracts/events';
 import { TaskBody } from '@oasis/contracts/task';
 import {
@@ -21,6 +21,7 @@ const toBody = (row: Artifact): ArtifactBody => ({
   size: row.size,
   contentType: row.contentType,
   category: row.category,
+  application: row.appSpec,
   deliverable: row.deliverable,
   taskId: row.taskId,
   nodeId: row.nodeId,
@@ -72,7 +73,16 @@ function deliveredFiles(task: TaskBody): DeliveredFile[] {
   return files;
 }
 
-const LIST_LIMIT = 500;
+const LIST_LIMIT = 1000;
+const APP_MAX_FILES = 1000;
+const APP_MAX_BYTES = 100 * 1024 * 1024;
+
+function safeApplicationMember(path: string): boolean {
+  return (
+    /^[\p{L}\p{N}_.-]+(?:\/[\p{L}\p{N}_.-]+)*$/u.test(path) &&
+    path.split('/').every((part) => !part.startsWith('.'))
+  );
+}
 
 export function createArtifactService(deps: {
   repo: ArtifactsRepo;
@@ -102,9 +112,7 @@ export function createArtifactService(deps: {
       const existing = await repo.listByTask(event.taskId);
       const done = new Set(existing.map((a) => `${a.nodeId}/${a.path}`));
       const files = deliveredFiles(detail).filter((f) => !done.has(`${f.nodeId}/${f.path}`));
-      if (files.length === 0) return;
-
-      const dir = await taskDir(event, existing);
+      const dir = files.length ? await taskDir(event, existing) : '';
       const takenInDir = new Set(
         existing.map((a) => a.syncPath.slice(dir.length + 1).toLowerCase()),
       );
@@ -133,11 +141,45 @@ export function createArtifactService(deps: {
           size: content.length,
           contentType,
           category: categoryOf(file.path),
+          appSpec: null,
           models: file.models,
           objectKey,
           syncPath: `${dir}/${relative}`,
         });
         if (inserted) logger.info({ taskId: event.taskId, path: file.path }, '成果已登记进画布');
+      }
+      // 事件重投时还会执行：文件已经登记、应用描述尚未写入时可继续补齐。
+      const all = await repo.listByTask(event.taskId);
+      for (const manifest of all.filter((row) => row.name === 'oasis-app.json' && !row.appSpec)) {
+        if (manifest.size > 16_384) continue;
+        const raw = await store.get(manifest.objectKey);
+        if (raw.length > 16_384) continue;
+        let data: unknown;
+        try {
+          data = JSON.parse(raw.toString('utf8'));
+        } catch {
+          continue;
+        }
+        const parsed = ApplicationSpec.safeParse(data);
+        if (!parsed.success) continue;
+        const spec = parsed.data;
+        if (manifest.path !== `${spec.root}/oasis-app.json`) continue;
+        const members = all.filter(
+          (row) =>
+            row.ownerId === manifest.ownerId &&
+            row.nodeId === manifest.nodeId &&
+            row.path.startsWith(`${spec.root}/`) &&
+            row.size > 0,
+        );
+        if (
+          members.length > APP_MAX_FILES ||
+          members.reduce((sum, row) => sum + row.size, 0) > APP_MAX_BYTES ||
+          members.some((row) => !safeApplicationMember(row.path.slice(spec.root.length + 1)))
+        )
+          continue;
+        if (!members.some((row) => row.path === `${spec.root}/${spec.entry}` && row.size > 0))
+          continue;
+        await repo.setApplication(manifest.id, spec);
       }
     },
 
@@ -152,6 +194,38 @@ export function createArtifactService(deps: {
       const row = await repo.find(id);
       if (row?.ownerId !== ownerId) throw new HttpError(404, 'artifact_not_found', '没有这个成果');
       return row;
+    },
+
+    /** 只从同任务同节点、已登记的最终成果组装离线运行包。 */
+    async application(ownerId: string, id: string) {
+      const manifest = await this.get(ownerId, id);
+      if (!manifest.appSpec) throw new HttpError(422, 'not_application', '这个成果不是可运行应用');
+      const { root, entry } = manifest.appSpec;
+      const rows = (await repo.listByTask(manifest.taskId)).filter(
+        (row) =>
+          row.ownerId === ownerId &&
+          row.nodeId === manifest.nodeId &&
+          row.path.startsWith(`${root}/`) &&
+          row.size > 0,
+      );
+      if (
+        rows.length > APP_MAX_FILES ||
+        rows.reduce((sum, row) => sum + row.size, 0) > APP_MAX_BYTES
+      )
+        throw new HttpError(413, 'application_size', '应用文件超过运行上限');
+      if (!rows.some((row) => row.path === `${root}/${entry}`))
+        throw new HttpError(422, 'application_entry', '应用入口文件缺失');
+      const files = [];
+      for (const row of rows) {
+        const path = row.path.slice(root.length + 1);
+        if (!safeApplicationMember(path))
+          throw new HttpError(422, 'application_path', '应用文件路径不安全');
+        const content = await store.get(row.objectKey);
+        if (content.length !== row.size)
+          throw new HttpError(422, 'application_content', '应用文件大小不一致');
+        files.push({ path, contentBase64: content.toString('base64') });
+      }
+      return { spec: manifest.appSpec, files };
     },
 
     /** 和桌面同步使用完全相同的最终文件集合与 syncPath。 */

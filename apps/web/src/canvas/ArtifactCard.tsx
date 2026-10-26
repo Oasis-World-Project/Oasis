@@ -24,6 +24,13 @@ function Paper({ label }: { label: string }) {
 }
 
 function Thumb({ artifact }: { artifact: ArtifactBody }) {
+  if (artifact.application)
+    return (
+      <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-ink-muted">
+        <Globe size={34} aria-hidden="true" />
+        <span className="text-xs">可运行应用</span>
+      </span>
+    );
   const url = artifactContentUrl(artifact.id);
   const kind = previewKindOf(artifact.path);
   if (kind === 'image') {
@@ -95,13 +102,15 @@ export function ArtifactCard({
       <Link
         to="/canvas/artifacts/$artifactId"
         params={{ artifactId: artifact.id }}
-        aria-label={`打开 ${artifact.name}`}
+        aria-label={`打开 ${artifact.application ? artifact.application.root : artifact.name}`}
         className="relative block h-[168px] overflow-hidden rounded-[22px] bg-glass-strong oasis-dots"
       >
         <Thumb artifact={artifact} />
       </Link>
       <div className="flex min-w-0 flex-col gap-0.5 px-2">
-        <h3 className="m-0 truncate text-[14.5px] font-medium">{artifact.name}</h3>
+        <h3 className="m-0 truncate text-[14.5px] font-medium">
+          {artifact.application ? artifact.application.root : artifact.name}
+        </h3>
         <span className="truncate text-[12px] text-ink-muted">
           {artifact.taskTitle} · {artifact.deliverable} · {formatBytes(artifact.size)}
         </span>

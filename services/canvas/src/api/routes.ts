@@ -1,10 +1,19 @@
 // canvas 的接口。/v1/* 经 gateway 给前端（只能看自己的）；/internal/* 给 conversation 和 harness。
 import { ArtifactQuery, UploadLookupBody, UploadQuery } from '@oasis/contracts/canvas';
 import {
+  PreviewAudioBody,
+  PreviewFrameBody,
+  PreviewInputBody,
+  PreviewQuoteBody,
+  PreviewSessionBody,
+} from '@oasis/contracts/harness';
+import {
   fileResponseHeaders,
+  HttpError,
   parseWith,
   requireUserId,
   type ObjectStore,
+  type ServiceClient,
   type ServiceApp,
 } from '@oasis/service-kit';
 import { z } from 'zod';
@@ -22,14 +31,19 @@ const DownloadQuery = z.object({ download: z.enum(['0', '1']).default('0') });
 
 export function registerRoutes(
   app: ServiceApp,
-  services: { uploads: UploadService; artifacts: ArtifactService; store: ObjectStore },
+  services: {
+    uploads: UploadService;
+    artifacts: ArtifactService;
+    store: ObjectStore;
+    harness?: ServiceClient;
+  },
   options: {
     maxBytes: number;
     preview?: PreviewLimits;
     archive?: { bytes: number; files: number };
   },
 ): void {
-  const { uploads, artifacts, store } = services;
+  const { uploads, artifacts, store, harness } = services;
   const previewLimits = options.preview ?? defaultPreviewLimits;
   const preview = createPreviewService(previewLimits);
   let archiving = false;
@@ -79,6 +93,76 @@ export function registerRoutes(
     return sendStored(request, reply, store, { ...row, download: download === '1' });
   });
 
+  const previewAccess = async (userId: string, id: string) => {
+    const row = await artifacts.get(userId, id);
+    if (!row.appSpec) throw new HttpError(422, 'not_application', '不是可运行成果');
+    return { artifactId: row.id, ownerId: userId, taskId: row.taskId };
+  };
+  if (harness) {
+    app.get('/v1/artifacts/:id/preview/quote', async (request) => {
+      const { id } = parseWith(IdParams, request.params);
+      await previewAccess(requireUserId(request), id);
+      return harness.json('POST', '/internal/previews/quote', {
+        requestId: request.id,
+        body: {},
+        schema: PreviewQuoteBody,
+      });
+    });
+    app.post('/v1/artifacts/:id/preview', async (request) => {
+      const { id } = parseWith(IdParams, request.params);
+      return harness.json('POST', '/internal/previews', {
+        body: await previewAccess(requireUserId(request), id),
+        requestId: request.id,
+        schema: PreviewSessionBody,
+      });
+    });
+    app.get('/v1/artifacts/:id/preview', async (request) => {
+      const { id } = parseWith(IdParams, request.params);
+      return harness.json('POST', '/internal/previews/lookup', {
+        body: await previewAccess(requireUserId(request), id),
+        requestId: request.id,
+        schema: PreviewSessionBody.nullable(),
+      });
+    });
+    app.delete('/v1/artifacts/:id/preview', async (request) => {
+      const { id } = parseWith(IdParams, request.params);
+      return harness.json('POST', '/internal/previews/stop', {
+        body: await previewAccess(requireUserId(request), id),
+        requestId: request.id,
+        schema: PreviewSessionBody,
+      });
+    });
+    app.get('/v1/artifacts/:id/preview/frame', async (request) => {
+      const { id } = parseWith(IdParams, request.params);
+      return harness.json('POST', '/internal/previews/frame', {
+        body: await previewAccess(requireUserId(request), id),
+        requestId: request.id,
+        schema: PreviewFrameBody,
+      });
+    });
+    app.get('/v1/artifacts/:id/preview/audio', async (request) => {
+      const { id } = parseWith(IdParams, request.params);
+      const { afterSeq } = parseWith(
+        z.object({ afterSeq: z.coerce.number().int().min(-1).default(-1) }),
+        request.query,
+      );
+      return harness.json('POST', '/internal/previews/audio', {
+        body: { ...(await previewAccess(requireUserId(request), id)), afterSeq },
+        requestId: request.id,
+        schema: PreviewAudioBody,
+      });
+    });
+    app.post('/v1/artifacts/:id/preview/input', async (request) => {
+      const { id } = parseWith(IdParams, request.params);
+      const input = parseWith(PreviewInputBody, request.body);
+      await harness.json('POST', '/internal/previews/input', {
+        body: { ...(await previewAccess(requireUserId(request), id)), input },
+        requestId: request.id,
+      });
+      return { accepted: true };
+    });
+  }
+
   app.post('/v1/previews', { bodyLimit: previewLimits.inputBytes }, async (request, reply) => {
     requireUserId(request);
     const { name } = parseWith(UploadQuery, request.query);
@@ -124,5 +208,12 @@ export function registerRoutes(
     const { id } = parseWith(IdParams, request.params);
     const { row, content } = await uploads.internalContent(id);
     return reply.type(row.contentType).send(content);
+  });
+  app.post('/internal/applications/lookup', async (request) => {
+    const { ownerId, artifactId } = parseWith(
+      z.object({ ownerId: z.uuid(), artifactId: z.uuid() }),
+      request.body,
+    );
+    return artifacts.application(ownerId, artifactId);
   });
 }

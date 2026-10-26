@@ -5,7 +5,16 @@ import type { Deliverable } from '../repo/schema.ts';
 import type { Node } from '../repo/task-store.ts';
 
 export function patternRegExp(pattern: string): RegExp {
-  return new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}$`);
+  let source = '^';
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i]!;
+    if (char === '*' && pattern[i + 1] === '*') {
+      source += '.*';
+      i += 1;
+    } else if (char === '*') source += '[^/]*';
+    else source += /[.+?^${}()|[\]\\]/.test(char) ? `\\${char}` : char;
+  }
+  return new RegExp(`${source}$`);
 }
 
 /** 关卡只读取明确期望或交付的文件，过程脚本不能先耗尽正文额度。 */

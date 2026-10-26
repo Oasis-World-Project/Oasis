@@ -89,16 +89,24 @@ export const ComputeHoldBody = z.object({
     .int()
     .positive()
     .max(24 * 3600_000),
+  purpose: z.enum(['run', 'preview', 'application-check']).default('run'),
 });
 export type ComputeHoldBody = z.infer<typeof ComputeHoldBody>;
 
 /** 冻结的结果；算力单价为 0（不计费）时 callId 为 null，之后也不用结算 */
-export const ComputeHold = z.object({ callId: z.uuid().nullable() });
+export const ComputeHold = z.object({
+  callId: z.uuid().nullable(),
+  heldMicro: z.number().int().nonnegative().default(0),
+});
 
 /** 沙箱销毁后按实际时长结算 */
 export const ComputeSettleBody = z.object({
   cores: z.number().positive().max(64),
   elapsedMs: z.number().int().nonnegative(),
+});
+export const ComputeOutcome = z.object({
+  status: z.enum(['running', 'succeeded', 'failed']),
+  chargedMicro: z.number().int().nonnegative().nullable(),
 });
 
 // ---- 工具（ADR 0006）：生图、配音、转写、联网搜索、网页抓取、Jev 判断……都经 model-gateway 计量 ----

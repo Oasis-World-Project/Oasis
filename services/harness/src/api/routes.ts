@@ -1,8 +1,15 @@
 // harness 只有内部接口（gateway 不转发 /internal）：task 等服务用它启动运行、看进度、追问、停止、取消。
-import { RunInspectBody, RunMessageBody, StartRunBody } from '@oasis/contracts/harness';
+import {
+  PreviewInputBody,
+  PreviewStartBody,
+  RunInspectBody,
+  RunMessageBody,
+  StartRunBody,
+} from '@oasis/contracts/harness';
 import { parseWith, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { RunService } from '../service/run-service.ts';
+import type { PreviewService } from '../service/preview-service.ts';
 
 const RunParams = z.object({ runId: z.uuid() });
 const FileParams = RunParams.extend({ '*': z.string().min(1).max(500) });
@@ -14,7 +21,42 @@ const EventsQuery = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
 });
 
-export function registerRoutes(app: ServiceApp, runs: RunService): void {
+export function registerRoutes(app: ServiceApp, runs: RunService, previews?: PreviewService): void {
+  if (previews) {
+    app.post('/internal/runs/:runId/application-check', async (request) => {
+      const { runId } = parseWith(RunParams, request.params);
+      const { payerId, taskId } = parseWith(
+        z.object({ payerId: z.uuid(), taskId: z.uuid() }),
+        request.body,
+      );
+      return previews.checkRun({ runId, payerId, taskId });
+    });
+    app.post('/internal/previews/quote', async () => previews.quote());
+    app.post('/internal/previews', async (request) =>
+      previews.start(parseWith(PreviewStartBody, request.body)),
+    );
+    app.post('/internal/previews/lookup', async (request) =>
+      previews.current(parseWith(PreviewStartBody, request.body)),
+    );
+    app.post('/internal/previews/stop', async (request) =>
+      previews.stop(parseWith(PreviewStartBody, request.body)),
+    );
+    app.post('/internal/previews/frame', async (request) =>
+      previews.frame(parseWith(PreviewStartBody, request.body)),
+    );
+    app.post('/internal/previews/audio', async (request) => {
+      const body = parseWith(
+        PreviewStartBody.extend({ afterSeq: z.number().int().min(-1) }),
+        request.body,
+      );
+      return previews.audio(body, body.afterSeq);
+    });
+    app.post('/internal/previews/input', async (request) => {
+      const body = parseWith(PreviewStartBody.extend({ input: PreviewInputBody }), request.body);
+      await previews.input(body, body.input);
+      return { accepted: true };
+    });
+  }
   /** 启动一次运行：立即返回（202），运行在后台进行，结束时发出 harness.run.finished */
   app.post('/internal/runs', async (request, reply) => {
     const body = parseWith(StartRunBody, request.body);

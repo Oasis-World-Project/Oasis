@@ -18,6 +18,13 @@ export const harnessEnv = {
     .transform((value) => value || undefined),
   /** 沙箱镜像（dsh 版本锁定在镜像标签里） */
   SANDBOX_IMAGE: z.string().default('oasis/harness-sandbox-base:0.2.1-rc.2'),
+  PREVIEW_IMAGE: z.string().default('oasis/harness-preview:1.64.0'),
+  PREVIEW_CPUS: z.coerce.number().positive().max(8).default(2),
+  PREVIEW_MEMORY_MB: positiveInt.default(2048),
+  PREVIEW_PIDS_LIMIT: positiveInt.default(512),
+  PREVIEW_APP_PORT: positiveInt.max(65535).default(3180),
+  PREVIEW_MAX_MS: positiveInt.max(60 * 60_000).default(30 * 60_000),
+  PREVIEW_IDLE_MS: positiveInt.max(30 * 60_000).default(5 * 60_000),
   /** 沙箱所在的内部网络：不通外网，只能访问沙箱入口代理 */
   SANDBOX_NETWORK: z.string().default('oasis-sandbox'),
   /** 沙箱里的 dsh 调模型、oasis-tool 调工具用的地址（入口代理，只放行几条 /run/v1/* 路径） */

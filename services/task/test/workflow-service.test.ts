@@ -886,6 +886,18 @@ describe('花费', () => {
     service.onCallSettled({ callId, taskId, nodeId, chargedMicro });
   const CALL = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
 
+  it('完成后的预览结算只留在账本，不回写生成任务花费', async () => {
+    const task = await create(['A'], [], 1_000);
+    await service.onCallSettled({
+      callId: CALL(8),
+      taskId: task.id,
+      nodeId: null,
+      chargedMicro: 500,
+      model: 'preview',
+    });
+    expect((await service.get(OWNER, task.id)).spentMicro).toBe(0);
+  });
+
   it('结算事件累加到任务和节点（同一次调用只算一次）；超过预估 3 倍就停下所有节点问用户', async () => {
     const task = await create(['A', 'B'], [], 1_000);
     expect(task.budgetLimitMicro).toBe(3_000);

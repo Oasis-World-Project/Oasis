@@ -17,12 +17,16 @@ import { registerRoutes } from './api/routes.ts';
 import { harnessEnv } from './config.ts';
 import { createDockerApi, defaultDockerSocket } from './executor/docker-api.ts';
 import { createDockerExecutor, type Executor } from './executor/executor.ts';
+import { createPreviewExecutor } from './executor/preview-executor.ts';
+import { createPreviewRepo } from './repo/preview-repo.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
 import { createRunService, type RunService } from './service/run-service.ts';
+import { createPreviewService, type PreviewService } from './service/preview-service.ts';
 
 let executor: Executor;
 let store: ObjectStore;
 let runs: RunService | undefined;
+let previews: PreviewService | undefined;
 
 await startService({
   name: 'harness',
@@ -61,7 +65,10 @@ await startService({
     const sandboxes: ServiceResource = {
       name: 'sandboxes',
       ready: () => executor.check(),
-      close: async () => runs?.stopAll(),
+      close: async () => {
+        await previews?.close();
+        await runs?.stopAll();
+      },
     };
     return { postgres, eventBus, outbox, objectStore: objects.resource, sandboxes };
   },
@@ -104,8 +111,29 @@ await startService({
       serviceName: name,
       logger,
     });
-    registerRoutes(app, runs);
+    previews = createPreviewService({
+      repo: createPreviewRepo(resources.postgres.pool),
+      executor: createPreviewExecutor({
+        docker: createDockerApi(config.DOCKER_SOCKET ?? defaultDockerSocket()),
+        image: config.PREVIEW_IMAGE,
+        cpus: config.PREVIEW_CPUS,
+        memoryMb: config.PREVIEW_MEMORY_MB,
+        pidsLimit: config.PREVIEW_PIDS_LIMIT,
+        appPort: config.PREVIEW_APP_PORT,
+      }),
+      canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 60_000 }),
+      modelGateway: createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
+        timeoutMs: 10_000,
+      }),
+      logger,
+      runs,
+      cpus: config.PREVIEW_CPUS,
+      maxMs: config.PREVIEW_MAX_MS,
+      idleMs: config.PREVIEW_IDLE_MS,
+    });
+    registerRoutes(app, runs, previews);
     // 接管上次进程遗留的运行；Docker 暂时不可用也不阻止启动（/ready 会显示 sandboxes 失败）
     await runs.recover().catch((err: unknown) => logger.warn({ err }, '清理遗留运行失败'));
+    await previews.recover().catch((err: unknown) => logger.warn({ err }, '清理遗留预览失败'));
   },
 });

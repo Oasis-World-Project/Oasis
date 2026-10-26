@@ -44,6 +44,42 @@ export type Material = z.infer<typeof Material>;
 export const ArtifactCategory = z.enum(['doc', 'media', 'threed', 'app', 'data']);
 export type ArtifactCategory = z.infer<typeof ArtifactCategory>;
 
+/** out/<root>/oasis-app.json：只描述可运行文件，不允许产物指定命令或权限。 */
+const AppPath = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine(
+    (value) =>
+      value.split('/').every(
+        (part) =>
+          // Windows 同步路径和容器路径都必须安全；不接受隐式路径与 URL。
+          /^[\p{L}\p{N}_.-]+$/u.test(part) && !part.startsWith('.'),
+      ),
+    '应用路径不安全',
+  );
+export const ApplicationSpec = z
+  .object({
+    version: z.literal(1),
+    kind: z.enum(['static', 'node']),
+    root: AppPath,
+    entry: AppPath,
+  })
+  .refine(
+    (spec) =>
+      spec.kind === 'static' ? /\.html?$/i.test(spec.entry) : /\.[cm]?js$/i.test(spec.entry),
+    '应用入口类型不匹配',
+  );
+export type ApplicationSpec = z.infer<typeof ApplicationSpec>;
+export const ApplicationBundle = z.object({
+  spec: ApplicationSpec,
+  files: z
+    .array(z.object({ path: AppPath, contentBase64: z.string() }))
+    .min(2)
+    .max(1000),
+});
+export type ApplicationBundle = z.infer<typeof ApplicationBundle>;
+
 /**
  * 画布里的一个成果（ADR 0007 §8）：任务完成时，负责交付物的节点交出的一个文件，复制进画布。
  */
@@ -56,6 +92,8 @@ export const ArtifactBody = z.object({
   size: z.number().int().nonnegative(),
   contentType: z.string(),
   category: ArtifactCategory,
+  /** 只有经过完整交付文件检查的 oasis-app.json 才带这个字段。 */
+  application: ApplicationSpec.nullable().optional(),
   /** 属于任务单里的哪样交付物 */
   deliverable: z.string(),
   taskId: z.uuid(),

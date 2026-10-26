@@ -23,6 +23,8 @@
     "stack:logs": "node scripts/compose.mjs logs",
     "sandbox:build": "node scripts/sandbox.mjs build",
     "sandbox:check": "node scripts/sandbox.mjs check",
+    "preview:build": "node scripts/preview.mjs build",
+    "preview:smoke": "node scripts/preview.mjs smoke",
     "check:engineering": "node scripts/check-engineering.mjs",
     "cleanup": "node scripts/cleanup-task.mjs",
     "prepare": "lefthook install"

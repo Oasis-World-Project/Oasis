@@ -2,7 +2,7 @@
 // 1. 规则检查（不花钱）：out/ 里有产出；方案里写明的文件都在且不是空的。
 // 2. 验收点检查（Jev，几乎不花钱）：每条验收点问一个「是否满足」，概率低于阈值算没满足。
 // 检查本身出错（Jev 连不上等）就放行，不卡用户。
-import { RunTextsBody, type RunOutputFile } from '@oasis/contracts/harness';
+import { ApplicationCheckResult, RunTextsBody, type RunOutputFile } from '@oasis/contracts/harness';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import type { Logger, ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
@@ -247,16 +247,43 @@ export function createGate(deps: {
         input.expects,
       );
       // 规则没过就不用再问 Jev 了（连产出都没有，验收点无从谈起）
+      if (unmet.length > 0) return { unmet };
+      const unchecked: string[] = [];
+      if (input.nodeId)
+        for (const run of input.runs) {
+          if (!run.outputs.some((file) => file.path.endsWith('/oasis-app.json'))) continue;
+          try {
+            const result = await harness.json(
+              'POST',
+              `/internal/runs/${run.runId}/application-check`,
+              {
+                body: { payerId: input.payerId, taskId: input.taskId },
+                schema: ApplicationCheckResult,
+              },
+            );
+            if (!result.passed)
+              unmet.push(`浏览器实际运行检查失败：${result.reason ?? '原因未返回'}`);
+          } catch (err) {
+            logger.warn({ err, taskId: input.taskId, runId: run.runId }, '浏览器检查未完成');
+            unchecked.push('浏览器实际运行检查未完成');
+          }
+        }
       if (
         unmet.length > 0 ||
         (input.checks.length === 0 && input.expects.every((e) => typeof e === 'string'))
       )
-        return { unmet };
+        return { unmet, ...(unchecked.length ? { unchecked } : {}) };
       try {
-        return await checkPoints(input);
+        const semantic = await checkPoints(input);
+        return {
+          unmet: semantic.unmet,
+          ...(unchecked.length || semantic.unchecked?.length
+            ? { unchecked: [...unchecked, ...(semantic.unchecked ?? [])] }
+            : {}),
+        };
       } catch (err) {
         logger.warn({ err, taskId: input.taskId, nodeId: input.nodeId }, '验收点检查出错，放行');
-        return { unmet: [], unchecked: ['验收点检查服务异常，检查未完成'] };
+        return { unmet: [], unchecked: [...unchecked, '验收点检查服务异常，检查未完成'] };
       }
     },
   };

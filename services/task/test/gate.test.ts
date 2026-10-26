@@ -74,6 +74,39 @@ const input = {
 };
 
 describe('关卡的验收点检查', () => {
+  it('应用清单必须经过隔离浏览器打开；运行失败进入未满足项', async () => {
+    const harness = fakeClient((path) =>
+      path.endsWith('/application-check')
+        ? { passed: false, reason: '首页脚本报错', frameCaptured: true }
+        : { files: [], truncated: false },
+    );
+    const gate = createGate({
+      harness: harness.client,
+      modelGateway: fakeClient(() => ({})).client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    const result = await gate.check({
+      ...input,
+      checks: [],
+      expects: ['site/oasis-app.json'],
+      runs: [
+        {
+          runId: 'run-1',
+          summary: null,
+          outputs: [
+            { path: 'site/oasis-app.json', size: 50 },
+            { path: 'site/index.html', size: 100 },
+          ],
+        },
+      ],
+    });
+    expect(result.unmet).toEqual(['浏览器实际运行检查失败：首页脚本报错']);
+    expect(harness.calls.map((call) => call.path)).toEqual([
+      '/internal/runs/run-1/application-check',
+    ]);
+  });
   it.each([
     { name: '正文截断', files: [{ path: '介绍.md', text: '部分正文' }], truncated: true },
     { name: '内容缺失', files: [], truncated: false },

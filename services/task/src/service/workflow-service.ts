@@ -697,8 +697,12 @@ export function createWorkflowService(deps: {
      * 任务在跑、且花费超过上限时，停下所有在跑的节点，交给用户决定。
      */
     async onCallSettled(
-      data: Pick<CallSettledData, 'callId' | 'taskId' | 'nodeId' | 'chargedMicro'>,
+      data: Pick<CallSettledData, 'callId' | 'taskId' | 'nodeId' | 'chargedMicro'> & {
+        model?: string;
+      },
     ) {
+      // 成果预览在任务完成后单独付费；账单保留 taskId 关联，但不回写生成任务的花费。
+      if (data.model === 'preview') return;
       if (!(await store.get(data.taskId))) return;
       await transact(data.taskId, async (snapshot, w, fx) => {
         const node = data.nodeId ? snapshot.nodes.find((n) => n.id === data.nodeId) : undefined;
