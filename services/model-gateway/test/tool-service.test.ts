@@ -669,6 +669,9 @@ describe('音乐长任务', () => {
       )
     ).job!.id;
     expect(falCalls[0]?.input).toMatchObject({ is_instrumental: true, lyrics: '' });
+    expect(falCalls[0]?.input).toMatchObject({
+      audio_setting: { sample_rate: 44100, bitrate: 256000, format: 'mp3' },
+    });
     const done = await tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000));
     expect(done.status).toBe('completed');
     expect(done.result?.files[0]).toMatchObject({ id: '0', size: 8 });

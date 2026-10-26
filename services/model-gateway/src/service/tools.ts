@@ -549,7 +549,7 @@ export const TOOLS: ToolDef[] = [
             prompt: a.prompt,
             is_instrumental: a.instrumental,
             lyrics: a.instrumental ? '' : a.lyrics,
-            audio_setting: { sample_rate: '44100', bitrate: '256000', format: 'mp3' },
+            audio_setting: { sample_rate: 44100, bitrate: 256000, format: 'mp3' },
           },
           deps.signal,
         ),
