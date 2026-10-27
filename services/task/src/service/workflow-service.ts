@@ -36,7 +36,14 @@ import {
   requireNotStarted,
 } from './graph.ts';
 import { materialPaths } from './materials.ts';
-import { deliveryManifest, filesForInspection, selectDeliverables } from './output-files.ts';
+import {
+  deliveryManifest,
+  filesForInspection,
+  selectDeliverables,
+  missingDeliveryFiles,
+  selectedOutputFiles,
+  deliveryIntegrityChecks,
+} from './output-files.ts';
 import { nodeRow, planToRows, validatePlan } from './plan.ts';
 import { createPlanning, dollars, type PlanningConfig } from './planning-service.ts';
 import { decide } from './schedule.ts';
@@ -61,6 +68,7 @@ function toNodeBody(node: Node): NodeBody {
     goal: node.goal,
     model: node.model,
     checks: c.checks ?? [],
+    ...(c.gateChecks ? { gateChecks: c.gateChecks } : {}),
     expects: c.expects ?? [],
     ...(c.deliver === undefined ? {} : { deliver: c.deliver }),
     tools: c.tools ?? [],
@@ -277,6 +285,10 @@ export function createWorkflowService(deps: {
     const { sheet } = snapshot.task;
     const missing: string[] = [];
     const deliverables = selectDeliverables(task.deliverables, snapshot.nodes);
+    for (const owner of new Set(deliverables.map((d) => d.nodeId))) {
+      const node = snapshot.nodes.find((n) => n.id === owner);
+      if (node) missing.push(...missingDeliveryFiles(node.outputs, node.config.deliver));
+    }
     const runs = deliverables.flatMap((d) => {
       const node = snapshot.nodes.find((n) => n.id === d.nodeId);
       const runId = node?.config.outputsRunId;
@@ -287,7 +299,7 @@ export function createWorkflowService(deps: {
       }
       return [{ runId, summary: node.summary, outputs, label: d.name }];
     });
-    const { unmet, unchecked } =
+    const { unmet, unchecked, checks } =
       runs.length > 0
         ? await gate.check({
             payerId: task.payerId,
@@ -295,14 +307,29 @@ export function createWorkflowService(deps: {
             nodeId: null,
             goal: task.brief,
             runs,
-            checks: sheet.criteria,
+            checks: [
+              ...sheet.criteria,
+              ...deliveryIntegrityChecks(runs.flatMap((r) => r.outputs)),
+              ...(sheet.requirements ?? []).map((r) => ({
+                id: r.id,
+                text: r.text,
+                requirementIds: [r.id],
+                files: [],
+              })),
+            ],
             expects: [],
+            details: Boolean(sheet.requirements),
+            deliveryPaths: runs.flatMap((r) => r.outputs.map((f) => f.path)),
           })
         : { unmet: [], unchecked: undefined };
     await store.transact(taskId, async (fresh, w) => {
       if (fresh.task.status !== 'accepting') return;
       await w.setTask({
-        acceptance: { unmet: [...missing, ...unmet], ...(unchecked?.length ? { unchecked } : {}) },
+        acceptance: {
+          unmet: [...missing, ...unmet],
+          ...(unchecked?.length ? { unchecked } : {}),
+          ...(checks ? { checks } : {}),
+        },
         deliverables,
         status: 'succeeded',
         finishedAt: new Date(),
@@ -411,25 +438,39 @@ export function createWorkflowService(deps: {
     const snapshot = await store.get(taskId);
     const node = snapshot?.nodes.find((n) => n.id === nodeId);
     if (!snapshot || node?.status !== 'checking' || node.currentRunId !== runId) return;
-    const { unmet, unchecked } = await gate.check({
+    const delivery =
+      node.config.deliver === undefined
+        ? undefined
+        : selectedOutputFiles(node.outputs, node.config.deliver);
+    const { unmet, unchecked, checks } = await gate.check({
       payerId: snapshot.task.payerId,
       taskId,
       nodeId,
-      goal: node.goal,
+      goal: `${snapshot.task.brief}\n\n当前节点目标：${node.goal}`,
       runs: [
         {
           runId,
           summary: node.summary,
-          outputs: filesForInspection(node.outputs, node.config.expects ?? [], node.config.deliver),
+          outputs: filesForInspection(
+            node.outputs,
+            node.config.expects ?? [],
+            node.config.deliver,
+            node.config.checks,
+          ),
         },
       ],
-      checks: node.config.checks ?? [],
-      expects: node.config.expects ?? [],
+      checks: [
+        ...(node.config.checks ?? []),
+        ...(delivery ? deliveryIntegrityChecks(delivery) : []),
+      ],
+      expects: [...(node.config.expects ?? []), ...(node.config.deliver ?? [])],
+      ...(delivery ? { deliveryPaths: delivery.map((f) => f.path) } : {}),
     });
     await transact(taskId, async (fresh, w, fx) => {
       // 检查期间节点被停止、任务被取消：结果作废
       const current = fresh.nodes.find((n) => n.id === nodeId);
       if (current?.status !== 'checking' || current.currentRunId !== runId) return;
+      if (checks) await w.setNode(nodeId, { config: { ...current.config, gateChecks: checks } });
       if (unmet.length === 0) {
         await w.setNode(nodeId, {
           status: 'succeeded',

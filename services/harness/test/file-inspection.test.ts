@@ -1,4 +1,7 @@
 import { zipSync } from 'fflate';
+import { createHash } from 'node:crypto';
+import type { ServiceClient } from '@oasis/service-kit';
+import { createMaterialInspector } from '../src/service/material-inspection.ts';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { defaultInspectionLimits, inspectFiles } from '../src/service/file-inspection.ts';
@@ -49,6 +52,62 @@ function pdf(pages: number): Buffer {
 }
 
 describe('隔离文件解析', () => {
+  it('ZIP 从真实成员生成目录/摘要和说明，拒绝路径越界及 CRC 篡改', async () => {
+    const source = zipSync(
+      { '素材包/scripts/build.py': Buffer.from('print(1)'), 'README.md': Buffer.from('附带脚本') },
+      { level: 0 },
+    );
+    const result = await inspect([file('成果.zip', source)]);
+    expect(result.files[0]?.valid).toBe(true);
+    expect(result.files[0]?.text).toContain('素材包/scripts/build.py');
+    expect(result.files[0]?.text).toContain(createHash('sha256').update('print(1)').digest('hex'));
+    const unsafe = await inspect([
+      file('unsafe.zip', zipSync({ '../escape.txt': Buffer.from('x') })),
+    ]);
+    expect(unsafe.files[0]?.error).toContain('路径不安全');
+    const corrupt = Buffer.from(source);
+    const index = corrupt.indexOf(Buffer.from('print(1)'));
+    expect(index).toBeGreaterThan(0);
+    corrupt[index] = 120;
+    expect((await inspect([file('broken.zip', corrupt)])).files[0]?.error).toContain('CRC');
+  });
+  it('材料解析先查所有权，再有界读取并核对摘要；截断与图片元数据不冒充完整正文', async () => {
+    const id = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
+    const bytes = Buffer.from('预算按报价计算，另加10%');
+    let badHash = false;
+    let lookedUp = false;
+    const canvas = {
+      json: async (_method: string, _path: string, options: { body: { ownerId: string } }) => {
+        expect(options.body.ownerId).toBe(id);
+        lookedUp = true;
+        return {
+          uploads: [
+            {
+              id,
+              name: '事实.txt',
+              size: bytes.length,
+              sha256: badHash ? '0'.repeat(64) : createHash('sha256').update(bytes).digest('hex'),
+            },
+          ],
+        };
+      },
+      stream: async () => {
+        expect(lookedUp).toBe(true);
+        return new Response(bytes);
+      },
+    } as unknown as ServiceClient;
+    const inspector = createMaterialInspector(canvas, defaultInspectionLimits);
+    const complete = await inspector({ ownerId: id, ids: [id], maxChars: 300 });
+    expect(complete.files[0]).toMatchObject({ status: 'complete', text: bytes.toString('utf8') });
+    expect((await inspector({ ownerId: id, ids: [id], maxChars: 3 })).files[0]?.status).toBe(
+      'partial',
+    );
+    badHash = true;
+    expect((await inspector({ ownerId: id, ids: [id], maxChars: 300 })).files[0]).toMatchObject({
+      status: 'failed',
+      text: '',
+    });
+  });
   it('HTML 内嵌库不耗正文额度，保留可见文字、来源和受校验看板数据', async () => {
     const chart = {
       title: '看板',

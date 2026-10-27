@@ -737,7 +737,13 @@ export function createRunService(deps: {
             return;
           }
           if (size > limits.inputBytes) {
-            result.files.push({ path, text: '', valid: false, error: '文件超过解析大小上限' });
+            result.files.push({
+              path,
+              text: '',
+              valid: false,
+              error: '文件超过解析大小上限',
+              errorKind: 'incomplete',
+            });
             return;
           }
           const checked = await inspectFiles(

@@ -143,6 +143,19 @@ with zipfile.ZipFile(case / "project.zip") as archive, tempfile.TemporaryDirecto
 passed("relocated Unicode project renders; ZIP extracts with exact file hashes")
 
 original = project.read_bytes()
+assert b'<property name="shotcut:usePointSize">1</property>' in original
+alias = project.with_name("社区工程.mlt")
+alias.write_bytes(original)
+media.check(alias)
+alias_zip = case / "alias.zip"
+media.pack(alias, alias_zip)
+with zipfile.ZipFile(alias_zip) as archive:
+    assert alias.name in archive.namelist() and "project.mlt" not in archive.namelist()
+    assert alias.name in archive.read("README.md").decode("utf8")
+alias.write_bytes(original.replace(b"dynamictext", b"qtext"))
+rejected(lambda: media.check(alias), "renamed unsafe project")
+alias.unlink()
+passed("renamed supported project checks and packs with correct entry name; text uses explicit font size")
 for content, label in [(b'<!DOCTYPE mlt [<!ENTITY x SYSTEM "file:///etc/passwd">]><mlt>&x;</mlt>', "XML external entities"),
                        (original.replace(b"media/", b"https://example.test/"), "remote MLT resources"),
                        (original.replace(b"dynamictext", b"qtext"), "unsupported plugins")]:

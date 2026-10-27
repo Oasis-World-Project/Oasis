@@ -33,7 +33,13 @@ async function inspect(
 ): Promise<InspectedFile & { truncated?: boolean }> {
   if (!file.content.length) return { path: file.path, text: '', valid: false, error: '文件为空' };
   if (file.content.length > limits.inputBytes)
-    return { path: file.path, text: '', valid: false, error: '文件超过解析大小上限' };
+    return {
+      path: file.path,
+      text: '',
+      valid: false,
+      error: '文件超过解析大小上限',
+      errorKind: 'incomplete',
+    };
   const extension = import.meta.url.endsWith('.ts') ? 'ts' : 'js';
   return new Promise((resolve) => {
     const worker = new Worker(new URL(`./file-inspection-worker.${extension}`, import.meta.url), {
@@ -49,7 +55,8 @@ async function inspect(
       void worker.terminate();
       resolve(result);
     };
-    const fail = (error: string) => finish({ path: file.path, text: '', valid: false, error });
+    const fail = (error: string) =>
+      finish({ path: file.path, text: '', valid: false, error, errorKind: 'incomplete' });
     const timer = setTimeout(() => fail('文件解析超时，未完成检查'), limits.timeoutMs);
     worker.once('message', finish);
     worker.once('error', () => fail('文件解析进程出错，未完成检查'));
@@ -79,7 +86,7 @@ export async function inspectFiles(
       { ...limits, timeoutMs: Math.min(limits.timeoutMs, remaining) },
       Math.max(0, left),
     );
-    result.files.push(checked);
+    result.files.push({ ...checked, ...(truncated ? { truncated: true } : {}) });
     left -= checked.text.length;
     if (truncated) result.truncated = true;
   }

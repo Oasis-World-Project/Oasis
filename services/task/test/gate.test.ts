@@ -95,6 +95,69 @@ const input = {
 };
 
 describe('关卡的验收点检查', () => {
+  it('确定损坏与解析资源不足区分：损坏退回，超限留未检查且不误报数量不足', async () => {
+    const run = {
+      ...input,
+      checks: [],
+      expects: [{ pattern: '*.zip', minCount: 1 }],
+      runs: [{ runId: 'r', summary: null, outputs: [{ path: 'project.zip', size: 50 }] }],
+    };
+    const gateFor = (errorKind: 'invalid' | 'incomplete') =>
+      createGate({
+        harness: fakeClient(() => ({
+          files: [{ path: 'project.zip', text: '', valid: false, error: '读取失败', errorKind }],
+          truncated: false,
+        })).client,
+        modelGateway: fakeClient(() => ({})).client,
+        model: 'jev',
+        threshold: 0.5,
+        logger: pino({ level: 'silent' }),
+      });
+    expect((await gateFor('invalid').check(run)).unmet.length).toBeGreaterThan(0);
+    const limited = await gateFor('incomplete').check(run);
+    expect(limited.unmet).toEqual([]);
+    expect(limited.unchecked?.join('')).toContain('读取失败');
+  });
+  it('逐项检查：无法读取附件不阻止对另一个完整文件判断，缺证据不误判失败', async () => {
+    const harness = fakeClient(() => ({
+      files: [
+        { path: '说明.md', text: '报价合计217.80 SGD', valid: true },
+        { path: 'unknown.bin', text: '', warning: '格式未支持' },
+      ],
+      truncated: false,
+    }));
+    const gateway = fakeClient(() => ({ answers: { c1: { noul: 0.9 } } }));
+    const gate = createGate({
+      harness: harness.client,
+      modelGateway: gateway.client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    const result = await gate.check({
+      ...input,
+      expects: [],
+      checks: [
+        { id: 'unknown', text: '附件可读', files: ['unknown.bin'], requirementIds: [] },
+        { id: 'sum', text: '按报价计算', files: ['说明.md'], requirementIds: [] },
+      ],
+      runs: [
+        {
+          runId: 'r',
+          summary: null,
+          outputs: [
+            { path: '说明.md', size: 30 },
+            { path: 'unknown.bin', size: 50 },
+          ],
+        },
+      ],
+    });
+    expect(result.unmet).toEqual([]);
+    expect(result.checks?.map((c) => c.status)).toEqual(['unchecked', 'passed']);
+    expect(Object.keys((gateway.calls[0]?.body as { questions: object }).questions)).toEqual([
+      'c1',
+    ]);
+  });
   it('视频、工程与字幕使用可信检查；损坏退回，黑帧/音画差及语义检查保留提醒', async () => {
     const harness = fakeClient((path) => {
       expect(path).toContain('/video-check');

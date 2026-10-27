@@ -42,8 +42,12 @@ export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: S
         kind="交付"
         title={card.title}
         status={
-          <StatusTag tone={card.unmet.length ? 'accent' : 'solid'}>
-            {card.unmet.length ? '有几处没满足' : '已完成'}
+          <StatusTag tone={card.unmet.length || card.unchecked?.length ? 'accent' : 'solid'}>
+            {card.unmet.length
+              ? '有几处没满足'
+              : card.unchecked?.length
+                ? '部分检查未完成'
+                : '已交付'}
           </StatusTag>
         }
       />
@@ -63,6 +67,7 @@ export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: S
         </div>
       ))}
       <ItemList title="没完全满足的地方" items={card.unmet} />
+      <ItemList title="未完成的检查" items={card.unchecked ?? []} />
       {card.warnings.length > 0 && (
         <details className="rounded-item bg-glass-active/60 px-3.5 py-2.5">
           <summary className="cursor-pointer text-[13px] text-ink-muted">

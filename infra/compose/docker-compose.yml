@@ -260,6 +260,7 @@ services:
       MODEL_GATEWAY_URL: http://model-gateway:4108
       TASK_URL: http://task:4105
       CANVAS_URL: http://canvas:4106
+      HARNESS_URL: http://harness:4107
     depends_on: *data-deps
 
   task:

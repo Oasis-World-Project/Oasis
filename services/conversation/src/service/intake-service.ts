@@ -2,6 +2,7 @@
 // 用户确认 → 交给 task 建任务（之后由规划员排工作流）。问需求不走 harness：直接经 model-gateway 调模型。
 import { randomUUID } from 'node:crypto';
 import { ModelRoute } from '@oasis/contracts/agent';
+import { MaterialInspectResult } from '@oasis/contracts/harness';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import {
   AUTO_ANSWER,
@@ -20,6 +21,7 @@ import {
   questionsText,
   sheetText,
   taskBrief,
+  validateSheetSources,
   type IntakeReply,
 } from './intake.ts';
 
@@ -51,6 +53,7 @@ export function createIntakeService(deps: {
   agent: ServiceClient;
   modelGateway: ServiceClient;
   task: ServiceClient;
+  harness?: ServiceClient;
   config: IntakeConfig;
   logger: Logger;
 }) {
@@ -145,7 +148,42 @@ export function createIntakeService(deps: {
         : messages;
       try {
         const text = await complete(ownerId, model, prompt, requestId);
-        return parseIntakeReply(text, mustSheet);
+        const reply = parseIntakeReply(text, mustSheet);
+        if (reply.type === 'sheet' && deps.harness) {
+          validateSheetSources(reply.sheet, intake.request, intake.turns);
+          const checked = await deps.modelGateway.json('POST', '/internal/v1/decisions', {
+            body: {
+              model: config.detectModel,
+              state: [
+                ...messages.map((m) => m.content),
+                `待核对任务单：${JSON.stringify(reply.sheet)}`,
+              ],
+              questions: {
+                preserved: {
+                  type: 'noul',
+                  instructions:
+                    '任务单是否保持原话、附件已读正文和明确选择中的全部有效要求？只有用户明确修改可撤回旧要求；AI默认和假设不得改变费用口径、素材限制、语言范围或擅自扩充业务范围。引用真实不代表归纳完整。未读材料应保留未知。',
+                  criteria: {
+                    true: '全部保持，无擅自强化、遗漏或扩大',
+                    false: '有遗漏、强化、矛盾或扩大，或无法确认',
+                  },
+                },
+              },
+            },
+            headers: { [OASIS_HEADERS.payerId]: ownerId },
+            requestId,
+            schema: Decision,
+          });
+          if ((checked.answers.preserved?.noul ?? 0) < 0.5)
+            throw new Error(
+              '任务单未保持原始要求：请逐项对照原话、材料与具体默认答案，修复遗漏、强化或扩大；保留原费用口径，AI假设只补空白',
+            );
+          reply.sheet.materialWarnings = intake.turns
+            .flatMap((t) => (t.kind === 'materials' ? t.files : []))
+            .filter((f) => f.status !== 'complete')
+            .map((f) => `${f.name}：${f.reason ?? '未取得完整正文，内容未知'}`);
+        }
+        return reply;
       } catch (err) {
         if (err instanceof HttpError && err.statusCode === 402) throw err; // 额度不够
         feedback = err instanceof Error ? err.message : String(err);
@@ -163,6 +201,30 @@ export function createIntakeService(deps: {
     requestId: string,
     skipped = false,
   ): Promise<Message[]> {
+    if (deps.harness && intake.materials.length) {
+      const cached = intake.turns
+        .filter((t) => t.kind === 'materials')
+        .filter((t) => t.parser === 1);
+      const ids = intake.materials.map((m) => m.uploadId);
+      const latest = cached.at(-1);
+      if (
+        !latest ||
+        latest.files.length !== ids.length ||
+        !ids.every((id) => latest.files.some((f) => f.uploadId === id))
+      ) {
+        const result = await deps.harness.json('POST', '/internal/materials/inspect', {
+          body: { ownerId, ids },
+          schema: MaterialInspectResult,
+          requestId,
+        });
+        const turns = [
+          ...intake.turns.filter((t) => t.kind !== 'materials'),
+          { kind: 'materials' as const, parser: 1, files: result.files },
+        ];
+        await repo.updateIntake(intake.id, { turns });
+        intake = { ...intake, turns };
+      }
+    }
     const reply = await askModel(conversation, intake, ownerId, requestId, skipped);
     const author = conversation.modelKey ?? 'unknown';
     if (reply.type === 'cancel') {

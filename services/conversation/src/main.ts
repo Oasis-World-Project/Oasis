@@ -49,6 +49,7 @@ await startService({
       agent,
       modelGateway,
       task: createServiceClient('task', config.TASK_URL, { timeoutMs: 10_000 }),
+      harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 45_000 }),
       config: {
         detectModel: config.TASK_DETECT_MODEL,
         detectHigh: config.TASK_DETECT_HIGH,

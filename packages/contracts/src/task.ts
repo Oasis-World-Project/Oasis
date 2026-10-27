@@ -36,6 +36,53 @@ export const ExpectedFile = z.union([
 ]);
 export type ExpectedFile = z.infer<typeof ExpectedFile>;
 
+/** 新检查显式声明所需文件；旧字符串仍可读取。文件模式仅指本节点/最终清单。 */
+export const TaskCheck = z.union([
+  z.string().trim().min(1).max(300),
+  z.object({
+    id: z.string().regex(/^[\w-]{1,60}$/),
+    text: z.string().trim().min(1).max(300),
+    requirementIds: z.array(z.string().max(60)).max(32).default([]),
+    files: z.array(OutputPattern).max(20).default([]),
+  }),
+]);
+export type TaskCheck = z.infer<typeof TaskCheck>;
+
+export const RequirementSource = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('request'), quote: z.string().min(1).max(2000) }),
+  z.object({
+    kind: z.literal('user'),
+    turn: z.number().int().nonnegative(),
+    quote: z.string().min(1).max(2000),
+  }),
+  z.object({
+    kind: z.literal('answer'),
+    round: z.number().int().positive(),
+    questionId: z.string().max(60),
+    optionId: z.string().max(1000),
+    quote: z.string().min(1).max(2000),
+  }),
+  z.object({
+    kind: z.literal('material'),
+    uploadId: z.uuid(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    quote: z.string().min(1).max(2000),
+  }),
+]);
+export const TaskRequirement = z.object({
+  id: z.string().regex(/^[\w-]{1,60}$/),
+  text: z.string().trim().min(1).max(1000),
+  sources: z.array(RequirementSource).min(1).max(8),
+});
+export const CheckResult = z.object({
+  id: z.string(),
+  text: z.string(),
+  status: z.enum(['passed', 'unmet', 'unchecked']),
+  reason: z.string(),
+  evidence: z.array(z.string()),
+});
+export type CheckResult = z.infer<typeof CheckResult>;
+
 /** 两种节点共有的部分 */
 const NodeCommon = {
   key: NodeKey,
@@ -46,7 +93,7 @@ const NodeCommon = {
   /** 这个节点要做的事（讨论节点就是讨论的题目） */
   goal: z.string().trim().min(1).max(20_000),
   /** 关卡的验收点（普通话，最多 5 条）：交出产出前由 Jev 逐条判断 */
-  checks: z.array(z.string().trim().min(1).max(300)).max(5).default([]),
+  checks: z.array(TaskCheck).max(5).default([]),
   /** 关卡的规则检查：这些文件必须在 out/ 里且不是空的 */
   expects: z.array(ExpectedFile).max(10).default([]),
   /** 显式选择最终交付文件；缺省保留历史任务行为。 */
@@ -129,6 +176,10 @@ export const TaskSheet = z.object({
   assumptions: z.array(z.string().trim().min(1).max(200)).max(8).default([]),
   /** 用户给的素材（文件名） */
   materials: z.array(z.string().max(300)).max(50).default([]),
+  /** 有来源的有效用户要求；缺省为历史任务，不能补造来源。 */
+  requirements: z.array(TaskRequirement).max(32).optional(),
+  /** 仅说明素材读取覆盖，不表示已理解图片/视频内容。 */
+  materialWarnings: z.array(z.string().max(500)).max(20).optional(),
 });
 export type TaskSheet = z.infer<typeof TaskSheet>;
 
@@ -210,7 +261,8 @@ export const NodeBody = z.object({
   role: z.string(),
   goal: z.string(),
   model: z.string(),
-  checks: z.array(z.string()),
+  checks: z.array(TaskCheck),
+  gateChecks: z.array(CheckResult).optional(),
   expects: z.array(ExpectedFile),
   deliver: z.array(OutputPattern).optional(),
   /** 要用的外部工具（讨论节点没有；旧版 task 不返回时当作没有） */
@@ -266,7 +318,11 @@ export const TaskBody = z.object({
   sheet: TaskSheet.nullable(),
   /** 整体验收的结果：没满足的地方（没满足也照样交付）；还没验收时为 null */
   acceptance: z
-    .object({ unmet: z.array(z.string()), unchecked: z.array(z.string()).optional() })
+    .object({
+      unmet: z.array(z.string()),
+      unchecked: z.array(z.string()).optional(),
+      checks: z.array(CheckResult).optional(),
+    })
     .nullable(),
   /** task 生成的统一清单；缺省表示旧任务，空数组不能回退到所有产出。 */
   deliveryFiles: z
@@ -276,6 +332,8 @@ export const TaskBody = z.object({
         nodeId: z.uuid(),
         path: z.string(),
         size: z.number().int().nonnegative(),
+        sha256: RunOutputFile.shape.sha256,
+        runId: z.uuid().optional(),
       }),
     )
     .optional(),
@@ -315,7 +373,7 @@ export const UpdateNodeBody = z
     role: z.string().max(2000),
     goal: NodeCommon.goal,
     model: z.string().min(1).max(200),
-    checks: z.array(z.string().trim().min(1).max(300)).max(5),
+    checks: z.array(TaskCheck).max(5),
     expects: z.array(ExpectedFile).max(10),
     deliver: z.array(OutputPattern).max(20),
     participants: z.array(Participant).min(2).max(5),

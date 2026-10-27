@@ -209,12 +209,35 @@ export const RunTextsBody = z.object({
       valid: z.boolean().optional(),
       error: z.string().optional(),
       warning: z.string().optional(),
+      errorKind: z.enum(['invalid', 'incomplete']).optional(),
       width: z.number().int().positive().optional(),
       height: z.number().int().positive().optional(),
+      truncated: z.boolean().optional(),
     }),
   ),
   truncated: z.boolean(),
 });
+
+/** 只解析已上传素材，不开启 agent，不接受 URL 或本机路径。 */
+export const MaterialInspectBody = z.object({
+  ownerId: z.uuid(),
+  ids: z.array(z.uuid()).max(20),
+  maxChars: z.number().int().min(1).max(50_000).default(30_000),
+});
+export type MaterialInspectBody = z.infer<typeof MaterialInspectBody>;
+export const MaterialInspection = z.object({
+  uploadId: z.uuid(),
+  name: z.string(),
+  sha256: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
+  text: z.string(),
+  status: z.enum(['complete', 'partial', 'unsupported', 'failed']),
+  reason: z.string().optional(),
+});
+export const MaterialInspectResult = z.object({ files: z.array(MaterialInspection).max(20) });
+export type MaterialInspectResult = z.infer<typeof MaterialInspectResult>;
 export type RunTextsBody = z.infer<typeof RunTextsBody>;
 
 /** 先在该次运行的输出集合中选取，再解析正文；空清单不回退为全部文件。 */

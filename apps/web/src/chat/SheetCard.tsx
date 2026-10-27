@@ -26,6 +26,12 @@ function SheetDetails({ sheet }: { sheet: SheetData['sheet'] }) {
   return (
     <>
       <ItemList title="怎么算做好" items={sheet.criteria} />
+      {sheet.requirements?.length ? (
+        <ItemList title="原始要求" items={sheet.requirements.map((r) => r.text)} />
+      ) : null}
+      {sheet.materialWarnings?.length ? (
+        <ItemList title="材料读取提示" items={sheet.materialWarnings} />
+      ) : null}
       <ItemList title="风格与限制" items={sheet.style} />
       <ItemList title="素材" items={sheet.materials} />
       {sheet.budgetMicro !== null && (

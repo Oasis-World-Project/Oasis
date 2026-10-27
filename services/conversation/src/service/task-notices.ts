@@ -10,12 +10,15 @@ const list = (items: string[]) => items.map((x) => `- ${x}`).join('\n');
 
 /** 交付消息的文字（卡片之外只显示文字的地方用） */
 function deliveryText(card: DeliveryCard): string {
-  const parts = [`「${card.title}」做好了。`];
+  const parts = [
+    `「${card.title}」${card.unmet.length ? '已交付，有未满足项' : card.unchecked?.length ? '已交付，部分检查未完成' : '已交付'}。成果保存在系统中，可预览或主动下载；仅在你授权同步文件夹后自动保存到电脑。`,
+  ];
   if (card.files.length > 0) {
     parts.push(`成果：\n${list(card.files.map((f) => `${f.deliverable}：${f.path}`))}`);
   }
   if (card.unmet.length > 0) parts.push(`没完全满足的地方：\n${list(card.unmet)}`);
   if (card.warnings.length > 0) parts.push(`过程中的提醒：\n${list(card.warnings)}`);
+  if (card.unchecked?.length) parts.push(`未完成的检查：\n${list(card.unchecked)}`);
   if (card.unmet.length > 0) parts.push('需要改的话，告诉我要怎么改，我再交给 AI 团队做一版。');
   return parts.join('\n\n');
 }
@@ -40,6 +43,7 @@ function deliveryCard(task: TaskBody): DeliveryCard {
           : [];
       }),
     unmet: task.acceptance?.unmet ?? [],
+    unchecked: task.acceptance?.unchecked ?? [],
     warnings: [
       ...task.nodes.flatMap((n) => (n.warning ? [`「${n.title}」${n.warning}`] : [])),
       ...(task.acceptance?.unchecked ?? []).map((u) => `未完成的检查：${u}`),

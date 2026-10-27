@@ -7,12 +7,15 @@ import type {
   NodeStatus,
   TaskSheet,
   TaskStatus,
+  TaskCheck,
+  CheckResult,
 } from '@oasis/contracts/task';
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /** 节点配置：关卡的验收点和应有文件；讨论节点还有参与者、轮数、进行到第几轮和讨论记录 */
 export interface NodeConfig {
-  checks?: string[];
+  checks?: TaskCheck[];
+  gateChecks?: CheckResult[];
   expects?: ExpectedFile[];
   deliver?: string[];
   /** 干活节点要用的外部工具 */
@@ -70,7 +73,11 @@ export const tasks = pgTable('tasks', {
   deliverables: jsonb('deliverables').$type<Deliverable[]>().notNull().default([]),
   plannerRunId: uuid('planner_run_id'),
   planAttempts: integer('plan_attempts').notNull().default(0),
-  acceptance: jsonb('acceptance').$type<{ unmet: string[]; unchecked?: string[] }>(),
+  acceptance: jsonb('acceptance').$type<{
+    unmet: string[];
+    unchecked?: string[];
+    checks?: CheckResult[];
+  }>(),
   createdAt: at('created_at').notNull().defaultNow(),
   updatedAt: at('updated_at').notNull().defaultNow(),
   finishedAt: at('finished_at'),

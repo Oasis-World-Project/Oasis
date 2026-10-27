@@ -15,6 +15,7 @@ export const conversationEnv = {
   TASK_URL: z.url(),
   /** 核对用户随消息发的文件 */
   CANVAS_URL: z.url(),
+  HARNESS_URL: z.url(),
   /** 判断「是不是在交代任务」的决策模型（ADR 0005 §2） */
   TASK_DETECT_MODEL: z.string().min(1).default('typesafe/jev-1.14'),
   /** 概率不低于它就直接开始接需求 */

@@ -205,7 +205,7 @@ def effect(parent, service, identifier, start, end, properties):
         prop(element, name, value)
 
 
-def project_xml(plan):
+def project_xml(plan, legacy=False):
     profile, duration = plan["profile"], plan["durationFrames"]
     width, height = profile["width"], profile["height"]
     mlt = ET.Element("mlt", {"LC_NUMERIC": "C", "producer": "tractor", "version": "7.30.0"})
@@ -299,7 +299,8 @@ def project_xml(plan):
                    {"argument": cue["text"], "geometry": f"0 {int(height * (0.12 if kind == 'titles' else 0.78))} {width} {int(height * 0.16)}",
                     "family": "Noto Sans CJK JP", "size": max(18, round(height / 24)), "weight": 600,
                     "fgcolour": "#ffffffff", "bgcolour": "#00000000", "outlinecolour": "#ff000000",
-                    "outlinewidth": 2, "halign": "center", "valign": "middle"})
+                    "outlinewidth": 2, "halign": "center", "valign": "middle",
+                    **({} if legacy else {"shotcut:usePointSize": 1, "olcolour": "#ff000000", "outline": 2})})
     ET.indent(mlt)
     return ET.tostring(mlt, encoding="utf-8", xml_declaration=True) + b"\n"
 
@@ -316,10 +317,10 @@ def srt(plan):
 
 
 def check(project, inspect=False):
-    require(project.name == "project.mlt" and not project.is_symlink(), "Expected local project.mlt")
+    require(project.suffix.lower() == ".mlt" and not project.is_symlink(), "Expected local .mlt project")
     root = project.parent.resolve()
     plan = validate(load_json(local_file(root, "timeline.json")), root, inspect)
-    require(project.stat().st_size <= 1024 * 1024 and project.read_bytes() == project_xml(plan),
+    require(project.stat().st_size <= 1024 * 1024 and project.read_bytes() in (project_xml(plan), project_xml(plan, legacy=True)),
             "Project differs from supported timeline; arbitrary MLT XML is not rendered")
     require(local_file(root, "subtitles.srt").read_text("utf8") == srt(plan), "Subtitle timeline mismatch")
     return plan
@@ -379,14 +380,17 @@ def pack(project, output):
     plan = check(project)
     require(not output.exists() and output.suffix.lower() == ".zip", "New .zip output required")
     output.parent.mkdir(parents=True, exist_ok=True)
-    names = {"project.mlt", "timeline.json", "subtitles.srt", "README.md"} | {s["path"] for s in plan["sources"]}
+    names = {project.name, "timeline.json", "subtitles.srt", "README.md"} | {s["path"] for s in plan["sources"]}
     require(sum(local_file(project.parent, name).stat().st_size for name in names) <= MAX_TOTAL + 4 * 1024 * 1024,
             "Project exceeds package limit")
     with tempfile.TemporaryDirectory(prefix=".oasis-pack-", dir=output.parent) as temp:
         target = Path(temp) / "project.zip"
         with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_STORED) as archive:
             for name in sorted(names):
-                archive.write(local_file(project.parent, name), name)
+                if name == "README.md":
+                    archive.writestr(name, local_file(project.parent, name).read_text("utf8").replace("project.mlt", project.name))
+                else:
+                    archive.write(local_file(project.parent, name), name)
         target.rename(output)
     return {"output": str(output), "files": len(names), "sha256": digest(output)}
 

@@ -22,6 +22,7 @@ import { createPreviewRepo } from './repo/preview-repo.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
 import { createRunService, type RunService } from './service/run-service.ts';
 import { createPreviewService, type PreviewService } from './service/preview-service.ts';
+import { createMaterialInspector } from './service/material-inspection.ts';
 
 let executor: Executor;
 let store: ObjectStore;
@@ -140,7 +141,25 @@ await startService({
       maxMs: config.PREVIEW_MAX_MS,
       idleMs: config.PREVIEW_IDLE_MS,
     });
-    registerRoutes(app, runs, previews);
+    registerRoutes(
+      app,
+      runs,
+      previews,
+      createMaterialInspector(
+        createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: config.EXTRACT_TOTAL_MS }),
+        {
+          inputBytes: config.EXTRACT_INPUT_BYTES,
+          unzipBytes: config.EXTRACT_UNZIP_BYTES,
+          entries: config.EXTRACT_MAX_ENTRIES,
+          pages: config.EXTRACT_MAX_PAGES,
+          cells: config.EXTRACT_MAX_CELLS,
+          pixels: config.EXTRACT_MAX_PIXELS,
+          timeoutMs: config.EXTRACT_TIMEOUT_MS,
+          totalMs: config.EXTRACT_TOTAL_MS,
+          files: config.EXTRACT_MAX_FILES,
+        },
+      ),
+    );
     // 接管上次进程遗留的运行；Docker 暂时不可用也不阻止启动（/ready 会显示 sandboxes 失败）
     await runs.recover().catch((err: unknown) => logger.warn({ err }, '清理遗留运行失败'));
     await previews.recover().catch((err: unknown) => logger.warn({ err }, '清理遗留预览失败'));

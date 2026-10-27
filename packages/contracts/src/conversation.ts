@@ -70,12 +70,18 @@ export const DeliveryCard = z.object({
       nodeId: z.uuid(),
       path: z.string(),
       size: z.number().int().nonnegative(),
+      sha256: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .optional(),
+      runId: z.uuid().optional(),
     }),
   ),
   /** 整体验收没满足的地方 */
   unmet: z.array(z.string()),
   /** 过程中节点留下的提醒 */
   warnings: z.array(z.string()),
+  unchecked: z.array(z.string()).optional(),
 });
 export type DeliveryCard = z.infer<typeof DeliveryCard>;
 

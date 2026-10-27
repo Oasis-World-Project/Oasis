@@ -85,7 +85,7 @@ function Bar({ bridge }: { bridge: OasisDesktop }) {
         <p className="m-0 min-w-0 flex-1 text-[13px]">
           <span className="font-medium">同步到电脑</span>
           <span className="text-ink-muted">
-            ：选一个文件夹，任务完成后成果会自动存进去，按任务分好文件夹。
+            ：默认仅在系统中预览，不自动下载。选择文件夹即授权自动同步成果，按任务分好文件夹。
           </span>
         </p>
       )}

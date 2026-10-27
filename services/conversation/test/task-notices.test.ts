@@ -127,7 +127,7 @@ describe('任务的结果回到私聊', () => {
         eventId: EVENT,
       },
     });
-    expect(rows[0]!.content).toContain('「小木屋首页」做好了。');
+    expect(rows[0]!.content).toContain('「小木屋首页」已交付，有未满足项。');
     expect(rows[0]!.content).toContain('首页文案：首页.md');
     expect(rows[0]!.content).toContain('没完全满足的地方：\n- 不超过 80 字');
   });

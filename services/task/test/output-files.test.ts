@@ -4,6 +4,7 @@ import {
   deliveryManifest,
   filesForInspection,
   selectDeliverables,
+  missingDeliveryFiles,
 } from '../src/service/output-files.ts';
 
 const node = (deliver?: string[]) =>
@@ -19,6 +20,17 @@ const node = (deliver?: string[]) =>
   }) as Node;
 const deliverables = [{ name: '报告', form: 'DOCX+PDF', nodeId: 'node' }];
 describe('最终文件清单', () => {
+  it('每个最终路径都须匹配，其他文件不能掩盖漏交；递归目录必须明确选择', () => {
+    const outputs = [
+      { path: 'final.mp4', size: 100 },
+      { path: '素材包/scripts/build.py', size: 20 },
+    ];
+    expect(missingDeliveryFiles(outputs, ['final.mp4', 'named.mlt', '素材包/*'])).toEqual([
+      '最终交付缺少文件 out/named.mlt',
+      '最终交付缺少文件 out/素材包/*',
+    ]);
+    expect(missingDeliveryFiles(outputs, ['final.mp4', '素材包/**'])).toEqual([]);
+  });
   it('关卡按期望与交付文件的并集选取，脚本不挤占正文；旧节点不改变行为', () => {
     const outputs = [
       { path: '工作/build.py', size: 90000 },

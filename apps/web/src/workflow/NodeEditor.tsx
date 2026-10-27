@@ -112,7 +112,9 @@ export function NodeEditor({
   const [goal, setGoal] = useState(node?.goal ?? '');
   const [role, setRole] = useState(node?.role ?? '');
   const [model, setModel] = useState(node?.model ?? defaultModel);
-  const [checks, setChecks] = useState((node?.checks ?? []).join('\n'));
+  const [checks, setChecks] = useState(
+    (node?.checks ?? []).map((c) => (typeof c === 'string' ? c : c.text)).join('\n'),
+  );
   const [tools, setTools] = useState<Record<string, number>>(
     Object.fromEntries((node?.tools ?? []).map((t) => [t.key, t.uses])),
   );
@@ -148,7 +150,9 @@ export function NodeEditor({
       goal: goal.trim(),
       role: role.trim(),
       model,
-      checks: checkList,
+      checks: checkList.map(
+        (text) => node?.checks.find((c) => typeof c !== 'string' && c.text === text) ?? text,
+      ),
     };
     const toolList = Object.entries(tools).map(([key, uses]) => ({ key, uses }));
     const cleanParticipants = participants.map((p) => ({ ...p, name: p.name.trim() }));

@@ -350,7 +350,7 @@ export function NodePanel({
           <Section title="交出前要过的关卡">
             <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[13px] leading-relaxed">
               {node.checks.map((c, i) => (
-                <li key={i}>{c}</li>
+                <li key={i}>{typeof c === 'string' ? c : c.text}</li>
               ))}
             </ul>
           </Section>

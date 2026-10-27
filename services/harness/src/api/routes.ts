@@ -3,6 +3,7 @@ import {
   PreviewInputBody,
   PreviewStartBody,
   RunInspectBody,
+  MaterialInspectBody,
   RunMessageBody,
   StartRunBody,
 } from '@oasis/contracts/harness';
@@ -10,6 +11,7 @@ import { parseWith, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { RunService } from '../service/run-service.ts';
 import type { PreviewService } from '../service/preview-service.ts';
+import type { MaterialInspector } from '../service/material-inspection.ts';
 
 const RunParams = z.object({ runId: z.uuid() });
 const FileParams = RunParams.extend({ '*': z.string().min(1).max(500) });
@@ -21,7 +23,16 @@ const EventsQuery = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
 });
 
-export function registerRoutes(app: ServiceApp, runs: RunService, previews?: PreviewService): void {
+export function registerRoutes(
+  app: ServiceApp,
+  runs: RunService,
+  previews?: PreviewService,
+  inspectMaterials?: MaterialInspector,
+): void {
+  if (inspectMaterials)
+    app.post('/internal/materials/inspect', async (request) =>
+      inspectMaterials(parseWith(MaterialInspectBody, request.body)),
+    );
   for (const kind of ['audio', 'video'] as const) {
     app.post(`/internal/runs/:runId/${kind}-check`, async (request) => {
       const { runId } = parseWith(RunParams, request.params);

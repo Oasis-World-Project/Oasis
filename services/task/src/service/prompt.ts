@@ -38,7 +38,7 @@ function context(c: NodeContext, goalLabel: string): string[] {
   parts.push(`【${goalLabel}】\n${c.goal}`);
   if (c.deliver !== undefined)
     parts.push(
-      `【最终交付文件】\n${c.deliver.map((p) => `- out/${p}`).join('\n')}\n只从这些路径选择最终成果；草稿与局部素材放其他目录，配套文件也应按上述路径产出。`,
+      `【最终交付文件】\n${c.deliver.map((p) => `- out/${p}`).join('\n')}\n每个模式都必须交出文件。* 只匹配一层，** 才递归；完整工程须带齐引用资源。README/报告声称附带的脚本和素材必须被这些模式选中或真实包含在最终包内。只交这些成果，草稿另存。不要声称文件已下载到用户电脑，默认仅系统保存与预览。`,
     );
   if (c.upstream.length > 0) {
     const lines = c.upstream.map((u) => {

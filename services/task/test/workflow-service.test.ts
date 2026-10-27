@@ -1163,7 +1163,11 @@ describe('整体验收（从任务单来的任务）', () => {
     ]);
     expect(gateCalls.at(-1)).toEqual({
       runId: runOf('home', task).runId,
-      checks: ['语气温馨', '不超过 80 字'],
+      checks: [
+        '语气温馨',
+        '不超过 80 字',
+        expect.objectContaining({ id: 'delivery-contents', files: ['首页.md', '海报.md'] }),
+      ],
     });
     expect(events.map((e) => (e.data as { status: string }).status)).toEqual([
       'running',
@@ -1181,7 +1185,10 @@ describe('整体验收（从任务单来的任务）', () => {
     await service.decide(OWNER, task.id, { choice: 'continue' });
     const detail = await service.get(OWNER, task.id);
     expect(detail.status).toBe('succeeded');
-    expect(detail.acceptance?.unmet).toEqual(['「海报文案」没有交出文件']);
+    expect(detail.acceptance?.unmet).toEqual([
+      '最终交付缺少文件 out/*.md',
+      '「海报文案」没有交出文件',
+    ]);
   });
 
   it('验收中途断了：任务停在验收中，对账时重新验收', async () => {

@@ -11,11 +11,93 @@ import type {
 } from '../src/repo/conversation-repo.ts';
 import { createDmService, toMessageBody } from '../src/service/dm-service.ts';
 import { createIntakeService } from '../src/service/intake-service.ts';
-import { taskBrief } from '../src/service/intake.ts';
+import { taskBrief, intakeMessages, validateSheetSources } from '../src/service/intake.ts';
+import { TaskSheet } from '@oasis/contracts/task';
+import type { IntakeTurn } from '../src/repo/schema.ts';
 
 const OWNER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 const CONV = '3f2e1d0c-9b8a-4765-8432-10fedcba9876';
 const TASK_ID = '5e5e5e5e-5e5e-4e5e-8e5e-5e5e5e5e5e5e';
+
+describe('任务单来源与默认答案', () => {
+  const turns: IntakeTurn[] = [
+    {
+      kind: 'questions',
+      round: 1,
+      questions: [
+        {
+          id: 'q1',
+          text: '语言？',
+          default: 'b',
+          options: [
+            { id: 'a', label: '全中文' },
+            { id: 'b', label: '中文为主，保留专名' },
+          ],
+        },
+      ],
+      answers: { q1: 'auto' },
+    },
+  ];
+  it('auto 和跳过都确定采用当轮推荐，原话在 brief 中保留', () => {
+    const messages = intakeMessages({
+      name: 'AI',
+      request: '按报价计算',
+      context: [],
+      turns,
+      roundsLeft: 1,
+      skipped: false,
+      materials: [],
+    });
+    expect(messages[1]?.content).toContain('采用当轮默认项：中文为主，保留专名（选项 b）');
+    const sheet = TaskSheet.parse({
+      title: '测试',
+      deliverables: [{ name: '表', form: 'XLSX' }],
+      criteria: ['按报价计算'],
+    });
+    expect(taskBrief('按报价计算', turns, sheet)).toContain('AI 假设不得覆盖');
+    expect(
+      taskBrief(
+        '按报价计算',
+        [
+          {
+            ...turns[0]!,
+            kind: 'questions',
+            round: 1,
+            questions: turns[0]!.kind === 'questions' ? turns[0]!.questions : [],
+            answers: null,
+            skipped: true,
+          },
+        ],
+        sheet,
+      ),
+    ).toContain('采用当轮默认项：中文为主');
+  });
+  it('不能引用未选中的选项、伪造附件摘要或引文', () => {
+    const sheet = TaskSheet.parse({
+      title: '测试',
+      deliverables: [{ name: '表', form: 'XLSX' }],
+      criteria: ['中文为主'],
+      requirements: [
+        {
+          id: 'r1',
+          text: '中文为主',
+          sources: [
+            { kind: 'answer', round: 1, questionId: 'q1', optionId: 'b', quote: '中文为主' },
+          ],
+        },
+      ],
+    });
+    expect(() => validateSheetSources(sheet, '按报价计算', turns)).not.toThrow();
+    sheet.requirements![0]!.sources = [
+      { kind: 'answer', round: 1, questionId: 'q1', optionId: 'a', quote: '全中文' },
+    ];
+    expect(() => validateSheetSources(sheet, '按报价计算', turns)).toThrow('来源或引文不符');
+    sheet.requirements![0]!.sources = [
+      { kind: 'material', uploadId: OWNER, sha256: 'a'.repeat(64), quote: '市场估价' },
+    ];
+    expect(() => validateSheetSources(sheet, '按报价计算', turns)).toThrow('来源或引文不符');
+  });
+});
 
 /** 内存版仓库 */
 function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] } {
@@ -114,10 +196,16 @@ type ChatBody = { model: string; stream?: boolean; messages: { role: string; con
 const seenRequests: { payer: unknown; body: ChatBody }[] = [];
 const intakeRequests: ChatBody[] = [];
 let decisionCalls = 0;
+let preserveProbability = 0.9;
 const modelGateway = Fastify();
 modelGateway.post('/internal/v1/decisions', async () => {
   decisionCalls += 1;
-  return { answers: { is_task: { type: 'noul', noul: taskProbability } } };
+  return {
+    answers: {
+      is_task: { type: 'noul', noul: taskProbability },
+      preserved: { noul: preserveProbability },
+    },
+  };
 });
 modelGateway.post('/internal/v1/chat/completions', async (request, reply) => {
   const body = request.body as ChatBody;
@@ -211,6 +299,7 @@ beforeEach(() => {
   intakeRequests.length = 0;
   createdTasks.length = 0;
   decisionCalls = 0;
+  preserveProbability = 0.9;
   repo = memoryRepo();
   const logger = pino({ level: 'silent' });
   const clients = {
@@ -400,6 +489,85 @@ describe('认出任务', () => {
 });
 
 describe('接需求', () => {
+  it('真实接需求链读取材料并核对来源；语义审查失败时有限重试，不确认漂移任务单', async () => {
+    const request = '按材料报价做费用表，中文为主';
+    const evidence = '按报价计算，小计另加10%';
+    const generated = {
+      type: 'sheet',
+      sheet: {
+        title: '费用表',
+        deliverables: [{ name: '表', form: 'XLSX' }],
+        criteria: ['按原报价计算'],
+        requirements: [
+          {
+            id: 'r1',
+            text: '按原报价小计加10%',
+            sources: [
+              { kind: 'material', uploadId: PHOTO.id, sha256: 'a'.repeat(64), quote: evidence },
+            ],
+          },
+        ],
+      },
+    };
+    const inspector = {
+      json: async () => ({
+        files: [
+          {
+            uploadId: PHOTO.id,
+            name: '报价.txt',
+            sha256: 'a'.repeat(64),
+            text: evidence,
+            status: 'complete',
+          },
+        ],
+      }),
+    } as unknown as ReturnType<typeof createServiceClient>;
+    const prepared = createIntakeService({
+      repo,
+      agent: createServiceClient('agent', urls.agent),
+      modelGateway: createServiceClient('model-gateway', urls.gateway),
+      task: createServiceClient('task', urls.task),
+      harness: inspector,
+      config: {
+        detectModel: 'jev',
+        detectHigh: 0.7,
+        detectLow: 0.4,
+        fallbackModel: 'fallback',
+        maxRounds: 3,
+        maxTokens: 2000,
+      },
+      logger: pino({ level: 'silent' }),
+    });
+    const conversation = (await repo.findOwned(CONV, OWNER))!;
+    intakeReplies = [JSON.stringify(generated)];
+    const messages = await prepared.start({
+      conversation,
+      ownerId: OWNER,
+      request,
+      attachments: [PHOTO],
+      history: [],
+      requestId: 'r',
+    });
+    expect(messages.at(-1)?.kind).toBe('sheet');
+    expect(intakeRequests.at(-1)?.messages[1]?.content).toContain(evidence);
+    expect(repo.intakes[0]?.sheet?.requirements?.[0]?.sources[0]).toMatchObject({
+      sha256: 'a'.repeat(64),
+    });
+    await prepared.cancel(conversation);
+    preserveProbability = 0.1;
+    intakeReplies = Array.from({ length: 3 }, () => JSON.stringify(generated));
+    await expect(
+      prepared.start({
+        conversation,
+        ownerId: OWNER,
+        request,
+        attachments: [PHOTO],
+        history: [],
+        requestId: 'r2',
+      }),
+    ).rejects.toMatchObject({ code: 'intake_failed' });
+    expect(createdTasks).toHaveLength(0);
+  });
   it('任务说明保留用户补充、链接和问题卡答案，超长不会静默截断', () => {
     const finalSheet = JSON.parse(sheet()).sheet;
     const turns = [
@@ -442,7 +610,7 @@ describe('接需求', () => {
     });
     const prompt = intakeRequests[1]!.messages[1]!.content;
     expect(prompt).toContain('首页给谁看（第 1 轮） → 情侣');
-    expect(prompt).toContain('语气 → 你看着办');
+    expect(prompt).toContain('语气 → 采用当轮默认项：温馨（选项 a）');
   });
 
   it('选项不存在：400', async () => {

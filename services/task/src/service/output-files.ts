@@ -1,6 +1,6 @@
 // 文件匹配与交付选择属于 task；消费者直接使用 task 产出的最终清单。
 import type { RunOutputFile } from '@oasis/contracts/harness';
-import type { TaskBody, ExpectedFile } from '@oasis/contracts/task';
+import type { TaskBody, ExpectedFile, TaskCheck } from '@oasis/contracts/task';
 import type { Deliverable } from '../repo/schema.ts';
 import type { Node } from '../repo/task-store.ts';
 
@@ -22,10 +22,12 @@ export function filesForInspection(
   outputs: RunOutputFile[],
   expects: ExpectedFile[],
   deliver?: string[],
+  checks?: TaskCheck[],
 ): RunOutputFile[] {
   const patterns = [
     ...expects.map((e) => (typeof e === 'string' ? e : e.pattern)),
     ...(deliver ?? []),
+    ...(checks ?? []).flatMap((c) => (typeof c === 'string' ? [] : c.files)),
   ].map(patternRegExp);
   return patterns.length
     ? outputs.filter((file) => patterns.some((re) => re.test(file.path)))
@@ -36,15 +38,49 @@ export function selectDeliverables(deliverables: Deliverable[], nodes: Node[]): 
   return deliverables.map((d) => {
     const node = nodes.find((n) => n.id === d.nodeId);
     if (node?.config.deliver === undefined) return d;
-    const patterns = node.config.deliver.map(patternRegExp);
-    const files = node.outputs.filter(
-      (file) =>
-        file.size > 0 &&
-        !file.path.split('/').some((p) => p.startsWith('.oasis-')) &&
-        patterns.some((p) => p.test(file.path)),
-    );
+    const files = selectedOutputFiles(node.outputs, node.config.deliver);
     return { ...d, files };
   });
+}
+
+export function selectedOutputFiles(outputs: RunOutputFile[], deliver: string[]): RunOutputFile[] {
+  const patterns = deliver.map(patternRegExp);
+  return outputs.filter(
+    (file) =>
+      file.size > 0 &&
+      !file.path.split('/').some((p) => p.startsWith('.oasis-')) &&
+      patterns.some((p) => p.test(file.path)),
+  );
+}
+
+/** 不依赖媒体语义的说明/包内容核验可独立进行；未知媒体不应使它被整体跳过。 */
+export function deliveryIntegrityChecks(outputs: RunOutputFile[]): TaskCheck[] {
+  const files = outputs.filter((f) => /\.(md|txt|docx|pdf|zip)$/i.test(f.path)).map((f) => f.path);
+  return files.length
+    ? [
+        {
+          id: 'delivery-contents',
+          text: '交付说明中声称已附带的文件、素材和制作脚本，都确实在最终交付清单或受信ZIP成员中；工程完整性不能仅凭说明自述。',
+          files,
+          requirementIds: [],
+        },
+      ]
+    : [];
+}
+
+/** 每个明确承诺的选择器都需要产出，不能被同节点的其他文件掩盖。 */
+export function missingDeliveryFiles(outputs: RunOutputFile[], deliver?: string[]): string[] {
+  return (deliver ?? [])
+    .filter(
+      (pattern) =>
+        !outputs.some(
+          (file) =>
+            file.size > 0 &&
+            !file.path.split('/').some((p) => p.startsWith('.oasis-')) &&
+            patternRegExp(pattern).test(file.path),
+        ),
+    )
+    .map((pattern) => `最终交付缺少文件 out/${pattern}`);
 }
 
 export function deliveryManifest(
@@ -55,7 +91,8 @@ export function deliveryManifest(
   const seen = new Set<string>();
   return deliverables.flatMap((d) => {
     if (!d.nodeId) return [];
-    const files: RunOutputFile[] = d.files ?? nodes.find((n) => n.id === d.nodeId)?.outputs ?? [];
+    const node = nodes.find((n) => n.id === d.nodeId);
+    const files: RunOutputFile[] = d.files ?? node?.outputs ?? [];
     return files
       .filter((f) => {
         const id = `${d.nodeId}/${f.path}`;
@@ -63,6 +100,13 @@ export function deliveryManifest(
         seen.add(id);
         return true;
       })
-      .map((f) => ({ deliverable: d.name, nodeId: d.nodeId!, path: f.path, size: f.size }));
+      .map((f) => ({
+        deliverable: d.name,
+        nodeId: d.nodeId!,
+        path: f.path,
+        size: f.size,
+        ...(f.sha256 ? { sha256: f.sha256 } : {}),
+        ...(node?.config.outputsRunId ? { runId: node.config.outputsRunId } : {}),
+      }));
   });
 }

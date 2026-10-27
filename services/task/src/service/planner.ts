@@ -92,9 +92,11 @@ export function plannerPrompt(input: {
       `- 最多 ${input.limits.maxNodes} 个节点。简单的事 1–3 个节点就够，别为了显得完整而拆。`,
       '- 能同时做的就并行；一个节点只做一件事。',
       `- 任务单上每样交付物（${deliverables}）都要在 deliverables 里指定由哪个节点交出最终版。`,
-      '- 每个节点的 checks 从任务单的「怎么算做好」里挑和它相关的（最多 5 条，可以为空）；expects 写它必须交出的文件名（可以用 * 通配）。',
+      '- 每个节点 checks 只查本节点能负责的要求（最多5条，可为空）。推荐 {"id":"c1","text":"验收点","requirementIds":["r1"],"files":["报告.docx"]}；files 是检查所需的本节点输出。跨文件一致性交给有全部输入的汇总节点或最终验收，不要求并行节点证明其他文件已一致。expects 写必需文件。',
       '- expects 可写 {"pattern":"图片/*.png","exactCount":20,"width":1024,"height":1024}（正好 20 张），或 {"pattern":"图片/*.png","minCount":20}（至少 20 张）；只计有效非空文件。',
       '- 每个负责交付物的节点必须给出非空 deliver 路径列表（可用 * 通配），明确最终交付哪些文件；草稿与局部素材另存目录。deliver 与 expects 独立，配套 PDF、来源清单和统计报告需要时也列入。',
+      '- 路径模式 * 只匹配一层，目录/** 才递归包含嵌套文件。每个 deliver 模式都必须匹配实际文件；完整工程需交齐引用资源。README 所说已附带的文件/脚本必须在最终清单或包内。不要承诺不必要的额外文件。',
+      '- 原始要求及其来源不可被 AI 假设覆盖；需要核实新信息不等于可以改变原有费用口径、增加预算项目或放宽素材限制。技术选择与有效用户要求分开。用户未授权文件夹同步时成果只在系统里保存与预览，不能写入其电脑。',
       '- goal 写清楚这个节点要做什么、产出写成什么文件；节点里的 AI 不会再问用户问题。',
       '- key 只用英文字母、数字、下划线、短横线。',
     ].join('\n'),
@@ -160,6 +162,13 @@ export function checkPlan(
   }
   const usableTools = new Set(tools.map((t) => t.key));
   for (const node of plan.nodes) {
+    const checks = node.checks.filter((c) => typeof c !== 'string');
+    if (new Set(checks.map((c) => c.id)).size !== checks.length)
+      problems.push(`节点「${node.key}」检查 id 重复`);
+    for (const check of checks)
+      for (const id of check.requirementIds)
+        if (!sheet.requirements?.some((r) => r.id === id))
+          problems.push(`节点「${node.key}」检查引用未知要求 ${id}`);
     if (node.kind !== 'work') continue;
     for (const tool of node.tools) {
       if (!usableTools.has(tool.key)) {

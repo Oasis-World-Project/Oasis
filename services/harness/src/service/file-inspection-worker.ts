@@ -1,4 +1,6 @@
 import { extname, posix } from 'node:path';
+import { createHash } from 'node:crypto';
+import { crc32 } from 'node:zlib';
 import { parentPort, workerData } from 'node:worker_threads';
 import { DashboardData } from '@oasis/contracts/canvas';
 import { parse as parseHtml, type DefaultTreeAdapterMap } from 'parse5';
@@ -7,6 +9,8 @@ import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import sharp from 'sharp';
 import { getDocumentProxy } from 'unpdf';
 import type { InspectionLimits, InspectedFile } from './file-inspection.ts';
+
+class IncompleteInspection extends Error {}
 
 const data = workerData as {
   path: string;
@@ -22,7 +26,7 @@ function htmlContent(bytes: Buffer): { text: string; warning?: string } {
   let warning: string | undefined;
   let count = 0;
   function visit(node: DefaultTreeAdapterMap['node'], depth = 0): void {
-    if (++count > 100_000 || depth > 100) throw new Error('HTML 结构超过解析上限');
+    if (++count > 100_000 || depth > 100) throw new IncompleteInspection('HTML 结构超过解析上限');
     if (node.nodeName === '#text' && 'value' in node) {
       pieces.push(node.value);
       return;
@@ -101,22 +105,37 @@ function xml(bytes: Uint8Array, ordered = false, removeNSPrefix = true): unknown
   }).parse(source);
 }
 
-function officeParts(bytes: Uint8Array, limits: InspectionLimits): Map<string, Uint8Array> {
+function officeParts(
+  bytes: Uint8Array,
+  limits: InspectionLimits,
+  all = false,
+): Map<string, Uint8Array> {
   const parts = new Map<string, Uint8Array>();
   let entries = 0;
   let size = 0;
   const unzip = new Unzip((file) => {
-    if (++entries > limits.entries) throw new Error('ZIP 条目超过上限');
+    if (++entries > limits.entries) throw new IncompleteInspection('ZIP 条目超过上限');
     if (file.originalSize !== undefined && file.originalSize > limits.unzipBytes)
-      throw new Error('ZIP 解压体积超过上限');
-    if (!/^(word|ppt|xl)\/.+\.(xml|rels)$/.test(file.name)) return;
+      throw new IncompleteInspection('ZIP 解压体积超过上限');
+    if (
+      all &&
+      (file.name.startsWith('/') ||
+        file.name.includes('\\') ||
+        file.name.includes(':') ||
+        file.name.split('/').some((s) => s === '..' || s === '.') ||
+        file.name.includes('\0'))
+    )
+      throw new Error('ZIP 成员路径不安全');
+    if (file.name.endsWith('/')) return;
+    if (!all && !/^(word|ppt|xl)\/.+\.(xml|rels)$/.test(file.name)) return;
+    if (parts.has(file.name)) throw new Error('ZIP 成员重复');
     const chunks: Uint8Array[] = [];
     file.ondata = (error, chunk, final) => {
       if (error) throw error;
       size += chunk.length;
       if (size > limits.unzipBytes) {
         file.terminate();
-        throw new Error('ZIP 解压体积超过上限');
+        throw new IncompleteInspection('ZIP 解压体积超过上限');
       }
       chunks.push(chunk);
       if (final) parts.set(file.name, Buffer.concat(chunks));
@@ -128,6 +147,64 @@ function officeParts(bytes: Uint8Array, limits: InspectionLimits): Map<string, U
   for (let i = 0; i < bytes.length; i += 4096)
     unzip.push(bytes.subarray(i, i + 4096), i + 4096 >= bytes.length);
   return parts;
+}
+
+/** 只读取受限 ZIP 内容，核对中央目录、大小和 CRC；绝不执行或落盘成员。 */
+function archiveText(bytes: Buffer, limits: InspectionLimits): string {
+  let end = bytes.length - 22;
+  while (end >= Math.max(0, bytes.length - 65557) && bytes.readUInt32LE(end) !== 0x06054b50) end--;
+  if (
+    end < 0 ||
+    bytes.readUInt32LE(end) !== 0x06054b50 ||
+    end + 22 + bytes.readUInt16LE(end + 20) !== bytes.length
+  )
+    throw new Error('ZIP 中央目录缺失或不完整');
+  const count = bytes.readUInt16LE(end + 10);
+  if (
+    bytes.readUInt16LE(end + 4) ||
+    bytes.readUInt16LE(end + 6) ||
+    count === 65535 ||
+    count > limits.entries
+  )
+    throw new IncompleteInspection('ZIP 分卷、ZIP64 或成员数量不受支持');
+  let cursor = bytes.readUInt32LE(end + 16);
+  const directoryEnd = cursor + bytes.readUInt32LE(end + 12);
+  if (directoryEnd !== end) throw new Error('ZIP 中央目录位置不符');
+  const records = new Map<string, { size: number; crc: number }>();
+  for (let i = 0; i < count; i++) {
+    if (cursor + 46 > end || bytes.readUInt32LE(cursor) !== 0x02014b50)
+      throw new Error('ZIP 中央目录损坏');
+    const length = bytes.readUInt16LE(cursor + 28);
+    const extra = bytes.readUInt16LE(cursor + 30) + bytes.readUInt16LE(cursor + 32);
+    const mode = bytes.readUInt32LE(cursor + 38) >>> 16;
+    if ((mode & 0xf000) === 0xa000 || bytes.readUInt16LE(cursor + 8) & 1)
+      throw new Error('ZIP 不接受链接或加密成员');
+    if (cursor + 46 + length + extra > end) throw new Error('ZIP 成员头损坏');
+    const name = new TextDecoder('utf8', { fatal: true }).decode(
+      bytes.subarray(cursor + 46, cursor + 46 + length),
+    );
+    if (records.has(name)) throw new Error('ZIP 成员重复');
+    records.set(name, {
+      size: bytes.readUInt32LE(cursor + 24),
+      crc: bytes.readUInt32LE(cursor + 16),
+    });
+    cursor += 46 + length + extra;
+  }
+  if (cursor !== directoryEnd) throw new Error('ZIP 条目数不符');
+  const parts = officeParts(bytes, limits, true);
+  const lines = ['【ZIP 实际成员清单：路径 / 字节数 / SHA-256】'];
+  for (const [name, content] of parts) {
+    const entry = records.get(name);
+    if (!entry || content.length !== entry.size || crc32(content) !== entry.crc)
+      throw new Error('ZIP 成员大小或 CRC 不符');
+    lines.push(`${name}\t${content.length}\t${createHash('sha256').update(content).digest('hex')}`);
+  }
+  if ([...records].some(([name]) => !name.endsWith('/') && !parts.has(name)))
+    throw new Error('ZIP 成员缺失');
+  for (const [name, content] of parts)
+    if (/(^|\/)README[^/]*\.(md|txt)$/i.test(name) && content.length <= 16000)
+      lines.push(`【包内 ${name}】\n${new TextDecoder('utf8', { fatal: true }).decode(content)}`);
+  return lines.join('\n');
 }
 
 function paragraphs(tree: unknown): string {
@@ -177,7 +254,7 @@ function spreadsheet(
     lines.push(`【工作表：${sheet['@name']}】`);
     for (const row of array(child(read(name), 'worksheet', 'sheetData', 'row')))
       for (const cell of array(row.c)) {
-        if (++cells > limits.cells) throw new Error('单元格数量超过解析上限');
+        if (++cells > limits.cells) throw new IncompleteInspection('单元格数量超过解析上限');
         const type = cell['@t'];
         let value = textOf(cell.v);
         if (type === 's') {
@@ -215,6 +292,8 @@ async function inspect(): Promise<InspectedFile & { truncated?: boolean }> {
       throw new Error('图片格式与扩展名不符或不是单帧图片');
     await image.stats();
     dimensions = { width: meta.width, height: meta.height };
+  } else if (ext === '.zip') {
+    text = archiveText(bytes, data.limits);
   } else if (['.docx', '.pptx', '.xlsx'].includes(ext)) {
     const parts = officeParts(bytes, data.limits);
     if (ext === '.xlsx') ({ text, warning } = spreadsheet(parts, data.limits));
@@ -261,8 +340,8 @@ async function inspect(): Promise<InspectedFile & { truncated?: boolean }> {
           return name;
         });
       }
-      if (!slides.length || slides.length > data.limits.pages)
-        throw new Error('PPT 页数为空或超过上限');
+      if (!slides.length) throw new Error('PPT 页数为空');
+      if (slides.length > data.limits.pages) throw new IncompleteInspection('PPT 页数超过上限');
       text = slides
         .map((name, i) => `【幻灯片 ${i + 1}】\n${paragraphs(xml(parts.get(name)!, true))}`)
         .join('\n');
@@ -276,7 +355,7 @@ async function inspect(): Promise<InspectedFile & { truncated?: boolean }> {
       verbosity: 0,
     });
     try {
-      if (pdf.numPages > data.limits.pages) throw new Error('PDF 页数超过上限');
+      if (pdf.numPages > data.limits.pages) throw new IncompleteInspection('PDF 页数超过上限');
       const pages: string[] = [];
       for (let n = 1; n <= pdf.numPages; n++) {
         const page = await pdf.getPage(n);
@@ -328,5 +407,10 @@ void inspect()
       text: '',
       valid: false,
       error: error instanceof Error ? error.message : '文件解析失败',
+      errorKind:
+        error instanceof IncompleteInspection ||
+        (error instanceof Error && error.message.includes('pixel limit'))
+          ? 'incomplete'
+          : 'invalid',
     });
   });

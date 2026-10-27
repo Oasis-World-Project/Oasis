@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { safeHtml } from '../src/canvas/safe-html.ts';
 import { PreviewBody } from '../src/chat/FilePreview.tsx';
 import { readPreviewFile } from '../src/api/file-preview.ts';
+import { syncOnce } from '../src/desktop/sync.ts';
+import type { OasisDesktop } from '@oasis/contracts/desktop';
+import type { ArtifactBody } from '@oasis/contracts/canvas';
 
 afterEach(() => vi.unstubAllGlobals());
 const file = {
@@ -12,6 +15,18 @@ const file = {
   downloadUrl: '/api/canvas/v1/artifacts/1/content?download=1',
 };
 describe('安全格式预览', () => {
+  it('没有授权同步文件夹时，即使有新成果也不下载或写入用户电脑', async () => {
+    const fetcher = vi.fn();
+    const beginSyncedFile = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+    await syncOnce(
+      { beginSyncedFile } as unknown as OasisDesktop,
+      [{ id: 'new-artifact' }] as ArtifactBody[],
+      { folder: null, synced: [] },
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(beginSyncedFile).not.toHaveBeenCalled();
+  });
   it('重建 HTML 去除脚本、事件、资源、跳转和嵌套内容；外链只留给父应用', () => {
     const result = safeHtml(
       '<head class="x"><meta http-equiv="refresh" content="0;url=https://evil.test"><base href="https://evil.test"><style>@import "https://evil.test/css";</style></head><body onload="fetch(1)"><script>window.top.x=1</script><img src="https://evil.test/pixel" onerror="alert(1)"><a href="https://example.com/a" ping="https://evil.test/ping" target="_top">来源</a><a href="javascript:alert(1)">坏链接</a><iframe src="https://evil.test"></iframe><form action="https://evil.test"><button>提交</button></form><svg><script>alert(1)</script></svg><p>保留正文</p></body>',
