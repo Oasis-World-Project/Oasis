@@ -34,11 +34,12 @@
 7. **运行时**：结构化 JSON 日志输出到 stdout；每个服务暴露 `/health` 和 `/ready`；收到 SIGTERM 后处理完在途请求再退出。
 8. **数据库迁移**：dbmate 纯 SQL。文件头写 `-- phase: expand|migrate|contract`，必须有 `-- migrate:down`；expand 迁移必须写 `-- contract-plan:`。`pnpm check:engineering` 会检查这几项。
 9. **依赖版本**：一律精确版本（pnpm `saveExact`）；多个工作区共用的依赖写进 `pnpm-workspace.yaml` 的 `catalog`，package.json 里用 `"catalog:"` 引用。
-10. **镜像命名（没有例外）**：本项目构建和运行的每一个镜像都命名为 `oasis/<组件>:<标签>`，组件名小写（Docker 不允许大写），包括自研服务、中间件、以后 harness 的任务沙箱。
+10. **镜像命名（云渲染 worker 限定例外见下）**：本项目构建和运行的每一个镜像都命名为 `oasis/<组件>:<标签>`，组件名小写（Docker 不允许大写），包括自研服务、中间件、以后 harness 的任务沙箱。
     - 第三方镜像不直接使用：在 `infra/images/<组件>/Dockerfile` 里 `FROM` 官方镜像（锁定版本）做一层薄包装，标签沿用上游版本号，例如 `oasis/postgres:18.6`。
     - compose 里每个服务必须同时写 `image: oasis/...`、`build:` 和 `pull_policy: build`：只在本地构建，绝不从镜像仓库拉取，因为 Docker Hub 上的 `oasis` 命名空间不归我们。
     - 脚本里的 `docker build` 必须带 `-t oasis/<组件>:<标签>`。
     - `pnpm check:engineering` 的 images 检查和 pre-commit 钩子会强制执行这一条。
+    - **云渲染 worker 限定例外（用户 2026-10-27 确认）**：仅为 5.9 云渲染 worker，允许将本地构建并验证的 `oasis/harness-render:<精确标签>` 发布到用户明确指定且拥有控制权的私有 registry，由云端凭只读权限按不可变 SHA-256 摘要拉取。远端完整地址可增加 registry 主机与用户自有命名空间，仓库末段必须保持 `oasis/harness-render`；禁止未指定仓库、公开发布、`latest` 和不归用户所有的 Docker Hub `oasis` 命名空间。镜像中不得包含密钥、`.env`、用户文件或会话。本地 Compose 的命名、build、`pull_policy: build` 与沙箱网络边界保持不变。远端发布前必须具备显式发布描述和 registry/仓库/digest 白名单检查，不能整体放宽本地镜像检查。规则允许范围本身不构成创建资源、发布镜像或付费测试的授权，具体执行遵循用户当前授权；详见 ADR 0011 §12.2。
 11. **服务骨架**：每个服务都用 `@oasis/service-kit` 的 `startService` 启动，不自己写监听、探针、信号处理。统一接口：`/health`、`/ready`、`/v1/meta`；业务接口放 `/v1/*`，服务间接口放 `/internal/*`（gateway 不转发）。端口：gateway 8080，其余 4101–4108（见 README）。Node 服务的镜像统一用 `infra/images/node-service/Dockerfile` 按 `SERVICE` 参数构建。相对导入写 `.ts` 后缀，只用可擦除的 TS 语法（不用 enum、namespace、参数属性）。
 12. **前端约定**：
     - 颜色、阴影、圆角、字体一律来自 `@oasis/design-tokens`（CSS 变量 + Tailwind 主题），`apps/web/src` 里不写裸色值（`#xxx`、`rgb()` 等）；缺少的令牌先加进 `packages/design-tokens`。`pnpm check:engineering` 的 tokens 检查和 pre-commit 钩子会拦截。
