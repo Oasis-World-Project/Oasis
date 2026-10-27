@@ -149,6 +149,7 @@ export function createIntakeService(deps: {
       try {
         const text = await complete(ownerId, model, prompt, requestId);
         const reply = parseIntakeReply(text, mustSheet);
+        if (reply.type === 'sheet') reply.sheet.materials = intake.materials.map((m) => m.name);
         if (reply.type === 'sheet' && deps.harness) {
           validateSheetSources(reply.sheet, intake.request, intake.turns);
           const checked = await deps.modelGateway.json('POST', '/internal/v1/decisions', {

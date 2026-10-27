@@ -54,7 +54,7 @@ function system(name: string): string {
 
 三种回答：
 {"type":"questions","intro":"一句话开场","questions":[{"id":"q1","text":"问题","options":[{"id":"a","label":"选项"},{"id":"b","label":"选项"}],"default":"a"}]}
-{"type":"sheet","intro":"一句话说明","sheet":{"title":"不超过 60 字","deliverables":[{"name":"交付物名称","form":"形式，如 Markdown 文档、PNG 图片"}],"criteria":["怎么算做好，普通话、能检查，1–8 条"],"style":["风格与限制"],"budgetMicro":null,"assumptions":["你自己定的技术假设"],"materials":[]}}
+{"type":"sheet","intro":"一句话说明","sheet":{"title":"不超过60字","deliverables":[{"name":"交付物名称","form":"实际格式如DOCX+PDF"}],"criteria":["如何验收，1–8条"],"style":["风格与限制"],"budgetMicro":null,"assumptions":["不改变用户要求的制作选择"],"requirements":[{"id":"r1","text":"一条有效用户要求，最多1000字","sources":[{"kind":"request","quote":"从用户原话取出的连续原文，不要照抄本占位示例"}]}]}}
 {"type":"cancel","intro":"一句话回应"}
 
 说明：题目 id 用 q1、q2…，选项 id 用 a–e。budgetMicro 只有用户明确说了花费上限才填，单位是百万分之一美元（1 美元 = 1000000），否则填 null。`;
@@ -141,6 +141,16 @@ export function parseIntakeReply(text: string, mustSheet: boolean): IntakeReply 
   } catch {
     throw new Error('JSON 格式不对');
   }
+  // 素材清单和读取覆盖由服务端维护，忽略模型在这些只读字段里的内容。
+  if (
+    raw &&
+    typeof raw === 'object' &&
+    'sheet' in raw &&
+    raw.sheet &&
+    typeof raw.sheet === 'object' &&
+    !Array.isArray(raw.sheet)
+  )
+    raw = { ...raw, sheet: { ...raw.sheet, materials: [], materialWarnings: undefined } };
   const parsed = IntakeReply.safeParse(raw);
   if (!parsed.success) {
     const issues = parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}：${i.message}`);

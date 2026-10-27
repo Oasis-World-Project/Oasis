@@ -498,6 +498,7 @@ describe('接需求', () => {
         title: '费用表',
         deliverables: [{ name: '表', form: 'XLSX' }],
         criteria: ['按原报价计算'],
+        materials: [{ fabricated: '模型不负责填写素材元数据' }],
         requirements: [
           {
             id: 'r1',
@@ -549,6 +550,7 @@ describe('接需求', () => {
       requestId: 'r',
     });
     expect(messages.at(-1)?.kind).toBe('sheet');
+    expect(repo.intakes[0]?.sheet?.materials).toEqual([PHOTO.name]);
     expect(intakeRequests.at(-1)?.messages[1]?.content).toContain(evidence);
     expect(repo.intakes[0]?.sheet?.requirements?.[0]?.sources[0]).toMatchObject({
       sha256: 'a'.repeat(64),
