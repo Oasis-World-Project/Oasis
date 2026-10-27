@@ -95,6 +95,71 @@ const input = {
 };
 
 describe('关卡的验收点检查', () => {
+  it('缺乏支持不是违反；互相矛盾的判断也保持未知', async () => {
+    const gate = createGate({
+      harness: fakeClient(() => ({
+        files: [{ path: '介绍.md', text: '可读正文' }],
+        truncated: false,
+      })).client,
+      modelGateway: fakeClient(() => ({
+        answers: { c0: { noul: 0.1 }, f0: { noul: 0.1 }, c1: { noul: 0.9 }, f1: { noul: 0.9 } },
+      })).client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    const result = await gate.check({ ...input, details: true });
+    expect(result.unmet).toEqual([]);
+    expect(result.checks?.map((c) => c.status)).toEqual(['unchecked', 'unchecked']);
+  });
+  it('检查器取得原始材料、上游数据和系统计费事实，不要求成果写调用预算', async () => {
+    const harness = fakeClient((path) =>
+      path.includes('/materials/')
+        ? {
+            files: [
+              {
+                uploadId: PAYER,
+                name: '原始.csv',
+                sha256: 'a'.repeat(64),
+                text: 'V01,电器安全,09:00',
+                status: 'complete',
+              },
+            ],
+          }
+        : {
+            files: [
+              {
+                path: path.includes('source-run') ? '排班.json' : '介绍.md',
+                text: path.includes('source-run') ? 'V01 09:00' : '组织者说明',
+              },
+            ],
+            truncated: false,
+          },
+    );
+    const gateway = fakeClient(() => ({ answers: { c0: { noul: 0.9 }, f0: { noul: 0.1 } } }));
+    const gate = createGate({
+      harness: harness.client,
+      modelGateway: gateway.client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    await gate.check({
+      ...input,
+      checks: ['预算及原始排班一致'],
+      ownerId: PAYER,
+      materials: [{ uploadId: PAYER, name: '原始.csv', size: 20 }],
+      execution: { spentMicro: 54426, budgetMicro: 750000 },
+      references: [
+        { runId: 'source-run', summary: null, outputs: [{ path: '排班.json', size: 30 }] },
+      ],
+    });
+    const state = (gateway.calls[0]?.body as { state: string[] }).state.join('\n');
+    expect(state).toContain('V01,电器安全,09:00');
+    expect(state).toContain('V01 09:00');
+    expect(state).toContain('54426');
+    expect(state).toContain('750000');
+  });
   it('确定损坏与解析资源不足区分：损坏退回，超限留未检查且不误报数量不足', async () => {
     const run = {
       ...input,
@@ -126,7 +191,7 @@ describe('关卡的验收点检查', () => {
       ],
       truncated: false,
     }));
-    const gateway = fakeClient(() => ({ answers: { c1: { noul: 0.9 } } }));
+    const gateway = fakeClient(() => ({ answers: { c1: { noul: 0.9 }, f1: { noul: 0.1 } } }));
     const gate = createGate({
       harness: harness.client,
       modelGateway: gateway.client,
@@ -156,6 +221,7 @@ describe('关卡的验收点检查', () => {
     expect(result.checks?.map((c) => c.status)).toEqual(['unchecked', 'passed']);
     expect(Object.keys((gateway.calls[0]?.body as { questions: object }).questions)).toEqual([
       'c1',
+      'f1',
     ]);
   });
   it('视频、工程与字幕使用可信检查；损坏退回，黑帧/音画差及语义检查保留提醒', async () => {
@@ -349,7 +415,9 @@ describe('关卡的验收点检查', () => {
       stream: async () => new Response(Buffer.from('png')),
     } as ServiceClient;
     const gateway = fakeClient((path) =>
-      path.includes('image.inspect') ? { text: '一只杯子' } : { answers: { c0: { noul: 0.9 } } },
+      path.includes('image.inspect')
+        ? { text: '一只杯子' }
+        : { answers: { c0: { noul: 0.9 }, f0: { noul: 0.1 } } },
     );
     const gate = createGate({
       harness,
@@ -384,13 +452,18 @@ describe('关卡的验收点检查', () => {
     expect(unchecked.unchecked?.join('')).toContain('视觉检查未完成');
     expect(broken.calls).toHaveLength(1);
   });
-  it('每条验收点问一个是否满足；低于阈值的算没满足；记在付钱的人账上', async () => {
+  it('分别询问支持与明确违反证据；明确违反才没满足，记在付钱的人账上', async () => {
     const harness = fakeClient(() => ({
       files: [{ path: '介绍.md', text: '欢迎光临' }],
       truncated: false,
     }));
     const gateway = fakeClient(() => ({
-      answers: { c0: { type: 'noul', noul: 0.2 }, c1: { type: 'noul', noul: 0.9 } },
+      answers: {
+        c0: { type: 'noul', noul: 0.2 },
+        f0: { noul: 0.9 },
+        c1: { type: 'noul', noul: 0.9 },
+        f1: { noul: 0.1 },
+      },
     }));
     const gate = createGate({
       harness: harness.client,
@@ -414,7 +487,7 @@ describe('关卡的验收点检查', () => {
       'x-oasis-task-id': TASK,
       'x-oasis-node-id': NODE,
     });
-    expect(Object.keys(call.body.questions)).toEqual(['c0', 'c1']);
+    expect(Object.keys(call.body.questions)).toEqual(['c0', 'f0', 'c1', 'f1']);
     expect(call.body.state.join('\n')).toContain('欢迎光临');
   });
 
@@ -452,7 +525,9 @@ describe('关卡的验收点检查', () => {
       ],
       truncated: false,
     }));
-    const gateway = fakeClient(() => ({ answers: { c0: { type: 'noul', noul: 0.9 } } }));
+    const gateway = fakeClient(() => ({
+      answers: { c0: { type: 'noul', noul: 0.9 }, f0: { noul: 0.1 } },
+    }));
     const gate = createGate({
       harness: harness.client,
       modelGateway: gateway.client,

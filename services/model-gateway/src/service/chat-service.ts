@@ -108,14 +108,21 @@ export function createChatService(deps: {
     ): Promise<void> {
       let usage: Usage | undefined;
       let completionChars = 0;
+      let completed = false;
+      let providerFailed = false;
       const parser = createSseParser((data) => {
-        if (data === '[DONE]') return;
+        if (data === '[DONE]') {
+          completed = true;
+          return;
+        }
         try {
           const chunk = JSON.parse(data) as {
             usage?: Usage;
+            error?: unknown;
             choices?: { delta?: Parameters<typeof deltaChars>[0] }[];
           };
           if (chunk.usage) usage = chunk.usage;
+          if (chunk.error) providerFailed = true;
           const delta = chunk.choices?.[0]?.delta;
           if (delta) completionChars += deltaChars(delta);
         } catch {
@@ -124,13 +131,25 @@ export function createChatService(deps: {
       });
       const text = decoder();
       let error: string | undefined;
+      let terminalChunk: string | undefined;
       try {
         for await (const bytes of response.body as AsyncIterable<Uint8Array>) {
           const chunk = text.decode(bytes, { stream: true });
           parser.push(chunk);
+          // 客户端收到 DONE 就可能关闭连接；先结算，再发出包含 DONE 的最后一块。
+          if (completed) {
+            terminalChunk = chunk;
+            break;
+          }
           write(chunk);
         }
         parser.end();
+        if (!completed) {
+          error = '流式传输未收到完成标记';
+          write(
+            `data: ${JSON.stringify({ error: { code: 'stream_interrupted', message: '回复中断了' } })}\n\n`,
+          );
+        } else if (providerFailed) error = '供应商返回流式错误';
       } catch (err) {
         error = `流式传输中断：${String(err)}`;
         write(
@@ -138,6 +157,7 @@ export function createChatService(deps: {
         );
       }
       await settle(call, usage, completionChars, error);
+      if (terminalChunk !== undefined) write(terminalChunk);
     },
 
     /** 非流式：等上游完整返回，结算后把结果交给调用方。 */

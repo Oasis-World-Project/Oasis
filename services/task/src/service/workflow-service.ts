@@ -46,7 +46,7 @@ import {
 } from './output-files.ts';
 import { nodeRow, planToRows, validatePlan } from './plan.ts';
 import { createPlanning, dollars, type PlanningConfig } from './planning-service.ts';
-import { decide } from './schedule.ts';
+import { decide, incoming } from './schedule.ts';
 import { afterRound, firstStep, resumeStep, retryStep, reworkStep, type Step } from './steps.ts';
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
@@ -320,15 +320,31 @@ export function createWorkflowService(deps: {
             expects: [],
             details: Boolean(sheet.requirements),
             deliveryPaths: runs.flatMap((r) => r.outputs.map((f) => f.path)),
+            ownerId: task.ownerId,
+            materials: task.materials,
+            execution: { spentMicro: task.spentMicro, budgetMicro: sheet.budgetMicro },
           })
         : { unmet: [], unchecked: undefined };
     await store.transact(taskId, async (fresh, w) => {
       if (fresh.task.status !== 'accepting') return;
+      const overBudget = sheet.budgetMicro !== null && fresh.task.spentMicro > sheet.budgetMicro;
+      const budgetCheck =
+        sheet.budgetMicro === null
+          ? []
+          : [
+              {
+                id: 'system-budget',
+                text: '任务调用费用不超过用户上限',
+                status: overBudget ? ('unmet' as const) : ('passed' as const),
+                reason: `系统计量 ${fresh.task.spentMicro} 微美元；上限 ${sheet.budgetMicro} 微美元`,
+                evidence: ['task.spentMicro', 'sheet.budgetMicro'],
+              },
+            ];
       await w.setTask({
         acceptance: {
-          unmet: [...missing, ...unmet],
+          unmet: [...missing, ...unmet, ...(overBudget ? ['任务调用费用超过用户上限'] : [])],
           ...(unchecked?.length ? { unchecked } : {}),
-          ...(checks ? { checks } : {}),
+          ...(checks || budgetCheck.length ? { checks: [...(checks ?? []), ...budgetCheck] } : {}),
         },
         deliverables,
         status: 'succeeded',
@@ -465,6 +481,29 @@ export function createWorkflowService(deps: {
       ],
       expects: [...(node.config.expects ?? []), ...(node.config.deliver ?? [])],
       ...(delivery ? { deliveryPaths: delivery.map((f) => f.path) } : {}),
+      ownerId: snapshot.task.ownerId,
+      materials: snapshot.task.materials,
+      execution: {
+        spentMicro: snapshot.task.spentMicro,
+        budgetMicro: snapshot.task.sheet?.budgetMicro ?? null,
+      },
+      references: incoming(node, snapshot.edges).flatMap((edge) => {
+        const upstream = snapshot.nodes.find((n) => n.id === edge.fromNodeId);
+        if (!upstream?.config.outputsRunId) return [];
+        return [
+          {
+            runId: upstream.config.outputsRunId,
+            label: upstream.title,
+            summary: upstream.summary,
+            outputs: filesForInspection(
+              upstream.outputs,
+              upstream.config.expects ?? [],
+              upstream.config.deliver,
+              upstream.config.checks,
+            ),
+          },
+        ];
+      }),
     });
     await transact(taskId, async (fresh, w, fx) => {
       // 检查期间节点被停止、任务被取消：结果作废

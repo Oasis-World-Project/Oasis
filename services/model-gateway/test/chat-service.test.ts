@@ -102,6 +102,82 @@ const request = {
 };
 
 describe('一次模型调用', () => {
+  it('正常 EOF 缺少完成标记或供应商流内报错，都不能记为成功', async () => {
+    for (const content of [
+      'data: {"choices":[{"delta":{"content":"部分"}}]}\n\n',
+      'data: {"error":{"message":"upstream failed"}}\n\ndata: [DONE]\n\n',
+    ]) {
+      const call = await chat.prepare({
+        caller: { payerId: PAYER },
+        requestId: 'not-completed',
+        body: request,
+      });
+      await chat.pump(call, new Response(content), () => undefined);
+      expect(finished.at(-1)?.status).toBe('failed');
+    }
+  });
+  it('收到完成标记即完成读取，先结算再转发 DONE，正常关闭不记成中断', async () => {
+    const call = await chat.prepare({
+      caller: { payerId: PAYER },
+      requestId: 'done-before-close',
+      body: request,
+    });
+    let pulls = 0;
+    const response = new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (pulls++ === 0)
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {"choices":[],"usage":{"cost":0.000042}}\n\ndata: [DONE]\n\n',
+                ),
+              );
+            else controller.error(new DOMException('Client closes after DONE', 'AbortError'));
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+    );
+    let forwarded = '';
+    await chat.pump(call, response, (chunk) => {
+      if (chunk.includes('[DONE]')) expect(finished).toHaveLength(1);
+      forwarded += chunk;
+    });
+    expect(forwarded).toContain('[DONE]');
+    expect(forwarded).not.toContain('stream_interrupted');
+    expect(pulls).toBe(1);
+    expect(finished[0]).toMatchObject({
+      status: 'succeeded',
+      upstreamCostMicro: 42,
+      costSource: 'provider',
+    });
+  });
+  it('没有完成标记的真实中断仍记失败，不能用部分用量冒充完整成功', async () => {
+    const call = await chat.prepare({
+      caller: { payerId: PAYER },
+      requestId: 'interrupted',
+      body: request,
+    });
+    let pulls = 0;
+    const response = new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (pulls++ === 0)
+              controller.enqueue(
+                new TextEncoder().encode('data: {"choices":[{"delta":{"content":"部分"}}]}\n\n'),
+              );
+            else controller.error(new DOMException('Interrupted', 'AbortError'));
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+    );
+    await chat.pump(call, response, () => undefined);
+    expect(finished[0]).toMatchObject({ status: 'failed' });
+    expect(finished[0]?.error).toContain('中断');
+  });
   it('批次预算在冻结前校验，不透传供应商；非流式返回计量金额', async () => {
     await expect(
       chat.prepare({
