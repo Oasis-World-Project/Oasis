@@ -70,7 +70,7 @@ export function createToolService(deps: {
         if (
           !job ||
           job.phase === 'expired' ||
-          job.phase === 'uncertain' ||
+          (job.phase === 'uncertain' && job.call.cancelRequested !== true) ||
           job.status === 'failed' ||
           (job.status === 'completed' && job.result)
         )
@@ -89,6 +89,33 @@ export function createToolService(deps: {
         if (!result || !cost) {
           const tool = byKey.get(job.tool);
           if (!tool?.long) throw new Error('长任务工具不存在');
+          const toolDeps = {
+            openrouter: deps.openrouter,
+            tavily: deps.tavily,
+            fal: deps.fal,
+            config,
+            signal: AbortSignal.timeout(120_000),
+            upstream: (request: () => Promise<Response>) => request(),
+          };
+          if (job.call.cancelRequested === true) {
+            if (!tool.cancel) {
+              await jobs.update(id, {
+                phase: 'uncertain',
+                error: '供应商取消接口尚未接入，费用及终态待核对',
+              });
+              return;
+            }
+            try {
+              await tool.cancel(toolDeps, job.providerJobId);
+            } catch {
+              if (Date.now() - job.createdAt.getTime() > deps.jobTimeoutMs)
+                await jobs.update(id, {
+                  phase: 'uncertain',
+                  error: '取消长期未确认；费用和供应商状态待人工核对',
+                });
+              return;
+            }
+          }
           const state = await tool
             .check(
               {
@@ -112,8 +139,19 @@ export function createToolService(deps: {
               throw error;
             });
           if (state.state === 'failed') {
+            if (job.call.cancelRequested === true) {
+              await jobs.update(id, {
+                phase: 'uncertain',
+                error: '供应商终止，费用未确认；未自动退回',
+              });
+              return;
+            }
             await meter.fail(call, state.error);
             await jobs.finish(id, 'failed', state.error);
+            return;
+          }
+          if (state.state === 'uncertain') {
+            await jobs.update(id, { phase: 'uncertain', error: state.error });
             return;
           }
           if (state.state === 'pending') {
@@ -154,6 +192,7 @@ export function createToolService(deps: {
           result = {
             tool: tool.key,
             text: state.outcome.text,
+            ...(state.outcome.data === undefined ? {} : { data: state.outcome.data }),
             files,
             costMicro: cost.costMicro,
             job: { id },
@@ -218,8 +257,19 @@ export function createToolService(deps: {
       throw new HttpError(404, 'tool_job_not_found', '没有这个任务号');
     return job;
   }
+  async function cancelJob(caller: Caller, id: string) {
+    const job = await ownedJob(caller, id);
+    if (job.status !== 'pending') return;
+    await jobs.requestCancel(id);
+    // Intent survives client disconnect and run-key revocation; recovery owns the provider request.
+    void processOne(id).catch(() => deps.logger.warn({ jobId: id }, '取消待恢复巡检继续核对'));
+  }
 
   return {
+    cancel: cancelJob,
+    async cancelRun(caller: Caller, runId: string) {
+      for (const job of await jobs.forRun(runId)) await cancelJob(caller, job.id);
+    },
     /** 工具目录：没配 Key、或者没有能用的模型的工具标成不可用 */
     async list(): Promise<ToolEntry[]> {
       const blocked = new Set(await meter.regionBlockedModels());
@@ -523,11 +573,18 @@ export function createToolService(deps: {
       if (job.phase === 'expired' || (job.expiresAt && job.expiresAt.getTime() < Date.now()))
         throw new HttpError(410, 'tool_result_expired', '工具结果已过期，请使用已交付的成果');
       if (job.phase === 'uncertain')
-        return { status: 'uncertain', error: job.error ?? '供应商结果未确认' };
+        return {
+          status: 'uncertain',
+          error: job.error ?? '供应商结果未确认',
+          ...(job.call.cancelRequested === true ? { cancelRequested: true } : {}),
+        };
       if (job.status === 'failed') return { status: 'failed', error: job.error ?? '没做出来' };
       if (job.status === 'completed' && job.result)
         return { status: 'completed', result: job.result };
-      return { status: 'pending' };
+      return {
+        status: 'pending',
+        ...(job.call.cancelRequested === true ? { cancelRequested: true } : {}),
+      };
     },
     async file(caller: Caller, jobId: string, fileId: string) {
       const job = await ownedJob(caller, jobId);

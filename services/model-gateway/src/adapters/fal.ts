@@ -5,6 +5,7 @@ const Handle = z.object({
   request_id: z.string().min(1),
   status_url: z.url(),
   response_url: z.url(),
+  cancel_url: z.url().optional(),
 });
 export function createFalClient(options: {
   baseUrl: string;
@@ -34,7 +35,12 @@ export function createFalClient(options: {
     });
   return {
     configured: Boolean(options.apiKey),
-    submit(model: string, input: Record<string, unknown>, signal: AbortSignal) {
+    submit(
+      model: string,
+      input: Record<string, unknown>,
+      signal: AbortSignal,
+      policy?: { noRetry: boolean },
+    ) {
       if (!/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_.-]+)+$/.test(model))
         throw new Error('fal 模型名不合格');
       return request(`${base}/${model}`, {
@@ -42,6 +48,7 @@ export function createFalClient(options: {
         headers: {
           authorization: `Key ${options.apiKey ?? ''}`,
           'content-type': 'application/json',
+          ...(policy?.noRetry ? { 'x-fal-no-retry': '1' } : {}),
         },
         body: JSON.stringify(input),
         signal,
@@ -52,6 +59,7 @@ export function createFalClient(options: {
       const handle = Handle.parse(value);
       queueUrl(handle.status_url);
       queueUrl(handle.response_url);
+      if (handle.cancel_url) queueUrl(handle.cancel_url);
       return JSON.stringify(handle);
     },
     async status(serialized: string) {
@@ -61,6 +69,16 @@ export function createFalClient(options: {
     async result(serialized: string) {
       const handle = Handle.parse(JSON.parse(serialized));
       return get(handle.response_url);
+    },
+    async cancel(serialized: string) {
+      const handle = Handle.parse(JSON.parse(serialized));
+      const url = queueUrl(handle.cancel_url ?? `${handle.response_url}/cancel`);
+      return request(url, {
+        method: 'PUT',
+        headers: { authorization: `Key ${options.apiKey ?? ''}` },
+        redirect: 'error',
+        signal: AbortSignal.timeout(20_000),
+      });
     },
     async media(value: string): Promise<Response> {
       let url = new URL(value);

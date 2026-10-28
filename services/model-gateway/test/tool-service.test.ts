@@ -169,6 +169,17 @@ const repo: CallsRepo = {
 
 const jobRows = new Map<string, ToolJob>();
 const jobs: ToolJobsRepo = {
+  async requestCancel(id) {
+    const row = jobRows.get(id);
+    if (row?.status === 'pending') {
+      row.call = { ...row.call, cancelRequested: true };
+      row.phase = 'cancel_requested';
+    }
+  },
+  forRun: async (runId) =>
+    [...jobRows.values()].filter(
+      (row) => row.status === 'pending' && (row.call.caller as { runId?: string })?.runId === runId,
+    ),
   async insert(job) {
     if (job.requestKey && [...jobRows.values()].some((row) => row.requestKey === job.requestKey))
       return false;
@@ -254,6 +265,18 @@ let tools: ReturnType<typeof createToolService>;
 let urls = { billing: '', fake: '' };
 const falCalls: { url: string; input?: Record<string, unknown> }[] = [];
 let falSubmitFails = false;
+let geometryMode = false;
+let geometryMalformed = false;
+let geometryCancelled = false;
+let geometryCancelCompleted = false;
+const geometryImage = [
+  {
+    mediaType: 'image/png',
+    base64: Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(16)]).toString(
+      'base64',
+    ),
+  },
+];
 const build = (tavilyKey: string | undefined, withMusic = false) => {
   const logger = pino({ level: 'silent' });
   return createToolService({
@@ -268,6 +291,12 @@ const build = (tavilyKey: string | undefined, withMusic = false) => {
               ? (JSON.parse(String(init.body)) as Record<string, unknown>)
               : undefined;
             falCalls.push({ url, input: body });
+            if (init?.method === 'PUT') {
+              if (geometryCancelCompleted)
+                return Response.json({ status: 'ALREADY_COMPLETED' }, { status: 400 });
+              geometryCancelled = true;
+              return new Response(null, { status: 202 });
+            }
             if (init?.method === 'POST') {
               if (falSubmitFails) throw new Error('connection lost');
               return Response.json({
@@ -276,7 +305,20 @@ const build = (tavilyKey: string | undefined, withMusic = false) => {
                 response_url: 'https://queue.fal.run/fal-ai/minimax-music/requests/music-one',
               });
             }
-            if (url.endsWith('/status')) return Response.json({ status: 'COMPLETED' });
+            if (url.endsWith('/status'))
+              return Response.json({ status: geometryCancelled ? 'CANCELLED' : 'COMPLETED' });
+            if (geometryMode) {
+              if (!url.includes('fal.media'))
+                return Response.json({ model_glb: { url: 'https://v3.fal.media/model.glb' } });
+              const bytes = Buffer.alloc(24);
+              bytes.write('glTF');
+              bytes.writeUInt32LE(2, 4);
+              bytes.writeUInt32LE(24, 8);
+              bytes.writeUInt32LE(4, 12);
+              bytes.writeUInt32LE(0x4e4f534a, 16);
+              bytes.write('{}  ', 20);
+              return new Response(geometryMalformed ? Buffer.from('invalid') : bytes);
+            }
             if (url.includes('fal.media'))
               return new Response('ID3music', { headers: { 'content-type': 'audio/mpeg' } });
             return Response.json({ audio: { url: 'https://v3.fal.media/music.mp3' } });
@@ -295,6 +337,7 @@ const build = (tavilyKey: string | undefined, withMusic = false) => {
     jobTimeoutMs: 30 * 60_000,
     config: {
       musicModels: ['fal-ai/minimax-music/v2.6'],
+      geometryModels: withMusic ? ['fal-ai/trellis-2'] : [],
       imageModels: ['bytedance-seed/seedream-4.5', 'openai/gpt-image-2'],
       visionModels: ['vision/first', 'vision/second'],
       visionMaxTokens: 2048,
@@ -320,6 +363,10 @@ afterAll(async () => {
   await fake.close();
 });
 beforeEach(() => {
+  geometryMode = false;
+  geometryMalformed = false;
+  geometryCancelled = false;
+  geometryCancelCompleted = false;
   billingCalls.length = 0;
   settleFails = false;
   falSubmitFails = false;
@@ -341,6 +388,101 @@ beforeEach(() => {
   videoUsdTariff = true;
   jobRows.clear();
   tools = build('tvly-k');
+});
+
+describe('3D 生成复用长任务', () => {
+  it('取消与完成竞争时取回已完成成果，不把 ALREADY_COMPLETED 当成终止确认', async () => {
+    geometryMode = true;
+    geometryCancelCompleted = true;
+    tools = build('key', true);
+    const id = (await call('3d.generate', { image: geometryImage })).job!.id;
+    await tools.cancel({ payerId: PAYER }, id);
+    await tools.close();
+    expect(jobRows.get(id)?.status).toBe('completed');
+    expect(billingCalls.map((r) => r.path)).toEqual(['hold', 'settle']);
+  });
+  it('只接受本地单图，未配置模型不启用；预算不足不提交', async () => {
+    expect((await tools.list()).find((t) => t.key === '3d.generate')?.available).toBe(false);
+    await expect(call('3d.generate', { image: geometryImage })).rejects.toMatchObject({
+      statusCode: 503,
+    });
+    tools = build('key', true);
+    await expect(
+      call('3d.generate', { image_url: 'https://example.com/private' }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await expect(
+      tools.call({
+        caller: { payerId: PAYER },
+        key: '3d.generate',
+        args: { image: geometryImage },
+        requestId: 'budget',
+        signal: AbortSignal.timeout(1000),
+        maxCostMicro: 1,
+      }),
+    ).rejects.toMatchObject({ code: 'call_budget_exceeded' });
+    expect(falCalls).toHaveLength(0);
+    expect(billingCalls).toHaveLength(0);
+  });
+  it('同请求只提交一次；结算中断从归档恢复，保留未知检查项', async () => {
+    geometryMode = true;
+    tools = build('key', true);
+    const input = {
+      caller: { payerId: PAYER, taskId: TASK },
+      key: '3d.generate',
+      args: { image: geometryImage },
+      requestId: 'geometry',
+      idempotencyKey: '00000000-0000-4000-8000-000000000077',
+      signal: AbortSignal.timeout(5000),
+    };
+    const first = await tools.call(input),
+      same = await tools.call(input);
+    expect(first.job?.id).toBe(same.job?.id);
+    expect(falCalls.filter((r) => r.input)).toHaveLength(1);
+    expect(falCalls[0]?.input).toMatchObject({ resolution: 1024 });
+    settleFails = true;
+    await tools.job(input.caller, first.job!.id, AbortSignal.timeout(1000));
+    expect(jobRows.get(first.job!.id)?.phase).toBe('stored');
+    const count = falCalls.length;
+    settleFails = false;
+    tools = build('key', true);
+    const done = await tools.job(input.caller, first.job!.id, AbortSignal.timeout(1000));
+    expect(done.status).toBe('completed');
+    expect(done.result?.files[0]).toMatchObject({ mediaType: 'model/gltf-binary', size: 24 });
+    expect(done.result?.data).toMatchObject({
+      unchecked: ['真实尺寸', '背面', '拓扑', '可打印性'],
+    });
+    expect(falCalls).toHaveLength(count);
+    expect(billingCalls.filter((r) => r.path === 'settle')).toHaveLength(1);
+  });
+  it('坏 GLB 不归档结算，也不重新生成；原请求提交断连保留未知', async () => {
+    geometryMode = true;
+    geometryMalformed = true;
+    tools = build('key', true);
+    const id = (await call('3d.generate', { image: geometryImage })).job!.id;
+    await tools.job({ payerId: PAYER }, id, AbortSignal.timeout(1000));
+    expect(mediaFiles.size).toBe(0);
+    expect(billingCalls.map((r) => r.path)).toEqual(['hold']);
+    falSubmitFails = true;
+    const unknown = (await call('3d.generate', { image: geometryImage })).job!.id;
+    expect((await tools.job({ payerId: PAYER }, unknown, AbortSignal.timeout(1000))).status).toBe(
+      'uncertain',
+    );
+    expect(falCalls.filter((r) => r.input)).toHaveLength(2);
+  });
+  it('取消意图持久化且检查归属；接受取消不等于费用可退回', async () => {
+    geometryMode = true;
+    tools = build('key', true);
+    const id = (await call('3d.generate', { image: geometryImage }, TASK)).job!.id;
+    await expect(tools.cancel({ payerId: PAYER, taskId: PAYER }, id)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await tools.cancel({ payerId: PAYER, taskId: TASK }, id);
+    await tools.close();
+    expect(jobRows.get(id)?.call.cancelRequested).toBe(true);
+    expect(jobRows.get(id)?.phase).toBe('uncertain');
+    expect(geometryCancelled).toBe(true);
+    expect(billingCalls.map((r) => r.path)).toEqual(['hold']);
+  });
 });
 
 const call = (key: string, args: Record<string, unknown>, taskId?: string) =>
@@ -446,6 +588,7 @@ describe('工具目录', () => {
     const list = await build(undefined).list();
     const byKey = Object.fromEntries(list.map((t) => [t.key, t]));
     expect(Object.keys(byKey)).toEqual([
+      '3d.generate',
       'image.generate',
       'image.inspect',
       'audio.speech',

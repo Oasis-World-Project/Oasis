@@ -2,7 +2,7 @@
 // 目录放在这里（和供应商适配在一起），由 model-gateway 对外提供；以后接新供应商（如 fal.ai）只在这里加。
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { HttpError } from '@oasis/service-kit';
 import type { ProviderClient } from '../adapters/openrouter.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
@@ -27,6 +27,8 @@ export interface ToolConfig {
   speechMicroPerChar: number;
   musicModels?: string[];
   musicMicroPerGeneration?: number;
+  geometryModels?: string[];
+  geometryMicroPerGeneration?: number;
 }
 
 interface ToolDeps {
@@ -74,6 +76,7 @@ interface QuickTool extends ToolBase {
 type LongState =
   | { state: 'pending' }
   | { state: 'failed'; error: string }
+  | { state: 'uncertain'; error: string }
   | { state: 'completed'; outcome: ToolOutcome };
 
 /** 长任务（视频）：先提交拿到供应商的任务号，之后查进度，做好了再取结果 */
@@ -81,6 +84,7 @@ interface LongTool extends ToolBase {
   long: true;
   start: (deps: ToolDeps, args: Record<string, unknown>, model: string) => Promise<string>;
   check: (deps: ToolDeps, providerJobId: string) => Promise<LongState>;
+  cancel?: (deps: ToolDeps, providerJobId: string) => Promise<void>;
 }
 
 export type ToolDef = QuickTool | LongTool;
@@ -146,6 +150,39 @@ const InspectArgs = z.object({
   question: z.string().trim().min(1).max(4000),
   model: optionalModel,
 });
+const GeometryArgs = z.strictObject({
+  image: InputImages.max(1),
+  resolution: z.enum(['512', '1024', '1536']).default('1024'),
+  model: optionalModel,
+});
+/** Bounded container validation; full geometry and visual checks remain in the harness worker. */
+function glbStream(body: NonNullable<Response['body']>) {
+  let header = Buffer.alloc(0),
+    size = 0;
+  const check = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      size += chunk.length;
+      if (header.length < 12)
+        header = Buffer.concat([header, chunk.subarray(0, 12 - header.length)]);
+      if (size > 200 * 1024 ** 2) return callback(new Error('GLB 超过大小上限'));
+      callback(null, chunk);
+    },
+    flush(callback) {
+      callback(
+        header.length === 12 &&
+          header.toString('ascii', 0, 4) === 'glTF' &&
+          header.readUInt32LE(4) === 2 &&
+          header.readUInt32LE(8) === size
+          ? null
+          : new Error('GLB 容器或长度无效'),
+      );
+    },
+  });
+  const input = Readable.fromWeb(body);
+  input.on('error', (error) => check.destroy(error));
+  check.on('close', () => input.destroy());
+  return input.pipe(check);
+}
 const imageParts = (images: z.infer<typeof InputImages>) =>
   images.map((image) => ({
     type: 'image_url',
@@ -246,6 +283,80 @@ const estimate = (costMicro: number) => ({ costMicro, source: 'estimate' as cons
 const provider = (costUsd: number) => ({ costMicro: usd(costUsd), source: 'provider' as const });
 
 export const TOOLS: ToolDef[] = [
+  {
+    key: '3d.generate',
+    name: '生成 3D 模型',
+    description: '从一张本地参考图生成外观概念 GLB；不保证真实尺寸、背面、拓扑或可打印性。',
+    usage: 'oasis-tool 3d.generate --image materials/参考.png --resolution 1024 --out out/模型.glb',
+    unit: '模型',
+    estimateMicro: 500_000,
+    holdMicro: () => 1_000_000,
+    long: true,
+    provider: 'fal',
+    models: (config) => config.geometryModels ?? [],
+    args: GeometryArgs,
+    modelOf: pickModel,
+    async start(deps, args, model) {
+      if (!deps.fal) throw new Error('3D 供应商未配置');
+      const a = GeometryArgs.parse(args),
+        image = a.image[0]!;
+      return deps.fal.handle(
+        await (
+          await deps.upstream(() =>
+            deps.fal!.submit(
+              model,
+              {
+                image_url: `data:${image.mediaType};base64,${image.base64}`,
+                resolution: Number(a.resolution),
+              },
+              deps.signal,
+              { noRetry: true },
+            ),
+          )
+        ).json(),
+      );
+    },
+    async cancel(deps, id) {
+      if (!deps.fal) throw new Error('3D 供应商未配置');
+      const response = await deps.fal.cancel(id);
+      if (response.status === 400) {
+        const body = (await response.json().catch(() => null)) as { status?: string } | null;
+        if (body?.status === 'ALREADY_COMPLETED') return;
+        throw new Error('取消未确认');
+      }
+      await response.body?.cancel();
+      if (!response.ok) throw new Error('取消未确认');
+    },
+    async check(deps, id) {
+      if (!deps.fal) throw new Error('3D 供应商未配置');
+      const response = await deps.fal.status(id);
+      if (!response.ok) throw new Error('3D 状态暂不可取');
+      const state = z.object({ status: z.string() }).parse(await response.json());
+      if (['FAILED', 'CANCELLED'].includes(state.status))
+        return { state: 'uncertain', error: '供应商已终止，但费用未确认，保留对账' };
+      if (state.status !== 'COMPLETED') return { state: 'pending' };
+      const result = await deps.fal.result(id);
+      if (!result.ok) throw new Error('3D 结果暂不可取');
+      const body = z.object({ model_glb: z.object({ url: z.url() }) }).parse(await result.json());
+      const media = await deps.fal.media(body.model_glb.url);
+      if (!media.body) throw new Error('3D 结果无内容流');
+      return {
+        state: 'completed',
+        outcome: {
+          text: '参考图生成的外观概念 GLB；真实尺寸、背面、拓扑和可打印性未检查。',
+          data: {
+            source: 'fal',
+            format: 'glb',
+            unchecked: ['真实尺寸', '背面', '拓扑', '可打印性'],
+          },
+          files: [
+            { name: 'model.glb', mediaType: 'model/gltf-binary', body: glbStream(media.body) },
+          ],
+          cost: estimate(deps.config.geometryMicroPerGeneration ?? 500_000),
+        },
+      };
+    },
+  },
   {
     key: 'image.generate',
     name: '生成图片',

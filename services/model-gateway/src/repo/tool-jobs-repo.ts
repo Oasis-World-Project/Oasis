@@ -1,5 +1,5 @@
 // 长任务的提交、文件持久化、结算与清理共用同一行；租约防止多个进程重复处理。
-import { and, eq, isNull, lt, or } from 'drizzle-orm';
+import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { toolJobs } from './schema.ts';
@@ -9,6 +9,8 @@ export interface ToolJobsRepo {
     job: Pick<ToolJob, 'id' | 'tool' | 'providerJobId' | 'call' | 'requestKey' | 'requestHash'>,
   ): Promise<boolean>;
   byRequest(key: string): Promise<ToolJob | undefined>;
+  requestCancel(id: string): Promise<void>;
+  forRun(runId: string): Promise<ToolJob[]>;
   get(id: string): Promise<ToolJob | undefined>;
   update(
     id: string,
@@ -44,6 +46,22 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
       const [row] = await db.select().from(toolJobs).where(eq(toolJobs.requestKey, key));
       return row;
     },
+    async requestCancel(id) {
+      await db
+        .update(toolJobs)
+        .set({
+          call: sql`${toolJobs.call} || '{"cancelRequested":true}'::jsonb`,
+          phase: 'cancel_requested',
+        })
+        .where(and(eq(toolJobs.id, id), eq(toolJobs.status, 'pending')));
+    },
+    forRun: (runId) =>
+      db
+        .select()
+        .from(toolJobs)
+        .where(
+          and(eq(toolJobs.status, 'pending'), sql`${toolJobs.call}->'caller'->>'runId' = ${runId}`),
+        ),
     async get(id) {
       const [row] = await db.select().from(toolJobs).where(eq(toolJobs.id, id));
       return row;
@@ -90,6 +108,7 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
             or(
               eq(toolJobs.phase, 'pending'),
               eq(toolJobs.phase, 'stored'),
+              eq(toolJobs.phase, 'cancel_requested'),
               and(
                 eq(toolJobs.phase, 'submitting'),
                 lt(toolJobs.createdAt, new Date(Date.now() - 120_000)),

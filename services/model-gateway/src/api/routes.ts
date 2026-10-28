@@ -131,6 +131,15 @@ export function registerRoutes(
   app.get('/internal/v1/tools/jobs/:jobId', (request, reply) =>
     toolJob(internalCaller(request), request, reply),
   );
+  app.post('/internal/v1/tools/jobs/:jobId/cancel', async (request) => {
+    await tools.cancel(internalCaller(request), parseWith(JobParams, request.params).jobId);
+    return { accepted: true };
+  });
+  app.post('/internal/v1/tools/runs/:runId/cancel', async (request) => {
+    const { runId } = parseWith(z.object({ runId: z.uuid() }), request.params);
+    await tools.cancelRun(internalCaller(request), runId);
+    return { accepted: true };
+  });
 
   /** 算力（harness 用）：开沙箱前冻结，销毁后按实际时长结算 */
   app.get('/internal/v1/compute/quote', async (request) => {
@@ -197,6 +206,13 @@ export function registerRoutes(
   app.get('/run/v1/tools/jobs/:jobId', async (request, reply) =>
     toolJob(await runKeys.authenticate(request.headers.authorization), request, reply),
   );
+  app.post('/run/v1/tools/jobs/:jobId/cancel', async (request) => {
+    await tools.cancel(
+      await runKeys.authenticate(request.headers.authorization),
+      parseWith(JobParams, request.params).jobId,
+    );
+    return { accepted: true };
+  });
   const fileParams = JobParams.extend({ fileId: z.string().regex(/^\d{1,3}$/) });
   app.get('/run/v1/tools/jobs/:jobId/files/:fileId', async (request, reply) => {
     const caller = await runKeys.authenticate(request.headers.authorization);

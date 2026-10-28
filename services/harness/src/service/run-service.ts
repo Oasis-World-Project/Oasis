@@ -513,6 +513,20 @@ export function createRunService(deps: {
       await sandbox
         ?.destroy()
         .catch((err: unknown) => logger.warn({ err, runId: id }, '销毁沙箱失败'));
+      if (outcome.status !== 'succeeded') {
+        await deps.modelGateway
+          .json('POST', `/internal/v1/tools/runs/${id}/cancel`, {
+            body: {},
+            requestId: id,
+            headers: {
+              'x-oasis-payer-id': row.payerId,
+              ...(row.taskId ? { 'x-oasis-task-id': row.taskId } : {}),
+            },
+          })
+          .catch((err: unknown) =>
+            logger.warn({ err, runId: id }, '长任务取消意图写入失败，费用仍需核对'),
+          );
+      }
       if (keyId) {
         await deps.modelGateway
           .json('POST', `/internal/run-keys/${keyId}/revoke`, { body: {}, requestId: id })
@@ -826,6 +840,18 @@ export function createRunService(deps: {
     async recover(): Promise<void> {
       for (const row of await repo.listUnfinished()) {
         if (live.has(row.id)) continue;
+        await deps.modelGateway
+          .json('POST', `/internal/v1/tools/runs/${row.id}/cancel`, {
+            body: {},
+            requestId: row.id,
+            headers: {
+              'x-oasis-payer-id': row.payerId,
+              ...(row.taskId ? { 'x-oasis-task-id': row.taskId } : {}),
+            },
+          })
+          .catch((err: unknown) =>
+            logger.warn({ err, runId: row.id }, '重启恢复时长任务取消意图未写入'),
+          );
         await finish(row, {
           status: 'failed',
           error: '运行中断：harness 重启',

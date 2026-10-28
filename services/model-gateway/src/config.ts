@@ -24,6 +24,14 @@ export const modelGatewayEnv = {
   FAL_BASE_URL: z.url().default('https://queue.fal.run'),
   FAL_MEDIA_HOSTS: list('fal.media'),
   TOOL_MUSIC_MODELS: list('fal-ai/minimax-music/v2.6'),
+  // Opt in only after model price/parameters are verified. A Key alone does not enable 3D.
+  TOOL_GEOMETRY_MODELS: list(''),
+  TOOL_GEOMETRY_MICRO_PER_GENERATION: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(1_000_000)
+    .default(500_000),
   TOOL_MUSIC_MICRO_PER_GENERATION: z.coerce.number().int().positive().max(500_000).default(150_000),
   TOOL_RESULT_MAX_BYTES: z.coerce
     .number()

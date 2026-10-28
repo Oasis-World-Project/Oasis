@@ -173,6 +173,7 @@ export type ToolResult = z.infer<typeof ToolResult>;
 /** 长任务的进度：还在做 / 做好了（带结果）/ 失败了（带原因） */
 export const ToolJobBody = z.object({
   status: z.enum(['pending', 'completed', 'failed', 'uncertain']),
+  cancelRequested: z.boolean().optional(),
   result: ToolResult.optional(),
   error: z.string().optional(),
 });

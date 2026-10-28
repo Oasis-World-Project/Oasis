@@ -22,8 +22,10 @@ describe('fal 队列与媒体边界', () => {
       response_url: 'https://queue.fal.run/fal-ai/music/requests/one',
     });
     await client.status(handle);
+    await client.cancel(handle);
     await client.media('https://v3.fal.media/audio.mp3');
-    expect(calls.map((call) => call.auth)).toEqual(['Key test', null]);
+    expect(calls[1]?.url).toBe('https://queue.fal.run/fal-ai/music/requests/one/cancel');
+    expect(calls.map((call) => call.auth)).toEqual(['Key test', 'Key test', null]);
     expect(() =>
       client.handle({
         request_id: 'x',

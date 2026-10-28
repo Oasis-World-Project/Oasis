@@ -216,6 +216,10 @@ async function localImages(paths: unknown): Promise<{ mediaType: string; base64:
 
 async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
+  if (key === '3d.generate' && args.image !== undefined) {
+    if (typeof args.image !== 'string') throw new Error('--image 需要本地图片路径');
+    args.image = await localImages([args.image]);
+  }
   if (key === 'audio.music' && args.lyrics_file !== undefined) {
     if (typeof args.lyrics_file !== 'string' || (await stat(args.lyrics_file)).size > 14_000)
       throw new Error('歌词文件超过上限');
@@ -233,7 +237,7 @@ async function run(key: string, argv: string[]): Promise<void> {
   delete args.max_cost_micro;
   let statePath: string | undefined;
   let requestState: { key: string; jobId?: string } | undefined;
-  if (key === 'audio.music' || key === 'video.generate') {
+  if (key === 'audio.music' || key === 'video.generate' || key === '3d.generate') {
     const fingerprint = createHash('sha256')
       .update(
         JSON.stringify({
@@ -343,6 +347,13 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   if (command === 'list') return list();
+  if (command === 'cancel') {
+    const [id] = rest;
+    if (!id || !/^[a-f0-9-]{36}$/.test(id)) throw new Error('cancel 后面需要任务号');
+    await request(`/tools/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' });
+    say('取消意图已保存；供应商终态及费用仍由后台核对，请用 wait 查询。');
+    return;
+  }
   if (command === 'wait') {
     const [id, ...more] = rest;
     if (!id) throw new Error('wait 后面要写任务号');
