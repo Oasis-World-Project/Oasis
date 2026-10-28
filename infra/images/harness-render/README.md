@@ -134,8 +134,8 @@ audited bill line/window across jobs. The response acknowledges acceptance;
 poll the existing job endpoint for the final state. This route is deliberately
 unavailable under `/run` or the public gateway. The caller must verify worker
 shutdown and all attributable startup/execution/idle/storage/platform costs;
-the API does not independently prove that assertion. There is **no automatic
-Runpod invoice collector or worker-stop verifier yet**. Never manufacture a
+the API does not independently prove that assertion. The optional automatic
+collector described below obtains evidence from the provider instead. Never manufacture a
 zero bill or derive a total bill from executionTime. Unattributable costs remain
 platform risk; user charges cannot exceed the saved approved hold ceiling.
 
@@ -147,3 +147,48 @@ lifecycle, shutdown and billing evidence all pass. `RENDER_HOLD_MICRO` is a
 configured reservation ceiling, not a verified current supplier quotation.
 Do not enable the flag just to expose the tool in the catalogue. Signed-URL
 and fake-provider tests do not prove R2 reachability or real GPU execution.
+
+## Automatic audit policy (code and fault tests only)
+
+Keep `RENDER_AUTO_RECONCILE=false` for deployment preparation. Enabling it also
+requires `RENDER_AUDIT_DEDICATED_ENDPOINT=true`, confirming this gateway is the
+only submitter to a dedicated endpoint. The key must permit runtime status/health,
+control-plane `serverless:read`, and `billing:read`. The read-only control API is
+configured separately with `RUNPOD_CONTROL_BASE_URL`; secrets never go to the agent.
+No endpoint settings, queue purge, retry or worker deletion are performed by the
+collector. Existing cancellation targets only the saved job id.
+
+Before POST, the collector checks the immutable image, zero-minimum/single-GPU
+profile, empty runtime queue and complete control-plane worker list, and records
+an hourly zero-charge baseline. Historical job windows prevent overlap. A new
+job can therefore wait for the next hour; retry submit on the same prepared job
+or cancel it, never make another paid submission to bypass this guard.
+
+After a terminal job receipt, at least two empty observations separated by
+`RENDER_AUDIT_QUIET_MS` (60 s by default) must agree across the worker list and
+runtime health. Any active/idle/initializing/throttled/unhealthy worker, queued
+job or observation failure invalidates the stop observation. A lost POST reply
+requires expiry of the fixed 30 min TTL plus the 2 min submission bound, empty
+resources and consistent counters/billing; a positive unexplained bill stays
+under manual review. A job 404 or cancel acknowledgment alone is insufficient.
+
+Billing queries use aligned, complete hourly windows for this endpoint. After
+window close, `RENDER_AUDIT_BILLING_LAG_MS` (15 min) and two identical snapshots
+separated by `RENDER_AUDIT_STABLE_MS` (5 min) are required. Endpoint/window echoes,
+every bucket, counts, duplicate/foreign rows, cost components and totals are
+validated. Missing final records are not a zero bill. Profile/policy changes,
+counter resets, retries or foreign jobs keep a persistent review reason. The
+existing job scanner persists observations, honors exponential backoff, renews
+the hold and resumes after restart. Only verified evidence reaches settlement;
+cost persistence, billing and cleanup retries do not generate again or debit twice.
+
+Runpod's hourly API has no final-invoice watermark. These delays are conservative
+local policy defaults, **not a guarantee that billing is final**; measure them in
+real acceptance. Recheck settled windows for `RENDER_AUDIT_WATCH_MS` (24 h), record
+later changes and platform risk, and never charge the user again. Shared R2 costs
+remain explicitly unallocated platform risk, not claimed zero. Review after
+`RENDER_AUDIT_MAX_WAIT_MS` (24 h), or if hold renewal fails; keep collecting stop
+evidence without silently charging/refunding a closed hold. Evidence outside the
+configured follow-up period still requires operations review. All current tests
+use local fake providers; private pull, real GPU/stop and actual invoice acceptance
+are still required before enabling the profile.

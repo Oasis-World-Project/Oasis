@@ -127,6 +127,16 @@ await startService({
     const tools = createToolService({
       render: createRenderClient({
         baseUrl: config.RUNPOD_BASE_URL,
+        controlBaseUrl: config.RUNPOD_CONTROL_BASE_URL,
+        auditPolicy: {
+          enabled: config.RENDER_AUTO_RECONCILE,
+          dedicatedEndpoint: config.RENDER_AUDIT_DEDICATED_ENDPOINT,
+          quietMs: config.RENDER_AUDIT_QUIET_MS,
+          billingLagMs: config.RENDER_AUDIT_BILLING_LAG_MS,
+          stableMs: config.RENDER_AUDIT_STABLE_MS,
+          maxWaitMs: config.RENDER_AUDIT_MAX_WAIT_MS,
+          watchMs: config.RENDER_AUDIT_WATCH_MS,
+        },
         endpointId: config.RUNPOD_ENDPOINT_ID,
         apiKey: config.RUNPOD_API_KEY,
         verified: config.RENDER_PROFILE_VERIFIED,

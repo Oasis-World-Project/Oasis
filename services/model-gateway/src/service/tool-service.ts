@@ -8,8 +8,9 @@ import { HttpError, type Logger, type ObjectStore } from '@oasis/service-kit';
 import type { ProviderClient } from '../adapters/openrouter.ts';
 import type { FalClient } from '../adapters/fal.ts';
 import { RenderArgs, type RenderClient } from '../adapters/runpod.ts';
+import type { RenderAuditState, RenderBillEvidence } from '../adapters/runpod-audit.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
-import { ToolAdmissionError, type ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
+import { ToolAdmissionError, type ToolJob, type ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
 import type { Caller, Meter, MeteredCall } from './metering.ts';
 import { TOOLS, type ToolConfig, type ToolDef } from './tools.ts';
 
@@ -53,6 +54,73 @@ export function createToolService(deps: {
   const inFlight = new Map<string, Promise<void>>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let ticking = false;
+  async function acceptRenderEvidence(
+    job: ToolJob,
+    evidence: { costMicro: number; billId: string; stopped: boolean } | RenderBillEvidence,
+  ) {
+    const cap = Number(job.call.holdCeiling);
+    if (!Number.isSafeInteger(cap) || cap <= 0) throw new Error('Missing quote');
+    await jobs.mergeCall(job.id, {
+      billingEvidence: evidence,
+      terminalAudit: !job.result,
+      platformRiskMicro: Math.max(0, evidence.costMicro - cap),
+    });
+    await jobs.update(job.id, {
+      cost: { costMicro: Math.min(cap, evidence.costMicro), source: 'provider' },
+      ...(job.result
+        ? { result: { ...job.result, costMicro: Math.min(cap, evidence.costMicro) } }
+        : {}),
+      phase: 'stored',
+    });
+  }
+  async function observeRender(job: ToolJob) {
+    if (
+      job.tool !== '3d.render' ||
+      !job.call.submissionAttempted ||
+      !job.call.autoAudit ||
+      job.call.manualReconciled ||
+      !deps.render?.audit.enabled
+    )
+      return job;
+    const { state, evidence } = await deps.render.audit.observe(
+      job.call.autoAudit as unknown as RenderAuditState,
+      job.providerJobId || undefined,
+    );
+    await jobs.mergeCall(job.id, {
+      autoAudit: state,
+      ...(state.lateAdjustmentMicro === undefined
+        ? {}
+        : { latePlatformRiskMicro: Math.max(0, state.lateAdjustmentMicro) }),
+    });
+    if (state.reviewReason && job.status === 'pending')
+      await jobs.update(job.id, { error: state.reviewReason });
+    if (
+      state.lateAdjustmentMicro &&
+      state.lateAdjustmentMicro !==
+        (job.call.autoAudit as unknown as RenderAuditState).lateAdjustmentMicro
+    )
+      deps.logger.warn(
+        { jobId: job.id, adjustmentMicro: state.lateAdjustmentMicro },
+        'GPU 补账差额保留平台风险，不追加扣款',
+      );
+    if (
+      evidence &&
+      job.status === 'pending' &&
+      !job.cost &&
+      (job.result || state.terminal !== 'COMPLETED')
+    ) {
+      if (job.call.holdLost) {
+        await jobs.mergeCall(job.id, {
+          billingEvidence: evidence,
+          platformRiskMicro: evidence.costMicro,
+        });
+        await jobs.update(job.id, {
+          error: '停止和账单已核验，但冻结失效；保留平台风险等待内部处理',
+        });
+      } else await acceptRenderEvidence(job, evidence);
+    }
+    return (await jobs.get(job.id))!;
+  }
   async function processOne(id: string) {
     const prior = inFlight.get(id);
     if (prior) return prior;
@@ -70,11 +138,12 @@ export function createToolService(deps: {
       }, 30_000);
       heartbeat.unref();
       try {
-        const job = await jobs.get(id);
+        let job = await jobs.get(id);
         if (job?.tool === '3d.render' && job.status === 'pending' && !job.cost) {
           try {
             await meter.renew(job.call as unknown as MeteredCall);
           } catch {
+            await jobs.mergeCall(id, { holdLost: true });
             await jobs.requestCancel(id);
             if (job.providerJobId)
               await deps.render?.cancel(job.providerJobId).catch(() => undefined);
@@ -82,13 +151,17 @@ export function createToolService(deps: {
               phase: 'uncertain',
               error: '冻结无法续期；已请求止损，后续费用保留平台风险',
             });
+            if (job.call.autoAudit) await observeRender((await jobs.get(id))!);
             return;
           }
         }
+        if (job) job = await observeRender(job);
         if (
           !job ||
           job.phase === 'expired' ||
-          (job.phase === 'uncertain' && job.call.cancelRequested !== true) ||
+          (job.phase === 'uncertain' &&
+            job.call.cancelRequested !== true &&
+            !(job.tool === '3d.render' && job.call.autoAudit)) ||
           job.status === 'failed' ||
           (job.status === 'completed' && job.result)
         )
@@ -119,6 +192,16 @@ export function createToolService(deps: {
             (job.call.inputArgs as { assets: unknown[] }).assets.length,
           );
           await jobs.finish(id, 'failed', 'GPU 已终止，费用已核对');
+          return;
+        }
+        const renderAudit = job.call.autoAudit as unknown as RenderAuditState | undefined;
+        if (
+          job.tool === '3d.render' &&
+          renderAudit?.terminal &&
+          renderAudit.terminal !== 'COMPLETED' &&
+          !job.cost
+        ) {
+          await jobs.update(id, { phase: 'awaiting_cost' });
           return;
         }
         if (!job.providerJobId) {
@@ -202,11 +285,13 @@ export function createToolService(deps: {
             return;
           }
           if (state.state === 'pending') {
-            if (Date.now() - job.createdAt.getTime() > deps.jobTimeoutMs)
+            if (Date.now() - job.createdAt.getTime() > deps.jobTimeoutMs) {
+              if (job.tool === '3d.render') await jobs.requestCancel(id);
               await jobs.update(id, {
                 phase: 'uncertain',
                 error: '供应商长任务超过等待上限，费用待核对；未自动重发或认定免费',
               });
+            }
             return;
           }
           cost = state.outcome.cost;
@@ -278,7 +363,10 @@ export function createToolService(deps: {
       } finally {
         clearInterval(heartbeat);
         try {
-          await jobs.mergeCall(id, { nextCheckAt: Date.now() + 30000 });
+          const latest = await jobs.get(id);
+          const auditNext =
+            (latest?.call.autoAudit as unknown as RenderAuditState | undefined)?.nextAt ?? 0;
+          await jobs.mergeCall(id, { nextCheckAt: Math.max(Date.now() + 30000, auditNext) });
         } finally {
           await jobs.unlock(id, token);
         }
@@ -376,13 +464,51 @@ export function createToolService(deps: {
         if (job.call.cancelRequested) throw new HttpError(409, 'job_cancelled', '取消意图已存在');
         if (args.assets.some((_, i) => !(job.call.uploads as Record<string, boolean>)?.[i]))
           throw new HttpError(409, 'inputs_missing', '输入未齐备');
+        if (deps.render!.audit.enabled) {
+          try {
+            const autoAudit = await deps.render!.audit.prepare(await jobs.renderWindowEnd(id));
+            await jobs.mergeCall(id, { autoAudit });
+          } catch {
+            throw new HttpError(
+              409,
+              'render_audit_not_ready',
+              '专用 endpoint、空闲基线或账单窗口未通过，未提交 GPU；可稍后提交同一作业',
+            );
+          }
+          job = await ownedJob(caller, id);
+          if (job.call.cancelRequested) throw new HttpError(409, 'job_cancelled', '取消意图已存在');
+        }
         await jobs.mergeCall(id, { submissionAttempted: true });
         await jobs.update(id, { phase: 'submitting' });
         try {
-          const handle = await deps.render!.start(args, id, AbortSignal.timeout(120000));
+          const handle = await deps.render!.start(
+            args,
+            id,
+            AbortSignal.timeout(120000),
+            async (dispatchedAt) => {
+              const until = new Date(Date.now() + 180000);
+              if (!(await jobs.claim(id, token, until)))
+                throw new Error('Render submit lease lost');
+              const current = await ownedJob(caller, id);
+              if (
+                current.status !== 'pending' ||
+                current.phase !== 'submitting' ||
+                current.call.cancelRequested ||
+                Date.now() >= until.getTime()
+              )
+                throw new Error('Render submission fenced before POST');
+              if (current.call.autoAudit)
+                await jobs.mergeCall(id, {
+                  autoAudit: { ...(current.call.autoAudit as object), dispatchedAt },
+                });
+              if (Date.now() >= until.getTime()) throw new Error('Render submit lease expired');
+            },
+          );
           await jobs.update(id, { providerJobId: handle, phase: 'pending' });
         } catch {
-          await jobs.update(id, { phase: 'uncertain', error: '渲染提交未确认；未自动重发' });
+          const current = await jobs.get(id);
+          if (current?.status === 'pending' && current.leaseToken === token)
+            await jobs.update(id, { phase: 'uncertain', error: '渲染提交未确认；未自动重发' });
         }
         return { job: { id } };
       } finally {
@@ -406,20 +532,8 @@ export function createToolService(deps: {
           !evidence.stopped
         )
           throw new HttpError(409, 'audit_not_ready', '需要费用及停机核验');
-        const cap = Number(job.call.holdCeiling);
-        if (!Number.isSafeInteger(cap) || cap <= 0) throw new Error('Missing quote');
-        await jobs.mergeCall(id, {
-          billingEvidence: evidence,
-          terminalAudit: !job.result,
-          platformRiskMicro: Math.max(0, evidence.costMicro - cap),
-        });
-        await jobs.update(id, {
-          cost: { costMicro: Math.min(cap, evidence.costMicro), source: 'provider' },
-          ...(job.result
-            ? { result: { ...job.result, costMicro: Math.min(cap, evidence.costMicro) } }
-            : {}),
-          phase: 'stored',
-        });
+        await acceptRenderEvidence(job, evidence);
+        await jobs.mergeCall(id, { manualReconciled: true });
       } finally {
         await jobs.unlock(id, token);
       }

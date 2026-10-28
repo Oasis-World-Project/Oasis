@@ -8,13 +8,14 @@ import {
 } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOpenRouterClient } from '../src/adapters/openrouter.ts';
 import { createFalClient } from '../src/adapters/fal.ts';
 import { createRenderClient } from '../src/adapters/runpod.ts';
 import { createHash } from 'node:crypto';
 import { createTavilyClient } from '../src/adapters/tavily.ts';
-import type { CallOutcome, CallsRepo } from '../src/repo/calls-repo.ts';
+import type { Call, CallOutcome, CallsRepo } from '../src/repo/calls-repo.ts';
+import { auditPolicy, runpodFixture } from './runpod-fixture.ts';
 import type { ToolJob, ToolJobsRepo } from '../src/repo/tool-jobs-repo.ts';
 import { createMeter } from '../src/service/metering.ts';
 import { createToolService } from '../src/service/tool-service.ts';
@@ -27,8 +28,11 @@ const PNG = Buffer.from('fake-png').toString('base64');
 
 const billingCalls: { path: string; body: Record<string, unknown> }[] = [];
 let settleFails = false;
+let renewFails = false;
 const billing = Fastify();
-billing.post('/internal/holds/:id/renew', async (_request, reply) => reply.code(204).send());
+billing.post('/internal/holds/:id/renew', async (_request, reply) =>
+  reply.code(renewFails ? 409 : 204).send(),
+);
 billing.post('/internal/holds', async (request, reply) => {
   billingCalls.push({ path: 'hold', body: request.body as Record<string, unknown> });
   return reply.code(201).send({ holdId: HOLD, heldMicro: 1 });
@@ -159,13 +163,15 @@ fake.post('/tavily/extract', async (request) => {
 });
 
 const finished: CallOutcome[] = [];
+const recordedCalls = new Map<string, CallOutcome>();
 const settled: EventEnvelope[] = [];
 let blocked: string[] = [];
 const repo: CallsRepo = {
   start: async () => {},
-  get: async () => undefined,
+  get: async (id) => recordedCalls.get(id) as Call | undefined,
   regionBlockedModels: async () => blocked,
-  async finish(_id, outcome, event) {
+  async finish(id, outcome, event) {
+    recordedCalls.set(id, outcome);
     finished.push(outcome);
     if (event) settled.push(event);
   },
@@ -173,6 +179,7 @@ const repo: CallsRepo = {
 
 const jobRows = new Map<string, ToolJob>();
 const jobs: ToolJobsRepo = {
+  renderWindowEnd: async () => 0,
   async cancelRun(runId, payerId, taskId) {
     for (const row of await this.forRun(runId)) {
       const caller = row.call.caller as { payerId: string; taskId?: string };
@@ -235,7 +242,9 @@ const jobs: ToolJobsRepo = {
     }
   },
   pending: async () =>
-    [...jobRows.values()].filter((row) => row.status === 'pending' && row.phase !== 'uncertain'),
+    [...jobRows.values()].filter(
+      (row) => row.status === 'pending' && (row.phase !== 'uncertain' || row.tool === '3d.render'),
+    ),
   expired: async (now) =>
     [...jobRows.values()].filter(
       (row) => row.expiresAt && row.expiresAt < now && row.phase === 'completed',
@@ -255,6 +264,7 @@ const jobs: ToolJobsRepo = {
 };
 
 const mediaFiles = new Map<string, Buffer>();
+let renderCleanupFails = false;
 const mediaStore: ObjectStore = {
   put: async (key, body) => {
     mediaFiles.set(key, body);
@@ -262,6 +272,8 @@ const mediaStore: ObjectStore = {
   get: async (key) => mediaFiles.get(key)!,
   read: async (key) => Readable.from([mediaFiles.get(key)!]),
   delete: async (key) => {
+    if (renderCleanupFails && key.startsWith('jobs/'))
+      throw new Error('Temporary staging delete failure');
     mediaFiles.delete(key);
   },
   async putStream(key, source, _type, limits) {
@@ -296,19 +308,30 @@ const geometryImage = [
 let renderSubmits = 0;
 let renderTransfer = '';
 let renderSubmitLost = false;
-const build = (tavilyKey: string | undefined, withMusic = false, withRender = false) => {
+let renderAuditFixture = runpodFixture();
+const build = (
+  tavilyKey: string | undefined,
+  withMusic = false,
+  withRender = false,
+  withAudit = false,
+) => {
   const logger = pino({ level: 'silent' });
   return createToolService({
     render: withRender
       ? createRenderClient({
           baseUrl: 'https://api.runpod.ai/v2',
+          controlBaseUrl: 'https://control.test/v2',
+          auditPolicy: withAudit ? auditPolicy : undefined,
+          now: renderAuditFixture.now,
           endpointId: 'fixture',
           apiKey: 'not-real',
           verified: true,
           holdMicro: 1000000,
           archive: mediaStore,
           staging: { ...mediaStore, sign: async (key) => 'https://example.test/' + key },
-          fetcher: async (_url, init) => {
+          fetcher: async (url, init) => {
+            if (String(url).includes('/cancel/'))
+              return Response.json({ id: 'gpu-one', status: 'CANCELLED' });
             if (init?.method === 'POST') {
               renderSubmits++;
               if (renderSubmitLost) throw new Error('Lost POST response');
@@ -316,6 +339,8 @@ const build = (tavilyKey: string | undefined, withMusic = false, withRender = fa
               renderTransfer = body.input.transferId;
               return Response.json({ id: 'gpu-one' });
             }
+            if (withAudit && !String(url).includes('/status/'))
+              return renderAuditFixture.fetcher(url, init);
             const artifact = (key: string) => ({
               size: mediaFiles.get(key)!.length,
               sha256: createHash('sha256').update(mediaFiles.get(key)!).digest('hex'),
@@ -324,15 +349,17 @@ const build = (tavilyKey: string | undefined, withMusic = false, withRender = fa
               zipKey = `jobs/${renderTransfer}/project.zip`;
             mediaFiles.set(imageKey, Buffer.from('png-fixture'));
             mediaFiles.set(zipKey, Buffer.from('zip-fixture'));
-            return Response.json({
-              status: 'COMPLETED',
-              output: {
-                transferId: renderTransfer,
-                artifacts: { image: artifact(imageKey), project: artifact(zipKey) },
-                device: { gpuUsed: true },
-                boundary: { filesystem: true, socketsDenied: true, secretEnvironmentEmpty: true },
-              },
-            });
+            const output = {
+              transferId: renderTransfer,
+              artifacts: { image: artifact(imageKey), project: artifact(zipKey) },
+              device: { gpuUsed: true },
+              boundary: { filesystem: true, socketsDenied: true, secretEnvironmentEmpty: true },
+            };
+            if (withAudit) {
+              renderAuditFixture.output = output;
+              return renderAuditFixture.fetcher(url, init);
+            }
+            return Response.json({ status: 'COMPLETED', output });
           },
         })
       : undefined,
@@ -419,6 +446,9 @@ afterAll(async () => {
   await fake.close();
 });
 beforeEach(() => {
+  renderAuditFixture = runpodFixture();
+  renderCleanupFails = false;
+  recordedCalls.clear();
   renderSubmits = 0;
   renderTransfer = '';
   renderSubmitLost = false;
@@ -428,6 +458,7 @@ beforeEach(() => {
   geometryCancelCompleted = false;
   billingCalls.length = 0;
   settleFails = false;
+  renewFails = false;
   falSubmitFails = false;
   falCalls.length = 0;
   mediaFiles.clear();
@@ -565,6 +596,155 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     assets: [],
     render: { width: 128, height: 128, samples: 8, backend: 'CUDA' },
   };
+  const pollRender = (id: string) => tools.job(caller, id, AbortSignal.timeout(2000));
+  async function autoRender() {
+    tools = build('key', false, true, true);
+    const id = (await call('3d.render', args)).job!.id;
+    await tools.submit(caller, id);
+    return id;
+  }
+  async function billReady(id: string, status = 'COMPLETED') {
+    renderAuditFixture.jobStatus = status;
+    if (status === 'COMPLETED') renderAuditFixture.jobs.completed = 1;
+    else renderAuditFixture.jobs.failed = 1;
+    await pollRender(id);
+    renderAuditFixture.advance(60000);
+    await pollRender(id);
+    renderAuditFixture.at('2026-10-28T10:16:00Z');
+    renderAuditFixture.totalMicro = 12345;
+    await pollRender(id);
+    renderAuditFixture.advance(300000);
+  }
+  it('自动对账贯通归档、重启、结算失败恢复及补账；只扣一次且不重发 GPU', async () => {
+    const id = await autoRender();
+    await billReady(id);
+    tools = build('key', false, true, true);
+    settleFails = true;
+    expect((await pollRender(id)).status).toBe('pending');
+    expect(jobRows.get(id)?.cost?.costMicro).toBe(12345);
+    settleFails = false;
+    expect((await pollRender(id)).status).toBe('completed');
+    expect(jobRows.get(id)?.result?.costMicro).toBe(12345);
+    expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
+    renderAuditFixture.totalMicro = 52345;
+    renderAuditFixture.advance(300000);
+    await pollRender(id);
+    expect(jobRows.get(id)?.call.latePlatformRiskMicro).toBe(40000);
+    expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
+    expect(renderSubmits).toBe(1);
+  });
+  it('取消终态要等 worker 和账单证据；结算后清理失败重试也能完成且不重复扣款', async () => {
+    const id = await autoRender();
+    renderAuditFixture.jobStatus = 'CANCELLED';
+    await tools.cancel(caller, id);
+    await tools.close();
+    expect(jobRows.get(id)?.status).toBe('pending');
+    expect(billingCalls.some((c) => c.path === 'release')).toBe(false);
+    await billReady(id, 'CANCELLED');
+    renderCleanupFails = true;
+    await pollRender(id);
+    expect(jobRows.get(id)?.status).toBe('pending');
+    expect(recordedCalls.get((jobRows.get(id)!.call as { id: string }).id)?.status).toBe('failed');
+    renderCleanupFails = false;
+    expect((await pollRender(id)).status).toBe('failed');
+    expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
+    expect(billingCalls.some((c) => c.path === 'release')).toBe(false);
+  });
+  it('未知提交在 TTL、停止和归属账单确认后自动终结，不重新提交', async () => {
+    renderSubmitLost = true;
+    const id = await autoRender();
+    expect(jobRows.get(id)?.phase).toBe('uncertain');
+    renderAuditFixture.jobs.failed = 1;
+    renderAuditFixture.at('2026-10-28T09:40:00Z');
+    await pollRender(id);
+    renderAuditFixture.advance(60000);
+    await pollRender(id);
+    renderAuditFixture.at('2026-10-28T10:16:00Z');
+    renderAuditFixture.totalMicro = 321;
+    await pollRender(id);
+    renderAuditFixture.advance(300000);
+    expect((await pollRender(id)).status).toBe('failed');
+    expect(billingCalls.find((c) => c.path === 'settle')?.body.costMicro).toBe(321);
+    expect(renderSubmits).toBe(1);
+  });
+  it('证据已持久化但写成本中断，重启仍能结算；缺少基线的旧作业不会补造证据', async () => {
+    const id = await autoRender();
+    await billReady(id);
+    const original = jobs.update;
+    const spy = vi.spyOn(jobs, 'update').mockImplementation(async (key, patch) => {
+      if (patch.cost) throw new Error('Crash before cost persistence');
+      await original(key, patch);
+    });
+    try {
+      await pollRender(id);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(jobRows.get(id)?.cost).toBeNull();
+    expect(jobRows.get(id)?.call.autoAudit).toMatchObject({ acceptedMicro: 12345 });
+    tools = build('key', false, true, true);
+    renderAuditFixture.advance(30000);
+    expect((await pollRender(id)).status).toBe('completed');
+    expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
+    delete jobRows.get(id)!.call.autoAudit;
+    const requests = renderAuditFixture.requests.length;
+    await pollRender(id);
+    expect(renderAuditFixture.requests).toHaveLength(requests);
+  });
+  it('冻结失效仍收集停机与完整费用，保留平台风险，不偷偷再次扣款或退款', async () => {
+    const id = await autoRender();
+    renewFails = true;
+    await billReady(id, 'CANCELLED');
+    await pollRender(id);
+    expect(jobRows.get(id)?.call).toMatchObject({
+      holdLost: true,
+      platformRiskMicro: 12345,
+      billingEvidence: { costMicro: 12345 },
+    });
+    expect(jobRows.get(id)?.cost).toBeNull();
+    expect(billingCalls.filter((c) => c.path !== 'hold')).toEqual([]);
+  });
+  it('准备审计失败不提交 GPU，随后只重试原作业', async () => {
+    tools = build('key', false, true, true);
+    const id = (await call('3d.render', args)).job!.id;
+    renderAuditFixture.activeWorkers = [{ id: 'other-worker', status: 'IDLE' }];
+    await expect(tools.submit(caller, id)).rejects.toMatchObject({
+      code: 'render_audit_not_ready',
+    });
+    expect(renderSubmits).toBe(0);
+    expect(jobRows.get(id)?.phase).toBe('uploading');
+    renderAuditFixture.activeWorkers = [];
+    await tools.submit(caller, id);
+    expect(renderSubmits).toBe(1);
+  });
+  it.each(['lease-lost', 'already-finished'])(
+    '原提交进程恢复时 %s，不能迟到发起 GPU 请求',
+    async (mode) => {
+      tools = build('key', false, true, true);
+      const id = (await call('3d.render', args)).job!.id;
+      const original = jobs.claim;
+      let claims = 0;
+      const spy = vi.spyOn(jobs, 'claim').mockImplementation(async (key, token, until) => {
+        claims++;
+        if (claims === 2) {
+          if (mode === 'lease-lost') {
+            jobRows.get(id)!.leaseToken = 'another-process';
+            return false;
+          }
+          await jobs.finish(id, 'failed');
+        }
+        return original(key, token, until);
+      });
+      try {
+        await tools.submit(caller, id);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(renderSubmits).toBe(0);
+      if (mode === 'already-finished') expect(jobRows.get(id)?.phase).toBe('failed');
+      else expect(jobRows.get(id)?.leaseToken).toBe('another-process');
+    },
+  );
   it('场景引用和灯光方向错误在冻结和 GPU 提交前拒绝', async () => {
     tools = build('key', false, true);
     for (const scene of [

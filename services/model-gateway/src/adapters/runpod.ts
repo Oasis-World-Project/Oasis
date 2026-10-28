@@ -1,6 +1,7 @@
 // Queue credentials stay here; signed exchange URLs are never persisted or returned to agents.
 import { z } from 'zod';
 import type { ObjectStore } from '@oasis/service-kit';
+import { createRunpodAudit, type RenderAuditOptions } from './runpod-audit.ts';
 
 const vec = (low: number, high: number) => z.array(z.number().min(low).max(high)).length(3);
 const Scene = z
@@ -128,6 +129,9 @@ export function createRenderClient(options: {
   staging?: ObjectStore;
   archive: ObjectStore;
   fetcher?: typeof fetch;
+  controlBaseUrl: string;
+  auditPolicy?: RenderAuditOptions;
+  now?: () => number;
 }) {
   const fetcher = options.fetcher ?? fetch;
   const base = options.baseUrl.replace(/\/$/, '');
@@ -151,11 +155,30 @@ export function createRenderClient(options: {
     });
   }
   return {
+    audit: createRunpodAudit({
+      endpointId: options.endpointId,
+      controlBaseUrl: options.controlBaseUrl,
+      queueBaseUrl: base,
+      apiKey: options.apiKey,
+      policy: options.auditPolicy,
+      fetcher,
+      runtime: (path) => request(path),
+      now: options.now,
+    }),
     configured: Boolean(
-      options.verified && options.apiKey && options.endpointId && options.staging?.sign,
+      options.verified &&
+      options.apiKey &&
+      options.endpointId &&
+      options.staging?.sign &&
+      (!options.auditPolicy?.enabled || options.auditPolicy.dedicatedEndpoint),
     ),
     holdMicro: options.holdMicro,
-    async start(value: Record<string, unknown>, jobId: string, signal: AbortSignal) {
+    async start(
+      value: Record<string, unknown>,
+      jobId: string,
+      signal: AbortSignal,
+      beforeSubmit?: (dispatchedAt: number) => Promise<void>,
+    ) {
       const args = RenderArgs.parse(value),
         staging = options.staging!;
       const sceneAssets = args.scene.assets;
@@ -179,6 +202,9 @@ export function createRenderClient(options: {
         image: await staging.sign!(key(jobId, 'image.png'), 'PUT', 3600),
         project: await staging.sign!(key(jobId, 'project.zip'), 'PUT', 3600),
       };
+      signal.throwIfAborted();
+      await beforeSubmit?.((options.now ?? Date.now)());
+      signal.throwIfAborted();
       const response = await request(
         'run',
         'POST',

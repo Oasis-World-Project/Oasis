@@ -17,6 +17,35 @@ export const modelGatewayEnv = {
   RUNPOD_API_KEY: z.string().optional(),
   RUNPOD_ENDPOINT_ID: z.string().default(''),
   RUNPOD_BASE_URL: z.url().default('https://api.runpod.ai/v2'),
+  RUNPOD_CONTROL_BASE_URL: z.url().default('https://api.runpod.io/v2'),
+  RENDER_AUTO_RECONCILE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  RENDER_AUDIT_DEDICATED_ENDPOINT: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  RENDER_AUDIT_QUIET_MS: z.coerce.number().int().min(30000).max(600000).default(60000),
+  RENDER_AUDIT_BILLING_LAG_MS: z.coerce
+    .number()
+    .int()
+    .min(60000)
+    .max(6 * 3600000)
+    .default(900000),
+  RENDER_AUDIT_STABLE_MS: z.coerce.number().int().min(30000).max(3600000).default(300000),
+  RENDER_AUDIT_MAX_WAIT_MS: z.coerce
+    .number()
+    .int()
+    .min(6 * 3600000)
+    .max(72 * 3600000)
+    .default(24 * 3600000),
+  RENDER_AUDIT_WATCH_MS: z.coerce
+    .number()
+    .int()
+    .min(3600000)
+    .max(7 * 24 * 3600000)
+    .default(24 * 3600000),
   RENDER_PROFILE_VERIFIED: z
     .enum(['true', 'false'])
     .default('false')
