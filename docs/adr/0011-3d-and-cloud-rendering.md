@@ -1,6 +1,6 @@
 # ADR 0011：5.9 3D 模型、场景与云端渲染
 
-- 状态：设计草案；第一步免费部署前核验及限定镜像规则确认已完成，云端实际条件尚未齐备，未部署或真实验收（2026-10-27，记录见 §12）。
+- 状态：第一步免费核验及规则确认完成；第二步 CPU 建模/几何检查基础已实现并免费验证，Runpod 官方插件已安装、登录待用户重启后完成。云 GPU、生成工具和交互预览尚未接通（2026-10-28，见 §12–§13）。
 - 依据：工程方向 §2/§3、ADR 0003 §6/§10、ADR 0006 的能力与算力计费、ADR 0007 的画布与本地写入边界、ADR 0010 的媒体数据面，以及自主规划集中验证记录。
 - 目标：AI 根据目标、素材和限制，自行选择建模、资产生成、组装、渲染和检查能力，交付可预览、可取得和可继续编辑的成果。补通用能力，不建立“3D 场景名称 → 固定工作流”的映射。
 - 设计后用户授权“执行第一步”，目前执行不付费的部署前核验。旧集中修复批次按用户选择维持 $5，不追加真实调用；本阶段没有获得新的付费测试、云资源创建、镜像发布或账号操作授权。
@@ -259,3 +259,61 @@ R2 记录的 S3 endpoint 通常为 `https://<account-id>.r2.cloudflarestorage.co
 配置完成时，用户只需回复账号/桶/命名空间已经准备好和非敏感的资源标识；密钥填本地配置或系统凭据存储，不贴聊天。此时仅做授权范围内的连接核验，真实 GPU 探针继续等软件准备与预算授权。当前尚未读取这些未来配置的应用代码，因此不要反复运行 `pnpm env:init` 覆盖已有 Key，也不要把新增变量存在误报为系统已经接入。
 
 本步最终修改跟踪文件 2 个：AGENTS.md 落实用户已确认的镜像限定例外，本文保存核验、选型和配置清单；脱敏证据在 `out/3d-preflight-20261027/audit.json`。无新增实现文件、依赖、表或迁移，无模型/付费调用，无创建或发布操作。文档格式、diff 空白与七项工程检查通过（287 模块、791 依赖，knip 通过，重复率 0.72%）；规则更新后四项命名/镜像/令牌/迁移检查再次通过。未重跑无业务改动所不需的测试、lint、typecheck 或 build。`pnpm cleanup` 删除 0 项、释放 0 字节，未创建 Docker 资源，悬空镜像为 0；原有本地镜像门禁未放宽，远端发布门禁仍随后续发布描述实施，当前不具备发布条件。修改本地提交，不推送。
+
+## 13. 第二步 CPU 基础与 Runpod Agent Setup（2026-10-28）
+
+用户要求获取并遵循 `https://agents.runpod.io/`，表示账号/命名空间/桶和 Key 已准备，并要求执行下一步。当前授权覆盖官方插件安装、本地 CPU 基础实现和免费检查；未自行增加付费 GPU 调用或发布预算，也未从聊天取得密钥。本节是 §12 之后的执行状态，先前“未读取未来配置”等描述保留为历史时点。
+
+### 13.1 官方插件安装与登录边界
+
+按官方指南的 Codex 路径，在现有 Codex CLI 中添加 `runpod/runpod-plugins-official` marketplace 并安装 `runpod@runpod`；未重复执行 `codex mcp add`。第一次 clone 因用户 Git 配置指向未运行的本地代理失败；仅对该次安装子进程禁用该代理后成功，没有更改全局 Git/代理配置。
+
+核对结果：插件 **1.8.0 installed=true、enabled=true**，16 份技能的 `SKILL.md` 均非空；包内 MCP 声明为 `https://mcp.runpod.io/`。没有提前安装 runpodctl 或 Flash SDK，也没有运行供应商作业。证据为 `out/3d-foundation-20261028-final/agent-setup.json`。
+
+当前聊天没有加载 Runpod MCP 工具，认证尚未验证。官方指南的用户步骤要求完全退出并重开 Codex Desktop，再从插件完成 Sign in with Runpod；随后用只读资源列表核对连接。不能把安装成功写成已经登录、能够操作账号。项目根 `.env` 的运行时 API Key 不会自动替代插件的 OAuth 登录；不将明文 Key 写进 Codex 全局配置。[用户指定的官方指南](https://agents.runpod.io/)、[官方插件来源](https://github.com/runpod/runpod-plugins-official)、[OpenAI 插件安装说明](https://developers.openai.com/plugins/build/plugins)。
+
+### 13.2 CPU 环境、工程 helper 与检查器
+
+新增薄包装 `oasis/harness-sandbox-3d:0.2.1-rc.2-blender4.3.2`，继承已在本地构建的基础镜像，仅增加精确版本 `blender=4.3.2+dfsg-2` 和 Oasis helper。脚本先确认本地父镜像存在，不让缺失镜像导致拉取 Docker Hub 不归用户所有的 oasis 镜像。第三方 Blender 4.5 官方下载目录/校验文件仍受 403 限制，当前采用经过实际 apt 核对的 Debian 版本，不冒称已安装原候选 4.5 LTS，更不证明 CUDA/OptiX 可用。
+
+命令为 `pnpm sandbox:build:3d`、`pnpm sandbox:check:3d`。运行夹具在无网络、无供应商密钥、cap-drop、no-new-privileges、2 CPU/3 GiB/时限受限的容器中进行，只挂载本次明确选定的 `out/` 证据目录，不改变产品默认不下载行为。不自动更换现有任务沙箱；本机开发若要显式使用这套 CPU 软件，可在 harness 本地 `.env` 设置现有 `SANDBOX_IMAGE` 为该镜像名，前提是已经构建和核验。按节点选择多环境的规划能力尚未实现，不在本节冒称完成。
+
+`oasis-3d build|inspect|pack` 使用受限 scene JSON v1：单位 m，最多 100 对象、20 个已核对摘要的内嵌 GLB 资产、8 个灯光，有限坐标/尺寸/材质/相机参数。支持 box/sphere/cylinder 和任意已授权 GLB 网格的组合，不以物体主题决定工作流。构建采用镜像内固定脚本，禁自动执行，输出 `scene.blend`、`model.glb`、`scene.json`、真实资产目录、说明及 SHA-256 清单。资产保留原材质；当前不支持的资产材质覆盖明确拒绝，不静默忽略。`inspect` 校验包文件与摘要并列出未检查范围，不能仅凭它声称原生工程语义/视觉检查通过。
+
+GLB 结构解析在现有文件检查 worker 中运行，逐项核验 chunk/buffer/accessor 越界与对齐、实际顶点与索引、可达场景、节点循环、有限变换和内嵌贴图元数据；拒绝外部 URI，资源超限/不支持的 required extension 记为检查不完整。报告明确未检查外观、世界坐标实际尺寸、可打印性/拓扑、动画与材质语义，不把结构合法等同于用户需求已满足。没有接入任意 `.blend` 的云端脚本执行，也不保证所有 glTF 扩展均受支持。
+
+### 13.3 免费验证与证据
+
+最终夹具通过 12 条真实验证，包含：实际 Blender 构建；清单与摘要闭包；授权 GLB 导入；工程搬移到新的中文目录后重开；对象数量与尺寸可编辑；CPU 重渲染像素相同且图片完整；ZIP 成员/CRC；非有限数、脚本字段、路径越界、远程资源、符号链接和正式文件篡改拒绝。两份实际生成 GLB 经生产文件检查 worker 再解析通过，证据 `gate-geometry.json` 记录真实顶点/面数以及未检查项。
+
+Debian 构建缺少 OpenImageDenoise，初次 CPU 渲染夹具因此失败；修为明确关闭降噪后通过，没有更换为别的成品图或把失败当作成功。128×128 的三对象画面仅是工程回归夹具，已目视确认红盒/蓝球/台座可见，不是自主业务成品或云 GPU 渲染。最终证据在 `out/3d-foundation-20261028-final/`；最初两份目录是已被替代的开发夹具。
+
+相关 harness **64 项测试**、全仓 **15 包 typecheck**、lint、harness 构建通过；七项工程检查通过，289 模块/793 依赖无方向违规，knip 通过，重复率 0.70%。全仓 lint 首次被已保留在 `out/` 的上轮复现控制器触发，现已将这个 Git 忽略的生成物目录纳入 ESLint ignore；源码规则未放宽。没有重跑不受影响的全仓业务测试或 Web 构建，不引用上轮 359 项冒充本次结果。
+
+### 13.4 根目录环境配置与安全预检
+
+根 `.env.example` 增加用户需要填写的供应商配置，`pnpm env:init` 已将缺项补到根 `.env`。逐项核对原有值均未改变；新增 R2 Key 为空，修正初始化器避免把外部 `RENDER_*` 凭据生成随机字符串。实际 Key 仍由用户本地填写，绝不要求贴聊天。
+
+```dotenv
+RUNPOD_API_KEY=你的RunpodKey
+RENDER_GHCR_NAMESPACE=你的github用户名或组织名的小写形式
+RENDER_GHCR_PUSH_TOKEN=有write_packages权限的PAT
+RENDER_GHCR_PULL_TOKEN=只有read_packages权限的PAT
+RENDER_STAGING_S3_ENDPOINT=https://你的account-id.r2.cloudflarestorage.com
+RENDER_STAGING_S3_REGION=auto
+RENDER_STAGING_S3_BUCKET=你的私有桶名
+RENDER_STAGING_S3_ACCESS_KEY=R2的AccessKeyID
+RENDER_STAGING_S3_SECRET_KEY=R2的SecretAccessKey
+```
+
+上例 PAT 权限的实际 GitHub 标识分别是 `write:packages`、`read:packages`，不是下划线文字。`RUNPOD_ENDPOINT_ID` 和 `RENDER_IMAGE_DIGEST` 目前留空，待真正的云 worker 发布和 endpoint 就绪后填写；不能拿 CPU 3D 镜像摘要冒充云 worker。原有 `S3_ENDPOINT/S3_ACCESS_KEY/S3_SECRET_KEY` 继续用于本地私有归档，不被 R2 配置覆盖。
+
+填写后运行 **`pnpm render:config`**。该命令已实际消费根 `.env`，仅检查配置形状、凭据是否填写、GHCR 仓库定位和存储 hostname，不打印秘密、不联网或创建资源。缺项时退出码 2；全部格式正确仍返回 `remoteValidated=false`、`deploymentReady=false`，不能把本地预检当成账号权限或集成验证。已用不是真凭据的 canary 证明输出不包含 token，且无 endpoint 时不会谎报云端就绪。
+
+### 13.5 范围与收尾
+
+本轮跟踪变更 13 个文件，其中 6 个新增分别承接 3D 镜像、helper、几何检查与测试、配置预检；其余扩展原文件并记录本节。无新增 Node/Python 项目依赖、服务、表或 SQL 迁移；Blender 软件仅安装进新隔离镜像。全局 Runpod 插件是用户明确要求安装的开发工具，不进入业务服务依赖或镜像。
+
+云 `3d.generate/3d.render` 适配、长任务上传/取消/计费、私有发布硬门禁、实际 GPU 隔离探针、交互预览和自主业务验收仍待后续，不把这次 CPU 基础称为 5.9 完成。本轮模型调用、供应商计算和云资源创建/发布均为 0，支出 $0。正式工程/图片/ZIP/检查记录保留；可复用本地镜像保留，不做全局 Docker prune。
+
+清理两份过期夹具目录的原生 PowerShell 操作被自动审批拒绝，工具只返回“blocked by policy”；未改用其他方式删除，目录保留并明确标记为非最终证据。项目标准 `pnpm cleanup` 单独执行，删除 0 项、释放 0 字节；没有运行中的本轮容器，悬空镜像为 0。最终镜像内 helper 摘要与已测试源文件一致，另在只读挂载中核对导入组合的世界坐标尺寸为 2×2×1 米。最终镜像保留为可复用开发资源；未删除用户数据、其他项目或安装好的插件。变更本地提交，不推送；后续先由用户填写配置并完成插件登录，再核对云端访问条件，保持第三步云调用与真实验收未完成。

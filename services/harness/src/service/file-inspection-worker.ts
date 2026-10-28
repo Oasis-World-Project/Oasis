@@ -9,6 +9,7 @@ import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import sharp from 'sharp';
 import { getDocumentProxy } from 'unpdf';
 import type { InspectionLimits, InspectedFile } from './file-inspection.ts';
+import { GeometryLimit, inspectGlb } from './geometry-inspection.ts';
 
 class IncompleteInspection extends Error {}
 
@@ -347,6 +348,9 @@ async function inspect(): Promise<InspectedFile & { truncated?: boolean }> {
         .join('\n');
     }
     if (!text.trim()) warning = '未提取到正文，内容检查未完成';
+  } else if (ext === '.glb') {
+    text = await inspectGlb(bytes, data.limits.pixels);
+    warning = '只完成几何结构与资源检查；外观、尺寸用途和动画仍需独立核验';
   } else if (ext === '.pdf') {
     const pdf = await getDocumentProxy(new Uint8Array(bytes), {
       useSystemFonts: false,
@@ -409,6 +413,7 @@ void inspect()
       error: error instanceof Error ? error.message : '文件解析失败',
       errorKind:
         error instanceof IncompleteInspection ||
+        error instanceof GeometryLimit ||
         (error instanceof Error && error.message.includes('pixel limit'))
           ? 'incomplete'
           : 'invalid',

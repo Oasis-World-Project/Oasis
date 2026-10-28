@@ -8,7 +8,14 @@ import tseslint from 'typescript-eslint';
 
 export default defineConfig(
   {
-    ignores: ['**/node_modules/**', '**/dist/**', '**/.turbo/**', '**/coverage/**', '**/.tmp/**'],
+    ignores: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/.turbo/**',
+      '**/coverage/**',
+      '**/.tmp/**',
+      'out/**',
+    ],
   },
   js.configs.recommended,
   tseslint.configs.recommended,
