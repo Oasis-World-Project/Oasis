@@ -317,3 +317,54 @@ RENDER_STAGING_S3_SECRET_KEY=R2的SecretAccessKey
 云 `3d.generate/3d.render` 适配、长任务上传/取消/计费、私有发布硬门禁、实际 GPU 隔离探针、交互预览和自主业务验收仍待后续，不把这次 CPU 基础称为 5.9 完成。本轮模型调用、供应商计算和云资源创建/发布均为 0，支出 $0。正式工程/图片/ZIP/检查记录保留；可复用本地镜像保留，不做全局 Docker prune。
 
 清理两份过期夹具目录的原生 PowerShell 操作被自动审批拒绝，工具只返回“blocked by policy”；未改用其他方式删除，目录保留并明确标记为非最终证据。项目标准 `pnpm cleanup` 单独执行，删除 0 项、释放 0 字节；没有运行中的本轮容器，悬空镜像为 0。最终镜像内 helper 摘要与已测试源文件一致，另在只读挂载中核对导入组合的世界坐标尺寸为 2×2×1 米。最终镜像保留为可复用开发资源；未删除用户数据、其他项目或安装好的插件。变更本地提交，不推送；后续先由用户填写配置并完成插件登录，再核对云端访问条件，保持第三步云调用与真实验收未完成。
+
+## 14. 云 worker 本地构建与标签（2026-10-28）
+
+用户确认已填写配置、登录两个插件，并明确指定自有仓库 `ghcr.io/kong-yikai/oasis/harness-render`，要求继续并协助构建/打标签。本轮完成本地镜像与可审查的发布准备，不把它等同于第三步适配闭环、远端发布或 GPU 验收。现有任务能力目录未启用云渲染，根 `.env` 的 endpoint/digest 仍空，没有把本地构建结果冒充远端可用配置。
+
+### 14.1 已读取的资源状态
+
+Runpod MCP `list-endpoints` 和 `list-pods` 成功，均为空，证明插件认证可用。Cloudflare 插件身份查询和下列桶的四个 GET 均成功；没有创建或修改云资源，没有读取/展示秘密。
+
+| R2 项目 | 本轮实际读值 |
+| --- | --- |
+| 桶 | `oasis-render-staging` |
+| 存储 | Standard，APAC，default jurisdiction |
+| 公开访问 | r2.dev disabled，自定义域名列表为空 |
+| 生命周期 | 仅默认 604800 秒（7 天）中止未完成分段上传；没有对象过期规则 |
+
+因此本地配置形状与私有桶条件通过，但部署前仍须按 §12.3 为临时前缀 `jobs/` 配置 1 天对象过期/分段上传中止，并在应用中主动回收。这次只读核验未改生命周期，也未进行真实签名对象读写，不能报告交换存储完整验收。GHCR 私有性/两个 PAT 的实际 push/pull 权限尚未核验。
+
+### 14.2 镜像、边界与固定输入
+
+新增独立 `harness-render` 薄包装与最小构建上下文，基础是官方 Python 3.11.14 镜像的固定 SHA-256，安装 Blender Foundation 官方 PyPI `bpy==4.5.3` 和 Runpod SDK `1.10.1`。这是 Blender 官方 Python 模块发行渠道，不是对先前 403 下载地址的绕过。Linux amd64 的 105 个 Python 发行包（包含 SDK 的传递依赖）全部精确版本并用 wheel SHA-256 锁定，构建实际执行 `--require-hashes` 和 `pip check`；编译器仅在构建阶段，不进入最终镜像。[官方模块](https://pypi.org/project/bpy/4.5.3/)、[官方 handler 契约](https://docs.runpod.io/serverless/workers/handler-functions)。
+
+worker 归属 harness，不是新的业务服务。队列只接受固定 v1 `render|probe`，有界 scene JSON、已授权 GLB 摘要/来源、CUDA/OPTIX、像素/采样和本作业交换对象。拒绝任意 Python/shell、插件、上传 ZIP 或任意 `.blend`。渲染外壳限制为指定 R2 host/bucket/随机 transfer 前缀，不跟随跳转或使用环境代理，流式核对输入大小/摘要；输出为 PNG 和具备 README、原生工程、GLB、资产、设备报告与摘要清单的 ZIP。ZIP 已用现有 `geometry.inspect_package` 再检查，不建立另一套成果清单语义。
+
+Blender 子进程由固定 C launcher 启动：非 root、no-new-privileges、Landlock ABI ≥3、当前目录可写/运行库和固定代码只读、GPU 设备按需访问；仅放行驱动初始化所需的当前进程 maps/mountinfo 与 nvidia 信息，不放行 `/proc/*/environ` 或其他作业目录。seccomp 拒绝所有新 socket、跨进程读取/信号等通路，关闭继承 FD、清空密钥环境、限制 CPU/文件/FD，父进程退出时终止子进程。无需 privileged、SYS_ADMIN、Docker socket 或新增对内网络通路。目标内核不支持时直接失败；GPU 不可用也直接失败，没有生产 CPU 降级。真实 Runpod 内核/驱动/设备组合仍需付费探针证明，不能拿本地边界检查替代。
+
+SDK 实际源代码显示默认 DEBUG 会打印本地请求体；入口现强制 INFO，并用含假签名地址的 SDK 本地请求核验不泄漏。外壳错误不回显签名 URL/对象响应正文。worker 只接触 Runpod 注入的队列凭据和本作业临时签名，不配置长期 R2 Key、GHCR push PAT 或模型 Key。
+
+### 14.3 构建、检查与标签证据
+
+```text
+本地：oasis/harness-render:0.1.0-blender4.5.3
+GHCR 标签（仅本地）：ghcr.io/kong-yikai/oasis/harness-render:0.1.0-blender4.5.3
+不可变候选：ghcr.io/kong-yikai/oasis/harness-render@sha256:4282030c94e7e9087f780bc7964367e23564bfc40088595c38587e49de9f7635
+```
+
+命令为 `pnpm render:build` → `pnpm render:check` → `pnpm render:tag`。`infra/render-release.json` 显式限定 registry/自有仓库/精确标签/平台/私有要求；脚本核对根配置命名空间、构建 manifest 摘要、实际平台/用户、源码哈希与同一镜像的成功检查记录，最后回读两个标签确实指向同一镜像。仓库和摘要不符的负例实际被拒绝。保留 Docker Desktop containerd 的 index/descriptor 与旧式 config digest 两种有证据的身份读取方式，不把缺失字段当作通过。
+
+发布描述和摘要候选在 `out/render-worker-20261028/release-plan.json`，明确 `published=false`、`gpuValidated=false`、`privateRegistryValidated=false`。当前无 push 命令、无云端创建；后续发布仍须重新核对该描述和摘要白名单、私有性及只读拉取证据，不允许绕过为通用 `docker push`。本地标签不代表仓库里已经有镜像，也不将此摘要预填到生产 `.env`。
+
+本地容器在 network=none、cap-drop ALL、no-new-privileges、2 CPU/4 GiB/256 PID 下通过 **4 项真实回归组**：非法契约/签名边界；GPU 不可用明确报错且无成品；CPU 参考渲染/ZIP/旧工程清单复用与内核边界；真实 SDK 入口及日志假秘密不泄漏。早期父 PID=1 误判已修正；首次 GPU 负例暴露驱动库读取自身 maps 的限制，随后只放行必要只读元数据并重新运行，最终负例确实因“Required GPU unavailable”失败，未把驱动崩溃当成 GPU 缺失验证。
+
+独立重开最终 ZIP 内原生工程，确认两个网格、红盒 1×1×1 米、PNG 128×128、ZIP 成员与全部 manifest 摘要；生产文件检查 worker 解析新 GLB（48 顶点/24 三角形）和 PNG 通过。已目视确认实际红盒/地面画面；8 样本小图只是回归夹具，不是业务画质验收。证据包括 `native-check.json`、`inspection.json`、`manifest.json`、`boundary.json`、`device.json`、PNG/ZIP，以及构建/源码/本地检查记录。
+
+### 14.4 本轮报告与后续
+
+跟踪变更 12 文件，其中新增 9 个承接镜像配方/最小上下文/部署说明、发布白名单、固定 worker/隔离/依赖锁和回归；其余原地扩展构建脚本、命令和本 ADR。新增镜像内 Python 依赖用于真正的 Blender/Runpod 入口，不新增 Node 工作区依赖、微服务、表或 SQL 迁移，Expand/Migrate/Contract 不适用。harness 64 测试、全仓 15 包 typecheck、lint、七项工程检查通过（289 模块/793 依赖，knip 通过，重复率 0.69%）；不将本地 CPU 结果算作 GPU 成功。首次 apt 包下载超时，加有限重试后构建通过。
+
+本轮没有模型/付费 GPU 调用、镜像上传或云资源创建/修改。正式镜像和证据保留；标准 `pnpm cleanup` 删除 0 项、释放 0 字节，没有遗留运行中的本轮容器。另删除本轮明确归属的一份过期无标签镜像，最终悬空镜像为 0；其共享层实际释放空间未单独测得，不把镜像显示体积当作回收量。过期 `cpu-test-failure.txt` 的原生 PowerShell 删除被自动审批拒绝，只返回“blocked by policy”；未绕过删除，保留并在证据说明中标记为已被最终成功结果取代。
+
+后续先完成私有镜像发布/摘要回读/只读拉取、R2 生命周期和签名传输验证，并实现现有 model-gateway 长作业的冻结、上传、恢复、取消、归档和用量/账单闭环；之后在明确的新预算内执行真实 GPU 隔离/停止/费用探针。当前既没有运行 endpoint，也没有启用生产渲染能力；5.9 第三步整体和第四/第五步仍未完成。产品仍默认鉴权预览、用户主动下载，不自动写入最终用户本地目录。

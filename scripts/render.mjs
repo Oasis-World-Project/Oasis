@@ -1,14 +1,19 @@
 #!/usr/bin/env node
 // Cloud-render preparation only. Never prints credentials or starts/publishes cloud resources.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { parseEnv } from 'node:util';
 
 const root = path.resolve(import.meta.dirname, '..');
 const file = path.join(root, '.env');
 const env = { ...(existsSync(file) ? parseEnv(readFileSync(file, 'utf8')) : {}), ...process.env };
-if (process.argv[2] !== 'config')
-  throw new Error('用法：node scripts/render.mjs config（仅本地配置核对）');
+const command = process.argv[2];
+if (command !== 'config') {
+  localImageCommand(command);
+  process.exit(0);
+}
 const required = [
   'RUNPOD_API_KEY',
   'RENDER_GHCR_NAMESPACE',
@@ -77,3 +82,157 @@ console.log(
   ),
 );
 process.exitCode = missing.length || problems.length ? 2 : 0;
+
+function localImageCommand(action) {
+  if (!['build', 'check', 'tag'].includes(action))
+    throw new Error('用法：node scripts/render.mjs config|build|check|tag（不发布、不创建云资源）');
+  const releaseFile = path.join(root, 'infra/render-release.json');
+  const release = JSON.parse(readFileSync(releaseFile, 'utf8'));
+  const expected = 'ghcr.io/' + env.RENDER_GHCR_NAMESPACE + '/oasis/harness-render';
+  if (
+    release.version !== 1 ||
+    release.registry !== 'ghcr.io' ||
+    release.repository !== expected ||
+    !/^ghcr\.io\/[a-z0-9]+(?:-[a-z0-9]+)*\/oasis\/harness-render$/.test(release.repository) ||
+    !/^oasis\/harness-render:(?!latest$)[a-z0-9][a-z0-9.-]+$/.test(release.localImage) ||
+    release.remoteTag !== release.repository + ':' + release.localImage.split(':')[1] ||
+    release.privateRequired !== true ||
+    release.platform !== 'linux/amd64'
+  )
+    throw new Error('云镜像发布描述与 registry/仓库/命名白名单不符');
+  const evidence = path.join(root, 'out/render-worker-20261028');
+  mkdirSync(evidence, { recursive: true });
+  const metadata = path.join(evidence, 'build.json');
+  const receiptFile = path.join(evidence, 'local-check.json');
+  const run = (args, capture = false) => {
+    const result = spawnSync('docker', args, {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+      timeout: 1200000,
+    });
+    if (result.status !== 0) throw new Error('Docker ' + args[0] + ' 失败');
+    return result.stdout;
+  };
+  const sources = [
+    'infra/images/harness-render/Dockerfile',
+    'infra/images/harness-render/Dockerfile.dockerignore',
+    'services/harness/sandbox/geometry.py',
+    'services/harness/render/requirements.txt',
+    'services/harness/render/isolate.c',
+    'services/harness/render/render_child.py',
+    'services/harness/render/worker.py',
+    'services/harness/test/render-worker.py',
+  ];
+  const sourceHash = () => {
+    const hash = createHash('sha256');
+    for (const name of sources) hash.update(name).update(readFileSync(path.join(root, name)));
+    return hash.digest('hex');
+  };
+  if (action === 'build') {
+    const before = sourceHash();
+    run([
+      'build',
+      '--platform',
+      release.platform,
+      '--metadata-file',
+      metadata,
+      '-t',
+      release.localImage,
+      '-f',
+      'infra/images/harness-render/Dockerfile',
+      '.',
+    ]);
+    if (before !== sourceHash()) throw new Error('构建过程中源文件改变，请重新构建');
+    writeFileSync(
+      path.join(evidence, 'source.json'),
+      JSON.stringify({ hash: sourceHash() }, null, 2),
+    );
+    return;
+  }
+  const image = JSON.parse(run(['image', 'inspect', release.localImage], true))[0];
+  const build = JSON.parse(readFileSync(metadata, 'utf8'));
+  const digest = build['containerimage.digest'];
+  const source = JSON.parse(readFileSync(path.join(evidence, 'source.json'), 'utf8'));
+  if (
+    !/^sha256:[a-f0-9]{64}$/.test(digest) ||
+    !(
+      image.Descriptor?.digest === digest ||
+      (build['containerimage.config.digest'] && build['containerimage.config.digest'] === image.Id)
+    ) ||
+    image.Architecture !== 'amd64' ||
+    image.Os !== 'linux' ||
+    image.Config.User !== '10001:10001' ||
+    source.hash !== sourceHash()
+  )
+    throw new Error('镜像摘要/平台/身份/源文件已改变，请重新构建与验证');
+  if (action === 'check') {
+    run([
+      'run',
+      '--rm',
+      '--network',
+      'none',
+      '--cap-drop',
+      'ALL',
+      '--security-opt',
+      'no-new-privileges',
+      '--cpus',
+      '2',
+      '--memory',
+      '4g',
+      '--pids-limit',
+      '256',
+      '--mount',
+      'type=bind,source=' + evidence + ',target=/evidence',
+      '--mount',
+      'type=bind,source=' +
+        path.join(root, 'services/harness/test/render-worker.py') +
+        ',target=/test.py,readonly',
+      '-e',
+      'RENDER_TEST_OUTPUT=/evidence',
+      '-e',
+      'RUNPOD_API_KEY=canary-not-real-key',
+      release.localImage,
+      'python',
+      '-B',
+      '/test.py',
+    ]);
+    writeFileSync(
+      receiptFile,
+      JSON.stringify(
+        { imageId: image.Id, digest, source: source.hash, localPassed: true, gpuTested: false },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  const check = JSON.parse(readFileSync(receiptFile, 'utf8'));
+  if (
+    !check.localPassed ||
+    check.imageId !== image.Id ||
+    check.digest !== digest ||
+    check.source !== source.hash
+  )
+    throw new Error('必须对同一源码/同一镜像完成本地检查，才能打远端标签');
+  if (env.RENDER_IMAGE_DIGEST && env.RENDER_IMAGE_DIGEST !== digest)
+    throw new Error('RENDER_IMAGE_DIGEST 与已核验摘要不一致');
+  run(['tag', release.localImage, release.remoteTag]);
+  const tagged = JSON.parse(run(['image', 'inspect', release.remoteTag], true))[0];
+  if (tagged.Id !== image.Id) throw new Error('标签回读不一致');
+  const plan = {
+    ...release,
+    imageId: image.Id,
+    allowedDigest: digest,
+    immutableReference: release.repository + '@' + digest,
+    source: source.hash,
+    localValidated: true,
+    gpuValidated: false,
+    published: false,
+    privateRegistryValidated: false,
+    publicationAuthorized: false,
+    note: '仅在本地打标签；发布前必须重新核对该描述、摘要和私有性，不等于发布或部署授权。',
+  };
+  writeFileSync(path.join(evidence, 'release-plan.json'), JSON.stringify(plan, null, 2));
+  console.log(JSON.stringify(plan, null, 2));
+}

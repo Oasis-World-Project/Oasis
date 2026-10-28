@@ -1,0 +1,11 @@
+# Explicit build-input allowlist: no .env, user artifacts, git history or sessions.
+**
+!services/
+!services/harness/
+!services/harness/sandbox/
+!services/harness/sandbox/geometry.py
+!services/harness/render/
+!services/harness/render/requirements.txt
+!services/harness/render/isolate.c
+!services/harness/render/render_child.py
+!services/harness/render/worker.py
