@@ -65,3 +65,10 @@ export const toolJobs = pgTable('tool_jobs', {
   createdAt: at('created_at').notNull().defaultNow(),
   finishedAt: at('finished_at'),
 });
+
+export const toolRunControls = pgTable('tool_run_controls', {
+  runId: uuid('run_id').primaryKey(),
+  payerId: uuid('payer_id').notNull(),
+  taskId: uuid('task_id'),
+  cancelledAt: at('cancelled_at'),
+});

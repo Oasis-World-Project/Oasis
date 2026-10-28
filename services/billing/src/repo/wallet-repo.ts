@@ -8,6 +8,14 @@ export function createWalletRepo(pool: pg.Pool) {
   const db = drizzle(pool);
 
   return {
+    async renewHold(id: string, now: Date, until: Date) {
+      const rows = await db
+        .update(holds)
+        .set({ expiresAt: until })
+        .where(and(eq(holds.id, id), eq(holds.status, 'open'), gte(holds.expiresAt, now)))
+        .returning({ id: holds.id });
+      return rows.length > 0;
+    },
     /** 处理注册事件：同一事件只处理一次；同一用户的注册赠送也只有一次（唯一索引兜底）。 */
     async grantSignup(eventId: string, userId: string, amountMicro: number): Promise<boolean> {
       return db.transaction(async (tx) => {
@@ -75,12 +83,19 @@ export function createWalletRepo(pool: pg.Pool) {
      */
     async settleHold(holdId: string, chargeMicro: number, detail: Record<string, unknown>) {
       return db.transaction(async (tx) => {
-        const [hold] = await tx
-          .select()
-          .from(holds)
-          .where(and(eq(holds.id, holdId), eq(holds.status, 'open')))
-          .for('update');
+        const [hold] = await tx.select().from(holds).where(eq(holds.id, holdId)).for('update');
         if (!hold) return undefined;
+        if (hold.status === 'settled') {
+          const [entry] = await tx
+            .select()
+            .from(ledgerEntries)
+            .where(eq(ledgerEntries.holdId, holdId));
+          return (entry?.detail as Record<string, unknown> | undefined)?.costMicro ===
+            detail.costMicro
+            ? (hold.chargedMicro ?? undefined)
+            : undefined;
+        }
+        if (hold.status !== 'open') return undefined;
         const [wallet] = await tx
           .select()
           .from(wallets)
@@ -112,12 +127,18 @@ export function createWalletRepo(pool: pg.Pool) {
       });
     },
 
-    async releaseHold(holdId: string): Promise<boolean> {
+    async releaseHold(holdId: string, expiredBefore?: Date): Promise<boolean> {
       return db.transaction(async (tx) => {
         const [hold] = await tx
           .update(holds)
           .set({ status: 'released', closedAt: sql`now()` })
-          .where(and(eq(holds.id, holdId), eq(holds.status, 'open')))
+          .where(
+            and(
+              eq(holds.id, holdId),
+              eq(holds.status, 'open'),
+              ...(expiredBefore ? [lt(holds.expiresAt, expiredBefore)] : []),
+            ),
+          )
           .returning({ userId: holds.userId, amountMicro: holds.amountMicro });
         if (!hold) return false;
         await tx

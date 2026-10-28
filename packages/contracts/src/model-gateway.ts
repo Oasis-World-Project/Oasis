@@ -174,6 +174,7 @@ export type ToolResult = z.infer<typeof ToolResult>;
 export const ToolJobBody = z.object({
   status: z.enum(['pending', 'completed', 'failed', 'uncertain']),
   cancelRequested: z.boolean().optional(),
+  phase: z.string().optional(),
   result: ToolResult.optional(),
   error: z.string().optional(),
 });

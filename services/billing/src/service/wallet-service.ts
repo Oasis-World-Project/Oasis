@@ -32,6 +32,11 @@ export function createWalletService(deps: {
   const now = deps.now ?? (() => new Date());
 
   return {
+    async renew(id: string, ttlMs: number) {
+      const instant = now();
+      if (!(await repo.renewHold(id, instant, new Date(instant.getTime() + ttlMs))))
+        throw new HttpError(409, 'hold_closed', '冻结已关闭或过期，不能续期');
+    },
     async grantSignup(eventId: string, userId: string): Promise<void> {
       const granted = await repo.grantSignup(eventId, userId, deps.signupGrantMicro);
       deps.logger.info({ userId, granted }, granted ? '注册赠送已到账' : '注册赠送已处理过，跳过');
@@ -83,7 +88,7 @@ export function createWalletService(deps: {
     async releaseExpired(): Promise<number> {
       const ids = await repo.expiredHoldIds(now());
       let released = 0;
-      for (const id of ids) if (await repo.releaseHold(id)) released += 1;
+      for (const id of ids) if (await repo.releaseHold(id, now())) released += 1;
       if (released > 0) deps.logger.warn({ released }, '已退回过期未结算的冻结');
       return released;
     },

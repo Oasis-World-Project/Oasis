@@ -213,6 +213,43 @@ export function registerRoutes(
     );
     return { accepted: true };
   });
+  app.addContentTypeParser('application/octet-stream', (_request, payload, done) =>
+    done(null, payload),
+  );
+  app.put(
+    '/run/v1/tools/jobs/:jobId/inputs/:fileId',
+    { bodyLimit: 100 * 1024 ** 2 },
+    async (request) => {
+      const caller = await runKeys.authenticate(request.headers.authorization);
+      const { jobId, fileId } = parseWith(
+        JobParams.extend({ fileId: z.string().regex(/^\d{1,2}$/) }),
+        request.params,
+      );
+      return tools.upload(caller, jobId, fileId, request.body as import('node:stream').Readable);
+    },
+  );
+  app.post('/run/v1/tools/jobs/:jobId/submit', async (request) =>
+    tools.submit(
+      await runKeys.authenticate(request.headers.authorization),
+      parseWith(JobParams, request.params).jobId,
+    ),
+  );
+  app.post('/internal/v1/tools/jobs/:jobId/reconcile', async (request) => {
+    const evidence = parseWith(
+      z.object({
+        costMicro: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+        billId: z.string().min(1).max(200),
+        stopped: z.literal(true),
+      }),
+      request.body,
+    );
+    await tools.reconcile(
+      internalCaller(request),
+      parseWith(JobParams, request.params).jobId,
+      evidence,
+    );
+    return { accepted: true };
+  });
   const fileParams = JobParams.extend({ fileId: z.string().regex(/^\d{1,3}$/) });
   app.get('/run/v1/tools/jobs/:jobId/files/:fileId', async (request, reply) => {
     const caller = await runKeys.authenticate(request.headers.authorization);

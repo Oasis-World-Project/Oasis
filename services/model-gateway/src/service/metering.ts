@@ -51,6 +51,12 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
   }
 
   return {
+    async renew(call: MeteredCall) {
+      await billing.json('POST', `/internal/holds/${call.holdId}/renew`, {
+        body: { ttlMs: 6 * 3600000 },
+        requestId: call.requestId,
+      });
+    },
     /** 在当前网络用不了的模型：最近一次聊天调用因为地区限制被上游拒绝、之后没再成功过 */
     regionBlockedModels: () => repo.regionBlockedModels(),
 

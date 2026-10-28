@@ -7,8 +7,9 @@ import type { ToolEntry, ToolJobBody, ToolResult } from '@oasis/contracts/model-
 import { HttpError, type Logger, type ObjectStore } from '@oasis/service-kit';
 import type { ProviderClient } from '../adapters/openrouter.ts';
 import type { FalClient } from '../adapters/fal.ts';
+import { RenderArgs, type RenderClient } from '../adapters/runpod.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
-import type { ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
+import { ToolAdmissionError, type ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
 import type { Caller, Meter, MeteredCall } from './metering.ts';
 import { TOOLS, type ToolConfig, type ToolDef } from './tools.ts';
 
@@ -22,6 +23,7 @@ export function createToolService(deps: {
   jobs: ToolJobsRepo;
   store: ObjectStore;
   fal?: FalClient;
+  render?: RenderClient;
   resultMaxBytes?: number;
   retentionMs?: number;
   submitTimeoutMs?: number;
@@ -33,11 +35,13 @@ export function createToolService(deps: {
   const { meter, config, jobs } = deps;
   const byKey = new Map(TOOLS.map((t) => [t.key, t]));
   const configured = (tool: ToolDef) =>
-    tool.provider === 'tavily'
-      ? deps.tavily.configured
-      : tool.provider === 'fal'
-        ? Boolean(deps.fal?.configured)
-        : deps.openrouter.configured;
+    tool.provider === 'runpod'
+      ? Boolean(deps.render?.configured)
+      : tool.provider === 'tavily'
+        ? deps.tavily.configured
+        : tool.provider === 'fal'
+          ? Boolean(deps.fal?.configured)
+          : deps.openrouter.configured;
 
   /** 这个工具现在能用的模型：去掉当前网络用不了的 */
   async function usableModels(tool: ToolDef): Promise<string[]> {
@@ -67,6 +71,20 @@ export function createToolService(deps: {
       heartbeat.unref();
       try {
         const job = await jobs.get(id);
+        if (job?.tool === '3d.render' && job.status === 'pending' && !job.cost) {
+          try {
+            await meter.renew(job.call as unknown as MeteredCall);
+          } catch {
+            await jobs.requestCancel(id);
+            if (job.providerJobId)
+              await deps.render?.cancel(job.providerJobId).catch(() => undefined);
+            await jobs.update(id, {
+              phase: 'uncertain',
+              error: '冻结无法续期；已请求止损，后续费用保留平台风险',
+            });
+            return;
+          }
+        }
         if (
           !job ||
           job.phase === 'expired' ||
@@ -75,6 +93,34 @@ export function createToolService(deps: {
           (job.status === 'completed' && job.result)
         )
           return;
+        if (
+          job.tool === '3d.render' &&
+          !job.call.submissionAttempted &&
+          (job.phase === 'uploading' || job.call.cancelRequested)
+        ) {
+          if (
+            job.call.cancelRequested ||
+            Date.now() - job.createdAt.getTime() > deps.jobTimeoutMs
+          ) {
+            await deps.render?.cleanup(
+              id,
+              (job.call.inputArgs as { assets: unknown[] }).assets.length,
+            );
+            await meter.fail(job.call as unknown as MeteredCall, '上传取消或过期，未提交 GPU');
+            await jobs.finish(id, 'failed', '未提交 GPU');
+          }
+          return;
+        }
+        const call = job.call as unknown as MeteredCall;
+        if (job.call.terminalAudit && job.cost) {
+          if (!(await meter.settle(call, job.cost, undefined, 'GPU 终态费用已核对'))) return;
+          await deps.render?.cleanup(
+            id,
+            (job.call.inputArgs as { assets: unknown[] }).assets.length,
+          );
+          await jobs.finish(id, 'failed', 'GPU 已终止，费用已核对');
+          return;
+        }
         if (!job.providerJobId) {
           if (job.phase === 'submitting' && Date.now() - job.createdAt.getTime() < 120_000) return;
           await jobs.update(id, {
@@ -83,16 +129,16 @@ export function createToolService(deps: {
           });
           return;
         }
-        const call = job.call as unknown as MeteredCall;
         let result = job.result;
         let cost = job.cost;
-        if (!result || !cost) {
+        if (!result) {
           const tool = byKey.get(job.tool);
           if (!tool?.long) throw new Error('长任务工具不存在');
           const toolDeps = {
             openrouter: deps.openrouter,
             tavily: deps.tavily,
             fal: deps.fal,
+            render: deps.render,
             config,
             signal: AbortSignal.timeout(120_000),
             upstream: (request: () => Promise<Response>) => request(),
@@ -122,6 +168,7 @@ export function createToolService(deps: {
                 openrouter: deps.openrouter,
                 tavily: deps.tavily,
                 fal: deps.fal,
+                render: deps.render,
                 config,
                 signal: AbortSignal.timeout(120_000),
                 upstream: (request) => request(),
@@ -166,7 +213,7 @@ export function createToolService(deps: {
           const quoted = Number(job.call.videoEstimateMicro);
           if (
             job.tool === 'video.generate' &&
-            cost.source === 'estimate' &&
+            cost?.source === 'estimate' &&
             Number.isSafeInteger(quoted) &&
             quoted > 0
           )
@@ -179,7 +226,11 @@ export function createToolService(deps: {
               resultKey(id, fileId),
               source,
               file.mediaType,
-              { maxBytes: deps.resultMaxBytes ?? 512 * 1024 * 1024 },
+              {
+                maxBytes: deps.resultMaxBytes ?? 512 * 1024 * 1024,
+                ...(file.size === undefined ? {} : { size: file.size }),
+                ...(file.sha256 === undefined ? {} : { sha256: file.sha256 }),
+              },
             );
             files.push({
               id: fileId,
@@ -194,7 +245,7 @@ export function createToolService(deps: {
             text: state.outcome.text,
             ...(state.outcome.data === undefined ? {} : { data: state.outcome.data }),
             files,
-            costMicro: cost.costMicro,
+            costMicro: cost?.costMicro ?? 0,
             job: { id },
           };
           await jobs.update(id, {
@@ -203,6 +254,10 @@ export function createToolService(deps: {
             phase: 'stored',
             expiresAt: new Date(Date.now() + (deps.retentionMs ?? 7 * 24 * 3600_000)),
           });
+        }
+        if (!cost) {
+          await jobs.update(id, { phase: 'awaiting_cost' });
+          return;
         }
         if (lostLease || !(await jobs.claim(id, token, new Date(Date.now() + 180_000))))
           throw new Error('媒体任务租约已被接管');
@@ -214,10 +269,19 @@ export function createToolService(deps: {
             });
           throw new Error('长任务结算未确认，将重试');
         }
+        if (job.tool === '3d.render')
+          await deps.render?.cleanup(
+            id,
+            (job.call.inputArgs as { assets: unknown[] }).assets.length,
+          );
         await jobs.finish(id, 'completed');
       } finally {
         clearInterval(heartbeat);
-        await jobs.unlock(id, token);
+        try {
+          await jobs.mergeCall(id, { nextCheckAt: Date.now() + 30000 });
+        } finally {
+          await jobs.unlock(id, token);
+        }
       }
     })();
     inFlight.set(id, work);
@@ -268,7 +332,98 @@ export function createToolService(deps: {
   return {
     cancel: cancelJob,
     async cancelRun(caller: Caller, runId: string) {
+      await jobs.cancelRun(runId, caller.payerId, caller.taskId);
       for (const job of await jobs.forRun(runId)) await cancelJob(caller, job.id);
+    },
+    async upload(caller: Caller, id: string, fileId: string, body: Readable) {
+      let job = await ownedJob(caller, id);
+      const args = RenderArgs.parse(job.call.inputArgs),
+        index = Number(fileId),
+        asset = args.assets[index];
+      if (job.phase !== 'uploading' || job.call.cancelRequested || !asset || !deps.render)
+        throw new HttpError(409, 'upload_closed', '上传未开放');
+      const token = randomUUID();
+      if (!(await jobs.claim(id, token, new Date(Date.now() + 180000))))
+        throw new HttpError(409, 'job_busy', '作业处理中');
+      const timeout = setTimeout(() => body.destroy(new Error('Upload timeout')), 120000);
+      try {
+        job = await ownedJob(caller, id);
+        if (job.phase !== 'uploading' || job.call.cancelRequested)
+          throw new HttpError(409, 'upload_closed', '上传已关闭');
+        await deps.store.putStream(deps.render.inputKey(id, index), body, 'model/gltf-binary', {
+          maxBytes: asset.size,
+          size: asset.size,
+          sha256: asset.sha256,
+        });
+        await jobs.mergeCall(id, {
+          uploads: { ...((job.call.uploads as object) ?? {}), [fileId]: true },
+        });
+      } finally {
+        clearTimeout(timeout);
+        await jobs.unlock(id, token);
+      }
+      return { stored: true };
+    },
+    async submit(caller: Caller, id: string) {
+      let job = await ownedJob(caller, id);
+      if (job.phase !== 'uploading') return { job: { id } };
+      const token = randomUUID();
+      if (!(await jobs.claim(id, token, new Date(Date.now() + 180000))))
+        throw new HttpError(409, 'job_busy', '作业处理中');
+      try {
+        job = await ownedJob(caller, id);
+        const args = RenderArgs.parse(job.call.inputArgs);
+        if (job.call.cancelRequested) throw new HttpError(409, 'job_cancelled', '取消意图已存在');
+        if (args.assets.some((_, i) => !(job.call.uploads as Record<string, boolean>)?.[i]))
+          throw new HttpError(409, 'inputs_missing', '输入未齐备');
+        await jobs.mergeCall(id, { submissionAttempted: true });
+        await jobs.update(id, { phase: 'submitting' });
+        try {
+          const handle = await deps.render!.start(args, id, AbortSignal.timeout(120000));
+          await jobs.update(id, { providerJobId: handle, phase: 'pending' });
+        } catch {
+          await jobs.update(id, { phase: 'uncertain', error: '渲染提交未确认；未自动重发' });
+        }
+        return { job: { id } };
+      } finally {
+        await jobs.unlock(id, token);
+      }
+    },
+    async reconcile(
+      caller: Caller,
+      id: string,
+      evidence: { costMicro: number; billId: string; stopped: boolean },
+    ) {
+      const token = randomUUID();
+      await ownedJob(caller, id);
+      if (!(await jobs.claim(id, token, new Date(Date.now() + 180000))))
+        throw new HttpError(409, 'job_busy', '作业处理中');
+      try {
+        const job = await ownedJob(caller, id);
+        if (
+          job.tool !== '3d.render' ||
+          !['awaiting_cost', 'uncertain'].includes(job.phase) ||
+          !evidence.stopped
+        )
+          throw new HttpError(409, 'audit_not_ready', '需要费用及停机核验');
+        const cap = Number(job.call.holdCeiling);
+        if (!Number.isSafeInteger(cap) || cap <= 0) throw new Error('Missing quote');
+        await jobs.mergeCall(id, {
+          billingEvidence: evidence,
+          terminalAudit: !job.result,
+          platformRiskMicro: Math.max(0, evidence.costMicro - cap),
+        });
+        await jobs.update(id, {
+          cost: { costMicro: Math.min(cap, evidence.costMicro), source: 'provider' },
+          ...(job.result
+            ? { result: { ...job.result, costMicro: Math.min(cap, evidence.costMicro) } }
+            : {}),
+          phase: 'stored',
+        });
+      } finally {
+        await jobs.unlock(id, token);
+      }
+      await processOne(id);
     },
     /** 工具目录：没配 Key、或者没有能用的模型的工具标成不可用 */
     async list(): Promise<ToolEntry[]> {
@@ -437,9 +592,12 @@ export function createToolService(deps: {
       for (const model of candidates) {
         const call = await meter.hold({
           caller: input.caller,
-          kind: 'tool',
+          kind: tool.provider === 'runpod' ? 'compute' : 'tool',
           model,
-          amountMicro: videoHoldMicro ?? tool.holdMicro(args),
+          amountMicro:
+            tool.provider === 'runpod'
+              ? deps.render!.holdMicro
+              : (videoHoldMicro ?? tool.holdMicro(args)),
           ...(input.maxCostMicro === undefined ? {} : { maxCostMicro: input.maxCostMicro }),
           requestId: input.requestId,
           ...(tool.long ? { ttlMs: deps.jobTimeoutMs + HOLD_MARGIN_MS } : {}),
@@ -462,17 +620,31 @@ export function createToolService(deps: {
           if (tool.long) {
             const id = randomUUID();
             if (
-              !(await jobs.insert({
-                id,
-                tool: tool.key,
-                providerJobId: '',
-                call: {
-                  ...call,
-                  ...(videoEstimateMicro === undefined ? {} : { videoEstimateMicro }),
-                },
-                requestKey: input.idempotencyKey ?? null,
-                requestHash,
-              }))
+              !(await jobs
+                .insert({
+                  id,
+                  tool: tool.key,
+                  providerJobId: '',
+                  call: {
+                    ...call,
+                    ...(tool.provider === 'runpod'
+                      ? { inputArgs: args, holdCeiling: deps.render!.holdMicro }
+                      : {}),
+                    ...(videoEstimateMicro === undefined ? {} : { videoEstimateMicro }),
+                  },
+                  requestKey: input.idempotencyKey ?? null,
+                  requestHash,
+                })
+                .catch(async (error: unknown) => {
+                  await meter.fail(call, '作业准入失败，未调用供应商');
+                  if (error instanceof ToolAdmissionError)
+                    throw new HttpError(
+                      503,
+                      'render_profile_busy',
+                      '云渲染仍有在途或待对账作业，请稍后重试',
+                    );
+                  throw error;
+                }))
             ) {
               await meter.fail(call, '重复工具请求，未提交供应商');
               const prior = input.idempotencyKey
@@ -480,6 +652,16 @@ export function createToolService(deps: {
                 : undefined;
               if (!prior) throw new Error('重复工具请求无法恢复');
               return resume(prior.id);
+            }
+            if (tool.deferred) {
+              await jobs.update(id, { phase: 'uploading' });
+              return {
+                tool: tool.key,
+                text: '输入准备中；上传全部资产后提交同一作业。',
+                files: [],
+                costMicro: 0,
+                job: { id },
+              };
             }
             try {
               const providerJobId = await tool.start(
@@ -583,6 +765,7 @@ export function createToolService(deps: {
         return { status: 'completed', result: job.result };
       return {
         status: 'pending',
+        ...(job.tool === '3d.render' ? { phase: job.phase } : {}),
         ...(job.call.cancelRequested === true ? { cancelRequested: true } : {}),
       };
     },

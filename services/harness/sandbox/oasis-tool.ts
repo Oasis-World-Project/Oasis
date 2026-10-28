@@ -7,12 +7,12 @@
 //   oasis-tool audio.transcribe --file in/录音.mp3
 //   oasis-tool video.generate --prompt "…" --out out/视频.mp4   长任务：提交后自己等，等不到就给任务号
 //   oasis-tool wait <任务号> --out out/视频.mp4                   接着等长任务
-import { mkdir, readFile, stat, writeFile, rename, rm } from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
+import { mkdir, readFile, stat, writeFile, rename, rm, realpath, lstat } from 'node:fs/promises';
+import { createWriteStream, createReadStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { basename, dirname, extname, join } from 'node:path';
+import { basename, dirname, extname, join, resolve, relative, isAbsolute } from 'node:path';
 import { runBatch } from './batch.ts';
 
 /** 这些参数是列表：逗号分隔，或者直接写 JSON 数组 */
@@ -86,7 +86,8 @@ export function targetsFor(files: ToolFile[], out: string | undefined): string[]
   if (files.length === 1) return [out];
   const ext = extname(out);
   const stem = ext ? out.slice(0, -ext.length) : out;
-  return files.map((f, i) => `${stem}-${i + 1}${ext || extname(f.name)}`);
+  const mixed = new Set(files.map((f) => extname(f.name))).size > 1;
+  return files.map((f, i) => `${stem}-${i + 1}${mixed ? extname(f.name) : ext || extname(f.name)}`);
 }
 
 /** 命令的输出（AI 读的就是这些） */
@@ -99,7 +100,11 @@ async function openRequest(path: string, init: RequestInit = {}): Promise<Respon
   if (!base || !key) throw new Error('这里不是 Oasis 的沙箱，用不了 oasis-tool');
   const response = await fetch(`${base.replace(/\/$/, '')}${path}`, {
     ...init,
-    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      ...init.headers,
+      authorization: `Bearer ${key}`,
+    },
   });
   if (response.ok) return response;
   const body = (await response.json().catch(() => ({}))) as {
@@ -216,6 +221,58 @@ async function localImages(paths: unknown): Promise<{ mediaType: string; base64:
 
 async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
+  const renderInputs: string[] = [];
+  if (key === '3d.render') {
+    if (typeof args.scene !== 'string') throw new Error('--scene 需要本地 scene.json');
+    const source = resolve(args.scene),
+      directory = dirname(source);
+    if ((await stat(source)).size > 1024 ** 2) throw new Error('Scene exceeds limit');
+    const scene = JSON.parse(await readFile(source, 'utf8')) as {
+      assets?: { id: string; path: string; sha256: string }[];
+    };
+    const assets = [];
+    for (const asset of scene.assets ?? []) {
+      const target = resolve(directory, asset.path),
+        rel = relative(directory, target);
+      if (rel.startsWith('..') || isAbsolute(rel)) throw new Error('Asset path escapes scene');
+      const actual = relative(await realpath(directory), await realpath(target));
+      if (actual.startsWith('..') || isAbsolute(actual) || (await lstat(target)).isSymbolicLink())
+        throw new Error('Asset symlink escapes scene');
+      const size = (await stat(target)).size;
+      if (size <= 0 || size > 100 * 1024 ** 2 || assets.length >= 20)
+        throw new Error('Asset exceeds limits');
+      const hash = createHash('sha256');
+      for await (const chunk of createReadStream(target)) hash.update(chunk);
+      if (hash.digest('hex') !== asset.sha256) throw new Error('Asset hash mismatch');
+      renderInputs.push(target);
+      assets.push({ id: asset.id, size, sha256: asset.sha256 });
+    }
+    args.scene = scene;
+    args.assets = assets;
+    args.render = {
+      width: Number(args.width ?? 512),
+      height: Number(args.height ?? 512),
+      samples: Number(args.samples ?? 32),
+      backend: args.backend ?? 'CUDA',
+    };
+    for (const key of ['width', 'height', 'samples', 'backend']) delete args[key];
+  }
+  const finishJob = async (id: string) => {
+    if (key === '3d.render') {
+      const state = (await request(`/tools/jobs/${id}`)) as { phase?: string };
+      if (state.phase === 'uploading') {
+        for (const [index, path] of renderInputs.entries())
+          await openRequest(`/tools/jobs/${id}/inputs/${index}`, {
+            method: 'PUT',
+            headers: { 'content-type': 'application/octet-stream' },
+            body: Readable.toWeb(createReadStream(path)),
+            duplex: 'half',
+          } as RequestInit);
+        await request(`/tools/jobs/${id}/submit`, { method: 'POST', body: '{}' });
+      }
+    }
+    return wait(id, out);
+  };
   if (key === '3d.generate' && args.image !== undefined) {
     if (typeof args.image !== 'string') throw new Error('--image 需要本地图片路径');
     args.image = await localImages([args.image]);
@@ -237,7 +294,12 @@ async function run(key: string, argv: string[]): Promise<void> {
   delete args.max_cost_micro;
   let statePath: string | undefined;
   let requestState: { key: string; jobId?: string } | undefined;
-  if (key === 'audio.music' || key === 'video.generate' || key === '3d.generate') {
+  if (
+    key === 'audio.music' ||
+    key === 'video.generate' ||
+    key === '3d.generate' ||
+    key === '3d.render'
+  ) {
     const fingerprint = createHash('sha256')
       .update(
         JSON.stringify({
@@ -269,7 +331,7 @@ async function run(key: string, argv: string[]): Promise<void> {
       throw new Error('工具恢复记录损坏，未提交供应商');
     if (requestState.jobId) {
       say(`沿用任务号 ${requestState.jobId}，未重新提交。`);
-      return wait(requestState.jobId, out);
+      return finishJob(requestState.jobId);
     }
   }
   if (
@@ -335,7 +397,7 @@ async function run(key: string, argv: string[]): Promise<void> {
   }
   if (!result.job) return save(result, out);
   say(result.text);
-  return wait(result.job.id, out);
+  return finishJob(result.job.id);
 }
 
 export async function main(argv: string[]): Promise<void> {

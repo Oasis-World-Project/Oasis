@@ -11,11 +11,14 @@ import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createOpenRouterClient } from '../src/adapters/openrouter.ts';
 import { createFalClient } from '../src/adapters/fal.ts';
+import { createRenderClient } from '../src/adapters/runpod.ts';
+import { createHash } from 'node:crypto';
 import { createTavilyClient } from '../src/adapters/tavily.ts';
 import type { CallOutcome, CallsRepo } from '../src/repo/calls-repo.ts';
 import type { ToolJob, ToolJobsRepo } from '../src/repo/tool-jobs-repo.ts';
 import { createMeter } from '../src/service/metering.ts';
 import { createToolService } from '../src/service/tool-service.ts';
+import { registerRoutes } from '../src/api/routes.ts';
 
 const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 const TASK = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
@@ -25,6 +28,7 @@ const PNG = Buffer.from('fake-png').toString('base64');
 const billingCalls: { path: string; body: Record<string, unknown> }[] = [];
 let settleFails = false;
 const billing = Fastify();
+billing.post('/internal/holds/:id/renew', async (_request, reply) => reply.code(204).send());
 billing.post('/internal/holds', async (request, reply) => {
   billingCalls.push({ path: 'hold', body: request.body as Record<string, unknown> });
   return reply.code(201).send({ holdId: HOLD, heldMicro: 1 });
@@ -169,6 +173,18 @@ const repo: CallsRepo = {
 
 const jobRows = new Map<string, ToolJob>();
 const jobs: ToolJobsRepo = {
+  async cancelRun(runId, payerId, taskId) {
+    for (const row of await this.forRun(runId)) {
+      const caller = row.call.caller as { payerId: string; taskId?: string };
+      if (caller.payerId !== payerId || (caller.taskId && caller.taskId !== taskId))
+        throw new Error('Owner mismatch');
+      await this.requestCancel(row.id);
+    }
+  },
+  async mergeCall(id, patch) {
+    const row = jobRows.get(id)!;
+    row.call = { ...row.call, ...patch };
+  },
   async requestCancel(id) {
     const row = jobRows.get(id);
     if (row?.status === 'pending') {
@@ -277,9 +293,49 @@ const geometryImage = [
     ),
   },
 ];
-const build = (tavilyKey: string | undefined, withMusic = false) => {
+let renderSubmits = 0;
+let renderTransfer = '';
+let renderSubmitLost = false;
+const build = (tavilyKey: string | undefined, withMusic = false, withRender = false) => {
   const logger = pino({ level: 'silent' });
   return createToolService({
+    render: withRender
+      ? createRenderClient({
+          baseUrl: 'https://api.runpod.ai/v2',
+          endpointId: 'fixture',
+          apiKey: 'not-real',
+          verified: true,
+          holdMicro: 1000000,
+          archive: mediaStore,
+          staging: { ...mediaStore, sign: async (key) => 'https://example.test/' + key },
+          fetcher: async (_url, init) => {
+            if (init?.method === 'POST') {
+              renderSubmits++;
+              if (renderSubmitLost) throw new Error('Lost POST response');
+              const body = JSON.parse(String(init.body)) as { input: { transferId: string } };
+              renderTransfer = body.input.transferId;
+              return Response.json({ id: 'gpu-one' });
+            }
+            const artifact = (key: string) => ({
+              size: mediaFiles.get(key)!.length,
+              sha256: createHash('sha256').update(mediaFiles.get(key)!).digest('hex'),
+            });
+            const imageKey = `jobs/${renderTransfer}/image.png`,
+              zipKey = `jobs/${renderTransfer}/project.zip`;
+            mediaFiles.set(imageKey, Buffer.from('png-fixture'));
+            mediaFiles.set(zipKey, Buffer.from('zip-fixture'));
+            return Response.json({
+              status: 'COMPLETED',
+              output: {
+                transferId: renderTransfer,
+                artifacts: { image: artifact(imageKey), project: artifact(zipKey) },
+                device: { gpuUsed: true },
+                boundary: { filesystem: true, socketsDenied: true, secretEnvironmentEmpty: true },
+              },
+            });
+          },
+        })
+      : undefined,
     fal: withMusic
       ? createFalClient({
           baseUrl: 'https://queue.fal.run',
@@ -363,6 +419,9 @@ afterAll(async () => {
   await fake.close();
 });
 beforeEach(() => {
+  renderSubmits = 0;
+  renderTransfer = '';
+  renderSubmitLost = false;
   geometryMode = false;
   geometryMalformed = false;
   geometryCancelled = false;
@@ -493,6 +552,146 @@ const call = (key: string, args: Record<string, unknown>, taskId?: string) =>
     requestId: 'r',
     signal: new AbortController().signal,
   });
+
+describe('云渲染的准备、恢复、归档和对账', () => {
+  const caller = { payerId: PAYER };
+  const args = {
+    scene: {
+      version: 1,
+      units: 'm',
+      objects: [{ id: 'cube', kind: 'box', size: [1, 1, 1], position: [0, 0, 0] }],
+      camera: { position: [3, 3, 3], target: [0, 0, 0] },
+    },
+    assets: [],
+    render: { width: 128, height: 128, samples: 8, backend: 'CUDA' },
+  };
+  it('场景引用和灯光方向错误在冻结和 GPU 提交前拒绝', async () => {
+    tools = build('key', false, true);
+    for (const scene of [
+      { ...args.scene, objects: [{ ...args.scene.objects[0], kind: 'asset', asset: 'missing' }] },
+      { ...args.scene, lights: [{ position: [0, 0, 0] }] },
+    ]) {
+      await expect(call('3d.render', { ...args, scene })).rejects.toMatchObject({
+        code: 'invalid_tool_args',
+      });
+    }
+    expect(billingCalls).toEqual([]);
+    expect(renderSubmits).toBe(0);
+  });
+  it('真实 HTTP 路由串接准备、二进制上传和幂等提交', async () => {
+    tools = build('key', false, true);
+    const app = Fastify({ loggerInstance: pino({ level: 'silent' }) });
+    registerRoutes(app, {
+      tools,
+      runKeys: { authenticate: async () => caller },
+      chat: {},
+      compute: {},
+      decisions: {},
+      unavailableModels: async () => [],
+    } as unknown as Parameters<typeof registerRoutes>[1]);
+    try {
+      const bytes = Buffer.from('uploaded mesh fixture'),
+        sha256 = createHash('sha256').update(bytes).digest('hex');
+      const prepared = await app.inject({
+        method: 'POST',
+        url: '/run/v1/tools/3d.render',
+        payload: {
+          args: {
+            ...args,
+            scene: {
+              ...args.scene,
+              assets: [{ id: 'a', path: 'assets/a.glb', origin: 'fixture', sha256 }],
+            },
+            assets: [{ id: 'a', size: bytes.length, sha256 }],
+          },
+        },
+      });
+      expect(prepared.statusCode).toBe(200);
+      const id = prepared.json().job.id as string;
+      const uploaded = await app.inject({
+        method: 'PUT',
+        url: `/run/v1/tools/jobs/${id}/inputs/0`,
+        headers: { 'content-type': 'application/octet-stream' },
+        payload: bytes,
+      });
+      expect(uploaded.statusCode).toBe(200);
+      expect(mediaFiles.get(`tool-inputs/${id}/0`)).toEqual(bytes);
+      const submitted = await app.inject({
+        method: 'POST',
+        url: `/run/v1/tools/jobs/${id}/submit`,
+        payload: {},
+      });
+      expect(submitted.statusCode).toBe(200);
+      expect(renderSubmits).toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+  it('先归档等待全成本证据；重启不重复生成，结算后回收暂存', async () => {
+    tools = build('key', false, true);
+    const id = (await call('3d.render', args)).job!.id;
+    expect(jobRows.get(id)?.phase).toBe('uploading');
+    expect(renderSubmits).toBe(0);
+    await tools.submit(caller, id);
+    await tools.submit(caller, id);
+    expect(renderSubmits).toBe(1);
+    const waiting = await tools.job(caller, id, AbortSignal.timeout(2000));
+    expect(waiting).toMatchObject({ status: 'pending', phase: 'awaiting_cost' });
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold']);
+    expect(jobRows.get(id)?.result?.files).toHaveLength(2);
+    tools = build('key', false, true);
+    settleFails = true;
+    await expect(
+      tools.reconcile(caller, id, { costMicro: 12345, billId: 'bill-line-one', stopped: true }),
+    ).rejects.toThrow('结算未确认');
+    expect(jobRows.get(id)?.phase).toBe('stored');
+    settleFails = false;
+    expect((await tools.job(caller, id, AbortSignal.timeout(2000))).status).toBe('completed');
+    expect(jobRows.get(id)?.result?.costMicro).toBe(12345);
+    expect(renderSubmits).toBe(1);
+    expect([...mediaFiles.keys()].some((k) => k.startsWith('jobs/'))).toBe(false);
+    expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
+    await expect(tools.file({ payerId: TASK }, id, '0')).rejects.toMatchObject({ statusCode: 404 });
+  });
+  it('输入不齐不提交、坏摘要不保存；取消上传不调用 GPU', async () => {
+    tools = build('key', false, true);
+    const bytes = Buffer.from('mesh-data'),
+      sha256 = createHash('sha256').update(bytes).digest('hex');
+    const id = (
+      await call('3d.render', {
+        ...args,
+        scene: {
+          ...args.scene,
+          assets: [{ id: 'asset', path: 'assets/a.glb', sha256, origin: 'authorized fixture' }],
+        },
+        assets: [{ id: 'asset', size: bytes.length, sha256 }],
+      })
+    ).job!.id;
+    await expect(tools.submit(caller, id)).rejects.toMatchObject({ code: 'inputs_missing' });
+    await expect(
+      tools.upload(caller, id, '0', Readable.from([Buffer.from('bad')])),
+    ).rejects.toThrow();
+    await tools.upload(caller, id, '0', Readable.from([bytes]));
+    await tools.cancel(caller, id);
+    await tools.close();
+    expect(jobRows.get(id)?.status).toBe('failed');
+    expect(renderSubmits).toBe(0);
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release']);
+  });
+  it('提交断连保留未知且不重发；终态成本超过冻结的部分记平台风险', async () => {
+    tools = build('key', false, true);
+    renderSubmitLost = true;
+    const id = (await call('3d.render', args)).job!.id;
+    await tools.submit(caller, id);
+    await tools.submit(caller, id);
+    expect(renderSubmits).toBe(1);
+    expect(jobRows.get(id)?.phase).toBe('uncertain');
+    await tools.reconcile(caller, id, { costMicro: 1500000, billId: 'risk-line', stopped: true });
+    expect(jobRows.get(id)?.status).toBe('failed');
+    expect(jobRows.get(id)?.call.platformRiskMicro).toBe(500000);
+    expect(billingCalls.find((c) => c.path === 'settle')?.body.costMicro).toBe(1000000);
+  });
+});
 const errorOf = (p: Promise<unknown>) =>
   p.then(
     () => undefined,
@@ -588,6 +787,7 @@ describe('工具目录', () => {
     const list = await build(undefined).list();
     const byKey = Object.fromEntries(list.map((t) => [t.key, t]));
     expect(Object.keys(byKey)).toEqual([
+      '3d.render',
       '3d.generate',
       'image.generate',
       'image.inspect',

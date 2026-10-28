@@ -7,6 +7,7 @@ import { HttpError } from '@oasis/service-kit';
 import type { ProviderClient } from '../adapters/openrouter.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
 import type { FalClient } from '../adapters/fal.ts';
+import { RenderArgs, type RenderClient } from '../adapters/runpod.ts';
 import { USD_TO_MICRO, type CostSource } from './pricing.ts';
 
 /** 工具交回给 AI 的文字最多这么长 */
@@ -32,6 +33,7 @@ export interface ToolConfig {
 }
 
 interface ToolDeps {
+  render?: RenderClient;
   openrouter: ProviderClient;
   tavily: SearchClient;
   fal?: FalClient;
@@ -44,7 +46,14 @@ interface ToolDeps {
 interface ToolOutcome {
   text: string;
   data?: unknown;
-  files: { name: string; mediaType: string; base64?: string; body?: Readable }[];
+  files: {
+    name: string;
+    mediaType: string;
+    base64?: string;
+    body?: Readable;
+    size?: number;
+    sha256?: string;
+  }[];
   cost: { costMicro: number; source: CostSource };
 }
 
@@ -58,7 +67,7 @@ interface ToolBase {
   /** 调用前冻结多少（微美元），按参数算 */
   holdMicro: (args: Record<string, unknown>) => number;
   /** 依赖哪个供应商（没配 Key 就不能用） */
-  provider: 'openrouter' | 'tavily' | 'fal';
+  provider: 'openrouter' | 'tavily' | 'fal' | 'runpod';
   /** 可以选的模型；不需要模型的工具返回空 */
   models: (config: ToolConfig) => string[];
   args: z.ZodType<Record<string, unknown>>;
@@ -77,10 +86,14 @@ type LongState =
   | { state: 'pending' }
   | { state: 'failed'; error: string }
   | { state: 'uncertain'; error: string }
-  | { state: 'completed'; outcome: ToolOutcome };
+  | {
+      state: 'completed';
+      outcome: Omit<ToolOutcome, 'cost'> & { cost: ToolOutcome['cost'] | null };
+    };
 
 /** 长任务（视频）：先提交拿到供应商的任务号，之后查进度，做好了再取结果 */
 interface LongTool extends ToolBase {
+  deferred?: boolean;
   long: true;
   start: (deps: ToolDeps, args: Record<string, unknown>, model: string) => Promise<string>;
   check: (deps: ToolDeps, providerJobId: string) => Promise<LongState>;
@@ -283,6 +296,34 @@ const estimate = (costMicro: number) => ({ costMicro, source: 'estimate' as cons
 const provider = (costUsd: number) => ({ costMicro: usd(costUsd), source: 'provider' as const });
 
 export const TOOLS: ToolDef[] = [
+  {
+    key: '3d.render',
+    name: '云 GPU 渲染',
+    description:
+      '渲染受限 scene JSON 与已授权 GLB，输出 PNG 和可编辑工程；需通过已核验的云 profile。',
+    usage:
+      'oasis-tool 3d.render --scene 工程/scene.json --width 512 --height 512 --samples 32 --out out/渲染.png',
+    unit: '作业',
+    estimateMicro: 300000,
+    holdMicro: () => 1000000,
+    provider: 'runpod',
+    long: true,
+    deferred: true,
+    models: () => ['oasis/blender-cuda'],
+    args: RenderArgs,
+    modelOf: () => 'oasis/blender-cuda',
+    async start() {
+      throw new Error('渲染须经准备/上传/提交接口');
+    },
+    async check(deps, id) {
+      if (!deps.render) throw new Error('GPU profile 不可用');
+      return deps.render.check(id);
+    },
+    async cancel(deps, id) {
+      if (!deps.render) throw new Error('GPU profile 不可用');
+      await deps.render.cancel(id);
+    },
+  },
   {
     key: '3d.generate',
     name: '生成 3D 模型',

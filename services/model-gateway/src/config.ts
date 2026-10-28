@@ -14,6 +14,19 @@ const list = (fallback: string) =>
     );
 
 export const modelGatewayEnv = {
+  RUNPOD_API_KEY: z.string().optional(),
+  RUNPOD_ENDPOINT_ID: z.string().default(''),
+  RUNPOD_BASE_URL: z.url().default('https://api.runpod.ai/v2'),
+  RENDER_PROFILE_VERIFIED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  RENDER_HOLD_MICRO: z.coerce.number().int().positive().default(1000000),
+  RENDER_STAGING_S3_ENDPOINT: z.string().default(''),
+  RENDER_STAGING_S3_REGION: z.string().default('auto'),
+  RENDER_STAGING_S3_BUCKET: z.string().default(''),
+  RENDER_STAGING_S3_ACCESS_KEY: z.string().default(''),
+  RENDER_STAGING_S3_SECRET_KEY: z.string().default(''),
   ...postgresAndEventBus.env,
   ...objectStoreEnv,
   S3_BUCKET: z.string().default('oasis-model-gateway'),

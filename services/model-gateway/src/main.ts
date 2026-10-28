@@ -30,6 +30,7 @@ import { createRunKeyService } from './service/run-key-service.ts';
 import { createToolService } from './service/tool-service.ts';
 import { createTavilyClient } from './adapters/tavily.ts';
 import { createFalClient } from './adapters/fal.ts';
+import { createRenderClient } from './adapters/runpod.ts';
 
 /** 定时刷新价格表；拉取失败时保留上一版，1 分钟后重试。 */
 function startPriceBook(provider: ProviderClient, refreshMs: number, logger: Logger) {
@@ -57,6 +58,7 @@ function startPriceBook(provider: ProviderClient, refreshMs: number, logger: Log
 let priceBook: ReturnType<typeof startPriceBook>;
 let provider: ProviderClient;
 let toolStore: ObjectStore;
+let renderStaging: ObjectStore | undefined;
 
 await startService({
   name: 'model-gateway',
@@ -82,6 +84,17 @@ await startService({
     });
     await objects.ensureBucket();
     toolStore = objects.store;
+    const staging =
+      ctx.config.RENDER_PROFILE_VERIFIED && ctx.config.RENDER_STAGING_S3_ENDPOINT
+        ? createObjectStore({
+            endpoint: ctx.config.RENDER_STAGING_S3_ENDPOINT,
+            region: ctx.config.RENDER_STAGING_S3_REGION,
+            bucket: ctx.config.RENDER_STAGING_S3_BUCKET,
+            accessKey: ctx.config.RENDER_STAGING_S3_ACCESS_KEY,
+            secretKey: ctx.config.RENDER_STAGING_S3_SECRET_KEY,
+          })
+        : undefined;
+    renderStaging = staging?.store;
     await ensureStream(eventBus.connection, MODEL_GATEWAY_STREAM);
     // 属于任务的调用结算后发 model-gateway.call.settled（task 累加花费）
     const outbox = startOutboxRelay({
@@ -89,7 +102,14 @@ await startService({
       connection: eventBus.connection,
       logger: ctx.logger,
     });
-    return { postgres, eventBus, outbox, objects: objects.resource, priceBook: priceBook.resource };
+    return {
+      postgres,
+      eventBus,
+      outbox,
+      objects: objects.resource,
+      priceBook: priceBook.resource,
+      ...(staging ? { renderStaging: staging.resource } : {}),
+    };
   },
   routes: (app, { config, resources, logger }) => {
     const callsRepo = createCallsRepo(resources.postgres.pool);
@@ -105,6 +125,15 @@ await startService({
       fallbackHoldMicro: config.FALLBACK_HOLD_MICRO,
     };
     const tools = createToolService({
+      render: createRenderClient({
+        baseUrl: config.RUNPOD_BASE_URL,
+        endpointId: config.RUNPOD_ENDPOINT_ID,
+        apiKey: config.RUNPOD_API_KEY,
+        verified: config.RENDER_PROFILE_VERIFIED,
+        holdMicro: config.RENDER_HOLD_MICRO,
+        staging: renderStaging,
+        archive: toolStore,
+      }),
       openrouter: provider,
       fal: createFalClient({
         baseUrl: config.FAL_BASE_URL,

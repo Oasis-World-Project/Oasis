@@ -51,7 +51,7 @@ Runtime configuration, outside the image:
 - Runpod's own queue credentials: injected by Runpod, never passed to Blender.
 
 Do not set the project's R2 access/secret keys, GHCR push PAT or model API keys
-on this worker. The future gateway signs individual transfer objects. Private R2
+on this worker. The gateway signs individual transfer objects. Private R2
 resources and lifecycle policies still require verification.
 
 The image uses UID/GID 10001. The fixed child launcher requires Linux amd64 and
@@ -99,6 +99,51 @@ report. PNG and ZIP go to the signed PUT objects; URLs are not returned/logged.
 The caller must HEAD/read/hash, archive to existing private artifact storage, then
 remove staging objects. A cancelled or partial upload is not a completed result.
 Provider bills, final archive ownership and visual requirements remain unchecked
-by this worker. These gateway recovery/billing integrations are still pending.
+by this worker. The gateway integration below handles ownership and recovery;
+supplier billing/worker evidence still needs a trusted operations source.
 Oasis users preview authorized results and explicitly download; this worker does
 not create a folder or download files on an end user's computer.
+
+## Gateway integration (disabled until target verification)
+
+`oasis-tool 3d.render --scene <scene.json> --out <sandbox-output-dir>` reads the
+scene and its relative GLBs in the sandbox, hashes bounded inputs, and uses the
+existing run key and tool-job protocol. Optional `--width`, `--height`, `--samples`
+and `--backend` are bounded by the contract above. No cloud credentials enter
+the sandbox. These paths refer to the task workspace, not an end user's folder.
+
+The run protocol prepares with `POST /run/v1/tools/3d.render`, uploads each
+manifest entry with `PUT /run/v1/tools/jobs/:id/inputs/:index` (octet-stream), then
+submits with `POST /run/v1/tools/jobs/:id/submit`. Missing/bad inputs cannot reach
+the queue. Repeating submit uses the same persistent job and does not resend a
+provider POST. A disconnected POST is uncertain, even when no provider id was
+received; it must be audited rather than retried as a new generation.
+
+The existing scanner renews unsettled render holds, archives and verifies both
+outputs, and enters `awaiting_cost`. Neither results nor staging cleanup are
+reported as complete until settlement and cleanup succeed. A dedicated profile
+admits one job through reconciliation, including uncertain jobs. Run cancellation
+is durably fenced before new tool admission; cancelling an uploaded-only job
+cleans up and releases its unused hold. Provider cancellation is an intent, not
+proof that billing stopped.
+
+Trusted operations can close an audited job with
+`POST /internal/v1/tools/jobs/:id/reconcile`, supplying the original ownership
+headers and `{costMicro, billId, stopped:true}`. `billId` must identify a unique
+audited bill line/window across jobs. The response acknowledges acceptance;
+poll the existing job endpoint for the final state. This route is deliberately
+unavailable under `/run` or the public gateway. The caller must verify worker
+shutdown and all attributable startup/execution/idle/storage/platform costs;
+the API does not independently prove that assertion. There is **no automatic
+Runpod invoice collector or worker-stop verifier yet**. Never manufacture a
+zero bill or derive a total bill from executionTime. Unattributable costs remain
+platform risk; user charges cannot exceed the saved approved hold ceiling.
+
+Service configuration is documented in `services/model-gateway/.env.example`.
+`pnpm env:init` adds missing local fields from the existing root keys without
+replacing filled values. Keep `RENDER_PROFILE_VERIFIED=false` until private-image
+pull, fixed resource/price profile, real isolated GPU, signed R2 exchange,
+lifecycle, shutdown and billing evidence all pass. `RENDER_HOLD_MICRO` is a
+configured reservation ceiling, not a verified current supplier quotation.
+Do not enable the flag just to expose the tool in the catalogue. Signed-URL
+and fake-provider tests do not prove R2 reachability or real GPU execution.

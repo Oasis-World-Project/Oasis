@@ -42,6 +42,12 @@ describe('oasis-tool', () => {
     ];
     expect(targetsFor(files.slice(0, 1), 'out/首屏.png')).toEqual(['out/首屏.png']);
     expect(targetsFor(files, 'out/首屏.png')).toEqual(['out/首屏-1.png', 'out/首屏-2.png']);
+    expect(
+      targetsFor(
+        [files[0]!, { name: 'project.zip', mediaType: 'application/zip', base64: '' }],
+        'out/渲染.png',
+      ),
+    ).toEqual(['out/渲染-1.png', 'out/渲染-2.zip']);
     expect(targetsFor(files, undefined)).toEqual([
       join('out', 'image-1.png'),
       join('out', 'image-2.png'),

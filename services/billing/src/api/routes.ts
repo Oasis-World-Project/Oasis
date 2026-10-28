@@ -13,6 +13,20 @@ export function registerRoutes(app: ServiceApp, wallets: WalletService): void {
     const result = await wallets.hold(parseWith(CreateHoldBody, request.body));
     return reply.code(201).send(result);
   });
+  app.post('/internal/holds/:id/renew', async (request, reply) => {
+    const { ttlMs } = parseWith(
+      z.object({
+        ttlMs: z
+          .number()
+          .int()
+          .min(60000)
+          .max(6 * 3600000),
+      }),
+      request.body,
+    );
+    await wallets.renew(parseWith(HoldParams, request.params).id, ttlMs);
+    return reply.code(204).send();
+  });
 
   app.post('/internal/holds/:id/settle', async (request) => {
     const { id } = parseWith(HoldParams, request.params);

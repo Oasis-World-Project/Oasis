@@ -13,6 +13,7 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { createHash } from 'node:crypto';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Readable } from 'node:stream';
 import { z } from 'zod';
 import type { ServiceResource } from './resource.ts';
@@ -39,6 +40,7 @@ export interface ByteRange {
 }
 
 export interface ObjectStore {
+  sign?(key: string, method: 'GET' | 'PUT', expiresIn: number): Promise<string>;
   put(key: string, body: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<Buffer>;
   /** 边读边传，不整个读进内存（下载、拖动视频进度用） */
@@ -110,6 +112,8 @@ export function createObjectStore(options: {
     endpoint: options.endpoint,
     region: options.region,
     forcePathStyle: true,
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: { accessKeyId: options.accessKey, secretAccessKey: options.secretKey },
   });
   const Bucket = options.bucket;
@@ -153,6 +157,17 @@ export function createObjectStore(options: {
   }
   return {
     store: {
+      sign(key, method, expiresIn) {
+        if (!Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > 3600)
+          throw new Error('Invalid signature lifetime');
+        return getSignedUrl(
+          client,
+          method === 'GET'
+            ? new GetObjectCommand({ Bucket, Key: key })
+            : new PutObjectCommand({ Bucket, Key: key }),
+          { expiresIn },
+        );
+      },
       async put(key, body, contentType) {
         await client.send(
           new PutObjectCommand({ Bucket, Key: key, Body: body, ContentType: contentType }),

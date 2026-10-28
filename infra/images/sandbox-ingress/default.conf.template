@@ -28,6 +28,11 @@ server {
     proxy_pass ${MODEL_GATEWAY_UPSTREAM}/run/v1/tools/;
     include /etc/nginx/conf.d/sandbox-proxy.inc;
   }
+  location ~ ^/v1/tools/jobs/([a-f0-9-]+)/inputs/([0-9][0-9]?)$ {
+    client_max_body_size 100m;
+    proxy_pass ${MODEL_GATEWAY_UPSTREAM}/run/v1/tools/jobs/$1/inputs/$2;
+    include /etc/nginx/conf.d/sandbox-proxy.inc;
+  }
 
   location / {
     return 403;

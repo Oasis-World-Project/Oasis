@@ -2,9 +2,12 @@
 import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { toolJobs } from './schema.ts';
+import { toolJobs, toolRunControls } from './schema.ts';
 export type ToolJob = typeof toolJobs.$inferSelect;
+export class ToolAdmissionError extends Error {}
 export interface ToolJobsRepo {
+  cancelRun(runId: string, payerId: string, taskId?: string): Promise<void>;
+  mergeCall(id: string, patch: Record<string, unknown>): Promise<void>;
   insert(
     job: Pick<ToolJob, 'id' | 'tool' | 'providerJobId' | 'call' | 'requestKey' | 'requestHash'>,
   ): Promise<boolean>;
@@ -28,19 +31,95 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
   const db = drizzle(pool);
   return {
     async insert(job) {
-      return (
-        (
-          await db
-            .insert(toolJobs)
-            .values({
-              ...job,
-              status: 'pending',
-              phase: job.providerJobId ? 'pending' : 'submitting',
-            })
-            .onConflictDoNothing()
-            .returning({ id: toolJobs.id })
-        ).length > 0
-      );
+      return db.transaction(async (tx) => {
+        if (job.tool === '3d.render') {
+          await tx.execute(
+            sql`select pg_advisory_xact_lock(hashtextextended('oasis-render-admission',0))`,
+          );
+          const [active] = await tx
+            .select()
+            .from(toolJobs)
+            .where(and(eq(toolJobs.tool, '3d.render'), eq(toolJobs.status, 'pending')))
+            .limit(1);
+          if (active) {
+            if (job.requestKey && active.requestKey === job.requestKey) return false;
+            throw new ToolAdmissionError('GPU profile busy or awaiting cost reconciliation');
+          }
+        }
+        const caller = job.call.caller as { runId?: string; payerId: string; taskId?: string };
+        if (caller.runId) {
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${caller.runId},0))`);
+          await tx
+            .insert(toolRunControls)
+            .values({ runId: caller.runId, payerId: caller.payerId, taskId: caller.taskId ?? null })
+            .onConflictDoNothing();
+          const [control] = await tx
+            .select()
+            .from(toolRunControls)
+            .where(eq(toolRunControls.runId, caller.runId));
+          if (control?.cancelledAt) throw new Error('Run cancellation fences new tool admission');
+          if (
+            control?.payerId !== caller.payerId ||
+            (control.taskId && control.taskId !== caller.taskId)
+          )
+            throw new Error('Run owner mismatch');
+        }
+        return (
+          (
+            await tx
+              .insert(toolJobs)
+              .values({
+                ...job,
+                status: 'pending',
+                phase:
+                  job.tool === '3d.render'
+                    ? 'uploading'
+                    : job.providerJobId
+                      ? 'pending'
+                      : 'submitting',
+              })
+              .onConflictDoNothing()
+              .returning({ id: toolJobs.id })
+          ).length > 0
+        );
+      });
+    },
+    async cancelRun(runId, payerId, taskId) {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${runId},0))`);
+        await tx
+          .insert(toolRunControls)
+          .values({ runId, payerId, taskId: taskId ?? null, cancelledAt: new Date() })
+          .onConflictDoNothing();
+        const [control] = await tx
+          .select()
+          .from(toolRunControls)
+          .where(eq(toolRunControls.runId, runId));
+        if (control?.payerId !== payerId || (control.taskId && control.taskId !== taskId))
+          throw new Error('Run owner mismatch');
+        await tx
+          .update(toolRunControls)
+          .set({ cancelledAt: new Date() })
+          .where(eq(toolRunControls.runId, runId));
+        await tx
+          .update(toolJobs)
+          .set({
+            call: sql`${toolJobs.call} || '{"cancelRequested":true}'::jsonb`,
+            phase: 'cancel_requested',
+          })
+          .where(
+            and(
+              eq(toolJobs.status, 'pending'),
+              sql`${toolJobs.call}->'caller'->>'runId' = ${runId}`,
+            ),
+          );
+      });
+    },
+    async mergeCall(id, patch) {
+      await db
+        .update(toolJobs)
+        .set({ call: sql`${toolJobs.call} || ${JSON.stringify(patch)}::jsonb` })
+        .where(eq(toolJobs.id, id));
     },
     async byRequest(key) {
       const [row] = await db.select().from(toolJobs).where(eq(toolJobs.requestKey, key));
@@ -101,6 +180,7 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
         .from(toolJobs)
         .where(
           and(
+            sql`coalesce((${toolJobs.call}->>'nextCheckAt')::bigint,0) <= ${Date.now()}`,
             or(
               eq(toolJobs.status, 'pending'),
               and(eq(toolJobs.status, 'completed'), isNull(toolJobs.result)),
@@ -109,6 +189,9 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
               eq(toolJobs.phase, 'pending'),
               eq(toolJobs.phase, 'stored'),
               eq(toolJobs.phase, 'cancel_requested'),
+              eq(toolJobs.phase, 'uploading'),
+              eq(toolJobs.phase, 'awaiting_cost'),
+              and(eq(toolJobs.phase, 'uncertain'), eq(toolJobs.tool, '3d.render')),
               and(
                 eq(toolJobs.phase, 'submitting'),
                 lt(toolJobs.createdAt, new Date(Date.now() - 120_000)),

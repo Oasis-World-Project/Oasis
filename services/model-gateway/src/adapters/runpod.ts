@@ -1,0 +1,276 @@
+// Queue credentials stay here; signed exchange URLs are never persisted or returned to agents.
+import { z } from 'zod';
+import type { ObjectStore } from '@oasis/service-kit';
+
+const vec = (low: number, high: number) => z.array(z.number().min(low).max(high)).length(3);
+const Scene = z
+  .strictObject({
+    version: z.literal(1),
+    units: z.literal('m'),
+    objects: z
+      .array(
+        z.strictObject({
+          id: z.string().min(1).max(100),
+          kind: z.enum(['box', 'sphere', 'cylinder', 'asset']),
+          asset: z.string().optional(),
+          size: vec(0.0001, 10000),
+          position: vec(-10000, 10000),
+          rotation: vec(-3600, 3600).optional(),
+          color: z.array(z.number().min(0).max(1)).length(4).optional(),
+          roughness: z.number().min(0).max(1).optional(),
+          metallic: z.number().min(0).max(1).optional(),
+        }),
+      )
+      .min(1)
+      .max(100),
+    camera: z.strictObject({
+      position: vec(-10000, 10000),
+      target: vec(-10000, 10000),
+      lens: z.number().min(10).max(200).optional(),
+    }),
+    lights: z
+      .array(
+        z.strictObject({
+          position: vec(-10000, 10000),
+          target: vec(-10000, 10000).optional(),
+          power: z.number().positive().max(100000).optional(),
+          size: z.number().positive().max(100).optional(),
+        }),
+      )
+      .max(8)
+      .optional(),
+    background: vec(0, 1).optional(),
+    assets: z
+      .array(
+        z.strictObject({
+          id: z.string().min(1).max(100),
+          path: z
+            .string()
+            .min(1)
+            .max(400)
+            .refine(
+              (p) =>
+                !p.startsWith('.') &&
+                !p.startsWith('/') &&
+                !p.includes('..') &&
+                !p.includes('\\') &&
+                !p.includes(':'),
+            ),
+          sha256: z.string().regex(/^[a-f0-9]{64}$/),
+          origin: z.string().min(1).max(1000),
+        }),
+      )
+      .max(20)
+      .default([]),
+  })
+  .refine(
+    (s) =>
+      new Set(s.objects.map((o) => o.id)).size === s.objects.length &&
+      new Set(s.assets.map((a) => a.id)).size === s.assets.length &&
+      s.objects.every(
+        (o) =>
+          o.kind !== 'asset' ||
+          (s.assets.some((a) => a.id === o.asset) &&
+            o.color === undefined &&
+            o.roughness === undefined &&
+            o.metallic === undefined),
+      ) &&
+      JSON.stringify(s.camera.position) !== JSON.stringify(s.camera.target) &&
+      (s.lights ?? []).every(
+        (l) => JSON.stringify(l.position) !== JSON.stringify(l.target ?? [0, 0, 0]),
+      ),
+    'Invalid scene identity, reference, material override or direction',
+  );
+export const RenderArgs = z
+  .strictObject({
+    scene: Scene,
+    assets: z
+      .array(
+        z.strictObject({
+          id: z.string().min(1).max(100),
+          size: z
+            .number()
+            .int()
+            .positive()
+            .max(100 * 1024 ** 2),
+          sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        }),
+      )
+      .max(20)
+      .default([]),
+    render: z.strictObject({
+      width: z.number().int().min(64).max(2048),
+      height: z.number().int().min(64).max(2048),
+      samples: z.number().int().min(1).max(128),
+      backend: z.enum(['CUDA', 'OPTIX']),
+    }),
+  })
+  .refine(
+    (a) =>
+      a.scene.assets.length === a.assets.length &&
+      a.assets.every(
+        (v, i) => v.id === a.scene.assets[i]?.id && v.sha256 === a.scene.assets[i]?.sha256,
+      ),
+    'Asset closure mismatch',
+  )
+  .refine(
+    (v) =>
+      v.assets.reduce((s, a) => s + a.size, 0) <= 200 * 1024 ** 2 &&
+      JSON.stringify(v.scene).length <= 1024 ** 2,
+    'Scene exceeds limits',
+  );
+export function createRenderClient(options: {
+  baseUrl: string;
+  endpointId: string;
+  apiKey?: string;
+  verified: boolean;
+  holdMicro: number;
+  staging?: ObjectStore;
+  archive: ObjectStore;
+  fetcher?: typeof fetch;
+}) {
+  const fetcher = options.fetcher ?? fetch;
+  const base = options.baseUrl.replace(/\/$/, '');
+  const key = (id: string, name: string) => `jobs/${id.replaceAll('-', '')}/${name}`;
+  const inputKey = (id: string, i: number) => `tool-inputs/${id}/${i}`;
+  async function request(
+    path: string,
+    method = 'GET',
+    body?: unknown,
+    signal = AbortSignal.timeout(30000),
+  ) {
+    return fetcher(`${base}/${encodeURIComponent(options.endpointId)}/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${options.apiKey ?? ''}`,
+        'content-type': 'application/json',
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal,
+      redirect: 'error',
+    });
+  }
+  return {
+    configured: Boolean(
+      options.verified && options.apiKey && options.endpointId && options.staging?.sign,
+    ),
+    holdMicro: options.holdMicro,
+    async start(value: Record<string, unknown>, jobId: string, signal: AbortSignal) {
+      const args = RenderArgs.parse(value),
+        staging = options.staging!;
+      const sceneAssets = args.scene.assets;
+      const assets = [];
+      for (const [i, asset] of args.assets.entries()) {
+        const source = sceneAssets[i];
+        if (source?.id !== asset.id || source.sha256 !== asset.sha256)
+          throw new Error('Asset identity mismatch');
+        await staging.putStream(
+          key(jobId, `input-${i}.glb`),
+          await options.archive.read(inputKey(jobId, i)),
+          'model/gltf-binary',
+          { maxBytes: asset.size, size: asset.size, sha256: asset.sha256 },
+        );
+        assets.push({
+          ...asset,
+          url: await staging.sign!(key(jobId, `input-${i}.glb`), 'GET', 3600),
+        });
+      }
+      const outputs = {
+        image: await staging.sign!(key(jobId, 'image.png'), 'PUT', 3600),
+        project: await staging.sign!(key(jobId, 'project.zip'), 'PUT', 3600),
+      };
+      const response = await request(
+        'run',
+        'POST',
+        {
+          input: {
+            version: 1,
+            operation: 'render',
+            transferId: jobId.replaceAll('-', ''),
+            scene: args.scene,
+            assets,
+            render: args.render,
+            outputs,
+          },
+          policy: { executionTimeout: 600000, ttl: 1800000 },
+        },
+        signal,
+      );
+      if (!response.ok) throw new Error('Render submission not confirmed');
+      const result = z
+        .object({ id: z.string().regex(/^[a-zA-Z0-9_-]+$/) })
+        .parse(await response.json());
+      return JSON.stringify({ id: result.id, jobId, count: args.assets.length });
+    },
+    async cancel(handle: string) {
+      const { id } = JSON.parse(handle) as { id: string };
+      const response = await request(`cancel/${encodeURIComponent(id)}`, 'POST');
+      await response.body?.cancel();
+      if (!response.ok && response.status !== 404)
+        throw new Error('Render cancellation unconfirmed');
+    },
+    async check(handle: string) {
+      const h = JSON.parse(handle) as { id: string; jobId: string };
+      const response = await request(`status/${encodeURIComponent(h.id)}`);
+      if (!response.ok) throw new Error('Render status unavailable');
+      const value = z
+        .object({ status: z.string(), output: z.unknown().optional() })
+        .parse(await response.json());
+      if (['FAILED', 'CANCELLED', 'TIMED_OUT'].includes(value.status))
+        return { state: 'uncertain' as const, error: 'GPU 已终止；全成本及 worker 停止仍需对账' };
+      if (value.status !== 'COMPLETED') return { state: 'pending' as const };
+      const artifact = z.object({
+        size: z
+          .number()
+          .int()
+          .positive()
+          .max(200 * 1024 ** 2),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      });
+      const output = z
+        .object({
+          transferId: z.literal(h.jobId.replaceAll('-', '')),
+          artifacts: z.object({ image: artifact, project: artifact }),
+          device: z.object({ gpuUsed: z.literal(true) }).passthrough(),
+          boundary: z
+            .object({
+              filesystem: z.literal(true),
+              socketsDenied: z.literal(true),
+              secretEnvironmentEmpty: z.literal(true),
+            })
+            .passthrough(),
+        })
+        .parse(value.output);
+      return {
+        state: 'completed' as const,
+        outcome: {
+          text: '云 GPU 渲染结果已取回；全成本对账完成后交付。',
+          data: { device: output.device, boundary: output.boundary },
+          files: await Promise.all(
+            (['image', 'project'] as const).map(async (name) => ({
+              name: name === 'image' ? 'image.png' : 'project.zip',
+              mediaType: name === 'image' ? 'image/png' : 'application/zip',
+              body: await options.staging!.read(
+                key(h.jobId, name === 'image' ? 'image.png' : 'project.zip'),
+              ),
+              ...output.artifacts[name],
+            })),
+          ),
+          cost: null,
+        },
+      };
+    },
+    async cleanup(jobId: string, count: number) {
+      if (!options.staging) return;
+      for (const name of [
+        'image.png',
+        'project.zip',
+        ...Array.from({ length: count }, (_, i) => `input-${i}.glb`),
+      ])
+        await options.staging.delete(key(jobId, name));
+      for (let i = 0; i < count; i++) await options.archive.delete(inputKey(jobId, i));
+    },
+    inputKey,
+  };
+}
+export type RenderClient = ReturnType<typeof createRenderClient>;
