@@ -215,6 +215,13 @@ export function createArtifactService(deps: {
       return row;
     },
 
+    async family(ownerId: string, id: string): Promise<Artifact[]> {
+      const source = await this.get(ownerId, id);
+      return (await repo.listByTask(source.taskId)).filter(
+        (row) => row.ownerId === ownerId && row.nodeId === source.nodeId,
+      );
+    },
+
     /** 只从同任务同节点、已登记的最终成果组装离线运行包。 */
     async application(ownerId: string, id: string) {
       const manifest = await this.get(ownerId, id);

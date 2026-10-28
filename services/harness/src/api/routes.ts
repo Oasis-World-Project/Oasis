@@ -12,6 +12,11 @@ import { z } from 'zod';
 import type { RunService } from '../service/run-service.ts';
 import type { PreviewService } from '../service/preview-service.ts';
 import type { MaterialInspector } from '../service/material-inspection.ts';
+import { ModelInspectionBody, MODEL_PREVIEW_LIMITS } from '@oasis/contracts/model-preview';
+import {
+  createModelPreviewInspector,
+  createModelPosterInspector,
+} from '../service/file-inspection.ts';
 
 const RunParams = z.object({ runId: z.uuid() });
 const FileParams = RunParams.extend({ '*': z.string().min(1).max(500) });
@@ -29,6 +34,26 @@ export function registerRoutes(
   previews?: PreviewService,
   inspectMaterials?: MaterialInspector,
 ): void {
+  const inspectModel = createModelPreviewInspector();
+  const inspectPoster = createModelPosterInspector();
+  app.post(
+    '/internal/models/inspect',
+    { bodyLimit: Math.ceil(MODEL_PREVIEW_LIMITS.bytes / 3) * 4 + 1000 },
+    (request) => inspectModel(parseWith(ModelInspectionBody, request.body)),
+  );
+  app.post(
+    '/internal/models/poster',
+    { bodyLimit: Math.ceil(MODEL_PREVIEW_LIMITS.bytes / 3) * 4 + 1000 },
+    (request) =>
+      inspectPoster(
+        parseWith(
+          ModelInspectionBody.extend({
+            name: z.enum(['poster.png', 'poster.jpg', 'poster.jpeg', 'poster.webp']),
+          }),
+          request.body,
+        ),
+      ),
+  );
   if (inspectMaterials)
     app.post('/internal/materials/inspect', async (request) =>
       inspectMaterials(parseWith(MaterialInspectBody, request.body)),

@@ -26,6 +26,8 @@ import {
   type PreviewLimits,
 } from '../service/preview-service.ts';
 import { sendStored } from './send-stored.ts';
+import { ModelPreviewSource } from '@oasis/contracts/model-preview';
+import { createModelPreviewService } from '../service/model-preview-service.ts';
 
 const IdParams = z.object({ id: z.uuid() });
 const DownloadQuery = z.object({ download: z.enum(['0', '1']).default('0') });
@@ -37,6 +39,7 @@ export function registerRoutes(
     artifacts: ArtifactService;
     store: ObjectStore;
     harness?: ServiceClient;
+    task?: ServiceClient;
   },
   options: {
     maxBytes: number;
@@ -49,6 +52,9 @@ export function registerRoutes(
   const { uploads, artifacts, store, harness } = services;
   const previewLimits = options.preview ?? defaultPreviewLimits;
   const preview = createPreviewService(previewLimits);
+  const models = services.task
+    ? createModelPreviewService({ artifacts, uploads, store, task: services.task, harness })
+    : undefined;
   let archiving = false;
   let uploading = 0;
   // 上传的请求体就是文件本身（前端一律用 application/octet-stream 发，类型按文件名定）
@@ -101,13 +107,36 @@ export function registerRoutes(
   // ---- 成果（ADR 0007 §8–9）----
   app.get('/v1/artifacts', async (request) => {
     const filter = parseWith(ArtifactQuery, request.query);
-    return { artifacts: await artifacts.list(requireUserId(request), filter) };
+    const user = requireUserId(request),
+      rows = await artifacts.list(user, filter);
+    const decorated = [];
+    for (const row of rows) decorated.push(models ? await models.decorate(user, row) : row);
+    return { artifacts: decorated };
   });
 
   app.get('/v1/artifacts/:id', async (request) => {
     const { id } = parseWith(IdParams, request.params);
-    return artifacts.toBody(await artifacts.get(requireUserId(request), id));
+    const user = requireUserId(request),
+      row = artifacts.toBody(await artifacts.get(user, id));
+    return models ? models.decorate(user, row) : row;
   });
+
+  if (models)
+    app.post('/v1/model-previews', (request) =>
+      models.describe(requireUserId(request), parseWith(ModelPreviewSource, request.body)),
+    );
+  if (models)
+    app.get('/v1/artifacts/:id/model-poster', async (request, reply) => {
+      const { id } = parseWith(IdParams, request.params);
+      const { row, content, size, sha256 } = await models.poster(requireUserId(request), id);
+      return reply
+        .headers({
+          ...fileResponseHeaders(row.contentType, row.name, false),
+          'content-length': size,
+          'x-oasis-file-sha256': sha256,
+        })
+        .send(content);
+    });
 
   app.get('/v1/artifacts/:id/content', async (request, reply) => {
     const { id } = parseWith(IdParams, request.params);

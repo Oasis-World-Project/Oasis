@@ -1,8 +1,16 @@
 // 格式解析在独立 worker 中完成；逐文件错误、资源上限和总字符上限对调用方可见。
 import { Worker } from 'node:worker_threads';
 import type { RunTextsBody } from '@oasis/contracts/harness';
+import {
+  GeometryPreviewReport,
+  MODEL_PREVIEW_LIMITS,
+  type ModelInspectionResult,
+} from '@oasis/contracts/model-preview';
+import { createHash } from 'node:crypto';
+import { HttpError } from '@oasis/service-kit';
 
 export interface InspectionLimits {
+  modelPreview?: boolean;
   inputBytes: number;
   unzipBytes: number;
   entries: number;
@@ -91,4 +99,75 @@ export async function inspectFiles(
     if (truncated) result.truncated = true;
   }
   return result;
+}
+
+export function createModelPreviewInspector() {
+  let active = 0;
+  return async (input: {
+    contentBase64: string;
+    sha256: string;
+  }): Promise<import('zod').infer<typeof ModelInspectionResult>> => {
+    if (active >= 2) throw new HttpError(503, 'model_preview_busy', '模型预览检查正忙');
+    const bytes = Buffer.from(input.contentBase64, 'base64');
+    if (
+      bytes.length > MODEL_PREVIEW_LIMITS.bytes ||
+      createHash('sha256').update(bytes).digest('hex') !== input.sha256
+    )
+      throw new HttpError(422, 'model_preview_hash', '模型大小或摘要不符');
+    active++;
+    try {
+      const report = await inspectFiles([{ path: 'model.glb', content: bytes }], 16000, {
+        ...defaultInspectionLimits,
+        inputBytes: MODEL_PREVIEW_LIMITS.bytes,
+        pixels: MODEL_PREVIEW_LIMITS.texturePixels,
+        modelPreview: true,
+      });
+      const file = report.files[0];
+      if (!file?.valid || file.error || report.truncated || file.truncated)
+        return {
+          status: file?.errorKind === 'invalid' ? 'invalid' : 'unsupported',
+          sha256: input.sha256,
+          reason: (file?.error ?? '模型检查未完成').slice(0, 1000),
+        };
+      return {
+        status: 'ready',
+        sha256: input.sha256,
+        report: GeometryPreviewReport.parse(JSON.parse(file.text)),
+      };
+    } finally {
+      active--;
+    }
+  };
+}
+
+export function createModelPosterInspector() {
+  let active = 0;
+  return async (input: { name: string; sha256: string; contentBase64: string }) => {
+    if (active >= 2) throw new HttpError(503, 'model_preview_busy', '封面检查正忙');
+    const bytes = Buffer.from(input.contentBase64, 'base64');
+    if (
+      bytes.length > MODEL_PREVIEW_LIMITS.bytes ||
+      createHash('sha256').update(bytes).digest('hex') !== input.sha256
+    )
+      throw new HttpError(422, 'model_preview_hash', '封面大小或摘要不符');
+    active++;
+    try {
+      const result = await inspectFiles([{ path: input.name, content: bytes }], 100, {
+        ...defaultInspectionLimits,
+        pixels: MODEL_PREVIEW_LIMITS.texturePixels,
+      });
+      const file = result.files[0];
+      if (
+        !file?.valid ||
+        !file.width ||
+        !file.height ||
+        file.width > MODEL_PREVIEW_LIMITS.textureSide ||
+        file.height > MODEL_PREVIEW_LIMITS.textureSide
+      )
+        throw new HttpError(422, 'model_poster_invalid', '封面格式或解码资源不符合预览限制');
+      return { sha256: input.sha256, width: file.width, height: file.height };
+    } finally {
+      active--;
+    }
+  };
 }

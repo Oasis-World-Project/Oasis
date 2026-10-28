@@ -1,5 +1,6 @@
 // canvas 的接口：用户上传的素材（ADR 0007 §3）。5.5c 再加成果登记。
 import { z } from 'zod';
+import { ModelPreviewHint } from './model-preview.ts';
 
 /** 文件名：不能带路径、控制字符，也不能是 . 或 .. */
 export const FileName = z
@@ -104,6 +105,7 @@ export const ArtifactBody = z.object({
   category: ArtifactCategory,
   /** 只有经过完整交付文件检查的 oasis-app.json 才带这个字段。 */
   application: ApplicationSpec.nullable().optional(),
+  modelPreview: ModelPreviewHint.optional(),
   /** 属于任务单里的哪样交付物 */
   deliverable: z.string(),
   taskId: z.uuid(),

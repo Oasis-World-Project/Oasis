@@ -31,6 +31,7 @@
     "render:tag": "node scripts/render.mjs tag",
     "preview:build": "node scripts/preview.mjs build",
     "preview:smoke": "node scripts/preview.mjs smoke",
+    "model:smoke": "turbo run build --filter=@oasis/canvas... --filter=@oasis/harness... --filter=@oasis/desktop... && node scripts/model-preview.mjs",
     "media:smoke": "node --max-old-space-size=128 scripts/media.mjs",
     "media:recover": "node scripts/media.mjs recover",
     "video:smoke": "node scripts/video.mjs",

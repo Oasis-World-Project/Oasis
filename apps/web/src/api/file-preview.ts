@@ -8,7 +8,7 @@ export async function readPreviewFile(
 ): Promise<Uint8Array> {
   // 文件只允许走现有鉴权下载通路，不接受外部地址。
   if (!url.startsWith('/api/')) throw new Error('文件地址无效');
-  const response = await fetch(url, { credentials: 'same-origin', signal });
+  const response = await fetch(url, { credentials: 'same-origin', signal, redirect: 'error' });
   if (!response.ok) throw new Error('文件没能打开');
   const reader = response.body?.getReader();
   if (!reader) throw new Error('文件内容为空');

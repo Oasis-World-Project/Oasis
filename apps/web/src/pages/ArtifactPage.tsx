@@ -147,6 +147,7 @@ export function ArtifactPage() {
                 size: artifact.size,
                 url: artifactContentUrl(artifact.id),
                 downloadUrl: artifactContentUrl(artifact.id, true),
+                modelPreview: !!artifact.modelPreview,
                 ...(pdf ? { pdfUrl: artifactContentUrl(pdf.id) } : {}),
               }}
             />

@@ -28,7 +28,11 @@
     },
     // preload 由 Electron 按路径加载（BrowserWindow 的 webPreferences.preload），不经 import
     "apps/desktop": {
-      "entry": ["src/main.ts", "src/preload.cts"],
+      "entry": ["src/main.ts", "src/preload.cts", "test/model-preview-smoke.cjs"],
+    },
+    // model:smoke 通过 Vite HTML 动态挂载的测试页面，不进入产品入口。
+    "apps/web": {
+      "entry": ["test/model-preview-host.tsx"],
     },
     // exports 用了 "./*" 通配，knip 推不出对应的源码入口
     "packages/contracts": {

@@ -74,6 +74,7 @@ await startService({
         artifacts,
         store,
         harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 60_000 }),
+        task: createServiceClient('task', config.TASK_URL, { timeoutMs: 20000 }),
       },
       {
         maxBytes: config.UPLOAD_MAX_BYTES,

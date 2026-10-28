@@ -3,18 +3,15 @@ import { Download, X } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { formatBytes } from '../ui/format.ts';
 import { baseName, previewKindOf } from './files.ts';
+import type { PreviewFile } from './files.ts';
+export type { PreviewFile } from './files.ts';
 import { Markdown } from './Markdown.tsx';
 const DocumentPreview = lazy(() =>
   import('../canvas/DocumentPreview.tsx').then((module) => ({ default: module.DocumentPreview })),
 );
-
-export interface PreviewFile {
-  path: string;
-  size: number;
-  url: string;
-  downloadUrl: string;
-  pdfUrl?: string;
-}
+const ModelPreview = lazy(() =>
+  import('../canvas/ModelPreview.tsx').then((module) => ({ default: module.ModelPreview })),
+);
 
 /** 文字类文件最多显示这么多，再多请下载 */
 const TEXT_LIMIT = 200_000;
@@ -104,7 +101,13 @@ function TextPreview({ url, markdown }: { url: string; markdown: boolean }) {
 /** 预览内容本身：弹窗里和画布的成果页都用它 */
 export function PreviewBody({ file }: { file: PreviewFile }) {
   const name = baseName(file.path);
-  switch (previewKindOf(file.path)) {
+  switch (file.modelPreview ? 'model' : previewKindOf(file.path)) {
+    case 'model':
+      return (
+        <Suspense fallback={<p className="p-6 text-sm text-ink-muted">正在打开模型预览…</p>}>
+          <ModelPreview key={file.url} file={file} />
+        </Suspense>
+      );
     case 'image':
       return (
         <div className="flex h-full items-center justify-center p-6">

@@ -6,6 +6,7 @@ import { readPreviewFile } from '../src/api/file-preview.ts';
 import { syncOnce } from '../src/desktop/sync.ts';
 import type { OasisDesktop } from '@oasis/contracts/desktop';
 import type { ArtifactBody } from '@oasis/contracts/canvas';
+import { ModelPreview } from '../src/canvas/ModelPreview.tsx';
 
 afterEach(() => vi.unstubAllGlobals());
 const file = {
@@ -124,5 +125,92 @@ describe('安全格式预览', () => {
       <PreviewBody file={{ ...file, path: '上传.pptx', url: '/api/canvas/v1/uploads/id' }} />,
     );
     expect(screen.getByText(/未找到同一来源/)).toBeTruthy();
+  });
+});
+
+describe('模型预览降级与生命周期', () => {
+  const modelFile = {
+    ...file,
+    path: 'model.glb',
+    url: '/api/canvas/v1/artifacts/11111111-1111-4111-8111-111111111111/content',
+  };
+  const descriptor = {
+    source: { name: 'source.blend', url: modelFile.url, size: 10, sha256: 'a'.repeat(64) },
+    simplified: true,
+    glb: {
+      name: 'preview.glb',
+      url: modelFile.url,
+      size: 10,
+      sha256: 'a'.repeat(64),
+      report: {
+        vertices: 3,
+        triangles: 1,
+        nodes: 1,
+        images: 0,
+        texturePixels: 0,
+        animations: [],
+        meshLocalBounds: { min: [0, 0, 0], max: [1, 1, 1] },
+        unchecked: ['真实尺寸'],
+      },
+    },
+    poster: {
+      name: 'poster.png',
+      url: '/api/canvas/v1/artifacts/11111111-1111-4111-8111-111111111111/model-poster',
+      size: 10,
+      sha256: 'b'.repeat(64),
+    },
+    turntable: {
+      name: 'turn.webm',
+      url: '/api/canvas/v1/artifacts/22222222-2222-4222-8222-222222222222/content',
+      size: 10,
+      sha256: 'c'.repeat(64),
+    },
+  };
+  it('弱设备只请求描述和静态预览，不启动 worker 或获取 GLB；视频不自动播放', async () => {
+    vi.stubGlobal('navigator', { hardwareConcurrency: 1 });
+    const fetcher = vi.fn(async (_url: string) => Response.json(descriptor)),
+      worker = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+    vi.stubGlobal('Worker', worker);
+    const { container } = render(<ModelPreview file={modelFile} />);
+    expect(await screen.findByAltText('模型配套渲染图')).toBeTruthy();
+    expect(screen.getByText('轻量预览 · 原件未替换')).toBeTruthy();
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(worker).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/canvas/v1/model-previews');
+    fireEvent.click(screen.getByText('转台视频'));
+    expect(container.querySelector('video')?.autoplay).toBe(false);
+    expect(container.querySelector('a[download]')).toBeNull();
+  });
+  it('关闭预览取消在途请求；不信任任意外部文件 URL', async () => {
+    let signal: AbortSignal | undefined;
+    const fetcher = vi.fn((_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>(() => {});
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { unmount } = render(<ModelPreview file={modelFile} />);
+    expect(signal?.aborted).toBe(false);
+    unmount();
+    expect(signal?.aborted).toBe(true);
+    render(<ModelPreview file={{ ...modelFile, url: 'https://evil.test/model.glb' }} />);
+    expect(screen.getByText('此文件暂不支持受保护的模型预览。')).toBeTruthy();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('断网后允许重试；损坏配套图片和视频有明确的最终降级', async () => {
+    vi.stubGlobal('navigator', { hardwareConcurrency: 1 });
+    const fetcher = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(Response.json({ ...descriptor, glb: undefined }));
+    vi.stubGlobal('fetch', fetcher);
+    const { container } = render(<ModelPreview file={modelFile} />);
+    fireEvent.click(await screen.findByText('重试预览'));
+    fireEvent.error(await screen.findByAltText('模型配套渲染图'));
+    expect(container.querySelector('video')).toBeTruthy();
+    fireEvent.error(container.querySelector('video')!);
+    expect(screen.getByText(/没有可用的配套图片/)).toBeTruthy();
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });

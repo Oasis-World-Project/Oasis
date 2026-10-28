@@ -1,5 +1,6 @@
 // GLB is a container, not a trust boundary: validate real geometry and reject external resources.
 import sharp from 'sharp';
+import { MODEL_PREVIEW_LIMITS as L } from '@oasis/contracts/model-preview';
 
 export class GeometryLimit extends Error {}
 function check(condition: unknown, message: string): asserts condition {
@@ -19,7 +20,11 @@ const index = (value: unknown, length: number): number => {
   return Number(value);
 };
 
-export async function inspectGlb(bytes: Buffer, maxPixels: number): Promise<string> {
+export async function inspectGlb(
+  bytes: Buffer,
+  maxPixels: number,
+  preview = false,
+): Promise<string> {
   check(bytes.length >= 28 && bytes.toString('ascii', 0, 4) === 'glTF', 'GLB 文件头无效');
   check(
     bytes.readUInt32LE(4) === 2 && bytes.readUInt32LE(8) === bytes.length,
@@ -43,6 +48,7 @@ export async function inspectGlb(bytes: Buffer, maxPixels: number): Promise<stri
     new TextDecoder('utf-8', { fatal: true }).decode(chunks[0].bytes),
   ) as Record<string, unknown>;
   const bin = chunks[1].bytes;
+  if (preview && bytes.length > L.bytes) throw new GeometryLimit('模型超过交互预览大小上限');
   // No URI (including external URI hidden in an extension) is fetched by any subsequent loader.
   const queue: unknown[] = [data];
   let visited = 0;
@@ -52,6 +58,8 @@ export async function inspectGlb(bytes: Buffer, maxPixels: number): Promise<stri
     if (value && typeof value === 'object') {
       for (const [key, child] of Object.entries(value)) {
         check(key !== 'uri', 'GLB 不允许 URI；资源必须自包含');
+        if (preview && key === 'extensions' && child && Object.keys(child as object).length)
+          throw new GeometryLimit('此模型扩展暂不支持交互预览，请使用配套图片或视频');
         queue.push(child);
       }
     }
@@ -115,12 +123,36 @@ export async function inspectGlb(bytes: Buffer, maxPixels: number): Promise<stri
     );
     return { start: v.start + offset, count, stride, width };
   });
+  if (preview) {
+    if (list(data.materials ?? []).length > 64 || list(data.textures ?? []).length > 64)
+      throw new GeometryLimit('材质或纹理超过交互预览上限');
+    let values = 0;
+    for (const [i, span] of spans.entries()) {
+      const accessor = accessors[i]!;
+      const width = components[String(accessor.type)]!;
+      values += span.count * width;
+      if (values > 4000000) throw new GeometryLimit('模型属性超过交互预览上限');
+      if (accessor.componentType === 5126)
+        for (let n = 0; n < span.count; n++)
+          for (let c = 0; c < width; c++)
+            check(
+              Number.isFinite(bin.readFloatLE(span.start + n * span.stride + c * 4)),
+              '模型属性存在非有限数值',
+            );
+    }
+    if (list(data.skins ?? []).length) throw new GeometryLimit('骨骼动画暂不支持交互预览');
+  }
   let vertices = 0,
     triangles = 0;
   const meshes = list(data.meshes);
+  const meshTriangles: number[] = [];
+  let primitives = 0;
   const bounds = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
   for (const mesh of meshes) {
+    const before = triangles;
     for (const p of list(mesh.primitives)) {
+      if (preview && (++primitives > 256 || list(p.targets ?? []).length))
+        throw new GeometryLimit('网格分组或形态目标暂不支持预览');
       if (p.mode !== undefined && p.mode !== 4) throw new GeometryLimit('GLB 首批仅检查三角面网格');
       const position = index((p.attributes as Record<string, unknown>)?.POSITION, accessors.length);
       const a = accessors[position]!,
@@ -132,6 +164,7 @@ export async function inspectGlb(bytes: Buffer, maxPixels: number): Promise<stri
         for (let axis = 0; axis < 3; axis++) {
           const value = bin.readFloatLE(span.start + i * span.stride + axis * 4);
           check(Number.isFinite(value), 'GLB 顶点包含非有限数值');
+          if (preview && Math.abs(value) > 1000000) throw new GeometryLimit('模型坐标超过预览范围');
           bounds.min[axis] = Math.min(bounds.min[axis]!, value);
           bounds.max[axis] = Math.max(bounds.max[axis]!, value);
         }
@@ -153,12 +186,17 @@ export async function inspectGlb(bytes: Buffer, maxPixels: number): Promise<stri
       triangles += count / 3;
       if (triangles > 1000000) throw new GeometryLimit('GLB 三角面超过检查上限');
     }
+    meshTriangles.push(triangles - before);
   }
+  if (preview && (vertices > L.vertices || triangles > L.triangles))
+    throw new GeometryLimit('模型几何超过交互预览上限');
   check(
     vertices > 0 && triangles > 0 && bounds.max.some((v, i) => v > bounds.min[i]!),
     'GLB 几何为空或退化',
   );
   let pixels = 0;
+  if (preview && list(data.images ?? []).length > L.images)
+    throw new GeometryLimit('贴图数量超过交互预览上限');
   for (const image of list(data.images ?? [])) {
     const view = ranges[index(image.bufferView, ranges.length)]!;
     check(['image/png', 'image/jpeg'].includes(String(image.mimeType)), 'GLB 贴图格式尚未支持');
@@ -167,16 +205,38 @@ export async function inspectGlb(bytes: Buffer, maxPixels: number): Promise<stri
     }).metadata();
     pixels += (metadata.width ?? 0) * (metadata.height ?? 0);
     if (pixels > maxPixels) throw new GeometryLimit('GLB 贴图总像素超过检查上限');
+    if (preview) {
+      if (
+        pixels > L.texturePixels ||
+        (metadata.width ?? Infinity) > L.textureSide ||
+        (metadata.height ?? Infinity) > L.textureSide ||
+        (metadata.pages ?? 1) !== 1
+      )
+        throw new GeometryLimit('贴图解码资源超过交互预览上限');
+      await sharp(bin.subarray(view.start, view.start + view.size), {
+        limitInputPixels: L.texturePixels,
+      })
+        .raw()
+        .toBuffer();
+    }
   }
   const nodes = list(data.nodes),
     scenes = list(data.scenes);
+  if (preview && nodes.length > L.nodes) throw new GeometryLimit('场景节点超过交互预览上限');
   let traversed = 0;
+  let visibleTriangles = 0;
   const visibleMeshes = new Set<number>();
   const visit = (id: number, ancestors: Set<number>, depth: number): void => {
     if (++traversed > 20000) throw new GeometryLimit('GLB 场景遍历超过检查上限');
     check(depth < 100 && !ancestors.has(id), 'GLB 场景节点循环或过深');
     const node = nodes[id]!;
-    if (node.mesh !== undefined) visibleMeshes.add(index(node.mesh, meshes.length));
+    if (node.mesh !== undefined) {
+      const mesh = index(node.mesh, meshes.length);
+      visibleMeshes.add(mesh);
+      visibleTriangles += meshTriangles[mesh]!;
+      if (preview && visibleTriangles > L.triangles)
+        throw new GeometryLimit('实例化后的绘制面数超过预览上限');
+    }
     for (const key of ['translation', 'rotation', 'scale', 'matrix']) {
       if (node[key] !== undefined)
         check(
@@ -196,7 +256,65 @@ export async function inspectGlb(bytes: Buffer, maxPixels: number): Promise<stri
   const scene = scenes[index(data.scene ?? 0, scenes.length)]!;
   check(Array.isArray(scene.nodes) && scene.nodes.length > 0, 'GLB 场景为空');
   for (const node of scene.nodes) visit(index(node, nodes.length), new Set(), 0);
+  if (preview) {
+    if (scenes.length > 8) throw new GeometryLimit('场景数量超过交互预览上限');
+    for (const other of scenes)
+      if (other !== scene) {
+        check(Array.isArray(other.nodes), 'GLB 场景节点无效');
+        for (const node of other.nodes) visit(index(node, nodes.length), new Set(), 0);
+      }
+  }
   check(visibleMeshes.size > 0, 'GLB 默认场景没有可见网格');
+  const animations: { name: string; duration: number }[] = [];
+  if (preview) {
+    let channels = 0,
+      keys = 0;
+    for (const clip of list(data.animations ?? [])) {
+      if (animations.length >= L.clips) throw new GeometryLimit('动画数量超过交互预览上限');
+      const samplers = list(clip.samplers);
+      let duration = 0;
+      for (const channel of list(clip.channels)) {
+        if (++channels > L.channels) throw new GeometryLimit('动画通道超过交互预览上限');
+        const sampler = samplers[index(channel.sampler, samplers.length)]!;
+        const inputId = index(sampler.input, accessors.length),
+          outputId = index(sampler.output, accessors.length);
+        const input = accessors[inputId]!,
+          output = accessors[outputId]!,
+          times = spans[inputId]!;
+        const target = channel.target as Record<string, unknown>;
+        index(target?.node, nodes.length);
+        check(
+          ['translation', 'rotation', 'scale'].includes(String(target?.path)),
+          '预览动画类型不支持',
+        );
+        check(
+          ['LINEAR', 'STEP'].includes(String(sampler.interpolation ?? 'LINEAR')),
+          '预览动画插值不支持',
+        );
+        check(
+          input.type === 'SCALAR' &&
+            input.componentType === 5126 &&
+            output.componentType === 5126 &&
+            output.type === (target.path === 'rotation' ? 'VEC4' : 'VEC3') &&
+            output.count === input.count,
+          '动画数据结构无效',
+        );
+        keys += times.count;
+        if (keys > L.keyframes) throw new GeometryLimit('动画关键帧超过交互预览上限');
+        let last = -1;
+        for (let n = 0; n < times.count; n++) {
+          const time = bin.readFloatLE(times.start + n * times.stride);
+          check(time >= 0 && time > last && time <= L.durationSeconds, '动画时间无效或超过上限');
+          last = time;
+        }
+        duration = Math.max(duration, last);
+      }
+      animations.push({
+        name: String(clip.name ?? `动画 ${animations.length + 1}`).slice(0, 100),
+        duration,
+      });
+    }
+  }
   return JSON.stringify({
     format: 'glTF 2.0',
     vertices,
@@ -204,6 +322,7 @@ export async function inspectGlb(bytes: Buffer, maxPixels: number): Promise<stri
     meshes: meshes.length,
     nodes: nodes.length,
     images: (data.images as unknown[] | undefined)?.length ?? 0,
+    ...(preview ? { texturePixels: pixels, animations } : {}),
     meshLocalBounds: bounds,
     units: '格式使用米；原始来源是否按真实尺度建模仍需独立核对',
     unchecked: ['外观与需求一致性', '场景变换后的实际尺寸', '可打印性/拓扑质量', '动画和材质语义'],

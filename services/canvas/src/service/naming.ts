@@ -5,7 +5,7 @@ const CATEGORY_BY_EXT: Record<string, ArtifactCategory> = {};
 const groups: [ArtifactCategory, string][] = [
   ['doc', 'md txt pdf doc docx ppt pptx rtf png jpg jpeg webp gif svg'],
   ['media', 'mp3 wav m4a ogg flac aac mp4 webm mov mkv'],
-  ['threed', 'glb gltf obj fbx stl usdz ply'],
+  ['threed', 'glb gltf blend obj fbx stl usdz ply'],
   ['app', 'html htm js mjs ts tsx jsx css py sh vue apk'],
 ];
 for (const [category, exts] of groups) {

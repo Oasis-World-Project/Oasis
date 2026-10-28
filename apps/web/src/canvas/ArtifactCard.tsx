@@ -2,6 +2,7 @@
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import { Link } from '@tanstack/react-router';
 import { Box, Globe, Music, Play, Table } from 'lucide-react';
+import { useState } from 'react';
 import { artifactContentUrl } from '../api/queries.ts';
 import { badgeOf, previewKindOf } from '../chat/files.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
@@ -24,6 +25,17 @@ function Paper({ label }: { label: string }) {
 }
 
 function Thumb({ artifact }: { artifact: ArtifactBody }) {
+  const [posterFailed, setPosterFailed] = useState(false);
+  if (artifact.modelPreview?.posterId && !posterFailed)
+    return (
+      <img
+        src={`/api/canvas/v1/artifacts/${artifact.id}/model-poster`}
+        alt=""
+        loading="lazy"
+        onError={() => setPosterFailed(true)}
+        className="size-full object-cover"
+      />
+    );
   if (artifact.application)
     return (
       <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-ink-muted">

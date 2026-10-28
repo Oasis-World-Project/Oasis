@@ -1,9 +1,34 @@
 // 成果文件按扩展名分成几类，决定怎么预览、文件图标上写什么。
+export interface PreviewFile {
+  path: string;
+  size: number;
+  url: string;
+  downloadUrl: string;
+  pdfUrl?: string;
+  modelPreview?: boolean;
+}
 
 export type PreviewKind =
-  'image' | 'video' | 'audio' | 'pdf' | 'text' | 'page' | 'document' | 'presentation' | 'none';
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'pdf'
+  | 'text'
+  | 'page'
+  | 'document'
+  | 'presentation'
+  | 'model'
+  | 'none';
 
 const KINDS: Record<string, PreviewKind> = {
+  glb: 'model',
+  gltf: 'model',
+  blend: 'model',
+  obj: 'model',
+  fbx: 'model',
+  stl: 'model',
+  usdz: 'model',
+  ply: 'model',
   png: 'image',
   jpg: 'image',
   jpeg: 'image',

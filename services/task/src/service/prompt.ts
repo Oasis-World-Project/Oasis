@@ -87,6 +87,7 @@ export function workPrompt(c: NodeContext): string {
     [
       '【规则】',
       '- 把成果文件写到 out/ 目录（可以建子目录），下游节点和用户只看得到 out/ 里的东西。',
+      '- 3D：直接 GLB 可交互预览（自包含无 URI/扩展，≤16 MiB、20 万顶点/三角面、单纹理≤2048、纹理合计≤8MP；骨骼/形变/压缩扩展暂不支持）。配套预览用同目录 oasis-model-preview.json：{"version":1,"source":{"path":"scene.blend","sha256":"原件实际SHA-256"},"glb":{"path":"preview.glb","sha256":"实际SHA-256"},"poster":{"path":"poster.png","sha256":"实际SHA-256"},"turntable":{"path":"turn.webm","sha256":"实际SHA-256"},"simplified":true}。glb/poster/turntable 按实际需要选填，路径相对该 JSON 且禁止 ..；只能引用同节点最终 deliver 选中的真实文件，ZIP 内成员不自动登记。简化时保留原件并如实标注；不能为预览绕过用户约束或增加付费作业。',
       NO_QUESTIONS,
       '- 做完后用一两句话说明你交付了什么、做了哪些自己的决定。',
     ].join('\n'),

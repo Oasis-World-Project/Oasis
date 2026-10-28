@@ -349,7 +349,7 @@ async function inspect(): Promise<InspectedFile & { truncated?: boolean }> {
     }
     if (!text.trim()) warning = '未提取到正文，内容检查未完成';
   } else if (ext === '.glb') {
-    text = await inspectGlb(bytes, data.limits.pixels);
+    text = await inspectGlb(bytes, data.limits.pixels, data.limits.modelPreview);
     warning = '只完成几何结构与资源检查；外观、尺寸用途和动画仍需独立核验';
   } else if (ext === '.pdf') {
     const pdf = await getDocumentProxy(new Uint8Array(bytes), {
