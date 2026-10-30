@@ -308,6 +308,7 @@ let renderTransfer = '';
 let renderSubmitLost = false;
 let renderStatus = 'COMPLETED';
 let renderReceiptMissing = false;
+let renderBusy = false;
 const build = (tavilyKey: string | undefined, withMusic = false, withRender = false) => {
   const logger = pino({ level: 'silent' });
   return createToolService({
@@ -322,6 +323,11 @@ const build = (tavilyKey: string | undefined, withMusic = false, withRender = fa
           archive: mediaStore,
           staging: { ...mediaStore, sign: async (key) => 'https://example.test/' + key },
           fetcher: async (url, init) => {
+            if (String(url).endsWith('/health'))
+              return Response.json({
+                jobs: { completed: 3, failed: 1, inProgress: renderBusy ? 1 : 0, inQueue: 0 },
+                workers: { idle: 1, running: 0 },
+              });
             if (String(url).includes('/cancel/'))
               return Response.json({ id: 'gpu-one', status: 'CANCELLED' });
             if (init?.method === 'POST') {
@@ -442,6 +448,7 @@ afterAll(async () => {
 });
 beforeEach(() => {
   renderReceiptMissing = false;
+  renderBusy = false;
   renderCleanupFails = false;
   recordedCalls.clear();
   renderSubmits = 0;
@@ -592,6 +599,7 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     assets: [],
     render: { width: 128, height: 128, samples: 8, backend: 'CUDA' },
   };
+  const pollRender = (id: string) => tools.job(caller, id, AbortSignal.timeout(2000));
   it.each(['lease-lost', 'already-finished'])(
     '原提交进程恢复时 %s，不能迟到发起 GPU 请求',
     async (mode) => {
@@ -773,6 +781,26 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     expect(jobRows.get(id)?.status).toBe('failed');
     expect(jobRows.get(id)?.call.platformRiskMicro).toBe(500000);
     expect(billingCalls.find((c) => c.path === 'settle')?.body.costMicro).toBe(1000000);
+  });
+  it('提交断连过了排队与执行时限、GPU 空闲后自动结案退回冻结；GPU 仍忙或未到时限则继续等', async () => {
+    tools = build('key', false, true);
+    renderSubmitLost = true;
+    const id = (await call('3d.render', args)).job!.id;
+    await tools.submit(caller, id);
+    const submittedAt = jobRows.get(id)!.call.submittedAt as number;
+    expect(submittedAt).toBeGreaterThan(0);
+    expect((await pollRender(id)).status).toBe('uncertain');
+    jobRows.get(id)!.call.submittedAt = submittedAt - 43 * 60000;
+    renderBusy = true;
+    expect((await pollRender(id)).status).toBe('uncertain');
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold']);
+    renderBusy = false;
+    const closed = await pollRender(id);
+    expect(closed).toMatchObject({ status: 'failed' });
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release']);
+    expect(jobRows.get(id)?.call.lostSubmitClosed).toBe(true);
+    expect([...mediaFiles.keys()].some((k) => k.startsWith('jobs/'))).toBe(false);
+    expect(renderSubmits).toBe(1);
   });
 });
 const errorOf = (p: Promise<unknown>) =>

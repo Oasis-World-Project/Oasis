@@ -72,6 +72,21 @@ export function createToolService(deps: {
       phase: 'stored',
     });
   }
+  /**
+   * 提交断连（没拿到供应商作业号）的渲染：超过排队 TTL 与执行时限后，若 endpoint 空闲，
+   * 说明这次提交要么没到达、要么已结束，不会再占用 GPU。退回冻结并结案，释放单 GPU 准入；
+   * 可能发生的一次执行费用由平台承担。endpoint 仍忙则继续等，不重发。
+   */
+  async function closeLostSubmit(job: ToolJob) {
+    const render = deps.render!;
+    if (Date.now() < (job.call.submittedAt as number) + render.lostSubmitQuietMs) return;
+    if (!(await render.idle())) return;
+    await render.cleanup(job.id, (job.call.inputArgs as { assets: unknown[] }).assets.length);
+    const reason = '渲染提交未确认；超过排队与执行时限后核实 GPU 空闲，已自动结案，未扣款';
+    await meter.fail(job.call as unknown as MeteredCall, reason);
+    await jobs.mergeCall(job.id, { lostSubmitClosed: true });
+    await jobs.finish(job.id, 'failed', reason);
+  }
   async function processOne(id: string) {
     const prior = inFlight.get(id);
     if (prior) return prior;
@@ -104,6 +119,17 @@ export function createToolService(deps: {
             });
             return;
           }
+        }
+        if (
+          job?.tool === '3d.render' &&
+          job.phase === 'uncertain' &&
+          !job.providerJobId &&
+          !job.cost &&
+          !job.call.holdLost &&
+          typeof job.call.submittedAt === 'number'
+        ) {
+          await closeLostSubmit(job);
+          return;
         }
         if (
           !job ||
@@ -417,6 +443,7 @@ export function createToolService(deps: {
                 Date.now() >= until.getTime()
               )
                 throw new Error('Render submission fenced before POST');
+              await jobs.mergeCall(id, { submittedAt: Date.now() });
             },
           );
           await jobs.update(id, { providerJobId: handle, phase: 'pending' });

@@ -75,6 +75,177 @@ def glb_resources(file):
     return data
 
 
+# Mirrors the canvas interactive-preview limits (packages/contracts/src/model-preview.ts).
+PREVIEW_LIMITS = {"bytes": 16 * 1024 ** 2, "vertices": 200000, "triangles": 200000, "nodes": 2000,
+                  "images": 32, "side": 2048, "pixels": 8 * 1024 ** 2, "primitives": 256}
+SIDECAR = "oasis-model-preview.json"
+
+
+def read_glb(file):
+    raw = file.read_bytes()
+    require(len(raw) >= 28 and raw[:4] == b"glTF", "Invalid GLB")
+    n = struct.unpack("<I", raw[12:16])[0]
+    data = json.loads(raw[20:20 + n])
+    rest = raw[20 + n:]
+    binary = rest[8:8 + struct.unpack("<I", rest[:4])[0]] if len(rest) >= 8 and rest[4:8] == b"BIN\0" else b""
+    return data, binary
+
+
+def image_size(blob):
+    if blob[:8] == b"\x89PNG\r\n\x1a\n" and len(blob) >= 24:
+        return struct.unpack(">II", blob[16:24])
+    i = 2
+    while blob[:2] == b"\xff\xd8" and i + 9 < len(blob):
+        if blob[i] != 0xFF:
+            i += 1
+            continue
+        marker = blob[i + 1]
+        if marker in (0xD8, 0x01, 0xFF) or 0xD0 <= marker <= 0xD7:
+            i += 1 if marker == 0xFF else 2
+            continue
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            height, width = struct.unpack(">HH", blob[i + 5:i + 9])
+            return width, height
+        i += 2 + struct.unpack(">H", blob[i + 2:i + 4])[0]
+    return None
+
+
+def preview_problems(file):
+    """Reasons the canvas viewer would refuse this GLB; empty means it previews interactively."""
+    problems = []
+    if file.stat().st_size > PREVIEW_LIMITS["bytes"]:
+        problems.append("bytes")
+    data, binary = read_glb(file)
+    pending, extensions = [data], False
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            extensions |= bool(value.get("extensions")) or bool(value.get("extensionsUsed"))
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    if extensions or data.get("extensionsRequired"):
+        problems.append("extensions")
+    if data.get("skins") or any(p.get("targets") for m in data.get("meshes", []) for p in m.get("primitives", [])):
+        problems.append("skin/morph")
+    accessors, counts = data.get("accessors", []), []
+    for mesh in data.get("meshes", []):
+        vertices = triangles = 0
+        for p in mesh.get("primitives", []):
+            if p.get("mode", 4) != 4:
+                problems.append("non-triangle")
+            vertices += accessors[p["attributes"]["POSITION"]]["count"]
+            triangles += accessors[p["indices"]]["count"] // 3 if "indices" in p else accessors[p["attributes"]["POSITION"]]["count"] // 3
+        counts.append((vertices, triangles))
+    if sum(len(m.get("primitives", [])) for m in data.get("meshes", [])) > PREVIEW_LIMITS["primitives"]:
+        problems.append("primitives")
+    nodes = data.get("nodes", [])
+    instanced = [counts[n["mesh"]] for n in nodes if "mesh" in n]
+    if sum(v for v, _ in counts) > PREVIEW_LIMITS["vertices"] or sum(t for _, t in instanced) > PREVIEW_LIMITS["triangles"]:
+        problems.append("geometry")
+    if len(nodes) > PREVIEW_LIMITS["nodes"]:
+        problems.append("nodes")
+    images, pixels = data.get("images", []), 0
+    if len(images) > PREVIEW_LIMITS["images"]:
+        problems.append("images")
+    for image in images:
+        if image.get("mimeType") not in ("image/png", "image/jpeg") or "bufferView" not in image:
+            problems.append("texture format")
+            continue
+        view = data["bufferViews"][image["bufferView"]]
+        start = view.get("byteOffset", 0)
+        size = image_size(binary[start:start + view["byteLength"]])
+        if not size or max(size) > PREVIEW_LIMITS["side"]:
+            problems.append("texture size")
+            continue
+        pixels += size[0] * size[1]
+    if pixels > PREVIEW_LIMITS["pixels"]:
+        problems.append("texture pixels")
+    return sorted(set(problems))
+
+
+def strip_extensions(file):
+    """Drop optional glTF extensions (e.g. emissive strength) from a preview copy; geometry is unchanged."""
+    data, binary = read_glb(file)
+    require(not data.get("extensionsRequired"), "Preview still requires extensions")
+    pending = [data]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            value.pop("extensions", None)
+            value.pop("extensionsUsed", None)
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    text = json.dumps(data, separators=(",", ":")).encode()
+    text += b" " * (-len(text) % 4)
+    binary += b"\0" * (-len(binary) % 4)
+    chunks = struct.pack("<I4s", len(text), b"JSON") + text
+    if binary:
+        chunks += struct.pack("<I4s", len(binary), b"BIN\0") + binary
+    file.write_bytes(struct.pack("<4sII", b"glTF", 2, 12 + len(chunks)) + chunks)
+
+
+def blender_preview(source, target, triangle_budget):
+    """Import a GLB, decimate to the budget, shrink textures and export a plain PNG/JPEG GLB."""
+    import bpy
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.gltf(filepath=str(source))
+    meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+    total = 0
+    for obj in meshes:
+        obj.data.calc_loop_triangles()
+        total += len(obj.data.loop_triangles)
+    if total > triangle_budget:
+        ratio = max(0.01, triangle_budget / total)
+        for obj in meshes:
+            modifier = obj.modifiers.new("Preview decimate", "DECIMATE")
+            modifier.ratio = ratio
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.object.modifier_apply(modifier=modifier.name)
+    images = [i for i in bpy.data.images if i.size[0] and i.size[1]]
+    pixels = sum(i.size[0] * i.size[1] for i in images)
+    scale = min(1.0, math.sqrt(PREVIEW_LIMITS["pixels"] * 0.8 / pixels)) if pixels else 1.0
+    for image in images:
+        factor = min(scale, 1024 / max(image.size))
+        if factor < 1:
+            image.scale(max(1, int(image.size[0] * factor)), max(1, int(image.size[1] * factor)))
+    for material in bpy.data.materials:
+        for node in (material.node_tree.nodes if material.use_nodes else []):
+            if node.type == "BSDF_PRINCIPLED":
+                strength = node.inputs["Emission Strength"]
+                strength.default_value = min(strength.default_value, 1.0)
+    bpy.ops.export_scene.gltf(filepath=str(target), export_format="GLB", export_cameras=False, export_lights=False,
+                              export_extras=False, export_image_format="JPEG", export_image_quality=80)
+
+
+def make_preview(source):
+    """Write <name>-preview.glb and the canvas sidecar next to an over-limit GLB. Returns None if not needed."""
+    problems = preview_problems(source)
+    if not problems:
+        return None
+    target = source.with_name(source.stem + "-preview.glb")
+    sidecar = source.parent / SIDECAR
+    require(not target.exists() and not sidecar.exists(), "Preview files already exist")
+    budget = 150000
+    for _ in range(3):
+        target.unlink(missing_ok=True)
+        result = subprocess.run(["blender", "--background", "--factory-startup", "--disable-autoexec",
+            "--threads", "2", "--python-exit-code", "1", "--python", str(Path(__file__).resolve()),
+            "--", "internal-preview", str(source), str(target), str(budget)], capture_output=True, timeout=600)
+        require(result.returncode == 0, "Preview simplification failed: " + result.stderr.decode("utf8", "replace")[-2000:])
+        strip_extensions(target)
+        remaining = preview_problems(target)
+        if not remaining:
+            break
+        budget = int(budget * 0.6)
+    require(not remaining, "Preview still over limits: " + ", ".join(remaining))
+    sidecar.write_text(json.dumps({"version": 1,
+        "source": {"path": source.name, "sha256": digest(source)},
+        "glb": {"path": target.name, "sha256": digest(target)}, "simplified": True}, indent=2), "utf8")
+    return {"reasons": problems, "preview": target.name, "sidecar": SIDECAR}
+
+
 def validate(scene, root):
     fields(scene, ["version", "units", "objects", "camera", "lights", "background", "assets"])
     require(scene.get("version") == 1 and scene.get("units") == "m", "Scene version 1, units m required")
@@ -226,6 +397,7 @@ def build(source, output):
             "--", "internal-build", str(root)], capture_output=True, timeout=180)
         require(result.returncode == 0, "Blender build failed: " + result.stderr.decode("utf8", "replace")[-2000:])
         glb_resources(root / "model.glb")
+        preview = make_preview(root / "model.glb")
         (root / "README.md").write_text("# Oasis 3D scene\n\nOpen scene.blend in Blender with automatic script execution disabled. "
             "The editable scene and embedded GLB use metres. The source scene.json and assets/ are included. "
             "This package has not been cloud rendered or validated for manufacturing, printing or visual quality.\n", "utf8")
@@ -233,7 +405,7 @@ def build(source, output):
                    for p in sorted(root.rglob("*")) if p.is_file()]
         (root / "manifest.json").write_text(json.dumps({"version": 1, "files": entries}, indent=2), "utf8")
         root.rename(output)
-    return {"path": str(output), "files": entries, "cloudRendered": False}
+    return {"path": str(output), "files": entries, "cloudRendered": False, "preview": preview}
 
 
 def inspect_package(root):
@@ -255,13 +427,18 @@ def inspect_package(root):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["build", "inspect", "pack"])
+    parser.add_argument("command", choices=["build", "inspect", "pack", "preview"])
     parser.add_argument("input", type=Path)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
     if args.command == "build":
         require(args.out is not None, "--out required")
         result = build(args.input, args.out)
+    elif args.command == "preview":
+        require(args.input.suffix.lower() == ".glb" and args.input.is_file() and not args.input.is_symlink()
+                and args.input.stat().st_size <= 100 * 1024 ** 2, "A local GLB up to 100 MiB is required")
+        glb_resources(args.input)
+        result = make_preview(args.input) or {"preview": None, "reason": "GLB already previews interactively"}
     else:
         result = inspect_package(args.input)
         if args.command == "pack":
@@ -275,7 +452,10 @@ def main():
 
 
 if __name__ == "__main__":
-    if "--" in sys.argv and sys.argv[sys.argv.index("--") + 1:][:1] == ["internal-build"]:
+    command = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    if command[:1] == ["internal-build"]:
         blender_build(Path(sys.argv[-1]))
+    elif command[:1] == ["internal-preview"]:
+        blender_preview(Path(command[1]), Path(command[2]), int(command[3]))
     else:
         main()

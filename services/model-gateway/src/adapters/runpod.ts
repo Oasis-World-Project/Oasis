@@ -122,6 +122,9 @@ export const RenderArgs = z
       JSON.stringify(v.scene).length <= 1024 ** 2,
     'Scene exceeds limits',
   );
+/** 提交给 Runpod 的作业时限：排队超过 TTL 即丢弃，执行超过 executionTimeout 即终止。 */
+const SUBMIT_TTL_MS = 1800000,
+  EXECUTION_TIMEOUT_MS = 600000;
 export function createRenderClient(options: {
   baseUrl: string;
   endpointId: string;
@@ -205,7 +208,7 @@ export function createRenderClient(options: {
             render: args.render,
             outputs,
           },
-          policy: { executionTimeout: 600000, ttl: 1800000 },
+          policy: { executionTimeout: EXECUTION_TIMEOUT_MS, ttl: SUBMIT_TTL_MS },
         },
         signal,
       );
@@ -310,6 +313,18 @@ export function createRenderClient(options: {
           cost,
         },
       };
+    },
+    /** 断连的提交过了此时长，要么从未到达、要么已被丢弃或执行完，不会再产生 GPU 时长。 */
+    lostSubmitQuietMs: SUBMIT_TTL_MS + EXECUTION_TIMEOUT_MS + 120000,
+    /** endpoint 只接本网关的提交；排队和执行中都为 0 说明没有作业还在占用 GPU。 */
+    async idle() {
+      const response = await request('health');
+      if (!response.ok) throw new Error('Render health unavailable');
+      const count = z.number().int().nonnegative();
+      const { jobs } = z
+        .object({ jobs: z.object({ inQueue: count, inProgress: count }) })
+        .parse(await response.json());
+      return jobs.inQueue === 0 && jobs.inProgress === 0;
     },
     async cleanup(jobId: string, count: number) {
       if (!options.staging) return;

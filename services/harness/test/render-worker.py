@@ -60,6 +60,24 @@ class WorkerChecks(unittest.TestCase):
         self.assertFalse(device["gpuUsed"])
         boundary = json.loads((output / "boundary.json").read_text())
         self.assertTrue(all(boundary.values()))
+        self.assertEqual(device["denoiser"], "OPENIMAGEDENOISE")
+        self.assertEqual(device["exposureAdjustEv"], 0)
+
+    def test_exposure_guard_only_darkens_blown_scenes(self):
+        worker.canary()
+        bright = worker.fixture()
+        bright["lights"] = [{"position": [2, -3, 5], "power": 60000, "size": 1}]
+        dark = worker.fixture()
+        dark["lights"] = [{"position": [2, -3, 5], "power": 5, "size": 4}]
+        for scene, low, high in [(bright, -3, -1), (dark, 0, 0)]:
+            with tempfile.TemporaryDirectory(prefix="render-", dir="/jobs") as directory:
+                root = Path(directory)
+                (root / "assets").mkdir()
+                (root / "scene.json").write_text(json.dumps(scene))
+                (root / "render.json").write_text(json.dumps({"width": 96, "height": 64, "samples": 4, "backend": "CUDA"}))
+                worker.execute(root, "cpu-test")
+                change = json.loads((root / "device.json").read_text())["exposureAdjustEv"]
+                self.assertTrue(low <= change <= high, change)
 
     def test_no_silent_cpu_fallback_and_cleanup(self):
         worker.canary()

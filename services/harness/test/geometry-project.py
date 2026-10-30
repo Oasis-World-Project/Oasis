@@ -106,7 +106,15 @@ lit["objects"].append({"id": "lamp shade", "kind": "cylinder", "size": [.3, .3, 
 lit["lights"].append({"position": [0, 1, 1.5], "target": [0, 1, 0], "power": 60, "size": .3, "color": [1, .75, .45]})
 lit["background"] = [.01, .01, .02]
 (root / "lit-input.json").write_text(json.dumps(lit, ensure_ascii=False), "utf8")
-geometry.build(root / "lit-input.json", root / "lit-project")
+lit_result = geometry.build(root / "lit-input.json", root / "lit-project")
+assert result["preview"] is None, result["preview"]
+assert lit_result["preview"] and "extensions" in lit_result["preview"]["reasons"], lit_result["preview"]
+assert geometry.preview_problems(root / "lit-project/model-preview.glb") == []
+sidecar = json.loads((root / "lit-project/oasis-model-preview.json").read_text("utf8"))
+assert sidecar["source"] == {"path": "model.glb", "sha256": geometry.digest(root / "lit-project/model.glb")}
+assert sidecar["glb"]["sha256"] == geometry.digest(root / "lit-project/model-preview.glb") and sidecar["simplified"]
+geometry.inspect_package(root / "lit-project")
+passed("plain primitive GLB needs no preview; emissive GLB gets an extension-free preview and sidecar")
 script = root / "lit-verify.py"
 script.write_text("\n".join([
     "import bpy",
@@ -144,6 +152,52 @@ geometry.glb_resources(root / "webp.glb")
 with_required(root / "原工程/model.glb", root / "draco.glb", ["KHR_draco_mesh_compression"])
 rejected(lambda: geometry.glb_resources(root / "draco.glb"), "compressed required GLB extension")
 passed("WebP-textured generated GLB accepted; other required extensions still rejected")
+dense = root / "dense"
+dense.mkdir()
+script = root / "dense.py"
+script.write_text("\n".join([
+    "import bpy",
+    "bpy.ops.wm.read_factory_settings(use_empty=True)",
+    "bpy.ops.mesh.primitive_uv_sphere_add(segments=512, ring_count=256)",
+    "image = bpy.data.images.new('albedo', 2048, 2048)",
+    "image.generated_type = 'COLOR_GRID'",
+    "image.filepath_raw = " + repr(str(dense / "albedo.webp")),
+    "image.file_format = 'WEBP'",
+    "image.save()",
+    "image.pack()",
+    "material = bpy.data.materials.new('textured'); material.use_nodes = True",
+    "nodes = material.node_tree.nodes; texture = nodes.new('ShaderNodeTexImage'); texture.image = image",
+    "material.node_tree.links.new(texture.outputs['Color'], nodes['Principled BSDF'].inputs['Base Color'])",
+    "bpy.context.object.data.materials.append(material)",
+    "bpy.ops.export_scene.gltf(filepath=" + repr(str(dense / "generated.glb")) + ", export_format='GLB', export_image_format='WEBP')",
+]), "utf8")
+run("blender", "--background", "--factory-startup", "--disable-autoexec", "--python-exit-code", "1", "--python", str(script))
+(dense / "albedo.webp").unlink()
+geometry.glb_resources(dense / "generated.glb")
+before = geometry.preview_problems(dense / "generated.glb")
+assert "geometry" in before and "extensions" in before, before
+made = geometry.make_preview(dense / "generated.glb")
+assert made["preview"] == "generated-preview.glb" and geometry.preview_problems(dense / made["preview"]) == []
+data, _ = geometry.read_glb(dense / made["preview"])
+assert [i["mimeType"] for i in data["images"]] == ["image/jpeg"], data["images"]
+rejected(lambda: geometry.make_preview(dense / "generated.glb"), "overwriting an existing preview")
+passed("over-limit WebP generated GLB gets a decimated JPEG preview within canvas limits")
+script = root / "draft.py"
+script.write_text("\n".join([
+    "import bpy, json",
+    "s = bpy.context.scene",
+    "bpy.ops.mesh.primitive_cube_add()",
+    "s.render.engine = 'CYCLES'; s.cycles.device = 'CPU'; s.cycles.samples = 256; s.cycles.use_denoising = False",
+    "s.render.resolution_x, s.render.resolution_y, s.render.resolution_percentage = 1920, 1080, 100",
+    "s.render.filepath = " + repr(str(root / "draft.png")),
+    "bpy.ops.render.render(write_still=True)",
+    "assert (s.render.resolution_percentage, s.cycles.samples) == (100, 256)",
+]), "utf8")
+run("blender", "--background", "--factory-startup", "--disable-autoexec", "--python-exit-code", "1", "--python", str(script))
+width, height = Image.open(root / "draft.png").size
+assert width * height <= 640 * 480 and width / height > 1.7, (width, height)
+(root / "draft.png").unlink()
+passed("sandbox CPU still render is capped to a 640x480 draft; scene settings restored")
 passed("no cloud GPU was requested or claimed")
 (root / "checks.json").write_text(json.dumps({"checks": checks, "paidCalls": 0, "cloudGpu": False,
     "blender": run("blender", "--version").splitlines()[0]}, ensure_ascii=False, indent=2), "utf8")
