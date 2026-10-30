@@ -48,6 +48,8 @@ int main(int argc, char **argv) {
     if (rules < 0) fail("isolation ruleset");
     const char *system[] = {"/usr", "/lib", "/lib64", "/opt/oasis", "/etc/ld.so.cache", "/etc/fonts", "/etc/localtime", "/proc/driver/nvidia", "/proc/self/maps", "/proc/self/mountinfo", "/proc/mounts"};
     for (unsigned i = 0; i < sizeof(system) / sizeof(*system); i++) allow_path(rules, system[i], read, 1);
+    // CUDA names future threads via O_RDWR comm files; this PID survives exec.
+    allow_path(rules, "/proc/self/task", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_WRITE_FILE, 0);
     allow_path(rules, argv[1], all & ~((1ULL << 6) | (1ULL << 9) | (1ULL << 10) | (1ULL << 11)), 0);
     const char *devices[] = {"/dev/null", "/dev/urandom", "/dev/random"};
     for (unsigned i = 0; i < sizeof(devices) / sizeof(*devices); i++) allow_path(rules, devices[i], 6, 0);
@@ -84,7 +86,7 @@ int main(int argc, char **argv) {
     char home[512], tmp[512];
     snprintf(home, sizeof(home), "HOME=%s", argv[1]);
     snprintf(tmp, sizeof(tmp), "TMPDIR=%s", argv[1]);
-    char *env[] = {"PATH=/usr/local/bin:/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE=1", "PYTHONUNBUFFERED=1", "OMP_NUM_THREADS=2", "OPENBLAS_NUM_THREADS=2", home, tmp, NULL};
+    char *env[] = {"PATH=/usr/local/bin:/usr/bin:/bin", "LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64", "PYTHONDONTWRITEBYTECODE=1", "PYTHONUNBUFFERED=1", "OMP_NUM_THREADS=2", "OPENBLAS_NUM_THREADS=2", home, tmp, NULL};
     char *args[] = {"python3", "/opt/oasis/render_child.py", argv[1], argv[2], NULL};
     execve("/usr/local/bin/python3", args, env);
     fail("isolation exec");

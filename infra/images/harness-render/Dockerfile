@@ -15,7 +15,7 @@ COPY --from=compiler /isolate /opt/oasis/isolate
 COPY services/harness/sandbox/geometry.py /opt/oasis/geometry.py
 COPY services/harness/render/worker.py services/harness/render/render_child.py /opt/oasis/
 RUN mkdir /jobs && chown 10001:10001 /jobs
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=compute,utility LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 USER 10001:10001
 WORKDIR /opt/oasis
 CMD ["python", "-u", "/opt/oasis/worker.py"]

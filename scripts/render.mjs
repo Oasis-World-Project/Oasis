@@ -167,7 +167,7 @@ function localImageCommand(action) {
   )
     throw new Error('镜像摘要/平台/身份/源文件已改变，请重新构建与验证');
   if (action === 'check') {
-    run([
+    const checkArgs = [
       'run',
       '--rm',
       '--network',
@@ -192,10 +192,21 @@ function localImageCommand(action) {
       'RENDER_TEST_OUTPUT=/evidence',
       '-e',
       'RUNPOD_API_KEY=canary-not-real-key',
+    ];
+    run([...checkArgs, release.localImage, 'python', '-B', '/test.py']);
+    run([
+      ...checkArgs,
+      '--mount',
+      'type=tmpfs,destination=/usr/local/nvidia/lib64,tmpfs-mode=1777',
+      '--mount',
+      'type=bind,source=' +
+        path.join(root, 'services/harness/test/render-worker.py') +
+        ',target=/opt/oasis/render_child.py,readonly',
       release.localImage,
       'python',
       '-B',
       '/test.py',
+      '--driver-loader-test',
     ]);
     writeFileSync(
       receiptFile,

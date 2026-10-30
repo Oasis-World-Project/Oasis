@@ -40,6 +40,9 @@ def boundary(root):
 
 def main(root, mode):
     boundary(root)
+    if mode != "cpu-test":
+        from worker import cuda_status
+        (root / "cuda.txt").write_text(cuda_status())
     import bpy
     from geometry import blender_build
     bpy.context.preferences.filepaths.use_scripts_auto_execute = False

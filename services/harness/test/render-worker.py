@@ -26,6 +26,12 @@ class WorkerChecks(unittest.TestCase):
                 self.assertNotIn("secret", result)
             (root / "process.txt").write_text("x" * 16384 + "Landlock ABI >=3 required")
             self.assertIn("unclassified_child_failure", worker.failure_reason(root, 78))
+            for value, expected in [("init_999", "init_999"), ("devices_1", "devices_1"),
+                                    ("secret-canary", "not_recorded"), ("init_" + "1" * 100, "not_recorded")]:
+                (root / "cuda.txt").write_text(value)
+                result = worker.failure_reason(root, 1, "library_unavailable")
+                self.assertIn("cuda_before=library_unavailable; cuda_after=" + expected, result)
+                self.assertNotIn("secret", result)
 
     def test_rejects_untrusted_transfers_and_options(self):
         os.environ["RENDER_STAGING_HOST"] = "a" * 32 + ".r2.cloudflarestorage.com"
@@ -65,6 +71,9 @@ class WorkerChecks(unittest.TestCase):
                 worker.execute(root, "probe")
             self.assertFalse((root / "device.json").exists())
             self.assertIn("Required GPU unavailable; CPU fallback forbidden", (root / "process.txt").read_text())
+            self.assertEqual((root / "cuda.txt").read_text(), "library_unavailable")
+            self.assertIn("cuda_before=library_unavailable; cuda_after=library_unavailable",
+                          worker.failure_reason(root, 1, worker.cuda_status()))
         self.assertFalse(root.exists())
 
     def test_sdk_entrypoint(self):
@@ -78,4 +87,39 @@ class WorkerChecks(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    if len(sys.argv) == 3 and sys.argv[2] == "cpu-test":
+        # Mounted at the launcher's fixed script path in the loader regression only.
+        import ctypes
+        ctypes.CDLL("oasis-driver-probe.so")
+        assert worker.cuda_status() == "symbols_unavailable"
+        assert os.environ["LD_LIBRARY_PATH"] == "/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+        assert "LD_PRELOAD" not in os.environ and "RUNPOD_API_KEY" not in os.environ
+        import threading
+        stop = threading.Event()
+        thread = threading.Thread(target=lambda: stop.wait(5))
+        thread.start()
+        try:
+            # glibc names another live thread through /proc/self/task/<tid>/comm.
+            status = ctypes.CDLL(None).pthread_setname_np(ctypes.c_ulong(thread.ident), ctypes.c_char_p(b"oasis-cuda"))
+            assert status == 0, "Thread naming denied: errno=" + str(status)
+            assert Path("/proc/self/task/" + str(thread.native_id) + "/comm").read_text().strip() == "oasis-cuda"
+            try:
+                fd = os.open("/proc/" + str(os.getppid()) + "/task/" + str(os.getppid()) + "/comm", os.O_RDWR)
+            except PermissionError:
+                pass
+            else:
+                os.close(fd)
+                raise AssertionError("Parent thread name accessible")
+        finally:
+            stop.set()
+            thread.join()
+        print("Isolated driver loader/thread naming passed; no GPU simulated")
+    elif sys.argv[1:] == ["--driver-loader-test"]:
+        # A real DSO outside ld.so.cache: proves lookup in the injected driver mount.
+        Path("/usr/local/nvidia/lib64/oasis-driver-probe.so").symlink_to("/lib/x86_64-linux-gnu/libm.so.6")
+        Path("/usr/local/nvidia/lib64/libcuda.so.1").symlink_to("/lib/x86_64-linux-gnu/libm.so.6")
+        with tempfile.TemporaryDirectory(prefix="render-", dir="/jobs") as directory:
+            subprocess.run(["/opt/oasis/isolate", directory, "cpu-test", str(os.getpid())], check=True,
+                           env={"LD_LIBRARY_PATH": directory, "RUNPOD_API_KEY": "canary-not-real-key"}, timeout=30)
+    else:
+        unittest.main(verbosity=2)

@@ -79,7 +79,24 @@ def canary():
     (root / "private").write_text("isolation-canary-not-user-data")
 
 
-def failure_reason(root, code):
+def cuda_status():
+    import ctypes
+    try:
+        driver = ctypes.CDLL("libcuda.so.1")
+    except OSError:
+        return "library_unavailable"
+    try:
+        count = ctypes.c_int()
+        status = driver.cuInit(0)
+        if status:
+            return "init_" + str(status)
+        status = driver.cuDeviceGetCount(ctypes.byref(count))
+        return "count_" + str(status) if status else "devices_" + str(count.value)
+    except AttributeError:
+        return "symbols_unavailable"
+
+
+def failure_reason(root, code, parent_cuda=None):
     # Never return raw child output: it can include user paths, assets or credentials.
     with (root / "process.txt").open("rb") as log:
         head = log.read(16384).decode("utf8", "replace")
@@ -99,11 +116,21 @@ def failure_reason(root, code):
         "Required GPU unavailable; CPU fallback forbidden": "gpu_unavailable",
     }
     stage = next((value for marker, value in markers.items() if marker in head), "unclassified_child_failure")
-    return "Isolated renderer failed; stage=" + stage + "; exit=" + str(code) + "; no CPU fallback"
+    reason = "Isolated renderer failed; stage=" + stage + "; exit=" + str(code) + "; no CPU fallback"
+    if parent_cuda is not None:
+        state = "not_recorded"
+        if (root / "cuda.txt").is_file():
+            with (root / "cuda.txt").open("rb") as record:
+                value = record.read(64).decode("ascii", "replace")
+            if re.fullmatch(r"library_unavailable|symbols_unavailable|(?:init|count|devices)_-?[0-9]{1,10}", value):
+                state = value
+        reason += "; cuda_before=" + parent_cuda + "; cuda_after=" + state
+    return reason
 
 
 def execute(root, mode):
     # No provider input can change the executable, script, environment or process limits.
+    parent_cuda = None if mode == "cpu-test" else cuda_status()
     with (root / "process.txt").open("wb") as log:
         child = subprocess.Popen(["/opt/oasis/isolate", str(root), mode, str(os.getpid())], stdin=subprocess.DEVNULL,
             stdout=log, stderr=log, env={}, start_new_session=True, close_fds=True)
@@ -117,7 +144,7 @@ def execute(root, mode):
         import shutil
         shutil.copyfile(root / "process.txt", Path(os.environ["RENDER_TEST_OUTPUT"]) / (mode + "-failure.txt"))
     if code != 0:
-        raise ValueError(failure_reason(root, code))
+        raise ValueError(failure_reason(root, code, parent_cuda))
     require((root / "boundary.json").is_file() and (root / "device.json").is_file(), "Missing render evidence")
 
 

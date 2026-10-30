@@ -17,12 +17,17 @@ pnpm render:tag
 
 The last command adds this **local** tag, without uploading:
 
-`ghcr.io/kong-yikai/oasis/harness-render:0.1.1-blender4.5.3`
+`ghcr.io/kong-yikai/oasis/harness-render:0.1.4-blender4.5.3`
 
-The 0.1.1 source adds bounded, allowlisted failure stages and child exit codes;
-it never returns raw child logs. Both real Runpod probes failed before producing
-GPU evidence; 0.1.1 reports `stage=gpu_unavailable; exit=1`. The endpoint is disabled
-and was deleted after contradictory shutdown observations. See ADR 0011 §19 and the deployment receipt for the tested digest.
+Real 0.1.3 diagnostics found one GPU outside isolation but CUDA init error 304
+inside. The 0.1.4 source permits read/write of file entries beneath this PID's
+`/proc/self/task` for CUDA thread naming. A real pthread naming regression fails
+on 0.1.3 and passes on 0.1.4; parent-process access and existing boundaries stay
+denied. After an initial unconfirmed submission, an explicitly approved replacement
+returned a job ID but still failed with `cuda_before=devices_1; cuda_after=init_304`.
+The thread-naming change is insufficient; the remaining denied OS operation needs
+trusted syscall tracing. It is not GPU-render validated. All acceptance endpoints
+have been deleted; keep the profile disabled. See ADR 0011 §19–20 and the receipts.
 
 The release allowlist is `infra/render-release.json`. Build, source and test
 receipts are in `out/render-worker-20261028/`; `release-plan.json` records the
@@ -36,7 +41,11 @@ No generic push command bypassing those checks is provided.
 `render:check` uses no network, 2 CPUs, 4 GiB, 256 PIDs, no Linux capabilities and
 no-new-privileges. It actually renders a CPU reference PNG, checks the editable
 Blender/embedded GLB ZIP, exercises the kernel boundary, rejects invalid requests,
-and confirms a GPU request cannot silently fall back to CPU. This is **not GPU
+and confirms a GPU request cannot silently fall back to CPU. A second container
+mounts the existing test at the fixed child entrypoint and a temporary driver
+directory to test dynamic loading with a real DSO, hostile parent environment,
+future-thread naming and denial of parent-thread access;
+neither fixture enters the image. This is **not GPU
 or Runpod acceptance**. The explicit internal CPU test is not a queue operation.
 
 ## Runpod handoff — acceptance endpoint deleted after failure
@@ -68,7 +77,7 @@ resources and lifecycle policies still require verification.
 
 The image uses UID/GID 10001. The fixed child launcher requires Linux amd64 and
 Landlock ABI >=3. It grants read access to runtime libraries/code and GPU device
-access, write access only to the current job, denies all new sockets with seccomp,
+access, writes to the current job and this PID's thread metadata subtree, denies all new sockets with seccomp,
 closes inherited descriptors, strips the environment and sets resource limits.
 No privileged container, SYS_ADMIN, host networking or Docker socket is needed.
 If the target kernel/driver does not support this boundary, the job fails and
