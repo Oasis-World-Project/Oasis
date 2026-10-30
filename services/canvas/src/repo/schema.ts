@@ -11,6 +11,8 @@ export const uploads = pgTable('uploads', {
   sha256: text('sha256'),
   contentType: text('content_type').notNull(),
   objectKey: text('object_key').notNull(),
+  /** 修订任务的素材来自哪个任务的成果（ADR 0012）；用户自己上传的为空 */
+  sourceTaskId: uuid('source_task_id'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });
 
@@ -32,5 +34,7 @@ export const artifacts = pgTable('artifacts', {
   models: jsonb('models').$type<string[]>().notNull().default([]),
   objectKey: text('object_key').notNull(),
   syncPath: text('sync_path').notNull(),
+  /** 新版替换旧版时，同一同步路径上旧文件的摘要 */
+  replacesSha256: text('replaces_sha256'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });

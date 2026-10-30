@@ -1,7 +1,7 @@
 // conversation：群聊与私聊（MVP 先做私聊）。消息存库，AI 回复经 model-gateway 流式返回；
 // 私聊里认出任务就转去接需求，确认任务单后交给 task（ADR 0005）。
 import { fileURLToPath } from 'node:url';
-import { TASK_STREAM, TaskStatusChanged } from '@oasis/contracts/events';
+import { TASK_STREAM, TaskDeleted, TaskStatusChanged } from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
   createServiceClient,
@@ -13,6 +13,7 @@ import { conversationEnv } from './config.ts';
 import { createConversationRepo } from './repo/conversation-repo.ts';
 import { createDmService } from './service/dm-service.ts';
 import { createIntakeService } from './service/intake-service.ts';
+import { createRevisionService } from './service/revision-service.ts';
 import { createTaskNotices } from './service/task-notices.ts';
 
 await startService({
@@ -35,7 +36,16 @@ await startService({
       handle: (envelope) =>
         notices.onStatusChanged(envelope.id, TaskStatusChanged.data.parse(envelope.data)),
     });
-    return { postgres, eventBus, taskStatus };
+    // 任务被删除（用户删除或被新版替换）：它的卡片标成已替换 / 已删除（ADR 0012）
+    const taskDeleted = startEventConsumer({
+      connection: eventBus.connection,
+      stream: TASK_STREAM,
+      durable: 'conversation-task-deleted',
+      filterSubject: TaskDeleted.type,
+      logger: ctx.logger,
+      handle: (envelope) => notices.onDeleted(TaskDeleted.data.parse(envelope.data)),
+    });
+    return { postgres, eventBus, taskStatus, taskDeleted };
   },
   migrationsDir: fileURLToPath(new URL('../migrations', import.meta.url)),
   routes: (app, { config, resources, logger }) => {
@@ -60,17 +70,25 @@ await startService({
       },
       logger,
     });
+    const canvas = createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 5_000 });
+    const revisions = createRevisionService({
+      repo,
+      task: createServiceClient('task', config.TASK_URL, { timeoutMs: 10_000 }),
+      // 上一版文件多时要打成 ZIP，可能要一会儿
+      canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 120_000 }),
+      logger,
+    });
     const dms = createDmService({
       repo,
       agent,
       modelGateway,
-      canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 5_000 }),
+      canvas,
       intake,
       historyLimit: config.HISTORY_LIMIT,
       replyMaxTokens: config.REPLY_MAX_TOKENS,
       detect: { high: config.TASK_DETECT_HIGH, low: config.TASK_DETECT_LOW },
       logger,
     });
-    registerRoutes(app, dms, intake);
+    registerRoutes(app, dms, intake, revisions);
   },
 });

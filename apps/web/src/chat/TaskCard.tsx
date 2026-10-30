@@ -1,5 +1,6 @@
 // 任务卡：正在搭建工作流 → 进度（完成几个节点）、每个节点的状态、花费 → 需要处理时给出选择 → 完成。
 // 任务还在动时每 2.5 秒刷新；状态一变就顺带刷新消息，交付消息和提醒能马上出现。
+import type { RemovedMark } from '@oasis/contracts/conversation';
 import type { Attention, NodeStatus, TaskBody, TaskStatus } from '@oasis/contracts/task';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
@@ -243,24 +244,58 @@ function Progress({ task }: { task: TaskBody }) {
   );
 }
 
+/** 任务被删除后留下的卡片只剩一句话（ADR 0012） */
+export function RemovedNote({ removed }: { removed: RemovedMark }) {
+  return (
+    <p className="m-0 text-[13.5px] text-ink-muted">
+      {removed.replacedBy
+        ? '这一版已被修改后的新版替换，旧版本不保留。'
+        : '这个任务和它的成果已删除。'}
+    </p>
+  );
+}
+
 export function TaskCard({
   taskId,
   speaker,
   decisions = true,
+  revision = false,
+  removed,
 }: {
   taskId: string;
   speaker: Speaker;
   /** 需要处理时在这里给出选择 */
   decisions?: boolean;
+  /** 这是对某个成果的修改 */
+  revision?: boolean;
+  /** 任务已被删除或替换：不再查询，只留一句话 */
+  removed?: RemovedMark;
 }) {
   const actions = useChatActions();
-  const { data: task, isPending, isError } = useQuery(taskQuery(taskId));
+  const {
+    data: task,
+    isPending,
+    isError,
+  } = useQuery({
+    ...taskQuery(taskId),
+    enabled: !removed,
+  });
   useRefreshMessagesOnChange(actions.conversationId, task?.status);
+  const kind = revision ? '修改' : '任务';
+
+  if (removed) {
+    return (
+      <CardFrame speaker={speaker} label={kind} dim>
+        <CardHeading kind={kind} />
+        <RemovedNote removed={removed} />
+      </CardFrame>
+    );
+  }
 
   if (isPending || isError) {
     return (
-      <CardFrame speaker={speaker} label="任务">
-        <CardHeading kind="任务" />
+      <CardFrame speaker={speaker} label={kind}>
+        <CardHeading kind={kind} />
         <p className="m-0 text-sm text-ink-muted">
           {isError ? '任务信息没能加载，稍后会再试。' : '正在加载任务…'}
         </p>
@@ -274,9 +309,9 @@ export function TaskCard({
   const moving = ['planning', 'running', 'accepting'].includes(task.status);
 
   return (
-    <CardFrame speaker={speaker} label={`任务：${task.title}`} glowing={moving}>
+    <CardFrame speaker={speaker} label={`${kind}：${task.title}`} glowing={moving}>
       <CardHeading
-        kind="任务"
+        kind={kind}
         title={task.title}
         status={<StatusTag tone={status.tone}>{status.label}</StatusTag>}
       />

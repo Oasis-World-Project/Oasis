@@ -2,6 +2,7 @@ import { OASIS_HEADERS } from '@oasis/contracts/common';
 import {
   CreateDmBody,
   IntakeAnswersBody,
+  RevisionBody,
   SendMessageBody,
   StartIntakeBody,
   type IntakeResult,
@@ -12,12 +13,18 @@ import { z } from 'zod';
 import type { Message } from '../repo/conversation-repo.ts';
 import { toMessageBody, type DmService } from '../service/dm-service.ts';
 import type { IntakeService } from '../service/intake-service.ts';
+import type { RevisionService } from '../service/revision-service.ts';
 
 const IdParams = z.object({ id: z.uuid() });
 
 const result = (messages: Message[]): IntakeResult => ({ messages: messages.map(toMessageBody) });
 
-export function registerRoutes(app: ServiceApp, dms: DmService, intake: IntakeService): void {
+export function registerRoutes(
+  app: ServiceApp,
+  dms: DmService,
+  intake: IntakeService,
+  revisions: RevisionService,
+): void {
   app.get('/v1/dms', async (request) => ({
     conversations: await dms.listDms(requireUserId(request)),
   }));
@@ -105,5 +112,24 @@ export function registerRoutes(app: ServiceApp, dms: DmService, intake: IntakeSe
     const { id } = parseWith(IdParams, request.params);
     const conversation = await dms.assertOwned(id, ownerId);
     return result(await intake.confirm({ conversation, ownerId, requestId: request.id }));
+  });
+
+  /** 修改成果（ADR 0012）：发修改意见，新建一条工作流做出新版 */
+  app.post('/v1/conversations/:id/revisions', async (request) => {
+    const ownerId = requireUserId(request);
+    const { id } = parseWith(IdParams, request.params);
+    const body = parseWith(RevisionBody, request.body);
+    const conversation = await dms.assertOwned(id, ownerId);
+    const attachments = await dms.resolveAttachments(ownerId, body.attachments, request.id);
+    return result(
+      await revisions.revise({
+        conversation,
+        ownerId,
+        taskId: body.taskId,
+        request: body.request,
+        attachments,
+        requestId: request.id,
+      }),
+    );
   });
 }

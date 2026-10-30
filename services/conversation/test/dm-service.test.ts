@@ -152,6 +152,16 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
         rows.find((r) => r.id === id)!,
         { data },
       ),
+    async markTaskRemoved(conversationId, taskId, removed) {
+      const hits = rows.filter(
+        (r) =>
+          r.conversationId === conversationId &&
+          ['task', 'delivery', 'notice'].includes(r.kind) &&
+          r.data.taskId === taskId,
+      );
+      for (const r of hits) r.data = { ...r.data, removed };
+      return hits.length;
+    },
     async createIntake(intake) {
       if (intakes.some((i) => i.conversationId === intake.conversationId && open(i)))
         return undefined;

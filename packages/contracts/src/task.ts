@@ -68,6 +68,8 @@ export const RequirementSource = z.discriminatedUnion('kind', [
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     quote: z.string().min(1).max(2000),
   }),
+  /** 修改成果时用户写的修改意见（ADR 0012 §3） */
+  z.object({ kind: z.literal('revision'), quote: z.string().min(1).max(2000) }),
 ]);
 export const TaskRequirement = z.object({
   id: z.string().regex(/^[\w-]{1,60}$/),
@@ -202,6 +204,8 @@ export const CreateTaskBody = z
     estimateMicro: z.number().int().nonnegative().optional(),
     /** 用户给的素材（存在 canvas）：规划员和每个节点都能在沙箱的 materials/ 下看到 */
     materials: z.array(Material).max(MAX_MATERIALS).default([]),
+    /** 修改成果：这是哪个任务的新版（ADR 0012）。新版交付后整体替换上一版 */
+    revisionOf: z.uuid().optional(),
   })
   .refine((body) => Number(Boolean(body.sheet)) + Number(Boolean(body.plan)) === 1, {
     message: '要么给出任务单，要么给出工作流方案',
@@ -339,6 +343,8 @@ export const TaskBody = z.object({
     .optional(),
   /** 用户给的素材（旧版 task 不返回时当作没有） */
   materials: z.array(Material).default([]),
+  /** 修改成果：这是哪个任务的新版（ADR 0012）；旧版 task 不返回时当作不是 */
+  revisionOf: z.uuid().nullable().default(null),
   /** 每样交付物由哪个节点交出（规划员定） */
   deliverables: z.array(
     z.object({ name: z.string(), form: z.string(), nodeId: z.uuid().nullable() }),
@@ -357,6 +363,8 @@ export const TaskSummary = z.object({
   nodesDone: z.number().int().nonnegative(),
   nodesTotal: z.number().int().nonnegative(),
   spentMicro: z.number().int().nonnegative(),
+  /** 修改成果：这是哪个任务的新版（前端据此知道某份成果正在修改） */
+  revisionOf: z.uuid().nullable().default(null),
   createdAt: z.iso.datetime(),
 });
 export type TaskSummary = z.infer<typeof TaskSummary>;

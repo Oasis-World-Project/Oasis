@@ -1,16 +1,24 @@
 // 画布里打开一个成果（外观照原型 ⑨⑩）：点阵底，左上返回 / 任务名 / 文件名，右上工作流、回到私聊、下载，
-// 中间预览（图片、视频、音频、PDF、Markdown、文字、静态网页；其他格式提示下载）。批注和「发给 AI 修改」以后做。
-import { useQuery } from '@tanstack/react-query';
-import { getRouteApi, Link } from '@tanstack/react-router';
-import { ArrowLeft, Download, MessageCircle, Workflow } from 'lucide-react';
+// 中间预览（图片、视频、音频、PDF、Markdown、文字、静态网页；其他格式提示下载）。
+// 「发给 AI 修改」做出新版整体替换这一版，「删除」连同工作流一起删（ADR 0012）；批注在 5.11b。
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
+import { ArrowLeft, Download, MessageCircle, PencilLine, Workflow } from 'lucide-react';
+import { useState } from 'react';
+import { ApiError } from '../api/client.ts';
 import {
   artifactContentUrl,
   artifactQuery,
   artifactsQuery,
+  deleteTask,
+  SETTLED_STATUSES,
   taskArchiveUrl,
+  tasksQuery,
 } from '../api/queries.ts';
 import { PreviewBody } from '../chat/FilePreview.tsx';
+import { ConfirmButton } from '../chat/parts.tsx';
 import { PreviewPlayer } from '../canvas/PreviewPlayer.tsx';
+import { RevisePanel } from '../canvas/RevisePanel.tsx';
 import { formatBytes } from '../ui/format.ts';
 
 const route = getRouteApi('/shell/canvas/artifacts/$artifactId');
@@ -24,6 +32,24 @@ export function ArtifactPage() {
   const { data: siblings = [] } = useQuery({
     ...artifactsQuery(artifact?.taskId),
     enabled: !!artifact,
+  });
+  const { data: tasks = [] } = useQuery(tasksQuery);
+  // 这份成果正在修改：新版没结束之前不能再改、不能删
+  const revising = artifact
+    ? tasks.find((t) => t.revisionOf === artifact.taskId && !SETTLED_STATUSES.has(t.status))
+    : undefined;
+  const [reviseOpen, setReviseOpen] = useState(false);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const remove = useMutation({
+    mutationFn: (taskId: string) => deleteTask(taskId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['artifacts'] }),
+        queryClient.invalidateQueries({ queryKey: tasksQuery.queryKey }),
+      ]);
+      await navigate({ to: '/canvas' });
+    },
   });
   const position = siblings.findIndex((item) => item.id === artifactId);
   const candidates = artifact
@@ -130,9 +156,49 @@ export function ArtifactPage() {
               <Download size={15} aria-hidden="true" />
               下载
             </a>
+            {revising ? (
+              <Link
+                to="/canvas/tasks/$taskId"
+                params={{ taskId: revising.id }}
+                className={`${pill} bg-glass-active text-ink shadow-edge-strong`}
+              >
+                正在修改中…
+              </Link>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setReviseOpen(true)}
+                  className={`${pill} border-0 bg-accent text-on-accent`}
+                >
+                  <PencilLine size={15} aria-hidden="true" />
+                  发给 AI 修改
+                </button>
+                <ConfirmButton
+                  label="删除"
+                  question="连同工作流一起删，不能恢复，确定吗？"
+                  confirmLabel="删除"
+                  onConfirm={() => remove.mutate(artifact.taskId)}
+                  disabled={remove.isPending}
+                />
+              </>
+            )}
           </div>
         )}
       </div>
+      {remove.isError && (
+        <p role="alert" className="m-0 px-5 pb-2 text-[13px] text-accent">
+          {remove.error instanceof ApiError ? remove.error.message : '没删掉，请重试'}
+        </p>
+      )}
+      {artifact && reviseOpen && (
+        <RevisePanel
+          taskId={artifact.taskId}
+          taskTitle={artifact.taskTitle}
+          conversationId={artifact.conversationId}
+          onClose={() => setReviseOpen(false)}
+        />
+      )}
 
       <div className="mx-4 mb-4 min-h-0 flex-1 overflow-auto rounded-card bg-glass-active shadow-edge-strong">
         {isPending && <p className="m-0 p-6 text-sm text-ink-muted">正在打开…</p>}

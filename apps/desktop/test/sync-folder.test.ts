@@ -83,6 +83,28 @@ describe('同步记录', () => {
     expect((await sync.status()).synced).toEqual([A, B]);
   });
 
+  it('修改出的新版：没改过的旧版直接覆盖；用户改过的不动，新版另存为「(新版)」', async () => {
+    const sync = createSyncFolder(path.join(home, 'sync.json'));
+    const folder = path.join(home, '成果');
+    await sync.setFolder(folder);
+    await write(sync, A, '任务/a.md', bytes('旧版'));
+    await writeFile(path.join(folder, '任务', 'b.md'), '我改过的');
+    const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+    const C = '00000000-0000-4000-8000-000000000003';
+    const D = '00000000-0000-4000-8000-000000000004';
+    const replace = async (id: string, relative: string, text: string, old: string) => {
+      const token = (await sync.begin(id, relative, bytes(text).byteLength, sha(text), sha(old)))!;
+      await sync.append(token, bytes(text));
+      await sync.finish(token);
+    };
+    await replace(C, '任务/a.md', '新版', '旧版');
+    expect(await readFile(path.join(folder, '任务', 'a.md'), 'utf8')).toBe('新版');
+    await replace(D, '任务/b.md', '新版 b', '旧版 b');
+    expect(await readFile(path.join(folder, '任务', 'b.md'), 'utf8')).toBe('我改过的');
+    expect(await readFile(path.join(folder, '任务', 'b (新版).md'), 'utf8')).toBe('新版 b');
+    expect((await sync.status()).synced).toEqual([A, C, D]);
+  });
+
   it('同时写几个文件，记录不会互相覆盖；换了文件夹就重新同步', async () => {
     const sync = createSyncFolder(path.join(home, 'sync.json'));
     await sync.setFolder(path.join(home, '一'));

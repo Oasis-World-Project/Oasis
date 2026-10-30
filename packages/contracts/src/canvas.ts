@@ -35,6 +35,8 @@ export type UploadBody = z.infer<typeof UploadBody>;
 export const UploadLookupBody = z.object({
   ownerId: z.uuid(),
   ids: z.array(z.uuid()).min(1).max(20),
+  /** 只返回还在的，不因为少了某个就报错（ADR 0012：筛掉已随上一版删除的修订素材） */
+  partial: z.boolean().default(false),
 });
 export const UploadLookupResult = z.object({ uploads: z.array(UploadBody) });
 
@@ -118,9 +120,29 @@ export const ArtifactBody = z.object({
   models: z.array(z.string()),
   /** 同步到电脑时放在哪：相对同步文件夹的路径，如 小木屋民宿官网首页/首页文案.md */
   syncPath: z.string(),
+  /** 修改出的新版：同一同步路径上被它替换的旧文件摘要（桌面端据此判断能不能覆盖，ADR 0012） */
+  replacesSha256: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable()
+    .optional(),
   createdAt: z.iso.datetime(),
 });
 export type ArtifactBody = z.infer<typeof ArtifactBody>;
+
+/** 内部：把一个任务交付的成果登记成修订任务的素材（ADR 0012 §3） */
+export const RevisionMaterialsBody = z.object({
+  ownerId: z.uuid(),
+  taskId: z.uuid(),
+  /** 还能放几份素材：上一版文件放得下（且不超过 10 个）就逐个交，否则打成一个 ZIP */
+  room: z.number().int().min(1).max(20),
+});
+export const RevisionMaterialsResult = z.object({
+  materials: z.array(Material),
+  /** 素材名和上一版文件的对照（写进修订说明） */
+  files: z.array(z.object({ material: z.string(), path: z.string(), deliverable: z.string() })),
+});
+export type RevisionMaterialsResult = z.infer<typeof RevisionMaterialsResult>;
 
 export const ArtifactList = z.object({ artifacts: z.array(ArtifactBody) });
 

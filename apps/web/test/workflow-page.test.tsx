@@ -52,6 +52,7 @@ function baseTask(): TaskBody {
     budgetLimitMicro: 90_000,
     sheet: null,
     materials: [],
+    revisionOf: null,
     acceptance: null,
     deliverables: [],
     nodes: [

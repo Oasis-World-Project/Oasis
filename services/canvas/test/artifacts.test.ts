@@ -98,10 +98,24 @@ const fetched: string[] = [];
 let fileFailures = 0;
 const task = Fastify();
 let finalFiles: { deliverable: string; nodeId: string; path: string; size: number }[] | undefined;
-task.get('/internal/tasks/:id', async (request) => ({
-  ...taskBody((request.params as { id: string }).id),
-  ...(finalFiles === undefined ? {} : { deliveryFiles: finalFiles }),
-}));
+/** 修订任务 → 它修改的是哪个任务；canvas 换好新版后调 retire */
+const revisionOf = new Map<string, string>();
+const retired: { taskId: string; replacedBy: string }[] = [];
+task.get('/internal/tasks/:id', async (request) => {
+  const { id } = request.params as { id: string };
+  return {
+    ...taskBody(id),
+    revisionOf: revisionOf.get(id) ?? null,
+    ...(finalFiles === undefined ? {} : { deliveryFiles: finalFiles }),
+  };
+});
+task.post('/internal/tasks/:id/retire', async (request, reply) => {
+  retired.push({
+    taskId: (request.params as { id: string }).id,
+    replacedBy: (request.body as { replacedBy: string }).replacedBy,
+  });
+  return reply.code(204).send();
+});
 task.get('/internal/tasks/:id/files/:nodeId/*', async (request, reply) => {
   const path = (request.params as { '*': string })['*'];
   fetched.push(path);
@@ -118,6 +132,8 @@ beforeAll(async () => {
 afterAll(() => task.close());
 
 let repo: ReturnType<typeof memoryArtifacts>;
+let uploadRows: ReturnType<typeof memoryUploads>;
+let objects: ReturnType<typeof memoryStore>;
 let service: ReturnType<typeof createArtifactService>;
 let app: Awaited<ReturnType<typeof createService>>['app'];
 
@@ -125,10 +141,15 @@ beforeEach(async () => {
   finalFiles = undefined;
   fetched.length = 0;
   fileFailures = 0;
-  repo = memoryArtifacts();
+  revisionOf.clear();
+  retired.length = 0;
+  uploadRows = memoryUploads();
+  repo = memoryArtifacts(uploadRows);
   const store = memoryStore();
+  objects = store;
   service = createArtifactService({
     repo,
+    uploads: uploadRows,
     store,
     task: createServiceClient('task', taskUrl),
     logger: pino({ level: 'silent' }),
@@ -366,5 +387,95 @@ describe('类别和同步路径的规则', () => {
     expect(safeSegment('...')).toBe('未命名');
     expect(uniqueName('报告.md', new Set(['报告.md', '报告 (2).md']), true)).toBe('报告 (3).md');
     expect(uniqueName('Site', new Set(['site']), false)).toBe('Site (2)');
+  });
+});
+
+describe('修改成果：修订素材、新版替换、删除（ADR 0012）', () => {
+  const limits = { maxBytes: 1024 * 1024, archive: { bytes: 1024 * 1024, files: 100 } };
+  const keysOf = (taskId: string) =>
+    [...objects.objects.keys()].filter((k) => k.startsWith(`artifacts/${taskId}/`));
+
+  it('上一版的交付文件逐个登记成素材（沿用成果对象）；放不下时打成一个 ZIP；别人的任务没有', async () => {
+    await service.onTaskStatus(event(T1));
+    const single = await service.revisionMaterials(KAI, T1, 20, limits);
+    expect(single.materials.map((m) => m.name).sort()).toEqual([
+      '上一版-hero.png',
+      '上一版-首页文案.md',
+    ]);
+    expect(single.files.find((f) => f.material === '上一版-首页文案.md')).toMatchObject({
+      path: '首页文案.md',
+      deliverable: '首页文案',
+    });
+    const rows = [...uploadRows.rows.values()];
+    expect(rows.every((r) => r.sourceTaskId === T1 && r.objectKey.startsWith('artifacts/'))).toBe(
+      true,
+    );
+    const packedResult = await service.revisionMaterials(KAI, T1, 1, limits);
+    expect(packedResult.materials).toHaveLength(1);
+    expect(packedResult.materials[0]!.name).toBe('上一版成果.zip');
+    const zip = [...uploadRows.rows.values()].find((r) => r.name === '上一版成果.zip')!;
+    expect(zip.objectKey.startsWith('uploads/')).toBe(true);
+    const entries = unzipSync(objects.objects.get(zip.objectKey)!.body);
+    expect(strFromU8(entries[`${packedResult.files[0]!.path}`]!)).toBeTruthy();
+    await expect(service.revisionMaterials(MIA, T1, 20, limits)).rejects.toMatchObject({
+      code: 'no_artifacts',
+    });
+  });
+
+  it('新版交付后整体替换上一版：沿用同步路径、记下旧摘要、删旧对象和修订素材，再让 task 删上一版；重投幂等', async () => {
+    await service.onTaskStatus(event(T1));
+    const old = repo.rows.filter((r) => r.taskId === T1);
+    const oldCopy = old.find((r) => r.path === '首页文案.md')!;
+    await service.revisionMaterials(KAI, T1, 1, limits);
+    revisionOf.set(T2, T1);
+    const original = files['首页文案.md'];
+    files['首页文案.md'] = '# 山里的小木屋（新版）';
+    try {
+      await service.onTaskStatus(event(T2));
+      await service.onTaskStatus(event(T2));
+    } finally {
+      files['首页文案.md'] = original!;
+    }
+    expect(repo.rows.filter((r) => r.taskId === T1)).toHaveLength(0);
+    const fresh = repo.rows.filter((r) => r.taskId === T2);
+    expect(fresh.map((r) => r.syncPath).sort()).toEqual(old.map((r) => r.syncPath).sort());
+    const copy = fresh.find((r) => r.path === '首页文案.md')!;
+    expect(copy.replacesSha256).toBe(oldCopy.sha256);
+    expect(copy.sha256).not.toBe(oldCopy.sha256);
+    expect(keysOf(T1)).toEqual([]);
+    expect(uploadRows.rows.size).toBe(0);
+    expect([...objects.objects.keys()].some((k) => k.startsWith('uploads/'))).toBe(false);
+    expect(retired).toEqual([
+      { taskId: T1, replacedBy: T2 },
+      { taskId: T1, replacedBy: T2 },
+    ]);
+    const body = (await get(`/v1/artifacts/${copy.id}`)).json<{ replacesSha256: string }>();
+    expect(body.replacesSha256).toBe(oldCopy.sha256);
+  });
+
+  it('新版一个文件也没交出时不替换，上一版保留', async () => {
+    await service.onTaskStatus(event(T1));
+    revisionOf.set(T2, T1);
+    finalFiles = [];
+    await service.onTaskStatus(event(T2));
+    expect(repo.rows.filter((r) => r.taskId === T1)).toHaveLength(2);
+    expect(retired).toEqual([]);
+  });
+
+  it('任务被删除：成果行、对象和来自它的修订素材都删掉；重投没有副作用', async () => {
+    await service.onTaskStatus(event(T1));
+    await service.revisionMaterials(KAI, T1, 1, limits);
+    const deleted = {
+      taskId: T1,
+      ownerId: KAI,
+      conversationId: null,
+      replacedBy: null,
+      deletedAt: '2026-10-31T08:00:00.000Z',
+    };
+    await service.onTaskDeleted(deleted);
+    await service.onTaskDeleted(deleted);
+    expect(repo.rows).toHaveLength(0);
+    expect(uploadRows.rows.size).toBe(0);
+    expect(objects.objects.size).toBe(0);
   });
 });

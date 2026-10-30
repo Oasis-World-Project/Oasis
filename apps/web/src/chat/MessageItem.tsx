@@ -95,6 +95,8 @@ export function MessageItem({
         <TaskCard
           taskId={message.data.taskId}
           speaker={speaker}
+          revision={!!message.data.revisionOf}
+          {...(message.data.removed ? { removed: message.data.removed } : {})}
           // 后面已经有这个任务的提醒时，选择放在提醒里（离输入框近），任务卡不重复
           decisions={
             !later.some((m) => m.kind === 'notice' && m.data.taskId === message.data.taskId)

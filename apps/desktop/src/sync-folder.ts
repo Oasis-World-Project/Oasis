@@ -1,10 +1,11 @@
 // 把成果写进用户选的同步文件夹（ADR 0007 §10）。只在主进程里用，页面碰不到文件系统：
 // - 路径只能是同步文件夹里的相对路径，跳不出去；
-// - 已经有同名文件就不覆盖（可能是用户自己改过的），只记为已同步；
+// - 已经有同名文件就不覆盖（可能是用户自己改过的），只记为已同步；修改出的新版例外（ADR 0012）：
+//   那里还是没改过的旧版就覆盖，用户改过就另存为「名字 (新版).扩展名」；
 // - 先写临时文件再改名，写到一半断了不会留下半个文件；
 // - 哪些成果同步过记在桌面端自己的数据目录里，按文件夹分开记（换了文件夹会重新同步一遍）。
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import {
   mkdir,
   readFile,
@@ -53,6 +54,13 @@ export function resolveInside(folder: string, relative: string): string {
   if (back.startsWith('..') || path.isAbsolute(back))
     throw new Error(`路径跳出了同步文件夹：${relative}`);
   return target;
+}
+
+/** 电脑上一个文件的 SHA-256（判断它是不是用户没改过的旧版） */
+async function fileSha256(file: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
+  return hash.digest('hex');
 }
 
 /** 文件已存在时加序号：报告.pdf → 报告 (2).pdf（给「下载」用） */
@@ -104,6 +112,8 @@ export function createSyncFolder(recordFile: string) {
       count: number;
       hash: ReturnType<typeof createHash>;
       sha256?: string | null;
+      /** 修改出的新版替换用户没改过的旧版 */
+      overwrite: boolean;
     }
   >();
   async function discard(token: string) {
@@ -150,7 +160,13 @@ export function createSyncFolder(recordFile: string) {
         await save({ ...record, folder: path.resolve(folder) });
       }),
 
-    begin: (artifactId: string, relative: string, size: number, sha256?: string | null) =>
+    begin: (
+      artifactId: string,
+      relative: string,
+      size: number,
+      sha256?: string | null,
+      replacesSha256?: string | null,
+    ) =>
       serial(async () => {
         const record = await load();
         if (!record.folder) throw new Error('还没选同步文件夹');
@@ -158,8 +174,10 @@ export function createSyncFolder(recordFile: string) {
         if (!Number.isSafeInteger(size) || size < 0 || size > DESKTOP_SYNC_MAX_BYTES)
           throw new Error('文件太大，没有同步');
         if (sha256 != null && !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('校验和不合格');
+        if (replacesSha256 != null && !/^[a-f0-9]{64}$/.test(replacesSha256))
+          throw new Error('旧版校验和不合格');
         if (transfers.size >= 4) throw new Error('同步任务过多');
-        const target = resolveInside(record.folder, relative);
+        let target = resolveInside(record.folder, relative);
         await mkdir(path.dirname(target), { recursive: true });
         const root = await realpath(record.folder);
         const parent = await realpath(path.dirname(target));
@@ -168,12 +186,21 @@ export function createSyncFolder(recordFile: string) {
           path.isAbsolute(path.relative(root, parent))
         )
           throw new Error('同步目录包含越界链接');
+        // 修改出的新版（ADR 0012）：那里还是用户没改过的旧版就覆盖；用户改过就另存为「(新版)」
+        let overwrite = false;
         if (existsSync(target)) {
-          record.synced[record.folder] = [
-            ...new Set([...(record.synced[record.folder] ?? []), artifactId]),
-          ];
-          await save(record);
-          return null;
+          if (!replacesSha256) {
+            record.synced[record.folder] = [
+              ...new Set([...(record.synced[record.folder] ?? []), artifactId]),
+            ];
+            await save(record);
+            return null;
+          }
+          if ((await fileSha256(target)) === replacesSha256) overwrite = true;
+          else {
+            const { dir, name, ext } = path.parse(target);
+            target = freePath(path.join(dir, `${name} (新版)${ext}`));
+          }
         }
         const token = randomUUID();
         const partial = `${target}.oasis-${token}.partial`;
@@ -188,9 +215,13 @@ export function createSyncFolder(recordFile: string) {
           count: 0,
           hash: createHash('sha256'),
           sha256,
+          overwrite,
         });
         record.pending ??= {};
-        record.pending[token] = { folder: record.folder, relative };
+        record.pending[token] = {
+          folder: record.folder,
+          relative: path.relative(record.folder, target).split(path.sep).join('/'),
+        };
         try {
           await save(record);
         } catch (error) {
@@ -235,7 +266,9 @@ export function createSyncFolder(recordFile: string) {
         await item.file.close();
         transfers.delete(token);
         try {
-          await link(item.partial, item.target);
+          // 替换没改过的旧版：改名覆盖（原子）；其余情况不覆盖已有文件
+          if (item.overwrite) await rename(item.partial, item.target);
+          else await link(item.partial, item.target);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         } finally {

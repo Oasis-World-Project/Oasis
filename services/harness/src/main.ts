@@ -1,12 +1,13 @@
 // harness：Agent 运行时。唯一接触 DeepSeek Harness 的服务（只在 src/adapter/ 里），
 // 每次运行起一个沙箱容器跑 dsh，模型调用经 model-gateway 计费（ADR 0003）。
 import { fileURLToPath } from 'node:url';
-import { HARNESS_STREAM } from '@oasis/contracts/events';
+import { HARNESS_STREAM, TASK_STREAM, TaskDeleted } from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
   createObjectStore,
   createServiceClient,
   ensureStream,
+  startEventConsumer,
   startOutboxRelay,
   startService,
   type ObjectStore,
@@ -79,7 +80,22 @@ await startService({
         await runs?.stopAll();
       },
     };
-    return { postgres, eventBus, outbox, objectStore: objects.resource, sandboxes };
+    // 任务被删除（用户删除或被新版替换）：停掉它的预览，删掉运行存档和记录（ADR 0012）
+    const taskDeleted = startEventConsumer({
+      connection: eventBus.connection,
+      stream: TASK_STREAM,
+      durable: 'harness-task-deleted',
+      filterSubject: TaskDeleted.type,
+      logger: ctx.logger,
+      handle: async (envelope) => {
+        const { taskId } = TaskDeleted.data.parse(envelope.data);
+        // 服务还在启动（接口层还没建好）：抛出让事件稍后重投
+        if (!runs || !previews) throw new Error('harness 还没就绪');
+        await previews.stopTask(taskId);
+        if (!(await runs.purgeTask(taskId))) throw new Error('任务还有没结束的运行，稍后再清理');
+      },
+    });
+    return { postgres, eventBus, outbox, objectStore: objects.resource, sandboxes, taskDeleted };
   },
   routes: async (app, { config, resources, logger, name }) => {
     runs = createRunService({

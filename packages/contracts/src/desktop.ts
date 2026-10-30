@@ -12,12 +12,17 @@ export interface OasisDesktop {
   syncStatus(): Promise<DesktopSyncStatus>;
   /** 弹出系统对话框选文件夹；用户取消时返回 null */
   chooseSyncFolder(): Promise<string | null>;
-  /** 把一个成果写进同步文件夹的 relativePath（相对路径，不能跳出文件夹） */
+  /**
+   * 把一个成果写进同步文件夹的 relativePath（相对路径，不能跳出文件夹）。
+   * replacesSha256：修改出的新版要替换的旧文件摘要；那里的文件正是旧版（用户没改过）就覆盖，
+   * 否则另存为「名字 (新版).扩展名」（ADR 0012）。
+   */
   beginSyncedFile(
     artifactId: string,
     relativePath: string,
     size: number,
     sha256?: string | null,
+    replacesSha256?: string | null,
   ): Promise<string | null>;
   appendSyncedFile(token: string, data: Uint8Array): Promise<void>;
   finishSyncedFile(token: string): Promise<void>;

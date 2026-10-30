@@ -159,3 +159,26 @@ describe('任务的结果回到私聊', () => {
     expect(rows).toHaveLength(0);
   });
 });
+
+describe('任务被删除（ADR 0012）', () => {
+  it('它的卡片标成已替换；不是这个人的会话、没有会话的不动', async () => {
+    const marked: { conversationId: string; taskId: string; removed: unknown }[] = [];
+    const notices = createTaskNotices({
+      repo: {
+        findOwned: async (id: string, owner: string) =>
+          id === CONV && owner === OWNER ? { id: CONV, modelKey: 'claude' } : undefined,
+        markTaskRemoved: async (conversationId: string, taskId: string, removed: unknown) => {
+          marked.push({ conversationId, taskId, removed });
+          return 2;
+        },
+      } as unknown as ConversationRepo,
+      task: createServiceClient('task', 'http://127.0.0.1:9'),
+      logger: pino({ level: 'silent' }),
+    });
+    const base = { taskId: TASK, ownerId: OWNER, deletedAt: new Date().toISOString() };
+    await notices.onDeleted({ ...base, conversationId: CONV, replacedBy: NODE });
+    await notices.onDeleted({ ...base, conversationId: null, replacedBy: null });
+    await notices.onDeleted({ ...base, ownerId: NODE, conversationId: CONV, replacedBy: null });
+    expect(marked).toEqual([{ conversationId: CONV, taskId: TASK, removed: { replacedBy: NODE } }]);
+  });
+});

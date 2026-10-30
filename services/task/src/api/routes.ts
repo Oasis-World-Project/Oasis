@@ -21,6 +21,7 @@ const EventsQuery = z.object({
   runId: z.uuid().optional(),
 });
 const FileQuery = z.object({ download: z.enum(['0', '1']).default('0') });
+const RetireBody = z.object({ replacedBy: z.uuid() });
 
 export function registerRoutes(app: ServiceApp, workflows: WorkflowService): void {
   /** 提交任务和工作流方案，校验后立即开跑 */
@@ -44,6 +45,21 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
   app.get('/internal/tasks/:taskId', async (request) => {
     const { taskId } = parseWith(TaskParams, request.params);
     return workflows.getInternal(taskId);
+  });
+
+  /** 新版已交付，删除被它替换的上一版（canvas 换好成果后调用，ADR 0012） */
+  app.post('/internal/tasks/:taskId/retire', async (request, reply) => {
+    const { taskId } = parseWith(TaskParams, request.params);
+    const { replacedBy } = parseWith(RetireBody, request.body);
+    await workflows.retire(taskId, replacedBy);
+    return reply.code(204).send();
+  });
+
+  /** 删除任务：连同成果、工作流和中间产物（只能删已经结束的） */
+  app.delete('/v1/tasks/:taskId', async (request, reply) => {
+    const { taskId } = parseWith(TaskParams, request.params);
+    await workflows.remove(requireUserId(request), taskId);
+    return reply.code(204).send();
   });
 
   app.get('/v1/tasks', async (request) => ({

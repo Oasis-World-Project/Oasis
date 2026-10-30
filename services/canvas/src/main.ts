@@ -1,6 +1,6 @@
 // canvas：画布。存用户上传的素材；任务完成时把成果登记进画布，给前端列出、预览、下载（ADR 0007）。
 import { fileURLToPath } from 'node:url';
-import { TASK_STREAM, TaskStatusChanged } from '@oasis/contracts/events';
+import { TASK_STREAM, TaskDeleted, TaskStatusChanged } from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
   createObjectStore,
@@ -39,6 +39,7 @@ await startService({
     store = objects.store;
     artifacts = createArtifactService({
       repo: createArtifactsRepo(postgres.pool),
+      uploads: createUploadsRepo(postgres.pool),
       store,
       // 复制成果文件可能要一会儿
       task: createServiceClient('task', config.TASK_URL, { timeoutMs: 60_000 }),
@@ -55,7 +56,16 @@ await startService({
       logger: ctx.logger,
       handle: (envelope) => artifacts.onTaskStatus(TaskStatusChanged.data.parse(envelope.data)),
     });
-    return { postgres, eventBus, objectStore: objects.resource, taskStatus };
+    // 任务被删除（用户删除或被新版替换）→ 删掉它的成果和修订素材（ADR 0012）
+    const taskDeleted = startEventConsumer({
+      connection: eventBus.connection,
+      stream: TASK_STREAM,
+      durable: 'canvas-task-deleted',
+      filterSubject: TaskDeleted.type,
+      logger: ctx.logger,
+      handle: (envelope) => artifacts.onTaskDeleted(TaskDeleted.data.parse(envelope.data)),
+    });
+    return { postgres, eventBus, objectStore: objects.resource, taskStatus, taskDeleted };
   },
   routes: (app, { config, resources, logger }) => {
     const uploads = createUploadService({

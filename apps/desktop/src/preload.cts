@@ -9,8 +9,8 @@ const { contextBridge, ipcRenderer } = require('electron') as typeof import('ele
 const api: OasisDesktop = {
   syncStatus: () => ipcRenderer.invoke('oasis:sync-status'),
   chooseSyncFolder: () => ipcRenderer.invoke('oasis:sync-choose'),
-  beginSyncedFile: (id, relative, size, sha256) =>
-    ipcRenderer.invoke('oasis:sync-begin', id, relative, size, sha256),
+  beginSyncedFile: (id, relative, size, sha256, replacesSha256) =>
+    ipcRenderer.invoke('oasis:sync-begin', id, relative, size, sha256, replacesSha256),
   appendSyncedFile: (token, data) => ipcRenderer.invoke('oasis:sync-append', token, data),
   finishSyncedFile: (token) => ipcRenderer.invoke('oasis:sync-finish', token),
   abortSyncedFile: (token) => ipcRenderer.invoke('oasis:sync-abort', token),

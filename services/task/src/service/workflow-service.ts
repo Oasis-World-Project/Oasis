@@ -127,6 +127,7 @@ function toTaskBody({ task, nodes, edges }: Snapshot): TaskBody {
     budgetLimitMicro: task.budgetLimitMicro,
     sheet: task.sheet,
     materials: task.materials,
+    revisionOf: task.revisionOf,
     acceptance: task.acceptance,
     deliverables: task.deliverables,
     ...(deliveryFiles === undefined ? {} : { deliveryFiles }),
@@ -145,6 +146,9 @@ const UNAVAILABLE: Record<Attention['reason'], string> = {
   plan_failed: '工作流没排好时只能重新规划或取消',
   workflow_broken: '工作流的连线断开了：先把线接好再点运行，或者取消任务',
 };
+
+const revising = () =>
+  new HttpError(409, 'task_revising', '这份成果正在修改，等这次修改结束后再操作');
 
 /** 上游拒绝「地区不可用」时运行的错误里带的代码（model-gateway 给的） */
 const REGION_UNAVAILABLE = 'provider_region_unavailable';
@@ -728,6 +732,16 @@ export function createWorkflowService(deps: {
     return toTaskBody(await owned(ownerId, taskId));
   }
 
+  /** 能不能修改这个任务的成果：是这个人的、已经交付、没有正在进行的修改（ADR 0012） */
+  async function checkRevisable(ownerId: string, taskId: string): Promise<void> {
+    const previous = await store.get(taskId);
+    if (previous?.task.ownerId !== ownerId)
+      throw new HttpError(404, 'task_not_found', '没有这个任务');
+    if (previous.task.status !== 'succeeded')
+      throw new HttpError(409, 'task_not_delivered', '这个任务还没有交付成果，不能修改');
+    if (await store.findActiveRevision(taskId)) throw revising();
+  }
+
   /** 取消整个任务（在事务里） */
   async function cancelAll(snapshot: Snapshot, w: Writer, fx: Effects) {
     const now = new Date();
@@ -821,6 +835,7 @@ export function createWorkflowService(deps: {
      */
     async create(body: CreateTaskInput): Promise<TaskBody> {
       const id = randomUUID();
+      if (body.revisionOf) await checkRevisable(body.ownerId, body.revisionOf);
       const base = {
         id,
         ownerId: body.ownerId,
@@ -829,19 +844,26 @@ export function createWorkflowService(deps: {
         title: body.title,
         brief: body.brief,
         materials: body.materials,
+        revisionOf: body.revisionOf ?? null,
       };
       if (body.sheet) {
-        await store.create({
-          task: {
-            ...base,
-            status: 'planning',
-            estimateMicro: null,
-            budgetLimitMicro: body.sheet.budgetMicro,
-            sheet: body.sheet,
-          },
-          nodes: [],
-          edges: [],
-        });
+        try {
+          await store.create({
+            task: {
+              ...base,
+              status: 'planning',
+              estimateMicro: null,
+              budgetLimitMicro: body.sheet.budgetMicro,
+              sheet: body.sheet,
+            },
+            nodes: [],
+            edges: [],
+          });
+        } catch (err) {
+          // 两个修改请求同时到达：数据库的部分唯一索引只放进一个
+          if ((err as { code?: string }).code === '23505' && body.revisionOf) throw revising();
+          throw err;
+        }
         await transact(id, (snapshot, w, fx) => planning.begin(snapshot, w, fx));
         return toTaskBody((await store.get(id)) as Snapshot);
       }
@@ -873,6 +895,7 @@ export function createWorkflowService(deps: {
         nodesDone: nodes.filter((n) => n.status === 'succeeded').length,
         nodesTotal: nodes.length,
         spentMicro: task.spentMicro,
+        revisionOf: task.revisionOf,
         createdAt: task.createdAt.toISOString(),
       }));
     },
@@ -884,6 +907,31 @@ export function createWorkflowService(deps: {
       const snapshot = await store.get(taskId);
       if (!snapshot) throw new HttpError(404, 'task_not_found', '没有这个任务');
       return toTaskBody(snapshot);
+    },
+
+    /**
+     * 用户删除成果（ADR 0012）：连同工作流和中间产物一起删，不可恢复。
+     * 只能删已经结束的任务；成果正在修改时先取消那次修改。
+     */
+    async remove(ownerId: string, taskId: string): Promise<void> {
+      const { task } = await owned(ownerId, taskId);
+      if (!FINAL.includes(task.status))
+        throw new HttpError(409, 'task_not_ended', '任务还在进行，先取消再删除');
+      if (await store.findActiveRevision(taskId)) throw revising();
+      await store.remove(taskId, null);
+      logger.info({ taskId }, '用户删除了任务和它的成果');
+    },
+
+    /**
+     * 内部（canvas 换好新版后调用）：新版已交付，删除被它替换的上一版。
+     * 已经删过的直接返回（事件重投时会再调一次）。
+     */
+    async retire(taskId: string, replacedBy: string): Promise<void> {
+      const next = await store.get(replacedBy);
+      if (next?.task.revisionOf !== taskId || next.task.status !== 'succeeded')
+        throw new HttpError(409, 'not_replaced', '新版还没交付，不能替换上一版');
+      if (await store.remove(taskId, replacedBy))
+        logger.info({ taskId, replacedBy }, '上一版已被新版替换并删除');
     },
 
     /** 节点的运行过程：转发它最近一次运行的事件 */

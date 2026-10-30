@@ -195,6 +195,10 @@ const repo: RunsRepo = {
   },
   listEvents: async (runId, after, limit) =>
     events.filter((e) => e.runId === runId && e.seq > after).slice(0, limit),
+  listByTask: async (taskId) => [...rows.values()].filter((r) => r.taskId === taskId),
+  async removeMany(ids) {
+    for (const id of ids) rows.delete(id);
+  },
 };
 
 const stored = new Map<string, Buffer>();
@@ -424,6 +428,20 @@ describe('一次 agent 运行', () => {
     // 运行时上下文那条不是用户说的，不记
     const kinds = events.map((e) => e.kind);
     expect(kinds).toEqual(['status', 'user_message', 'assistant_text', 'turn_end', 'status']);
+  });
+
+  it('任务被删除：已结束运行的产出包、会话存档和记录都删掉；没结束的留到下次', async () => {
+    const taskId = '3c3c3c3c-3c3c-4c3c-8c3c-3c3c3c3c3c3c';
+    const nodeId = '4d4d4d4d-4d4d-4d4d-8d4d-4d4d4d4d4d4d';
+    const run = await service.start({ ...base, taskId, nodeId, prompt: '写' });
+    expect(await service.purgeTask(taskId)).toBe(false);
+    expect(rows.has(run.id)).toBe(true);
+    await finished(run.id);
+    expect(stored.has(`runs/${run.id}/outputs.tar`)).toBe(true);
+    expect(await service.purgeTask(taskId)).toBe(true);
+    expect(rows.has(run.id)).toBe(false);
+    expect([...stored.keys()].some((k) => k.startsWith(`runs/${run.id}/`))).toBe(false);
+    expect(await service.purgeTask(taskId)).toBe(true);
   });
 
   it('上游运行的产出放进 in/<上游名>/；只能引用同一付费人、已成功的运行', async () => {

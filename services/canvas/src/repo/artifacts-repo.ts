@@ -1,11 +1,11 @@
 import type { ArtifactCategory } from '@oasis/contracts/canvas';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { artifacts } from './schema.ts';
+import { artifacts, uploads } from './schema.ts';
 
 export type Artifact = typeof artifacts.$inferSelect;
-type NewArtifact = Omit<Artifact, 'createdAt'>;
+export type NewArtifact = Omit<Artifact, 'createdAt'>;
 
 export interface ArtifactsRepo {
   /** 已经登记过（同一个任务、节点、路径）就什么也不做，返回 false */
@@ -20,6 +20,13 @@ export interface ArtifactsRepo {
   listByTask(taskId: string): Promise<Artifact[]>;
   /** 这个用户在电脑上已经用掉的任务文件夹名（sync_path 的第一段），不含这个任务的 */
   syncDirs(ownerId: string, exceptTaskId: string): Promise<string[]>;
+  /**
+   * 新版替换旧版（ADR 0012）：一个事务里删掉旧任务的成果行和来自它的修订素材行，再插入新版的行
+   * （已经登记过的跳过）。
+   */
+  replaceTask(oldTaskId: string, rows: NewArtifact[]): Promise<void>;
+  /** 删掉这些成果行和修订素材行（对象已经删掉） */
+  removeRows(artifactIds: string[], uploadIds: string[]): Promise<void>;
 }
 
 export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
@@ -65,6 +72,24 @@ export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
         .from(artifacts)
         .where(and(eq(artifacts.ownerId, ownerId), sql`${artifacts.taskId} <> ${exceptTaskId}`));
       return rows.map((r) => r.dir);
+    },
+    async replaceTask(oldTaskId, rows) {
+      await db.transaction(async (tx) => {
+        await tx.delete(artifacts).where(eq(artifacts.taskId, oldTaskId));
+        await tx.delete(uploads).where(eq(uploads.sourceTaskId, oldTaskId));
+        if (rows.length > 0)
+          await tx
+            .insert(artifacts)
+            .values(rows)
+            .onConflictDoNothing({ target: [artifacts.taskId, artifacts.nodeId, artifacts.path] });
+      });
+    },
+    async removeRows(artifactIds, uploadIds) {
+      await db.transaction(async (tx) => {
+        if (artifactIds.length)
+          await tx.delete(artifacts).where(inArray(artifacts.id, artifactIds));
+        if (uploadIds.length) await tx.delete(uploads).where(inArray(uploads.id, uploadIds));
+      });
     },
   };
 }

@@ -1,7 +1,7 @@
 // 任务的结果回到私聊（ADR 0005 §6）：消费 task 的 task.task.status_changed，
 // 完成时发交付消息，需要用户处理或没能完成时发提醒。同一个事件只发一条消息（事件可能重复到达）。
 import type { DeliveryCard, NoticeCard } from '@oasis/contracts/conversation';
-import type { TaskStatusChangedData } from '@oasis/contracts/events';
+import type { TaskDeletedData, TaskStatusChangedData } from '@oasis/contracts/events';
 import { TaskBody } from '@oasis/contracts/task';
 import type { Logger, ServiceClient } from '@oasis/service-kit';
 import type { ConversationRepo } from '../repo/conversation-repo.ts';
@@ -19,7 +19,8 @@ function deliveryText(card: DeliveryCard): string {
   if (card.unmet.length > 0) parts.push(`没完全满足的地方：\n${list(card.unmet)}`);
   if (card.warnings.length > 0) parts.push(`过程中的提醒：\n${list(card.warnings)}`);
   if (card.unchecked?.length) parts.push(`未完成的检查：\n${list(card.unchecked)}`);
-  if (card.unmet.length > 0) parts.push('需要改的话，告诉我要怎么改，我再交给 AI 团队做一版。');
+  if (card.unmet.length > 0)
+    parts.push('需要改的话，点交付消息上的「改一版」写下修改意见，AI 团队会做出新版替换这一版。');
   return parts.join('\n\n');
 }
 
@@ -100,6 +101,20 @@ export function createTaskNotices(deps: {
         await repo.touchConversation(conversation.id);
         logger.info({ taskId: data.taskId, status: data.status }, '任务结果发到私聊');
       }
+    },
+
+    /**
+     * 任务被删除（用户删除，或被新版替换，ADR 0012）：它在私聊里的任务卡、交付消息和提醒
+     * 只留文字，标上「已替换 / 已删除」，不再提供下载和工作流入口。重复到达时结果一样。
+     */
+    async onDeleted(data: TaskDeletedData): Promise<void> {
+      if (!data.conversationId) return;
+      const conversation = await repo.findOwned(data.conversationId, data.ownerId);
+      if (!conversation) return;
+      const marked = await repo.markTaskRemoved(conversation.id, data.taskId, {
+        replacedBy: data.replacedBy,
+      });
+      if (marked) logger.info({ taskId: data.taskId, marked }, '私聊里的任务卡片已标为删除');
     },
   };
 }

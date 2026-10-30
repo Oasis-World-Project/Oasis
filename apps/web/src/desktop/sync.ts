@@ -62,6 +62,8 @@ export async function syncOnce(
         artifact.syncPath,
         artifact.size,
         artifact.sha256,
+        // 修改出的新版：电脑上那份还是没改过的旧版就覆盖（ADR 0012）
+        artifact.replacesSha256,
       );
       if (token) {
         const reader = response.body.getReader();

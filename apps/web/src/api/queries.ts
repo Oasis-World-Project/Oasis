@@ -13,6 +13,7 @@ import { RunEventList, type RunEventBody } from '@oasis/contracts/harness';
 import {
   NodeRunList,
   TaskBody,
+  TaskList,
   WorkflowOptions,
   type DecisionBody,
   type PlanNode,
@@ -92,6 +93,16 @@ export const cancelIntake = (conversationId: string) => intakeCall(conversationI
 
 export const confirmIntake = (conversationId: string) => intakeCall(conversationId, 'confirm', {});
 
+/** 修改成果（ADR 0012）：修改意见发到这个私聊，新建一条工作流做出新版；返回新增的消息 */
+export const reviseTask = (
+  conversationId: string,
+  body: { taskId: string; request: string; attachments: string[] },
+) =>
+  api(`/conversation/v1/conversations/${conversationId}/revisions`, IntakeResult, {
+    method: 'POST',
+    body,
+  });
+
 // ---- 任务 ----
 /** 任务和它下面的节点运行、运行过程都挂在 ['task', id] 下，改了任务一起刷新 */
 const taskKey = (taskId: string) => ['task', taskId] as const;
@@ -123,6 +134,16 @@ export const decideTask = (taskId: string, choice: DecisionBody['choice']) =>
 export const runTask = (taskId: string) => taskCall(taskId, 'run');
 export const stopTask = (taskId: string) => taskCall(taskId, 'stop');
 export const cancelTask = (taskId: string) => taskCall(taskId, 'cancel');
+
+/** 删除任务：连同成果、工作流和中间产物，不可恢复（ADR 0012） */
+export const deleteTask = (taskId: string) =>
+  apiVoid(`/task/v1/tasks/${taskId}`, { method: 'DELETE' });
+
+/** 自己最近的任务（成果页据此知道哪份成果正在修改） */
+export const tasksQuery = queryOptions({
+  queryKey: ['tasks'],
+  queryFn: async () => (await api('/task/v1/tasks', TaskList)).tasks,
+});
 
 /** 节点交出的文件：预览直接用这个地址，download 时让浏览器另存 */
 export function taskFileUrl(

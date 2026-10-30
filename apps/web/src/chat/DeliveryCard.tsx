@@ -6,14 +6,24 @@ import type {
 } from '@oasis/contracts/conversation';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { Images } from 'lucide-react';
+import { Images, PencilLine } from 'lucide-react';
 import { useState } from 'react';
 import { taskFileUrl, taskQuery } from '../api/queries.ts';
+import { RevisePanel } from '../canvas/RevisePanel.tsx';
 import { formatCost } from '../ui/format.ts';
 import { FileChip } from './FileChip.tsx';
 import { FilePreview, type PreviewFile } from './FilePreview.tsx';
-import { CardFrame, CardHeading, ItemList, StatusTag, type Speaker } from './parts.tsx';
-import { TaskDecisions } from './TaskCard.tsx';
+import {
+  CardActions,
+  CardButton,
+  CardFrame,
+  CardHeading,
+  ItemList,
+  StatusTag,
+  type Speaker,
+} from './parts.tsx';
+import { RemovedNote, TaskDecisions } from './TaskCard.tsx';
+import { useChatActions } from './use-chat-actions.ts';
 
 type DeliveredFile = DeliveryData['files'][number];
 
@@ -27,8 +37,18 @@ function groupByDeliverable(files: DeliveredFile[]) {
 
 export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: Speaker }) {
   const [preview, setPreview] = useState<PreviewFile | null>(null);
-  const { data: task } = useQuery(taskQuery(card.taskId));
+  const [revising, setRevising] = useState(false);
+  const actions = useChatActions();
+  const { data: task } = useQuery({ ...taskQuery(card.taskId), enabled: !card.removed });
   const groups = groupByDeliverable(card.files);
+  if (card.removed) {
+    return (
+      <CardFrame speaker={speaker} label={`交付：${card.title}`} dim>
+        <CardHeading kind="交付" title={card.title} />
+        <RemovedNote removed={card.removed} />
+      </CardFrame>
+    );
+  }
   const toPreview = (file: DeliveredFile): PreviewFile => ({
     path: file.path,
     size: file.size,
@@ -84,29 +104,45 @@ export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: S
         </p>
       )}
       {groups.length > 0 && (
-        <Link
-          to="/canvas"
-          search={{ task: card.taskId }}
-          className="inline-flex h-10 items-center gap-1.5 self-start rounded-full bg-solid px-4 text-[13.5px] font-medium text-on-solid no-underline"
-        >
-          <Images size={15} aria-hidden="true" />
-          在画布里看
-        </Link>
+        <CardActions>
+          <Link
+            to="/canvas"
+            search={{ task: card.taskId }}
+            className="inline-flex h-10 items-center gap-1.5 rounded-full bg-solid px-4 text-[13.5px] font-medium text-on-solid no-underline"
+          >
+            <Images size={15} aria-hidden="true" />
+            在画布里看
+          </Link>
+          {task?.status === 'succeeded' && (
+            <CardButton onClick={() => setRevising(true)}>
+              <PencilLine size={15} aria-hidden="true" />
+              改一版
+            </CardButton>
+          )}
+        </CardActions>
       )}
       {preview && <FilePreview file={preview} onClose={() => setPreview(null)} />}
+      {revising && (
+        <RevisePanel
+          taskId={card.taskId}
+          taskTitle={card.title}
+          conversationId={actions.conversationId}
+          onClose={() => setRevising(false)}
+        />
+      )}
     </CardFrame>
   );
 }
 
 export function NoticeCard({ card, speaker }: { card: NoticeData; speaker: Speaker }) {
-  const { data: task } = useQuery(taskQuery(card.taskId));
+  const { data: task } = useQuery({ ...taskQuery(card.taskId), enabled: !card.removed });
   // 已经处理过了（任务不在等处理），这条提醒只留文字
   const pending = task?.status === 'needs_attention';
   return (
     <CardFrame
       speaker={speaker}
       label="任务提醒"
-      dim={!pending && card.status === 'needs_attention'}
+      dim={!!card.removed || (!pending && card.status === 'needs_attention')}
     >
       <CardHeading
         kind={card.status === 'failed' ? '任务没能完成' : '任务需要你处理'}

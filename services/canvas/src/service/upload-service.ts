@@ -73,6 +73,7 @@ export function createUploadService(deps: {
           state: 'uploading',
           contentType,
           objectKey,
+          sourceTaskId: null,
         });
         const saved = await store.putStream(objectKey, source, contentType, limits);
         return toUploadBody(await repo.complete(id, saved));
@@ -91,13 +92,19 @@ export function createUploadService(deps: {
       return row;
     },
 
-    /** 内部：查这些文件，必须都存在且都是这个人的 */
-    async lookup(ownerId: string, ids: string[]): Promise<UploadBody[]> {
+    /**
+     * 内部：查这些文件，必须都存在且都是这个人的。
+     * partial：只返回还在的（再改新版时筛掉已随上一版删除的修订素材，ADR 0012）
+     */
+    async lookup(ownerId: string, ids: string[], partial = false): Promise<UploadBody[]> {
       const unique = [...new Set(ids)];
       const rows = await repo.findOwned(ownerId, unique);
-      if (rows.length !== unique.length) throw notFound();
+      if (!partial && rows.length !== unique.length) throw notFound();
       const byId = new Map(rows.map((row) => [row.id, row]));
-      return unique.map((id) => toUploadBody(byId.get(id)!));
+      return unique.flatMap((id) => {
+        const row = byId.get(id);
+        return row ? [toUploadBody(row)] : [];
+      });
     },
 
     /** 内部：取文件内容（harness 放进沙箱）；是不是付费人的文件，conversation 收附件时已核对 */

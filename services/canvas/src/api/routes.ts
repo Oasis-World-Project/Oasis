@@ -1,5 +1,10 @@
 // canvas 的接口。/v1/* 经 gateway 给前端（只能看自己的）；/internal/* 给 conversation 和 harness。
-import { ArtifactQuery, UploadLookupBody, UploadQuery } from '@oasis/contracts/canvas';
+import {
+  ArtifactQuery,
+  RevisionMaterialsBody,
+  UploadLookupBody,
+  UploadQuery,
+} from '@oasis/contracts/canvas';
 import {
   PreviewAudioBody,
   PreviewFrameBody,
@@ -265,8 +270,17 @@ export function registerRoutes(
   });
 
   app.post('/internal/uploads/lookup', async (request) => {
-    const { ownerId, ids } = parseWith(UploadLookupBody, request.body);
-    return { uploads: await uploads.lookup(ownerId, ids) };
+    const { ownerId, ids, partial } = parseWith(UploadLookupBody, request.body);
+    return { uploads: await uploads.lookup(ownerId, ids, partial) };
+  });
+
+  /** 把一个任务交付的成果登记成修订任务的素材（conversation 发起修改时调用，ADR 0012） */
+  app.post('/internal/revisions/materials', async (request) => {
+    const { ownerId, taskId, room } = parseWith(RevisionMaterialsBody, request.body);
+    return artifacts.revisionMaterials(ownerId, taskId, room, {
+      maxBytes: options.maxBytes,
+      archive: options.archive ?? { bytes: 100 * 1024 * 1024, files: 1000 },
+    });
   });
 
   app.get('/internal/uploads/:id/content', async (request, reply) => {

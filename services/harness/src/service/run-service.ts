@@ -681,6 +681,22 @@ export function createRunService(deps: {
 
     get: async (id: string) => toRunBody(await owned(id)),
 
+    /**
+     * 任务被删除（ADR 0012）：删掉它已结束的运行的产出包、会话存档和运行记录。
+     * 还没结束的运行（正常不会有）先留着，返回 false，事件重投时再删。
+     */
+    async purgeTask(taskId: string): Promise<boolean> {
+      const rows = await repo.listByTask(taskId);
+      const ended = rows.filter((row) => !['queued', 'starting', 'running'].includes(row.status));
+      for (const row of ended) {
+        if (row.outputKey) await store.delete(row.outputKey);
+        if (row.sessionKey) await store.delete(row.sessionKey);
+      }
+      await repo.removeMany(ended.map((row) => row.id));
+      if (ended.length) logger.info({ taskId, runs: ended.length }, '任务已删除，运行存档一并清理');
+      return ended.length === rows.length;
+    },
+
     async events(id: string, afterSeq: number, limit: number): Promise<RunEventBody[]> {
       await owned(id);
       const rows = await repo.listEvents(id, afterSeq, limit);

@@ -231,6 +231,11 @@ export function createPreviewService(deps: {
         throw err;
       }
     },
+    /** 任务被删除（ADR 0012）：停掉它还开着的预览，照常结算已用的算力 */
+    async stopTask(taskId: string): Promise<void> {
+      for (const row of (await deps.repo.unfinished()).filter((r) => r.taskId === taskId))
+        await stopRow(row);
+    },
     async stop(access: Access): Promise<PreviewSessionBody> {
       const row = await owned(access);
       if (!row) throw new HttpError(404, 'preview_not_found', '没有这个预览');

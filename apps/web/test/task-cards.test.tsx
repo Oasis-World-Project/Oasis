@@ -375,3 +375,62 @@ describe('发任务', () => {
     expect(screen.getByRole('button', { name: '发送' })).toBeTruthy();
   });
 });
+
+describe('修改成果（ADR 0012）', () => {
+  const delivery = (extra: object = {}) =>
+    message('delivery', {
+      taskId: TASK,
+      title: SHEET.title,
+      files: [{ deliverable: '首页文案', nodeId: NODE_A, path: '首页.md', size: 120 }],
+      unmet: [],
+      warnings: [],
+      ...extra,
+    });
+
+  it('交付消息上「改一版」：写修改意见发给做出这一版的 AI，私聊里出现修改的任务卡', async () => {
+    const REVISION = '00000000-0000-4000-8000-0000000000f2';
+    const card = delivery();
+    const { chat, api } = fakeChat([card], {
+      task: () => task({ status: 'succeeded', finishedAt: NOW }),
+      extra: (method, path) => {
+        if (method === 'POST' && path === `/conversation/v1/conversations/${CONV}/revisions`) {
+          const revised = message('task', { taskId: REVISION, revisionOf: TASK });
+          chat.messages = [card, message('text', {}, 'user', '修改：标题改成山居'), revised];
+          return json(200, { messages: chat.messages.slice(1) });
+        }
+        if (method === 'GET' && path === `/task/v1/tasks/${REVISION}`)
+          return json(200, task({ id: REVISION, status: 'planning', nodes: [] }));
+        if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
+        return undefined;
+      },
+    });
+    await openChat();
+    const region = await screen.findByRole('region', { name: `交付：${SHEET.title}` });
+    fireEvent.click(await within(region).findByRole('button', { name: /改一版/ }));
+    // jsdom 里 <dialog> 没有 showModal，里面的元素按 aria-label、hidden 查
+    const dialog = await screen.findByLabelText(`修改「${SHEET.title}」`);
+    expect(
+      await within(dialog).findByRole('option', { name: 'Claude（做出这一版的）', hidden: true }),
+    ).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText('要怎么改'), {
+      target: { value: '标题改成山居' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 修改', hidden: true }));
+    expect(await screen.findByRole('region', { name: `修改：${SHEET.title}` })).toBeTruthy();
+    expect(
+      api.bodies.find((b) => b.path.endsWith(`/conversations/${CONV}/revisions`))?.body,
+    ).toEqual({ taskId: TASK, request: '标题改成山居', attachments: [] });
+  });
+
+  it('被替换、被删除的任务：卡片只留一句话，不再查任务、不给下载', async () => {
+    const { api } = fakeChat([
+      message('task', { taskId: TASK, removed: { replacedBy: NODE_B } }),
+      delivery({ removed: { replacedBy: null } }),
+    ]);
+    await openChat();
+    expect(await screen.findByText('这一版已被修改后的新版替换，旧版本不保留。')).toBeTruthy();
+    expect(screen.getByText('这个任务和它的成果已删除。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /首页\.md/ })).toBeNull();
+    expect(api.requests.some((r) => r.includes(`/task/v1/tasks/${TASK}`))).toBe(false);
+  });
+});

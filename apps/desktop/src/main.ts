@@ -116,16 +116,23 @@ function registerSync(sync: SyncFolder): void {
   });
   ipcMain.handle(
     DESKTOP_CHANNELS.begin,
-    (event, id: unknown, relative: unknown, size: unknown, sha256: unknown) => {
+    (event, id: unknown, relative: unknown, size: unknown, sha256: unknown, replaces: unknown) => {
       fromApp(event);
       if (
         typeof id !== 'string' ||
         typeof relative !== 'string' ||
         typeof size !== 'number' ||
-        (sha256 != null && typeof sha256 !== 'string')
+        (sha256 != null && typeof sha256 !== 'string') ||
+        (replaces != null && typeof replaces !== 'string')
       )
         throw new Error('参数不合格');
-      return sync.begin(id, relative, size, sha256 as string | null | undefined);
+      return sync.begin(
+        id,
+        relative,
+        size,
+        sha256 as string | null | undefined,
+        replaces as string | null | undefined,
+      );
     },
   );
   ipcMain.handle(DESKTOP_CHANNELS.append, (event, token: unknown, data: unknown) => {

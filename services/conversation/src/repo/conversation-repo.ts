@@ -33,6 +33,12 @@ export interface ConversationRepo {
   listMessages(conversationId: string, limit: number): Promise<Message[]>;
   findMessage(conversationId: string, id: string): Promise<Message | undefined>;
   setMessageData(id: string, data: Record<string, unknown>): Promise<Message>;
+  /** 这个任务的任务卡、交付消息和提醒标上「已替换 / 已删除」（ADR 0012）；返回改了几条 */
+  markTaskRemoved(
+    conversationId: string,
+    taskId: string,
+    removed: { replacedBy: string | null },
+  ): Promise<number>;
   /** 开始接需求；这个会话已经有进行中的就返回 undefined */
   createIntake(
     intake: Pick<Intake, 'id' | 'conversationId' | 'request' | 'context' | 'materials'>,
@@ -134,6 +140,23 @@ export function createConversationRepo(pool: pg.Pool): ConversationRepo {
     async setMessageData(id, data) {
       const [row] = await db.update(messages).set({ data }).where(eq(messages.id, id)).returning();
       return row!;
+    },
+
+    async markTaskRemoved(conversationId, taskId, removed) {
+      const rows = await db
+        .update(messages)
+        .set({
+          data: sql`${messages.data} || jsonb_build_object('removed', ${JSON.stringify(removed)}::jsonb)`,
+        })
+        .where(
+          and(
+            eq(messages.conversationId, conversationId),
+            inArray(messages.kind, ['task', 'delivery', 'notice']),
+            sql`${messages.data}->>'taskId' = ${taskId}`,
+          ),
+        )
+        .returning({ id: messages.id });
+      return rows.length;
     },
 
     async createIntake(intake) {

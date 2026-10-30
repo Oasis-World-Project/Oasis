@@ -13,6 +13,8 @@ export interface UploadsRepo {
   complete(id: string, info: { size: number; sha256: string }): Promise<Upload>;
   remove(id: string): Promise<void>;
   stale(before: Date): Promise<Upload[]>;
+  /** 来自这个任务成果的修订素材（ADR 0012） */
+  listBySourceTask(taskId: string): Promise<Upload[]>;
 }
 
 export function createUploadsRepo(pool: pg.Pool): UploadsRepo {
@@ -50,5 +52,6 @@ export function createUploadsRepo(pool: pg.Pool): UploadsRepo {
         .from(uploads)
         .where(and(eq(uploads.state, 'uploading'), lt(uploads.createdAt, before)))
         .limit(100),
+    listBySourceTask: (taskId) => db.select().from(uploads).where(eq(uploads.sourceTaskId, taskId)),
   };
 }

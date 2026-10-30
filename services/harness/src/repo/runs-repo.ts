@@ -38,6 +38,10 @@ export interface RunsRepo {
   listUnfinished(): Promise<Run[]>;
   appendEvents(runId: string, events: Pick<RunEvent, 'seq' | 'kind' | 'data'>[]): Promise<void>;
   listEvents(runId: string, afterSeq: number, limit: number): Promise<RunEvent[]>;
+  /** 属于这个任务的全部运行（任务被删除时清理，ADR 0012） */
+  listByTask(taskId: string): Promise<Run[]>;
+  /** 删掉这些运行（运行事件级联删除） */
+  removeMany(ids: string[]): Promise<void>;
 }
 
 export function createRunsRepo(pool: pg.Pool): RunsRepo {
@@ -83,5 +87,9 @@ export function createRunsRepo(pool: pg.Pool): RunsRepo {
         .where(and(eq(runEvents.runId, runId), gt(runEvents.seq, afterSeq)))
         .orderBy(asc(runEvents.seq))
         .limit(limit),
+    listByTask: (taskId) => db.select().from(runs).where(eq(runs.taskId, taskId)),
+    async removeMany(ids) {
+      if (ids.length) await db.delete(runs).where(inArray(runs.id, ids));
+    },
   };
 }

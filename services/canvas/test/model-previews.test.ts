@@ -48,7 +48,7 @@ function setup() {
           };
     },
   } as unknown as ServiceClient;
-  const artifacts = createArtifactService({ repo, store, task, logger });
+  const artifacts = createArtifactService({ repo, uploads: memoryUploads(), store, task, logger });
   const uploads = createUploadService({ repo: memoryUploads(), store, logger });
   const models = createModelPreviewService({ artifacts, uploads, store, task, harness });
   async function add(path: string, content: Buffer | string, extra: object = {}) {
@@ -75,6 +75,7 @@ function setup() {
       appSpec: null,
       models: [],
       syncPath: `模型/${path}`,
+      replacesSha256: null,
       ...extra,
     });
     return repo.rows.find((row) => row.id === id)!;
