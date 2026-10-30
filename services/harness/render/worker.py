@@ -79,6 +79,29 @@ def canary():
     (root / "private").write_text("isolation-canary-not-user-data")
 
 
+def failure_reason(root, code):
+    # Never return raw child output: it can include user paths, assets or credentials.
+    with (root / "process.txt").open("rb") as log:
+        head = log.read(16384).decode("utf8", "replace")
+    markers = {
+        "Landlock ABI >=3 required": "landlock_unsupported",
+        "isolation identity/path": "identity_or_path",
+        "no_new_privs": "no_new_privileges",
+        "isolation ruleset": "landlock_ruleset",
+        "isolation rule:": "landlock_rule",
+        "isolation enforce": "landlock_enforce",
+        "isolation seccomp": "seccomp",
+        "isolation exec": "child_exec",
+        "Filesystem boundary failed": "filesystem_boundary",
+        "Network boundary failed": "network_boundary",
+        "Process boundary failed": "process_boundary",
+        "Secret environment inherited": "environment_boundary",
+        "Required GPU unavailable; CPU fallback forbidden": "gpu_unavailable",
+    }
+    stage = next((value for marker, value in markers.items() if marker in head), "unclassified_child_failure")
+    return "Isolated renderer failed; stage=" + stage + "; exit=" + str(code) + "; no CPU fallback"
+
+
 def execute(root, mode):
     # No provider input can change the executable, script, environment or process limits.
     with (root / "process.txt").open("wb") as log:
@@ -93,7 +116,8 @@ def execute(root, mode):
     if code != 0 and os.environ.get("RENDER_TEST_OUTPUT"):
         import shutil
         shutil.copyfile(root / "process.txt", Path(os.environ["RENDER_TEST_OUTPUT"]) / (mode + "-failure.txt"))
-    require(code == 0, "Isolated renderer failed (isolation/GPU/input); no CPU fallback")
+    if code != 0:
+        raise ValueError(failure_reason(root, code))
     require((root / "boundary.json").is_file() and (root / "device.json").is_file(), "Missing render evidence")
 
 

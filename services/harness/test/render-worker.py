@@ -12,6 +12,21 @@ import worker
 
 
 class WorkerChecks(unittest.TestCase):
+    def test_failure_diagnostic_is_bounded_and_never_returns_child_output(self):
+        with tempfile.TemporaryDirectory(prefix="render-", dir="/jobs") as directory:
+            root = Path(directory)
+            for marker, stage in [("Landlock ABI >=3 required", "landlock_unsupported"),
+                                  ("isolation identity/path", "identity_or_path"),
+                                  ("Required GPU unavailable; CPU fallback forbidden", "gpu_unavailable"),
+                                  ("unexpected secret canary", "unclassified_child_failure")]:
+                (root / "process.txt").write_text(marker + "\nhttps://private.invalid/?key=secret-canary")
+                result = worker.failure_reason(root, 78)
+                self.assertIn("stage=" + stage + "; exit=78", result)
+                self.assertNotIn("private.invalid", result)
+                self.assertNotIn("secret", result)
+            (root / "process.txt").write_text("x" * 16384 + "Landlock ABI >=3 required")
+            self.assertIn("unclassified_child_failure", worker.failure_reason(root, 78))
+
     def test_rejects_untrusted_transfers_and_options(self):
         os.environ["RENDER_STAGING_HOST"] = "a" * 32 + ".r2.cloudflarestorage.com"
         os.environ["RENDER_STAGING_BUCKET"] = "fixture"

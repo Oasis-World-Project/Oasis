@@ -17,7 +17,12 @@ pnpm render:tag
 
 The last command adds this **local** tag, without uploading:
 
-`ghcr.io/kong-yikai/oasis/harness-render:0.1.0-blender4.5.3`
+`ghcr.io/kong-yikai/oasis/harness-render:0.1.1-blender4.5.3`
+
+The 0.1.1 source adds bounded, allowlisted failure stages and child exit codes;
+it never returns raw child logs. Both real Runpod probes failed before producing
+GPU evidence; 0.1.1 reports `stage=gpu_unavailable; exit=1`. The endpoint is disabled
+and was deleted after contradictory shutdown observations. See ADR 0011 §19 and the deployment receipt for the tested digest.
 
 The release allowlist is `infra/render-release.json`. Build, source and test
 receipts are in `out/render-worker-20261028/`; `release-plan.json` records the
@@ -34,7 +39,14 @@ Blender/embedded GLB ZIP, exercises the kernel boundary, rejects invalid request
 and confirms a GPU request cannot silently fall back to CPU. This is **not GPU
 or Runpod acceptance**. The explicit internal CPU test is not a queue operation.
 
-## Proposed Runpod handoff — not deployed
+## Runpod handoff — acceptance endpoint deleted after failure
+
+Acceptance endpoint `1xa57icezdlbgp` and read-only registry credential
+`cmvuezprv008mfz3aag8hcy00` were created on 2026-10-30. Private image pull worked;
+isolated GPU enumeration did not. The endpoint was deleted and its absence verified;
+the registry credential remains. Keep the profile disabled. Runtime later reported
+initializing=1 despite max=0 and an empty control-plane list, so shutdown and final
+supplier bills must still be audited; a 404 alone does not prove billing has ended.
 
 Use a private registry credential with only `read:packages`. Use the immutable
 GHCR digest from the release receipt, after successful publication/read-back.
@@ -190,5 +202,6 @@ remain explicitly unallocated platform risk, not claimed zero. Review after
 `RENDER_AUDIT_MAX_WAIT_MS` (24 h), or if hold renewal fails; keep collecting stop
 evidence without silently charging/refunding a closed hold. Evidence outside the
 configured follow-up period still requires operations review. All current tests
-use local fake providers; private pull, real GPU/stop and actual invoice acceptance
-are still required before enabling the profile.
+use local fake providers. Private pull and actual stop observations were obtained in
+step 5, but GPU rendering failed and invoice/automatic-reconciliation acceptance is
+still pending. These remain prerequisites before enabling the profile.
