@@ -50,7 +50,7 @@ export const modelGatewayEnv = {
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
-  RENDER_HOLD_MICRO: z.coerce.number().int().positive().default(1000000),
+  RENDER_HOLD_MICRO: z.coerce.number().int().positive().default(300000),
   // RTX 4090 24GB Serverless 现价 $1.34/h（2026-10-30 目录），向上取整；上线前按 endpoint 现价复核。
   RENDER_PRICE_MICRO_PER_SECOND: z.coerce.number().int().positive().max(10000).default(373),
   RENDER_STARTUP_ALLOWANCE_SECONDS: z.coerce.number().int().nonnegative().max(600).default(90),

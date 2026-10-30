@@ -68,7 +68,10 @@ def glb_resources(file):
             pending.extend(value.values())
         elif isinstance(value, list):
             pending.extend(value)
-    require(not data.get("extensionsRequired"), "Required GLB extensions unsupported")
+    # WebP textures only change the embedded image codec (fal Trellis output); compression and other
+    # required extensions stay rejected because the importer/renderer cannot be assumed to decode them.
+    required = data.get("extensionsRequired") or []
+    require(isinstance(required, list) and set(required) <= {"EXT_texture_webp"}, "Required GLB extensions unsupported")
     return data
 
 

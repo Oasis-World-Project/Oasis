@@ -293,7 +293,11 @@ export function createRenderClient(options: {
       const cost =
         audited || !meter || billedSeconds === undefined
           ? null
-          : { costMicro: billedSeconds * meter.microPerSecond, source: 'provider' as const };
+          : {
+              // 用户扣款不超过冻结上限；超出部分（理论上执行超时才会出现）由平台承担。
+              costMicro: Math.min(billedSeconds * meter.microPerSecond, options.holdMicro),
+              source: 'provider' as const,
+            };
       return {
         state: 'completed' as const,
         outcome: {

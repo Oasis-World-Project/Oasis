@@ -2,8 +2,8 @@
   "version": 1,
   "registry": "ghcr.io",
   "repository": "ghcr.io/kong-yikai/oasis/harness-render",
-  "localImage": "oasis/harness-render:0.1.6-blender4.5.3",
-  "remoteTag": "ghcr.io/kong-yikai/oasis/harness-render:0.1.6-blender4.5.3",
+  "localImage": "oasis/harness-render:0.1.7-blender4.5.3",
+  "remoteTag": "ghcr.io/kong-yikai/oasis/harness-render:0.1.7-blender4.5.3",
   "privateRequired": true,
   "platform": "linux/amd64"
 }

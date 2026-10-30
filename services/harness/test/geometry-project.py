@@ -123,6 +123,27 @@ rejected(lambda: geometry.validate(bad, root), "out-of-range light colour")
 bad = json.loads(json.dumps(asset_scene)); bad["objects"][0]["emission"] = 5
 rejected(lambda: geometry.validate(bad, root), "emission override on imported asset")
 shutil.rmtree(root / "lit-project")
+
+
+def with_required(source, target, extensions):
+    # Rewrite only the JSON chunk of a real GLB to declare required extensions.
+    import struct
+    data = source.read_bytes()
+    length = struct.unpack("<I", data[12:16])[0]
+    doc = json.loads(data[20:20 + length])
+    doc["extensionsUsed"] = doc["extensionsRequired"] = extensions
+    chunk = json.dumps(doc).encode()
+    chunk += b" " * (-len(chunk) % 4)
+    rest = data[20 + length:]
+    target.write_bytes(b"glTF" + struct.pack("<II", 2, 20 + len(chunk) + len(rest))
+                       + struct.pack("<I", len(chunk)) + b"JSON" + chunk + rest)
+
+
+with_required(root / "原工程/model.glb", root / "webp.glb", ["EXT_texture_webp"])
+geometry.glb_resources(root / "webp.glb")
+with_required(root / "原工程/model.glb", root / "draco.glb", ["KHR_draco_mesh_compression"])
+rejected(lambda: geometry.glb_resources(root / "draco.glb"), "compressed required GLB extension")
+passed("WebP-textured generated GLB accepted; other required extensions still rejected")
 passed("no cloud GPU was requested or claimed")
 (root / "checks.json").write_text(json.dumps({"checks": checks, "paidCalls": 0, "cloudGpu": False,
     "blender": run("blender", "--version").splitlines()[0]}, ensure_ascii=False, indent=2), "utf8")
