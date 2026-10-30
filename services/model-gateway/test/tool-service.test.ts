@@ -318,6 +318,8 @@ let renderStatus = 'COMPLETED';
 let renderReceiptMissing = false;
 let renderBusy = false;
 let renderStatusGone = false;
+let renderExposure: number | undefined;
+const stagingReads: string[] = [];
 const build = (tavilyKey: string | undefined, withMusic = false, withRender = false) => {
   const logger = pino({ level: 'silent' });
   return createToolService({
@@ -330,7 +332,14 @@ const build = (tavilyKey: string | undefined, withMusic = false, withRender = fa
           verified: true,
           holdMicro: 1000000,
           archive: mediaStore,
-          staging: { ...mediaStore, sign: async (key) => 'https://example.test/' + key },
+          staging: {
+            ...mediaStore,
+            read: async (key) => {
+              stagingReads.push(key);
+              return mediaStore.read(key);
+            },
+            sign: async (key) => 'https://example.test/' + key,
+          },
           fetcher: async (url, init) => {
             if (String(url).endsWith('/health'))
               return Response.json({
@@ -359,7 +368,15 @@ const build = (tavilyKey: string | undefined, withMusic = false, withRender = fa
             const output = {
               transferId: renderTransfer,
               artifacts: { image: artifact(imageKey), project: artifact(zipKey) },
-              device: { gpuUsed: true },
+              device: {
+                gpuUsed: true,
+                ...(renderExposure === undefined
+                  ? {}
+                  : {
+                      exposureAdjustEv: renderExposure,
+                      devices: [{ name: 'NVIDIA GeForce RTX 4090', type: 'CUDA' }],
+                    }),
+              },
               boundary: {
                 filesystem: true,
                 networkSocketsDenied: true,
@@ -461,6 +478,8 @@ beforeEach(() => {
   renderReceiptMissing = false;
   renderBusy = false;
   renderStatusGone = false;
+  renderExposure = undefined;
+  stagingReads.length = 0;
   archiveFails = false;
   renderCleanupFails = false;
   recordedCalls.clear();
@@ -715,7 +734,7 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     const waiting = await tools.job(caller, id, AbortSignal.timeout(2000));
     expect(waiting).toMatchObject({ status: 'pending', phase: 'awaiting_cost' });
     expect(billingCalls.map((c) => c.path)).toEqual(['hold']);
-    expect(jobRows.get(id)?.result?.files).toHaveLength(2);
+    expect(jobRows.get(id)?.result?.files).toHaveLength(1);
     tools = build('key', false, true);
     settleFails = true;
     await expect(
@@ -771,6 +790,24 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     await tools.job(caller, id, AbortSignal.timeout(2000));
     expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
     expect(renderSubmits).toBe(1);
+  });
+  it('只取回渲染图：工程包留在暂存不下载（只记摘要），随作业清理删除；曝光调整写进给 AI 的说明', async () => {
+    tools = build('key', false, true);
+    renderExposure = -3;
+    const id = (await call('3d.render', args)).job!.id;
+    await tools.submit(caller, id);
+    expect((await pollRender(id)).status).toBe('completed');
+    const result = jobRows.get(id)!.result!;
+    expect(result.files.map((f) => f.name)).toEqual(['image.png']);
+    expect(stagingReads.some((k) => k.endsWith('/project.zip'))).toBe(false);
+    expect(stagingReads.some((k) => k.endsWith('/image.png'))).toBe(true);
+    expect(result.data).toMatchObject({
+      project: { retrieved: false, size: 'zip-fixture'.length },
+    });
+    expect(result.text).toContain('RTX 4090');
+    expect(result.text).toContain('降低了 3 EV');
+    expect(result.text).toContain('曝光设为 -3');
+    expect([...mediaFiles.keys()].some((k) => k.startsWith('jobs/'))).toBe(false);
   });
   it('GPU 失败不向用户扣款，退回冻结', async () => {
     tools = build('key', false, true);

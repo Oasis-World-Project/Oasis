@@ -302,7 +302,7 @@ export const TOOLS: ToolDef[] = [
     key: '3d.render',
     name: '云 GPU 渲染',
     description:
-      '渲染受限 scene JSON 与已授权 GLB，输出 PNG 和可编辑工程；需通过已核验的云 profile。',
+      '渲染受限 scene JSON 与已授权 GLB，只返回 PNG；可编辑工程用沙箱里 oasis-3d 由同一 scene.json 构建的那份。需通过已核验的云 profile。',
     usage:
       'oasis-tool 3d.render --scene 工程/scene.json --width 512 --height 512 --samples 32 --out out/渲染.png',
     unit: '作业',

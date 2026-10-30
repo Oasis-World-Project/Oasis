@@ -716,3 +716,15 @@ Runpod 的 worker 清单和系统日志证明私有拉取成功、分配 RTX4090
 
 - 渲染结果太大：`project.zip` 重复带上 46 MB 的 `.blend` 和 16 MB 的生成资产，慢网络下取回要几十分钟。可以考虑只取回渲染图，工程沿用沙箱里已有的那份，或改为压缩打包。
 - §21.6 中仍未处理：§10 的另两组对照（透明背景、转台 MP4），用户上传 `.blend` 导入，运行中 GPU 作业的真实取消。
+
+## 23. 渲染只取回成品图（2026-10-31，Claude）
+
+处理 §22.7 第一项。用户同意按建议顺序先做这一项。
+
+- **问题**：worker 的 `project.zip` 重复带上 `.blend` 和生成资产（实测 82 MB）。网关把它和 PNG 一起从 R2 取回，在约 65 KB/s 的链路上要约 20 分钟，渲染节点因此超时。
+- **决定**：model-gateway 只从暂存取回 `image.png`。工程包仍由 worker 写入暂存，网关不下载，只在结果 `data.project` 里记下 `{retrieved:false,size,sha256}` 以便追溯；暂存副本按原逻辑随作业清理删除。可编辑工程使用沙箱里 `oasis-3d build` 由同一份 `scene.json` 构建的那套（几何构建代码与 worker 共用 `geometry.py`），满足「渲染图与工程来自同一份 scene.json」。
+- **曝光**：worker 防过曝时会降低曝光，而沙箱工程保持原曝光。网关把调整幅度（以及 GPU 型号）写进返回给 AI 的说明；手册要求在交付说明里写明，并告诉用户在 Blender 色彩管理里设同样的曝光值即可得到同样亮度。工程本身未自动同步曝光，这是已知差异，不宣称两者逐像素一致。
+- **未改动**：worker 镜像（0.1.8）、endpoint、场景协议、计费和准入都不变，不需要重新构建或发布镜像。单文件结果下，`--out out/渲染.png` 直接保存为该路径（之前两个文件时会改名为 `渲染-1.png`、`渲染-2.zip`）。已存档的旧作业结果仍可读取。
+- **改动**：`services/model-gateway/src/adapters/runpod.ts`（只取回 PNG、说明文字）、`src/service/tools.ts`（目录描述）、`services/agent/playbooks/3d.md`（工程来源与曝光说明）、`test/tool-service.test.ts`（新增 1 项：不读取工程包、记摘要、暂存清理、曝光说明；原「回执缺执行时长」用例的文件数改为 1）。
+- **验证**：model-gateway typecheck、70 项测试（含 12 项云渲染）、相关文件 ESLint 与 Prettier、`pnpm check:engineering` 七项通过。没有发起真实 GPU 渲染，费用 $0。
+- **仍待处理**：输入方向仍受慢链路影响（16 MB 生成资产上传到 R2 约 4 分钟），目前在时限内；真实链路下的一次 GPU 渲染复验（约 $0.02）需用户同意后再做；以后若要让 worker 不再生成工程包，需重建并发布新镜像，另行授权。

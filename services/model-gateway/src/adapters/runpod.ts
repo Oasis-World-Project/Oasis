@@ -265,7 +265,17 @@ export function createRenderClient(options: {
         .object({
           transferId: z.literal(h.jobId.replaceAll('-', '')),
           artifacts: z.object({ image: artifact, project: artifact }),
-          device: z.object({ gpuUsed: z.literal(true) }).passthrough(),
+          device: z
+            .object({
+              gpuUsed: z.literal(true),
+              // 只用于给 AI 的说明；格式异常时忽略，不能挡住已完成的渲染交付。
+              devices: z
+                .array(z.object({ name: z.string().max(200) }).passthrough())
+                .optional()
+                .catch(undefined),
+              exposureAdjustEv: z.number().min(-3).max(0).optional().catch(undefined),
+            })
+            .passthrough(),
           boundary: z
             .object({
               filesystem: z.literal(true),
@@ -290,15 +300,29 @@ export function createRenderClient(options: {
               costMicro: Math.min(billedSeconds * meter.microPerSecond, options.holdMicro),
               source: 'provider' as const,
             };
+      const gpu = output.device.devices?.[0]?.name;
+      const exposure = output.device.exposureAdjustEv ?? 0;
+      // 只取回渲染图：worker 的工程包重复带上 .blend 和资产（实测 82 MB），慢网络下取回会让节点超时；
+      // 沙箱里用同一份 scene.json 构建的工程就是可编辑工程（ADR 0011 §23）。
+      const notes = [
+        `云 GPU${gpu ? `（${gpu}）` : ''}渲染图已取回并核对摘要`,
+        '只取回渲染图，可编辑工程用沙箱里由同一份 scene.json 构建的那份',
+        ...(exposure < 0
+          ? [
+              `为防过曝，渲染时曝光自动降低了 ${-exposure} EV，沙箱工程仍是原曝光：请在说明里写明，用户在 Blender 的色彩管理里把曝光设为 ${exposure} 即可得到同样的亮度`,
+            ]
+          : []),
+        cost ? '按 GPU 回执计量结算。' : '回执缺少执行时长，人工对账后交付。',
+      ];
       return {
         state: 'completed' as const,
         outcome: {
-          text: cost
-            ? '云 GPU 渲染结果已取回并核对摘要；按 GPU 回执计量结算。'
-            : '云 GPU 渲染结果已取回；回执缺少执行时长，人工对账后交付。',
+          text: notes.join('；'),
           data: {
             device: output.device,
             boundary: output.boundary,
+            // GPU 侧工程包未取回，只记下大小和摘要以便追溯；暂存里的副本随作业清理删除。
+            project: { retrieved: false, ...output.artifacts.project },
             ...(billedSeconds === undefined
               ? {}
               : {
@@ -310,16 +334,14 @@ export function createRenderClient(options: {
                   },
                 }),
           },
-          files: await Promise.all(
-            (['image', 'project'] as const).map(async (name) => ({
-              name: name === 'image' ? 'image.png' : 'project.zip',
-              mediaType: name === 'image' ? 'image/png' : 'application/zip',
-              body: await options.staging!.read(
-                key(h.jobId, name === 'image' ? 'image.png' : 'project.zip'),
-              ),
-              ...output.artifacts[name],
-            })),
-          ),
+          files: [
+            {
+              name: 'image.png',
+              mediaType: 'image/png',
+              body: await options.staging!.read(key(h.jobId, 'image.png')),
+              ...output.artifacts.image,
+            },
+          ],
           cost,
         },
       };
