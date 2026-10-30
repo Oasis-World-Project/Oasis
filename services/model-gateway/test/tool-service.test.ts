@@ -76,6 +76,12 @@ const record = (path: string, body: unknown) =>
   upstream.push({ path, body: body as Record<string, unknown> });
 fake.post('/api/v1/images', async (request, reply) => {
   record('images', request.body);
+  if ((request.body as { resolution?: string }).resolution === '1K')
+    return reply.code(400).send({
+      error: {
+        message: 'requires at least 3,686,400 output pixels; omit resolution to use the default.',
+      },
+    });
   if (imageStatus === 403) {
     return reply
       .code(403)
@@ -923,6 +929,12 @@ describe('工具目录', () => {
 });
 
 describe('调用工具', () => {
+  it('生图分辨率被供应商拒绝时按默认档重试一次，只结算成功的那次', async () => {
+    const result = await call('image.generate', { prompt: '扶手椅', resolution: '1K' }, TASK);
+    expect(result).toMatchObject({ tool: 'image.generate', costMicro: 40_000 });
+    expect(upstream.map((u) => u.body.resolution)).toEqual(['1K', undefined]);
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'settle']);
+  });
   it('生图：冻结 → 调 OpenRouter → 按实际花费结算；交回图片文件；属于任务的发结算事件', async () => {
     const result = await call(
       'image.generate',

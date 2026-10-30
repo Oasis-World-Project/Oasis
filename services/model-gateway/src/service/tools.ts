@@ -415,25 +415,29 @@ export const TOOLS: ToolDef[] = [
     modelOf: pickModel,
     async run(deps, args, model) {
       const a = ImageArgs.parse(args);
-      const response = await deps.upstream(() =>
-        deps.openrouter.images(
-          {
-            model,
-            prompt: a.prompt,
-            n: a.n,
-            output_format: 'png',
-            ...(a.references
-              ? {
-                  input_references: imageParts(a.references),
-                  provider: { require_parameters: true },
-                }
-              : {}),
-            ...(a.aspect_ratio ? { aspect_ratio: a.aspect_ratio } : {}),
-            ...(a.resolution ? { resolution: a.resolution } : {}),
-          },
+      const request = {
+        model,
+        prompt: a.prompt,
+        n: a.n,
+        output_format: 'png',
+        ...(a.references
+          ? { input_references: imageParts(a.references), provider: { require_parameters: true } }
+          : {}),
+        ...(a.aspect_ratio ? { aspect_ratio: a.aspect_ratio } : {}),
+      };
+      const response = await deps.upstream(async () => {
+        if (!a.resolution) return deps.openrouter.images(request, deps.signal);
+        const first = await deps.openrouter.images(
+          { ...request, resolution: a.resolution },
           deps.signal,
-        ),
-      );
+        );
+        if (first.status !== 400) return first;
+        // 供应商目录里列出的档位不一定真能用（如 seedream-4.5 拒绝 1K）；分辨率被拒时按其提示改用默认档重试一次。
+        const detail = await first.text();
+        if (!/resolution|pixels/i.test(detail))
+          return new Response(detail, { status: 400, headers: first.headers });
+        return deps.openrouter.images(request, deps.signal);
+      });
       const body = ImagesResponse.parse(await response.json());
       const files = body.data.map((d, i) => {
         const mediaType = d.media_type ?? 'image/png';
