@@ -15,7 +15,6 @@ import { createRenderClient } from '../src/adapters/runpod.ts';
 import { createHash } from 'node:crypto';
 import { createTavilyClient } from '../src/adapters/tavily.ts';
 import type { Call, CallOutcome, CallsRepo } from '../src/repo/calls-repo.ts';
-import { auditPolicy, runpodFixture } from './runpod-fixture.ts';
 import type { ToolJob, ToolJobsRepo } from '../src/repo/tool-jobs-repo.ts';
 import { createMeter } from '../src/service/metering.ts';
 import { createToolService } from '../src/service/tool-service.ts';
@@ -179,7 +178,6 @@ const repo: CallsRepo = {
 
 const jobRows = new Map<string, ToolJob>();
 const jobs: ToolJobsRepo = {
-  renderWindowEnd: async () => 0,
   async cancelRun(runId, payerId, taskId) {
     for (const row of await this.forRun(runId)) {
       const caller = row.call.caller as { payerId: string; taskId?: string };
@@ -308,26 +306,15 @@ const geometryImage = [
 let renderSubmits = 0;
 let renderTransfer = '';
 let renderSubmitLost = false;
-let renderAuditFixture = runpodFixture();
 let renderStatus = 'COMPLETED';
-const build = (
-  tavilyKey: string | undefined,
-  withMusic = false,
-  withRender = false,
-  withAudit = false,
-  withMetering = false,
-) => {
+let renderReceiptMissing = false;
+const build = (tavilyKey: string | undefined, withMusic = false, withRender = false) => {
   const logger = pino({ level: 'silent' });
   return createToolService({
     render: withRender
       ? createRenderClient({
           baseUrl: 'https://api.runpod.ai/v2',
-          controlBaseUrl: 'https://control.test/v2',
-          auditPolicy: withAudit ? auditPolicy : undefined,
-          ...(withMetering
-            ? { metering: { microPerSecond: 373, startupCapSeconds: 90, idleSeconds: 5 } }
-            : {}),
-          now: renderAuditFixture.now,
+          metering: { microPerSecond: 373, startupCapSeconds: 90, idleSeconds: 5 },
           endpointId: 'fixture',
           apiKey: 'not-real',
           verified: true,
@@ -344,8 +331,6 @@ const build = (
               renderTransfer = body.input.transferId;
               return Response.json({ id: 'gpu-one' });
             }
-            if (withAudit && !String(url).includes('/status/'))
-              return renderAuditFixture.fetcher(url, init);
             const artifact = (key: string) => ({
               size: mediaFiles.get(key)!.length,
               sha256: createHash('sha256').update(mediaFiles.get(key)!).digest('hex'),
@@ -364,14 +349,10 @@ const build = (
                 secretEnvironmentEmpty: true,
               },
             };
-            if (withAudit) {
-              renderAuditFixture.output = output;
-              return renderAuditFixture.fetcher(url, init);
-            }
             return Response.json({
               status: renderStatus,
               delayTime: 120400,
-              executionTime: 3172,
+              ...(renderReceiptMissing ? {} : { executionTime: 3172 }),
               ...(renderStatus === 'COMPLETED' ? { output } : {}),
             });
           },
@@ -460,7 +441,7 @@ afterAll(async () => {
   await fake.close();
 });
 beforeEach(() => {
-  renderAuditFixture = runpodFixture();
+  renderReceiptMissing = false;
   renderCleanupFails = false;
   recordedCalls.clear();
   renderSubmits = 0;
@@ -611,131 +592,10 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     assets: [],
     render: { width: 128, height: 128, samples: 8, backend: 'CUDA' },
   };
-  const pollRender = (id: string) => tools.job(caller, id, AbortSignal.timeout(2000));
-  async function autoRender() {
-    tools = build('key', false, true, true);
-    const id = (await call('3d.render', args)).job!.id;
-    await tools.submit(caller, id);
-    return id;
-  }
-  async function billReady(id: string, status = 'COMPLETED') {
-    renderAuditFixture.jobStatus = status;
-    if (status === 'COMPLETED') renderAuditFixture.jobs.completed = 1;
-    else renderAuditFixture.jobs.failed = 1;
-    await pollRender(id);
-    renderAuditFixture.advance(60000);
-    await pollRender(id);
-    renderAuditFixture.at('2026-10-28T10:16:00Z');
-    renderAuditFixture.totalMicro = 12345;
-    await pollRender(id);
-    renderAuditFixture.advance(300000);
-  }
-  it('自动对账贯通归档、重启、结算失败恢复及补账；只扣一次且不重发 GPU', async () => {
-    const id = await autoRender();
-    await billReady(id);
-    tools = build('key', false, true, true);
-    settleFails = true;
-    expect((await pollRender(id)).status).toBe('pending');
-    expect(jobRows.get(id)?.cost?.costMicro).toBe(12345);
-    settleFails = false;
-    expect((await pollRender(id)).status).toBe('completed');
-    expect(jobRows.get(id)?.result?.costMicro).toBe(12345);
-    expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
-    renderAuditFixture.totalMicro = 52345;
-    renderAuditFixture.advance(300000);
-    await pollRender(id);
-    expect(jobRows.get(id)?.call.latePlatformRiskMicro).toBe(40000);
-    expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
-    expect(renderSubmits).toBe(1);
-  });
-  it('取消终态要等 worker 和账单证据；结算后清理失败重试也能完成且不重复扣款', async () => {
-    const id = await autoRender();
-    renderAuditFixture.jobStatus = 'CANCELLED';
-    await tools.cancel(caller, id);
-    await tools.close();
-    expect(jobRows.get(id)?.status).toBe('pending');
-    expect(billingCalls.some((c) => c.path === 'release')).toBe(false);
-    await billReady(id, 'CANCELLED');
-    renderCleanupFails = true;
-    await pollRender(id);
-    expect(jobRows.get(id)?.status).toBe('pending');
-    expect(recordedCalls.get((jobRows.get(id)!.call as { id: string }).id)?.status).toBe('failed');
-    renderCleanupFails = false;
-    expect((await pollRender(id)).status).toBe('failed');
-    expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
-    expect(billingCalls.some((c) => c.path === 'release')).toBe(false);
-  });
-  it('未知提交在 TTL、停止和归属账单确认后自动终结，不重新提交', async () => {
-    renderSubmitLost = true;
-    const id = await autoRender();
-    expect(jobRows.get(id)?.phase).toBe('uncertain');
-    renderAuditFixture.jobs.failed = 1;
-    renderAuditFixture.at('2026-10-28T09:40:00Z');
-    await pollRender(id);
-    renderAuditFixture.advance(60000);
-    await pollRender(id);
-    renderAuditFixture.at('2026-10-28T10:16:00Z');
-    renderAuditFixture.totalMicro = 321;
-    await pollRender(id);
-    renderAuditFixture.advance(300000);
-    expect((await pollRender(id)).status).toBe('failed');
-    expect(billingCalls.find((c) => c.path === 'settle')?.body.costMicro).toBe(321);
-    expect(renderSubmits).toBe(1);
-  });
-  it('证据已持久化但写成本中断，重启仍能结算；缺少基线的旧作业不会补造证据', async () => {
-    const id = await autoRender();
-    await billReady(id);
-    const original = jobs.update;
-    const spy = vi.spyOn(jobs, 'update').mockImplementation(async (key, patch) => {
-      if (patch.cost) throw new Error('Crash before cost persistence');
-      await original(key, patch);
-    });
-    try {
-      await pollRender(id);
-    } finally {
-      spy.mockRestore();
-    }
-    expect(jobRows.get(id)?.cost).toBeNull();
-    expect(jobRows.get(id)?.call.autoAudit).toMatchObject({ acceptedMicro: 12345 });
-    tools = build('key', false, true, true);
-    renderAuditFixture.advance(30000);
-    expect((await pollRender(id)).status).toBe('completed');
-    expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
-    delete jobRows.get(id)!.call.autoAudit;
-    const requests = renderAuditFixture.requests.length;
-    await pollRender(id);
-    expect(renderAuditFixture.requests).toHaveLength(requests);
-  });
-  it('冻结失效仍收集停机与完整费用，保留平台风险，不偷偷再次扣款或退款', async () => {
-    const id = await autoRender();
-    renewFails = true;
-    await billReady(id, 'CANCELLED');
-    await pollRender(id);
-    expect(jobRows.get(id)?.call).toMatchObject({
-      holdLost: true,
-      platformRiskMicro: 12345,
-      billingEvidence: { costMicro: 12345 },
-    });
-    expect(jobRows.get(id)?.cost).toBeNull();
-    expect(billingCalls.filter((c) => c.path !== 'hold')).toEqual([]);
-  });
-  it('准备审计失败不提交 GPU，随后只重试原作业', async () => {
-    tools = build('key', false, true, true);
-    const id = (await call('3d.render', args)).job!.id;
-    renderAuditFixture.activeWorkers = [{ id: 'other-worker', status: 'IDLE' }];
-    await expect(tools.submit(caller, id)).rejects.toMatchObject({
-      code: 'render_audit_not_ready',
-    });
-    expect(renderSubmits).toBe(0);
-    expect(jobRows.get(id)?.phase).toBe('uploading');
-    renderAuditFixture.activeWorkers = [];
-    await tools.submit(caller, id);
-    expect(renderSubmits).toBe(1);
-  });
   it.each(['lease-lost', 'already-finished'])(
     '原提交进程恢复时 %s，不能迟到发起 GPU 请求',
     async (mode) => {
-      tools = build('key', false, true, true);
+      tools = build('key', false, true);
       const id = (await call('3d.render', args)).job!.id;
       const original = jobs.claim;
       let claims = 0;
@@ -822,8 +682,9 @@ describe('云渲染的准备、恢复、归档和对账', () => {
       await app.close();
     }
   });
-  it('先归档等待全成本证据；重启不重复生成，结算后回收暂存', async () => {
+  it('回执缺执行时长时先归档等人工对账；重启不重复生成，结算后回收暂存', async () => {
     tools = build('key', false, true);
+    renderReceiptMissing = true;
     const id = (await call('3d.render', args)).job!.id;
     expect(jobRows.get(id)?.phase).toBe('uploading');
     expect(renderSubmits).toBe(0);
@@ -874,7 +735,7 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release']);
   });
   it('按 GPU 回执计量即时结算并交付：执行秒 + 封顶启动秒 + 空闲秒，只扣一次', async () => {
-    tools = build('key', false, true, false, true);
+    tools = build('key', false, true);
     const id = (await call('3d.render', args)).job!.id;
     await tools.submit(caller, id);
     const done = await tools.job(caller, id, AbortSignal.timeout(2000));
@@ -890,8 +751,8 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
     expect(renderSubmits).toBe(1);
   });
-  it('计量模式下 GPU 失败不向用户扣款，退回冻结', async () => {
-    tools = build('key', false, true, false, true);
+  it('GPU 失败不向用户扣款，退回冻结', async () => {
+    tools = build('key', false, true);
     renderStatus = 'FAILED';
     const id = (await call('3d.render', args)).job!.id;
     await tools.submit(caller, id);

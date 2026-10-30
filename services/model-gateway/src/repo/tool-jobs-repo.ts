@@ -8,7 +8,6 @@ export class ToolAdmissionError extends Error {}
 export interface ToolJobsRepo {
   cancelRun(runId: string, payerId: string, taskId?: string): Promise<void>;
   mergeCall(id: string, patch: Record<string, unknown>): Promise<void>;
-  renderWindowEnd(exceptId: string): Promise<number>;
   insert(
     job: Pick<ToolJob, 'id' | 'tool' | 'providerJobId' | 'call' | 'requestKey' | 'requestHash'>,
   ): Promise<boolean>;
@@ -31,15 +30,6 @@ export interface ToolJobsRepo {
 export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
   const db = drizzle(pool);
   return {
-    async renderWindowEnd(exceptId) {
-      const result = await db.execute<{ boundary: string | null }>(sql`
-        select max(coalesce(
-          (call->'autoAudit'->>'windowEnd')::bigint,
-          (floor(extract(epoch from coalesce(finished_at, created_at)) / 3600) + 1)::bigint * 3600000
-        ))::text as boundary from tool_jobs where tool = '3d.render' and id <> ${exceptId}::uuid
-      `);
-      return Number(result.rows[0]?.boundary ?? 0);
-    },
     async insert(job) {
       return db.transaction(async (tx) => {
         if (job.tool === '3d.render') {
@@ -194,10 +184,6 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
             or(
               eq(toolJobs.status, 'pending'),
               and(eq(toolJobs.status, 'completed'), isNull(toolJobs.result)),
-              and(
-                eq(toolJobs.tool, '3d.render'),
-                sql`(${toolJobs.call}->'autoAudit'->>'watchUntil')::bigint > ${Date.now()}`,
-              ),
             ),
             or(
               eq(toolJobs.phase, 'pending'),
@@ -206,10 +192,6 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
               eq(toolJobs.phase, 'uploading'),
               eq(toolJobs.phase, 'awaiting_cost'),
               and(eq(toolJobs.phase, 'uncertain'), eq(toolJobs.tool, '3d.render')),
-              and(
-                eq(toolJobs.tool, '3d.render'),
-                sql`(${toolJobs.call}->'autoAudit'->>'watchUntil')::bigint > ${Date.now()}`,
-              ),
               and(
                 eq(toolJobs.phase, 'submitting'),
                 lt(toolJobs.createdAt, new Date(Date.now() - 120_000)),

@@ -140,77 +140,36 @@ the queue. Repeating submit uses the same persistent job and does not resend a
 provider POST. A disconnected POST is uncertain, even when no provider id was
 received; it must be audited rather than retried as a new generation.
 
-The existing scanner renews unsettled render holds, archives and verifies both
-outputs, and enters `awaiting_cost`. Neither results nor staging cleanup are
-reported as complete until settlement and cleanup succeed. A dedicated profile
-admits one job through reconciliation, including uncertain jobs. Run cancellation
-is durably fenced before new tool admission; cancelling an uploaded-only job
-cleans up and releases its unused hold. Provider cancellation is an intent, not
-proof that billing stopped.
+The existing scanner renews unsettled render holds, then archives and verifies
+both outputs against the worker receipt digests. Billing is metered per job
+(ADR 0011 §21): the user is charged
+`(ceil(executionTime s) + min(ceil(delayTime s), RENDER_STARTUP_ALLOWANCE_SECONDS) + RENDER_IDLE_SECONDS) × RENDER_PRICE_MICRO_PER_SECOND`,
+capped at the frozen `RENDER_HOLD_MICRO`, and the result is delivered as soon as
+that settlement and staging cleanup succeed. A `FAILED`, `CANCELLED` or
+`TIMED_OUT` GPU job releases the hold; the GPU time is platform cost. The hourly
+Runpod bill is checked by operations only; any difference is platform risk and
+is never charged to the user afterwards. A dedicated profile admits one job at a
+time, including uncertain jobs. Run cancellation is durably fenced before new
+tool admission; cancelling an uploaded-only job cleans up and releases its
+unused hold. Provider cancellation is an intent, not proof that billing stopped.
 
-Trusted operations can close an audited job with
+Two cases need a manual close: a disconnected submit (`uncertain`, which also
+holds the single GPU admission slot) and a completed receipt without
+`executionTime` (`awaiting_cost`). Trusted operations close them with
 `POST /internal/v1/tools/jobs/:id/reconcile`, supplying the original ownership
 headers and `{costMicro, billId, stopped:true}`. `billId` must identify a unique
-audited bill line/window across jobs. The response acknowledges acceptance;
-poll the existing job endpoint for the final state. This route is deliberately
-unavailable under `/run` or the public gateway. The caller must verify worker
-shutdown and all attributable startup/execution/idle/storage/platform costs;
-the API does not independently prove that assertion. The optional automatic
-collector described below obtains evidence from the provider instead. Never manufacture a
-zero bill or derive a total bill from executionTime. Unattributable costs remain
-platform risk; user charges cannot exceed the saved approved hold ceiling.
+bill line/window across jobs. The response acknowledges acceptance; poll the
+existing job endpoint for the final state. This route is deliberately
+unavailable under `/run` or the public gateway. The caller must verify at
+Runpod that the job is absent or stopped and what it cost; the API does not
+independently prove that assertion. User charges cannot exceed the saved
+approved hold ceiling; the excess is recorded as platform risk.
 
 Service configuration is documented in `services/model-gateway/.env.example`.
 `pnpm env:init` adds missing local fields from the existing root keys without
 replacing filled values. Keep `RENDER_PROFILE_VERIFIED=false` until private-image
-pull, fixed resource/price profile, real isolated GPU, signed R2 exchange,
-lifecycle, shutdown and billing evidence all pass. `RENDER_HOLD_MICRO` is a
-configured reservation ceiling, not a verified current supplier quotation.
-Do not enable the flag just to expose the tool in the catalogue. Signed-URL
-and fake-provider tests do not prove R2 reachability or real GPU execution.
-
-## Automatic audit policy (code and fault tests only)
-
-Keep `RENDER_AUTO_RECONCILE=false` for deployment preparation. Enabling it also
-requires `RENDER_AUDIT_DEDICATED_ENDPOINT=true`, confirming this gateway is the
-only submitter to a dedicated endpoint. The key must permit runtime status/health,
-control-plane `serverless:read`, and `billing:read`. The read-only control API is
-configured separately with `RUNPOD_CONTROL_BASE_URL`; secrets never go to the agent.
-No endpoint settings, queue purge, retry or worker deletion are performed by the
-collector. Existing cancellation targets only the saved job id.
-
-Before POST, the collector checks the immutable image, zero-minimum/single-GPU
-profile, empty runtime queue and complete control-plane worker list, and records
-an hourly zero-charge baseline. Historical job windows prevent overlap. A new
-job can therefore wait for the next hour; retry submit on the same prepared job
-or cancel it, never make another paid submission to bypass this guard.
-
-After a terminal job receipt, at least two empty observations separated by
-`RENDER_AUDIT_QUIET_MS` (60 s by default) must agree across the worker list and
-runtime health. Any active/idle/initializing/throttled/unhealthy worker, queued
-job or observation failure invalidates the stop observation. A lost POST reply
-requires expiry of the fixed 30 min TTL plus the 2 min submission bound, empty
-resources and consistent counters/billing; a positive unexplained bill stays
-under manual review. A job 404 or cancel acknowledgment alone is insufficient.
-
-Billing queries use aligned, complete hourly windows for this endpoint. After
-window close, `RENDER_AUDIT_BILLING_LAG_MS` (15 min) and two identical snapshots
-separated by `RENDER_AUDIT_STABLE_MS` (5 min) are required. Endpoint/window echoes,
-every bucket, counts, duplicate/foreign rows, cost components and totals are
-validated. Missing final records are not a zero bill. Profile/policy changes,
-counter resets, retries or foreign jobs keep a persistent review reason. The
-existing job scanner persists observations, honors exponential backoff, renews
-the hold and resumes after restart. Only verified evidence reaches settlement;
-cost persistence, billing and cleanup retries do not generate again or debit twice.
-
-Runpod's hourly API has no final-invoice watermark. These delays are conservative
-local policy defaults, **not a guarantee that billing is final**; measure them in
-real acceptance. Recheck settled windows for `RENDER_AUDIT_WATCH_MS` (24 h), record
-later changes and platform risk, and never charge the user again. Shared R2 costs
-remain explicitly unallocated platform risk, not claimed zero. Review after
-`RENDER_AUDIT_MAX_WAIT_MS` (24 h), or if hold renewal fails; keep collecting stop
-evidence without silently charging/refunding a closed hold. Evidence outside the
-configured follow-up period still requires operations review. All current tests
-use local fake providers. Private pull and actual stop observations were obtained in
-step 5, but GPU rendering failed and invoice/automatic-reconciliation acceptance is
-still pending. These remain prerequisites before enabling the profile.
+pull, fixed resource/price profile, real isolated GPU and signed R2 exchange
+pass (done on 2026-10-30 for endpoint `oasis-render`, see ADR 0011 §21).
+`RENDER_PRICE_MICRO_PER_SECOND` is the locked per-second price of the GPU pool;
+recheck it when the pool or Runpod pricing changes. Signed-URL and fake-provider
+tests do not prove R2 reachability or real GPU execution.

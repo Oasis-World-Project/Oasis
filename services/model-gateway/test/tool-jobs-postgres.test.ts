@@ -86,37 +86,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 取消准入�
     expect(await repo.insert(make(b))).toBe(true);
     await repo.finish(b, 'failed');
   });
-  it('已占用的账单窗口跨完成状态保留；补账观察到期或退避后不挤占扫描', async () => {
-    const id = randomUUID(),
-      end = (Math.floor(Date.now() / 3600000) + 2) * 3600000;
-    await repo.insert({
-      id,
-      tool: '3d.render',
-      providerJobId: '',
-      call: { caller: { payerId } },
-      requestKey: null,
-      requestHash: null,
-    });
-    await repo.mergeCall(id, { autoAudit: { windowEnd: end, watchUntil: Date.now() + 60000 } });
-    await repo.finish(id, 'completed');
-    expect(await repo.renderWindowEnd(randomUUID())).toBe(end);
-    expect(await repo.renderWindowEnd(id)).toBeLessThan(end);
-    expect((await repo.pending(100)).some((row) => row.id === id)).toBe(true);
-    await repo.mergeCall(id, { nextCheckAt: Date.now() + 60000 });
-    expect((await repo.pending(100)).some((row) => row.id === id)).toBe(false);
-    await repo.mergeCall(id, {
-      nextCheckAt: 0,
-      autoAudit: { windowEnd: end, watchUntil: Date.now() - 1 },
-    });
-    expect((await repo.pending(100)).some((row) => row.id === id)).toBe(false);
-  });
   it('取消迁移可在排空作业后回滚', async () => {
     const a = randomUUID(),
       b = randomUUID();
     for (const id of [a, b])
       await repo.insert({
         id,
-        tool: 'audit.fixture',
+        tool: 'render.fixture',
         providerJobId: '',
         call: { caller: { payerId } },
         requestKey: null,

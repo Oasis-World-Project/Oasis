@@ -1,7 +1,6 @@
 // Queue credentials stay here; signed exchange URLs are never persisted or returned to agents.
 import { z } from 'zod';
 import type { ObjectStore } from '@oasis/service-kit';
-import { createRunpodAudit, type RenderAuditOptions } from './runpod-audit.ts';
 
 const vec = (low: number, high: number) => z.array(z.number().min(low).max(high)).length(3);
 const Scene = z
@@ -132,11 +131,8 @@ export function createRenderClient(options: {
   staging?: ObjectStore;
   archive: ObjectStore;
   fetcher?: typeof fetch;
-  controlBaseUrl: string;
-  auditPolicy?: RenderAuditOptions;
   /** 按 GPU 回执计量：执行秒数 + 有上限的启动秒数 + 空闲超时，乘以锁定单价（ADR 0011 §21） */
-  metering?: { microPerSecond: number; startupCapSeconds: number; idleSeconds: number };
-  now?: () => number;
+  metering: { microPerSecond: number; startupCapSeconds: number; idleSeconds: number };
 }) {
   const fetcher = options.fetcher ?? fetch;
   const base = options.baseUrl.replace(/\/$/, '');
@@ -160,29 +156,15 @@ export function createRenderClient(options: {
     });
   }
   return {
-    audit: createRunpodAudit({
-      endpointId: options.endpointId,
-      controlBaseUrl: options.controlBaseUrl,
-      queueBaseUrl: base,
-      apiKey: options.apiKey,
-      policy: options.auditPolicy,
-      fetcher,
-      runtime: (path) => request(path),
-      now: options.now,
-    }),
     configured: Boolean(
-      options.verified &&
-      options.apiKey &&
-      options.endpointId &&
-      options.staging?.sign &&
-      (!options.auditPolicy?.enabled || options.auditPolicy.dedicatedEndpoint),
+      options.verified && options.apiKey && options.endpointId && options.staging?.sign,
     ),
     holdMicro: options.holdMicro,
     async start(
       value: Record<string, unknown>,
       jobId: string,
       signal: AbortSignal,
-      beforeSubmit?: (dispatchedAt: number) => Promise<void>,
+      beforeSubmit?: () => Promise<void>,
     ) {
       const args = RenderArgs.parse(value),
         staging = options.staging!;
@@ -208,7 +190,7 @@ export function createRenderClient(options: {
         project: await staging.sign!(key(jobId, 'project.zip'), 'PUT', 3600),
       };
       signal.throwIfAborted();
-      await beforeSubmit?.((options.now ?? Date.now)());
+      await beforeSubmit?.();
       signal.throwIfAborted();
       const response = await request(
         'run',
@@ -252,14 +234,11 @@ export function createRenderClient(options: {
           executionTime: z.number().int().nonnegative().optional(),
         })
         .parse(await response.json());
-      const audited = Boolean(options.auditPolicy?.enabled);
       if (['FAILED', 'CANCELLED', 'TIMED_OUT'].includes(value.status))
-        return audited
-          ? { state: 'uncertain' as const, error: 'GPU 已终止；全成本及 worker 停止仍需对账' }
-          : {
-              state: 'failed' as const,
-              error: `GPU 渲染未完成（${value.status}）；GPU 时长由平台承担，未向用户扣款`,
-            };
+        return {
+          state: 'failed' as const,
+          error: `GPU 渲染未完成（${value.status}）；GPU 时长由平台承担，未向用户扣款`,
+        };
       if (value.status !== 'COMPLETED') return { state: 'pending' as const };
       const artifact = z.object({
         size: z
@@ -285,13 +264,13 @@ export function createRenderClient(options: {
         .parse(value.output);
       const meter = options.metering;
       const billedSeconds =
-        meter && value.executionTime !== undefined
+        value.executionTime !== undefined
           ? Math.ceil(value.executionTime / 1000) +
             Math.min(Math.ceil((value.delayTime ?? 0) / 1000), meter.startupCapSeconds) +
             meter.idleSeconds
           : undefined;
       const cost =
-        audited || !meter || billedSeconds === undefined
+        billedSeconds === undefined
           ? null
           : {
               // 用户扣款不超过冻结上限；超出部分（理论上执行超时才会出现）由平台承担。
@@ -303,7 +282,7 @@ export function createRenderClient(options: {
         outcome: {
           text: cost
             ? '云 GPU 渲染结果已取回并核对摘要；按 GPU 回执计量结算。'
-            : '云 GPU 渲染结果已取回；全成本对账完成后交付。',
+            : '云 GPU 渲染结果已取回；回执缺少执行时长，人工对账后交付。',
           data: {
             device: output.device,
             boundary: output.boundary,
@@ -314,7 +293,7 @@ export function createRenderClient(options: {
                     executionMs: value.executionTime,
                     delayMs: value.delayTime ?? 0,
                     billedSeconds,
-                    microPerSecond: meter!.microPerSecond,
+                    microPerSecond: meter.microPerSecond,
                   },
                 }),
           },
