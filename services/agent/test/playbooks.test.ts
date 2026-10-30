@@ -6,6 +6,7 @@ describe('场景经验手册', () => {
   it('仓库里的手册都能读：有名称和「适用」', async () => {
     const list = await loadPlaybooks(fileURLToPath(new URL('../playbooks', import.meta.url)));
     expect(list.map((p) => p.key)).toEqual([
+      '3d',
       'audio',
       'data-dashboards',
       'deep-research',

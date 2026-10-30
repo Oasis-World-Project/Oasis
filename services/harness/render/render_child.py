@@ -20,7 +20,8 @@ def boundary(root):
                 raise RuntimeError("Missing isolation canary")
             continue
         raise RuntimeError("Filesystem boundary failed")
-    for family in (socket.AF_INET, socket.AF_INET6, socket.AF_UNIX):
+    # AF_UNIX stays available because cuInit needs it; Landlock blocks creating socket files.
+    for family in (socket.AF_INET, socket.AF_INET6, socket.AF_NETLINK, socket.AF_PACKET):
         try:
             sock = socket.socket(family)
         except PermissionError:
@@ -35,7 +36,7 @@ def boundary(root):
         raise RuntimeError("Process boundary failed")
     if any(k.endswith(("KEY", "TOKEN", "SECRET")) for k in os.environ):
         raise RuntimeError("Secret environment inherited")
-    (root / "boundary.json").write_text(json.dumps({"filesystem": True, "socketsDenied": True, "parentSignalDenied": True, "secretEnvironmentEmpty": True}))
+    (root / "boundary.json").write_text(json.dumps({"filesystem": True, "networkSocketsDenied": True, "parentSignalDenied": True, "secretEnvironmentEmpty": True}))
 
 
 def main(root, mode):

@@ -16,8 +16,9 @@ export const harnessEnv = {
     .string()
     .optional()
     .transform((value) => value || undefined),
-  /** 沙箱镜像（dsh 版本锁定在镜像标签里） */
-  SANDBOX_IMAGE: z.string().default('oasis/harness-sandbox-base:0.2.1-rc.2'),
+  /** 沙箱镜像（dsh 版本锁定在镜像标签里）。默认带 Blender 的 3D 版：它是基础版的超集，
+   *  节点按需求自行决定是否建模（ADR 0011 §21；按节点选镜像尚未实现）。 */
+  SANDBOX_IMAGE: z.string().default('oasis/harness-sandbox-3d:0.2.1-rc.2-blender4.3.2'),
   PREVIEW_IMAGE: z.string().default('oasis/harness-preview:1.64.0'),
   PREVIEW_CPUS: z.coerce.number().positive().max(8).default(2),
   PREVIEW_MEMORY_MB: positiveInt.default(2048),

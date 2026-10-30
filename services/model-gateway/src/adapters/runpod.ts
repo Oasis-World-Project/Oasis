@@ -20,6 +20,7 @@ const Scene = z
           color: z.array(z.number().min(0).max(1)).length(4).optional(),
           roughness: z.number().min(0).max(1).optional(),
           metallic: z.number().min(0).max(1).optional(),
+          emission: z.number().min(0).max(100).optional(),
         }),
       )
       .min(1)
@@ -36,6 +37,7 @@ const Scene = z
           target: vec(-10000, 10000).optional(),
           power: z.number().positive().max(100000).optional(),
           size: z.number().positive().max(100).optional(),
+          color: vec(0, 1).optional(),
         }),
       )
       .max(8)
@@ -74,7 +76,8 @@ const Scene = z
           (s.assets.some((a) => a.id === o.asset) &&
             o.color === undefined &&
             o.roughness === undefined &&
-            o.metallic === undefined),
+            o.metallic === undefined &&
+            o.emission === undefined),
       ) &&
       JSON.stringify(s.camera.position) !== JSON.stringify(s.camera.target) &&
       (s.lights ?? []).every(
@@ -131,6 +134,8 @@ export function createRenderClient(options: {
   fetcher?: typeof fetch;
   controlBaseUrl: string;
   auditPolicy?: RenderAuditOptions;
+  /** 按 GPU 回执计量：执行秒数 + 有上限的启动秒数 + 空闲超时，乘以锁定单价（ADR 0011 §21） */
+  metering?: { microPerSecond: number; startupCapSeconds: number; idleSeconds: number };
   now?: () => number;
 }) {
   const fetcher = options.fetcher ?? fetch;
@@ -240,10 +245,21 @@ export function createRenderClient(options: {
       const response = await request(`status/${encodeURIComponent(h.id)}`);
       if (!response.ok) throw new Error('Render status unavailable');
       const value = z
-        .object({ status: z.string(), output: z.unknown().optional() })
+        .object({
+          status: z.string(),
+          output: z.unknown().optional(),
+          delayTime: z.number().int().nonnegative().optional(),
+          executionTime: z.number().int().nonnegative().optional(),
+        })
         .parse(await response.json());
+      const audited = Boolean(options.auditPolicy?.enabled);
       if (['FAILED', 'CANCELLED', 'TIMED_OUT'].includes(value.status))
-        return { state: 'uncertain' as const, error: 'GPU 已终止；全成本及 worker 停止仍需对账' };
+        return audited
+          ? { state: 'uncertain' as const, error: 'GPU 已终止；全成本及 worker 停止仍需对账' }
+          : {
+              state: 'failed' as const,
+              error: `GPU 渲染未完成（${value.status}）；GPU 时长由平台承担，未向用户扣款`,
+            };
       if (value.status !== 'COMPLETED') return { state: 'pending' as const };
       const artifact = z.object({
         size: z
@@ -261,17 +277,43 @@ export function createRenderClient(options: {
           boundary: z
             .object({
               filesystem: z.literal(true),
-              socketsDenied: z.literal(true),
+              networkSocketsDenied: z.literal(true),
               secretEnvironmentEmpty: z.literal(true),
             })
             .passthrough(),
         })
         .parse(value.output);
+      const meter = options.metering;
+      const billedSeconds =
+        meter && value.executionTime !== undefined
+          ? Math.ceil(value.executionTime / 1000) +
+            Math.min(Math.ceil((value.delayTime ?? 0) / 1000), meter.startupCapSeconds) +
+            meter.idleSeconds
+          : undefined;
+      const cost =
+        audited || !meter || billedSeconds === undefined
+          ? null
+          : { costMicro: billedSeconds * meter.microPerSecond, source: 'provider' as const };
       return {
         state: 'completed' as const,
         outcome: {
-          text: '云 GPU 渲染结果已取回；全成本对账完成后交付。',
-          data: { device: output.device, boundary: output.boundary },
+          text: cost
+            ? '云 GPU 渲染结果已取回并核对摘要；按 GPU 回执计量结算。'
+            : '云 GPU 渲染结果已取回；全成本对账完成后交付。',
+          data: {
+            device: output.device,
+            boundary: output.boundary,
+            ...(billedSeconds === undefined
+              ? {}
+              : {
+                  gpuBilling: {
+                    executionMs: value.executionTime,
+                    delayMs: value.delayTime ?? 0,
+                    billedSeconds,
+                    microPerSecond: meter!.microPerSecond,
+                  },
+                }),
+          },
           files: await Promise.all(
             (['image', 'project'] as const).map(async (name) => ({
               name: name === 'image' ? 'image.png' : 'project.zip',
@@ -282,7 +324,7 @@ export function createRenderClient(options: {
               ...output.artifacts[name],
             })),
           ),
-          cost: null,
+          cost,
         },
       };
     },

@@ -304,7 +304,8 @@ export const TOOLS: ToolDef[] = [
     usage:
       'oasis-tool 3d.render --scene 工程/scene.json --width 512 --height 512 --samples 32 --out out/渲染.png',
     unit: '作业',
-    estimateMicro: 300000,
+    // 按 GPU 回执计量，常见一次 $0.01–0.05；冻结上限见 RENDER_HOLD_MICRO。
+    estimateMicro: 50000,
     holdMicro: () => 1000000,
     provider: 'runpod',
     long: true,

@@ -309,11 +309,13 @@ let renderSubmits = 0;
 let renderTransfer = '';
 let renderSubmitLost = false;
 let renderAuditFixture = runpodFixture();
+let renderStatus = 'COMPLETED';
 const build = (
   tavilyKey: string | undefined,
   withMusic = false,
   withRender = false,
   withAudit = false,
+  withMetering = false,
 ) => {
   const logger = pino({ level: 'silent' });
   return createToolService({
@@ -322,6 +324,9 @@ const build = (
           baseUrl: 'https://api.runpod.ai/v2',
           controlBaseUrl: 'https://control.test/v2',
           auditPolicy: withAudit ? auditPolicy : undefined,
+          ...(withMetering
+            ? { metering: { microPerSecond: 373, startupCapSeconds: 90, idleSeconds: 5 } }
+            : {}),
           now: renderAuditFixture.now,
           endpointId: 'fixture',
           apiKey: 'not-real',
@@ -353,13 +358,22 @@ const build = (
               transferId: renderTransfer,
               artifacts: { image: artifact(imageKey), project: artifact(zipKey) },
               device: { gpuUsed: true },
-              boundary: { filesystem: true, socketsDenied: true, secretEnvironmentEmpty: true },
+              boundary: {
+                filesystem: true,
+                networkSocketsDenied: true,
+                secretEnvironmentEmpty: true,
+              },
             };
             if (withAudit) {
               renderAuditFixture.output = output;
               return renderAuditFixture.fetcher(url, init);
             }
-            return Response.json({ status: 'COMPLETED', output });
+            return Response.json({
+              status: renderStatus,
+              delayTime: 120400,
+              executionTime: 3172,
+              ...(renderStatus === 'COMPLETED' ? { output } : {}),
+            });
           },
         })
       : undefined,
@@ -450,6 +464,7 @@ beforeEach(() => {
   renderCleanupFails = false;
   recordedCalls.clear();
   renderSubmits = 0;
+  renderStatus = 'COMPLETED';
   renderTransfer = '';
   renderSubmitLost = false;
   geometryMode = false;
@@ -857,6 +872,33 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     expect(jobRows.get(id)?.status).toBe('failed');
     expect(renderSubmits).toBe(0);
     expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release']);
+  });
+  it('按 GPU 回执计量即时结算并交付：执行秒 + 封顶启动秒 + 空闲秒，只扣一次', async () => {
+    tools = build('key', false, true, false, true);
+    const id = (await call('3d.render', args)).job!.id;
+    await tools.submit(caller, id);
+    const done = await tools.job(caller, id, AbortSignal.timeout(2000));
+    expect(done.status).toBe('completed');
+    // ceil(3.172)=4 + min(ceil(120.4)=121, 90) + 5 = 99 s × 373
+    expect(billingCalls.filter((c) => c.path === 'settle').map((c) => c.body.costMicro)).toEqual([
+      36927,
+    ]);
+    expect(jobRows.get(id)?.result?.data).toMatchObject({
+      gpuBilling: { billedSeconds: 99, microPerSecond: 373 },
+    });
+    await tools.job(caller, id, AbortSignal.timeout(2000));
+    expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
+    expect(renderSubmits).toBe(1);
+  });
+  it('计量模式下 GPU 失败不向用户扣款，退回冻结', async () => {
+    tools = build('key', false, true, false, true);
+    renderStatus = 'FAILED';
+    const id = (await call('3d.render', args)).job!.id;
+    await tools.submit(caller, id);
+    const done = await tools.job(caller, id, AbortSignal.timeout(2000));
+    expect(done.status).toBe('failed');
+    expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release']);
+    renderStatus = 'COMPLETED';
   });
   it('提交断连保留未知且不重发；终态成本超过冻结的部分记平台风险', async () => {
     tools = build('key', false, true);

@@ -103,6 +103,27 @@ if __name__ == "__main__":
             status = ctypes.CDLL(None).pthread_setname_np(ctypes.c_ulong(thread.ident), ctypes.c_char_p(b"oasis-cuda"))
             assert status == 0, "Thread naming denied: errno=" + str(status)
             assert Path("/proc/self/task/" + str(thread.native_id) + "/comm").read_text().strip() == "oasis-cuda"
+            # libcuda itself (driver 595, cloud probe 2026-10-30) opens comm with O_WRONLY|O_CREAT|O_TRUNC.
+            fd = os.open("/proc/self/task/" + str(thread.native_id) + "/comm", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+            os.write(fd, b"oasis-trunc")
+            os.close(fd)
+            # cuInit opens an AF_UNIX SOCK_SEQPACKET socket; network families must stay denied.
+            import socket
+            socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET).close()
+            for family in (socket.AF_INET, socket.AF_INET6, socket.AF_NETLINK, socket.AF_PACKET):
+                try:
+                    socket.socket(family, socket.SOCK_DGRAM if family == socket.AF_NETLINK else socket.SOCK_STREAM if family != socket.AF_PACKET else socket.SOCK_RAW)
+                except PermissionError:
+                    continue
+                raise AssertionError("Network socket family allowed: " + str(family))
+            for name in ["/proc/stat", "/proc/cpuinfo", "/sys/devices/system/cpu/online"]:
+                Path(name).read_bytes()
+            for name in ["/proc/self/environ", "/proc/1/environ", "/etc/passwd"]:
+                try:
+                    Path(name).read_bytes()
+                except PermissionError:
+                    continue
+                raise AssertionError("Secret-bearing path readable: " + name)
             try:
                 fd = os.open("/proc/" + str(os.getppid()) + "/task/" + str(os.getppid()) + "/comm", os.O_RDWR)
             except PermissionError:
@@ -113,7 +134,7 @@ if __name__ == "__main__":
         finally:
             stop.set()
             thread.join()
-        print("Isolated driver loader/thread naming passed; no GPU simulated")
+        print("Isolated driver loader/thread naming/AF_UNIX passed; no GPU simulated")
     elif sys.argv[1:] == ["--driver-loader-test"]:
         # A real DSO outside ld.so.cache: proves lookup in the injected driver mount.
         Path("/usr/local/nvidia/lib64/oasis-driver-probe.so").symlink_to("/lib/x86_64-linux-gnu/libm.so.6")

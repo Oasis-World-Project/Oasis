@@ -141,6 +141,11 @@ await startService({
         apiKey: config.RUNPOD_API_KEY,
         verified: config.RENDER_PROFILE_VERIFIED,
         holdMicro: config.RENDER_HOLD_MICRO,
+        metering: {
+          microPerSecond: config.RENDER_PRICE_MICRO_PER_SECOND,
+          startupCapSeconds: config.RENDER_STARTUP_ALLOWANCE_SECONDS,
+          idleSeconds: config.RENDER_IDLE_SECONDS,
+        },
         staging: renderStaging,
         archive: toolStore,
       }),

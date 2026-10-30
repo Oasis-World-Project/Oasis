@@ -35,6 +35,7 @@ pnpm desktop        # （可选）另开一个终端，打开 Electron 桌面窗
 
 ```bash
 pnpm sandbox:build
+pnpm sandbox:build:3d
 pnpm sandbox:check
 ```
 

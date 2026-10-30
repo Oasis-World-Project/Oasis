@@ -88,7 +88,7 @@ def validate(scene, root):
         assets[asset["id"]] = path
         require(len(assets) <= 20, "Too many assets")
     for obj in objects:
-        fields(obj, ["id", "kind", "asset", "size", "position", "rotation", "color", "roughness", "metallic"])
+        fields(obj, ["id", "kind", "asset", "size", "position", "rotation", "color", "roughness", "metallic", "emission"])
         require(isinstance(obj.get("id"), str) and 0 < len(obj["id"]) <= 100 and obj["id"] not in ids,
                 "Unique object id required")
         ids.add(obj["id"])
@@ -97,13 +97,13 @@ def validate(scene, root):
         vector(obj.get("rotation", [0, 0, 0]), 3, "rotation", -3600, 3600)
         vector(obj.get("size"), 3, "size", .0001, 10000)
         vector(obj.get("color", [0.6, 0.6, 0.6, 1]), 4, "color", 0, 1)
-        for key, default in [("roughness", .5), ("metallic", 0)]:
+        for key, default, maximum in [("roughness", .5, 1), ("metallic", 0, 1), ("emission", 0, 100)]:
             value = obj.get(key, default)
-            require(type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1,
+            require(type(value) in (int, float) and math.isfinite(value) and 0 <= value <= maximum,
                     "Invalid material scalar")
         if obj["kind"] == "asset":
             require(obj.get("asset") in assets, "Unknown asset reference")
-            require(not any(key in obj for key in ["color", "roughness", "metallic"]),
+            require(not any(key in obj for key in ["color", "roughness", "metallic", "emission"]),
                     "Imported asset material overrides are not yet supported")
     camera = scene.get("camera")
     fields(camera, ["position", "target", "lens"])
@@ -116,8 +116,9 @@ def validate(scene, root):
     lights = scene.get("lights", [])
     require(isinstance(lights, list) and len(lights) <= 8, "Too many lights")
     for light in lights:
-        fields(light, ["position", "target", "power", "size"])
+        fields(light, ["position", "target", "power", "size", "color"])
         vector(light.get("position"), 3, "light position")
+        vector(light.get("color", [1, 1, 1]), 3, "light color", 0, 1)
         vector(light.get("target", [0, 0, 0]), 3, "light target")
         require(light["position"] != light.get("target", [0, 0, 0]), "Light direction undefined")
         for key, default, maximum in [("power", 500, 100000), ("size", 5, 100)]:
@@ -173,6 +174,10 @@ def blender_build(root):
             shader.inputs["Base Color"].default_value = spec.get("color", [.6, .6, .6, 1])
             shader.inputs["Roughness"].default_value = spec.get("roughness", .5)
             shader.inputs["Metallic"].default_value = spec.get("metallic", 0)
+            if spec.get("emission", 0) > 0:
+                # Self-lit surfaces (lamp shades, screens) glow in the object's own colour.
+                shader.inputs["Emission Color"].default_value = spec.get("color", [.6, .6, .6, 1])
+                shader.inputs["Emission Strength"].default_value = spec["emission"]
             obj.data.materials.append(material)
         obj.location = spec["position"]
         obj.rotation_euler = tuple(math.radians(v) for v in spec.get("rotation", [0, 0, 0]))
@@ -187,6 +192,7 @@ def blender_build(root):
     for i, light in enumerate(scene.get("lights", [])):
         data = bpy.data.lights.new("Area " + str(i), "AREA")
         data.energy, data.shape, data.size = light.get("power", 500), "DISK", light.get("size", 5)
+        data.color = light.get("color", [1, 1, 1])
         obj = bpy.data.objects.new(data.name, data)
         bpy.context.collection.objects.link(obj)
         obj.location = light["position"]

@@ -100,6 +100,29 @@ rejected(lambda: geometry.local(root, "link.glb"), "symbolic link")
 (root / "搬移工程/model.glb").write_bytes(b"changed")
 rejected(lambda: geometry.inspect_package(root / "搬移工程"), "tampered final file")
 shutil.rmtree(root / "搬移工程")
+lit = json.loads(json.dumps(scene))
+lit["objects"].append({"id": "lamp shade", "kind": "cylinder", "size": [.3, .3, .25], "position": [0, 1, 1],
+                       "color": [1, .7, .4, 1], "emission": 12})
+lit["lights"].append({"position": [0, 1, 1.5], "target": [0, 1, 0], "power": 60, "size": .3, "color": [1, .75, .45]})
+lit["background"] = [.01, .01, .02]
+(root / "lit-input.json").write_text(json.dumps(lit, ensure_ascii=False), "utf8")
+geometry.build(root / "lit-input.json", root / "lit-project")
+script = root / "lit-verify.py"
+script.write_text("\n".join([
+    "import bpy",
+    "l=[o for o in bpy.data.objects if o.type=='LIGHT']",
+    "assert any(abs(o.data.color[1]-0.75)<1e-4 and abs(o.data.color[2]-0.45)<1e-4 for o in l), [tuple(o.data.color) for o in l]",
+    "n=bpy.data.materials['lamp shade material'].node_tree.nodes['Principled BSDF']",
+    "assert abs(n.inputs['Emission Strength'].default_value-12)<1e-4",
+]), "utf8")
+run("blender", "--background", "--factory-startup", "--disable-autoexec", str(root / "lit-project/scene.blend"),
+    "--python-exit-code", "1", "--python", str(script))
+passed("light colour and emissive surfaces survive into the editable .blend")
+bad = json.loads(json.dumps(lit)); bad["lights"][1]["color"] = [2, 0, 0]
+rejected(lambda: geometry.validate(bad, root), "out-of-range light colour")
+bad = json.loads(json.dumps(asset_scene)); bad["objects"][0]["emission"] = 5
+rejected(lambda: geometry.validate(bad, root), "emission override on imported asset")
+shutil.rmtree(root / "lit-project")
 passed("no cloud GPU was requested or claimed")
 (root / "checks.json").write_text(json.dumps({"checks": checks, "paidCalls": 0, "cloudGpu": False,
     "blender": run("blender", "--version").splitlines()[0]}, ensure_ascii=False, indent=2), "utf8")

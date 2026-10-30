@@ -1,4 +1,4 @@
-// Linux amd64 only. Fail closed: Landlock ABI >=3, no sockets, no inherited FDs.
+// Linux amd64 only. Fail closed: Landlock ABI >=3, no network sockets (CUDA needs AF_UNIX), no inherited FDs.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -46,10 +47,12 @@ int main(int argc, char **argv) {
     struct landlock_ruleset_attr attr = {.handled_access_fs = all};
     int rules = syscall(SYS_landlock_create_ruleset, &attr, sizeof(attr), 0);
     if (rules < 0) fail("isolation ruleset");
-    const char *system[] = {"/usr", "/lib", "/lib64", "/opt/oasis", "/etc/ld.so.cache", "/etc/fonts", "/etc/localtime", "/proc/driver/nvidia", "/proc/self/maps", "/proc/self/mountinfo", "/proc/mounts"};
+    const char *system[] = {"/usr", "/lib", "/lib64", "/opt/oasis", "/etc/ld.so.cache", "/etc/fonts", "/etc/localtime", "/proc/driver/nvidia", "/proc/self/maps", "/proc/self/mountinfo", "/proc/mounts",
+        // CPU/NUMA facts read by libcuda and Cycles; read-only, no process or secret data.
+        "/proc/stat", "/proc/cpuinfo", "/proc/meminfo", "/proc/sys/vm/mmap_min_addr", "/sys/devices/system/cpu", "/sys/devices/system/node"};
     for (unsigned i = 0; i < sizeof(system) / sizeof(*system); i++) allow_path(rules, system[i], read, 1);
-    // CUDA names future threads via O_RDWR comm files; this PID survives exec.
-    allow_path(rules, "/proc/self/task", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_WRITE_FILE, 0);
+    // CUDA names its threads by opening comm files with O_WRONLY|O_TRUNC; this PID survives exec.
+    allow_path(rules, "/proc/self/task", LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_WRITE_FILE | (1ULL << 14) /* TRUNCATE, ABI 3 */, 0);
     allow_path(rules, argv[1], all & ~((1ULL << 6) | (1ULL << 9) | (1ULL << 10) | (1ULL << 11)), 0);
     const char *devices[] = {"/dev/null", "/dev/urandom", "/dev/random"};
     for (unsigned i = 0; i < sizeof(devices) / sizeof(*devices); i++) allow_path(rules, devices[i], 6, 0);
@@ -66,7 +69,13 @@ int main(int argc, char **argv) {
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
         BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x40000000, 0, 1),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
-        DENY(socket), DENY(socketpair), DENY(ptrace), DENY(process_vm_readv), DENY(process_vm_writev),
+        // cuInit opens an AF_UNIX SOCK_SEQPACKET socket; every other address family stays denied.
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_socket, 0, 4),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[0])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AF_UNIX, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM),
+        DENY(socketpair), DENY(ptrace), DENY(process_vm_readv), DENY(process_vm_writev),
         DENY(pidfd_getfd), DENY(pidfd_open), DENY(io_uring_setup), DENY(mount), DENY(unshare),
         DENY(setns), DENY(bpf), DENY(perf_event_open), DENY(kill), DENY(tkill),
         DENY(rt_sigqueueinfo), DENY(rt_tgsigqueueinfo), DENY(pidfd_send_signal),
