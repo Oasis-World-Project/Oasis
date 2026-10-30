@@ -225,10 +225,17 @@ export function createRenderClient(options: {
       if (!response.ok && response.status !== 404)
         throw new Error('Render cancellation unconfirmed');
     },
-    async check(handle: string) {
+    async check(
+      handle: string,
+      receipt?: { saved?: unknown; save(value: unknown): Promise<void> },
+    ) {
       const h = JSON.parse(handle) as { id: string; jobId: string };
-      const response = await request(`status/${encodeURIComponent(h.id)}`);
-      if (!response.ok) throw new Error('Render status unavailable');
+      let raw = receipt?.saved;
+      if (raw === undefined) {
+        const response = await request(`status/${encodeURIComponent(h.id)}`);
+        if (!response.ok) throw new Error('Render status unavailable');
+        raw = await response.json();
+      }
       const value = z
         .object({
           status: z.string(),
@@ -236,7 +243,10 @@ export function createRenderClient(options: {
           delayTime: z.number().int().nonnegative().optional(),
           executionTime: z.number().int().nonnegative().optional(),
         })
-        .parse(await response.json());
+        .parse(raw);
+      // Runpod 只保留终态回执约 30 分钟；取回结果可能更慢，先存下来，之后重试不再依赖它。
+      if (value.status === 'COMPLETED' && receipt && receipt.saved === undefined)
+        await receipt.save(value);
       if (['FAILED', 'CANCELLED', 'TIMED_OUT'].includes(value.status))
         return {
           state: 'failed' as const,

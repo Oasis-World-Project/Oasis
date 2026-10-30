@@ -269,6 +269,7 @@ const jobs: ToolJobsRepo = {
 
 const mediaFiles = new Map<string, Buffer>();
 let renderCleanupFails = false;
+let archiveFails = false;
 const mediaStore: ObjectStore = {
   put: async (key, body) => {
     mediaFiles.set(key, body);
@@ -281,6 +282,7 @@ const mediaStore: ObjectStore = {
     mediaFiles.delete(key);
   },
   async putStream(key, source, _type, limits) {
+    if (archiveFails && key.startsWith('tool-results/')) throw new Error('Slow link dropped');
     const parts = checkedParts(source, limits);
     const chunks: Buffer[] = [];
     for (;;) {
@@ -315,6 +317,7 @@ let renderSubmitLost = false;
 let renderStatus = 'COMPLETED';
 let renderReceiptMissing = false;
 let renderBusy = false;
+let renderStatusGone = false;
 const build = (tavilyKey: string | undefined, withMusic = false, withRender = false) => {
   const logger = pino({ level: 'silent' });
   return createToolService({
@@ -334,6 +337,8 @@ const build = (tavilyKey: string | undefined, withMusic = false, withRender = fa
                 jobs: { completed: 3, failed: 1, inProgress: renderBusy ? 1 : 0, inQueue: 0 },
                 workers: { idle: 1, running: 0 },
               });
+            if (renderStatusGone && String(url).includes('/status/'))
+              return Response.json({ status: 404, detail: 'job not found' }, { status: 404 });
             if (String(url).includes('/cancel/'))
               return Response.json({ id: 'gpu-one', status: 'CANCELLED' });
             if (init?.method === 'POST') {
@@ -455,6 +460,8 @@ afterAll(async () => {
 beforeEach(() => {
   renderReceiptMissing = false;
   renderBusy = false;
+  renderStatusGone = false;
+  archiveFails = false;
   renderCleanupFails = false;
   recordedCalls.clear();
   renderSubmits = 0;
@@ -787,6 +794,22 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     expect(jobRows.get(id)?.status).toBe('failed');
     expect(jobRows.get(id)?.call.platformRiskMicro).toBe(500000);
     expect(billingCalls.find((c) => c.path === 'settle')?.body.costMicro).toBe(1000000);
+  });
+  it('取结果中断后供应商回执过期，仍按已保存的回执交付并计量结算一次', async () => {
+    tools = build('key', false, true);
+    const id = (await call('3d.render', args)).job!.id;
+    await tools.submit(caller, id);
+    archiveFails = true;
+    expect((await pollRender(id)).status).toBe('pending');
+    expect(jobRows.get(id)?.call.providerReceipt).toMatchObject({ status: 'COMPLETED' });
+    archiveFails = false;
+    renderStatusGone = true;
+    const done = await pollRender(id);
+    expect(done.status).toBe('completed');
+    expect(billingCalls.filter((c) => c.path === 'settle').map((c) => c.body.costMicro)).toEqual([
+      36927,
+    ]);
+    expect(renderSubmits).toBe(1);
   });
   it('提交断连过了排队与执行时限、GPU 空闲后自动结案退回冻结；GPU 仍忙或未到时限则继续等', async () => {
     tools = build('key', false, true);

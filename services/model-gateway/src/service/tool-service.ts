@@ -218,6 +218,12 @@ export function createToolService(deps: {
                 config,
                 signal: AbortSignal.timeout(120_000),
                 upstream: (request) => request(),
+                receipt: {
+                  saved: job.call.providerReceipt,
+                  save: async (value) => {
+                    await jobs.mergeCall(id, { providerReceipt: value });
+                  },
+                },
               },
               job.providerJobId,
             )

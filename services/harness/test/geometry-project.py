@@ -158,6 +158,7 @@ script = root / "dense.py"
 script.write_text("\n".join([
     "import bpy",
     "bpy.ops.wm.read_factory_settings(use_empty=True)",
+    "bpy.ops.mesh.primitive_cube_add(size=1, location=(3, 0, 0)); bpy.context.object.name = 'wall'",
     "bpy.ops.mesh.primitive_uv_sphere_add(segments=512, ring_count=256)",
     "image = bpy.data.images.new('albedo', 2048, 2048)",
     "image.generated_type = 'COLOR_GRID'",
@@ -180,8 +181,11 @@ made = geometry.make_preview(dense / "generated.glb")
 assert made["preview"] == "generated-preview.glb" and geometry.preview_problems(dense / made["preview"]) == []
 data, _ = geometry.read_glb(dense / made["preview"])
 assert [i["mimeType"] for i in data["images"]] == ["image/jpeg"], data["images"]
+acc = data["accessors"]
+counts = sorted(acc[p["indices"]]["count"] // 3 for m in data["meshes"] for p in m["primitives"])
+assert counts[0] == 12 and counts[-1] <= 150000, counts
 rejected(lambda: geometry.make_preview(dense / "generated.glb"), "overwriting an existing preview")
-passed("over-limit WebP generated GLB gets a decimated JPEG preview within canvas limits")
+passed("over-limit WebP generated GLB gets a decimated JPEG preview within canvas limits; low-poly box kept intact")
 script = root / "draft.py"
 script.write_text("\n".join([
     "import bpy, json",

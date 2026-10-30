@@ -192,13 +192,17 @@ def blender_preview(source, target, triangle_budget):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.gltf(filepath=str(source))
     meshes = [o for o in bpy.data.objects if o.type == "MESH"]
-    total = 0
+    counts = {}
     for obj in meshes:
         obj.data.calc_loop_triangles()
-        total += len(obj.data.loop_triangles)
+        counts[obj.name] = len(obj.data.loop_triangles)
+    total = sum(counts.values())
     if total > triangle_budget:
-        ratio = max(0.01, triangle_budget / total)
-        for obj in meshes:
+        # Only dense meshes are reduced; collapsing low-poly walls/boxes would mangle their shape.
+        heavy = [o for o in meshes if counts[o.name] > 5000]
+        light = total - sum(counts[o.name] for o in heavy)
+        ratio = max(0.01, (triangle_budget - light) / max(1, total - light))
+        for obj in heavy:
             modifier = obj.modifiers.new("Preview decimate", "DECIMATE")
             modifier.ratio = ratio
             bpy.context.view_layer.objects.active = obj

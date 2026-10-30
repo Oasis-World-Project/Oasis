@@ -41,6 +41,8 @@ interface ToolDeps {
   /** 发请求给供应商：还没产生费用就失败时，由计量那边退回冻结并抛出给调用方看的错误 */
   upstream: (request: () => Promise<Response>) => Promise<Response>;
   signal: AbortSignal;
+  /** 供应商终态回执的持久副本：供应商只保留一段时间，取结果慢时也不能丢 */
+  receipt?: { saved?: unknown; save(value: unknown): Promise<void> };
 }
 
 interface ToolOutcome {
@@ -318,7 +320,7 @@ export const TOOLS: ToolDef[] = [
     },
     async check(deps, id) {
       if (!deps.render) throw new Error('GPU profile 不可用');
-      return deps.render.check(id);
+      return deps.render.check(id, deps.receipt);
     },
     async cancel(deps, id) {
       if (!deps.render) throw new Error('GPU profile 不可用');

@@ -115,6 +115,8 @@ export function createObjectStore(options: {
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: { accessKeyId: options.accessKey, secretAccessKey: options.secretKey },
+    // 网络抖动时不让请求或流永久挂起：连接 10 秒、套接字 2 分钟无数据即失败，由调用方重试。
+    requestHandler: { connectionTimeout: 10_000, requestTimeout: 120_000 },
   });
   const Bucket = options.bucket;
   let timer: ReturnType<typeof setInterval> | undefined;
