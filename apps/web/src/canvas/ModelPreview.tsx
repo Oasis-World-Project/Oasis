@@ -37,6 +37,78 @@ function weakDevice() {
 const button =
   'rounded-full border border-hairline bg-glass-active px-3 py-1.5 text-xs text-ink disabled:opacity-40';
 
+/**
+ * 观看控制（ADR 0012 §12）：视角、线框、灯光亮度和色温，只改查看器里的画面，不改模型文件。
+ * 结构预览没有材质和灯光，只给视角。
+ */
+function ViewControls({
+  send,
+  structure,
+}: {
+  send: (message: Record<string, unknown>) => void;
+  structure: boolean;
+}) {
+  const [wireframe, setWireframe] = useState(false);
+  const [light, setLight] = useState({ level: 'normal', tone: 'neutral' });
+  const changeLight = (next: typeof light) => {
+    setLight(next);
+    send({ type: 'light', ...next });
+  };
+  return (
+    <>
+      <select
+        aria-label="视角"
+        className={button}
+        defaultValue=""
+        onChange={(event) => send({ type: 'view', preset: event.target.value })}
+      >
+        <option value="" disabled>
+          视角
+        </option>
+        <option value="iso">等轴</option>
+        <option value="front">正面</option>
+        <option value="side">侧面</option>
+        <option value="top">俯视</option>
+      </select>
+      {!structure && (
+        <>
+          <button
+            type="button"
+            aria-pressed={wireframe}
+            className={`${button} ${wireframe ? 'bg-solid text-on-solid' : ''}`}
+            onClick={() => {
+              send({ type: 'wireframe', on: !wireframe });
+              setWireframe(!wireframe);
+            }}
+          >
+            线框
+          </button>
+          <select
+            aria-label="灯光亮度"
+            className={button}
+            value={light.level}
+            onChange={(event) => changeLight({ ...light, level: event.target.value })}
+          >
+            <option value="dim">灯光暗</option>
+            <option value="normal">灯光标准</option>
+            <option value="bright">灯光亮</option>
+          </select>
+          <select
+            aria-label="灯光色温"
+            className={button}
+            value={light.tone}
+            onChange={(event) => changeLight({ ...light, tone: event.target.value })}
+          >
+            <option value="cool">冷光</option>
+            <option value="neutral">中性光</option>
+            <option value="warm">暖光</option>
+          </select>
+        </>
+      )}
+    </>
+  );
+}
+
 function ModelPreviewSession({ file }: { file: PreviewFile }) {
   const [descriptor, setDescriptor] = useState<Descriptor | null>(null);
   const [error, setError] = useState(() =>
@@ -259,7 +331,8 @@ function ModelPreviewSession({ file }: { file: PreviewFile }) {
       aria-label="3D 模型预览"
       data-model-released={released ? 'true' : undefined}
       data-model-release={releaseReport ? JSON.stringify(releaseReport) : undefined}
-      className="flex h-full min-h-[360px] flex-col"
+      // 至少占满容器；按钮行和说明多了就撑高，不溢出到外面（成果页的工具条排在它下面）
+      className="flex flex-col [min-height:max(100%,360px)]"
     >
       <div className="flex flex-wrap items-center gap-2 border-b border-hairline px-4 py-3">
         <span className="mr-auto text-sm text-ink">
@@ -347,6 +420,10 @@ function ModelPreviewSession({ file }: { file: PreviewFile }) {
               {text}
             </button>
           ))}
+          <ViewControls
+            send={(message) => portRef.current?.postMessage(message)}
+            structure={structure}
+          />
           {!structure && !!descriptor?.glb?.report.animations.length && (
             <>
               <select

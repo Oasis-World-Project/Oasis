@@ -128,6 +128,7 @@ export function registerRoutes(
         taskId: body.taskId,
         request: body.request,
         annotations: body.annotations,
+        parameters: body.parameters,
         attachments,
         requestId: request.id,
       }),

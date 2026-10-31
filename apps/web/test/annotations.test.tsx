@@ -252,6 +252,7 @@ describe('发给 AI 修改时带上批注', () => {
       taskId: TASK,
       request: '',
       annotations: [{ file: 'hero.png', number: 1, where: '画面右上', note: '换成夜景' }],
+      parameters: [],
       attachments: [],
     });
   });

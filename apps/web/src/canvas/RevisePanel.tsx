@@ -4,7 +4,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Paperclip, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { MAX_ATTACHMENTS, type RevisionNote } from '@oasis/contracts/conversation';
+import {
+  MAX_ATTACHMENTS,
+  type RevisionNote,
+  type RevisionParameter,
+} from '@oasis/contracts/conversation';
 import { ApiError } from '../api/client.ts';
 import {
   artifactsQuery,
@@ -31,12 +35,15 @@ export function RevisePanel({
   taskId,
   taskTitle,
   conversationId,
+  parameters = [],
   onClose,
 }: {
   taskId: string;
   taskTitle: string;
   /** 做出这一版的私聊（默认发给它）；没有时用第一个能聊的 AI */
   conversationId: string | null;
+  /** 从参数面板来的成品参数（ADR 0012 §12） */
+  parameters?: RevisionParameter[];
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -86,6 +93,7 @@ export function RevisePanel({
         taskId,
         request: request.trim(),
         annotations,
+        parameters,
         attachments: [...files.ids, ...shots],
       });
       return target;
@@ -104,7 +112,7 @@ export function RevisePanel({
   });
 
   const ready =
-    (request.trim().length > 0 || (withNotes && noteCount > 0)) &&
+    (request.trim().length > 0 || (withNotes && noteCount > 0) || parameters.length > 0) &&
     !!modelKey &&
     !files.uploading &&
     !files.failed;
@@ -150,6 +158,18 @@ export function RevisePanel({
               placeholder="比如：标题改成「山居」，第二段再短一点，配图换成夜景"
             />
           </label>
+          {parameters.length > 0 && (
+            <section aria-label="参数修改" className="flex flex-col gap-1 text-[13.5px]">
+              <span className="font-medium">参数修改（{parameters.length} 项）</span>
+              <ul className="m-0 flex list-none flex-col gap-0.5 rounded-item bg-glass-strong px-3 py-2 text-[13px]">
+                {parameters.map((p) => (
+                  <li key={`${p.file}-${p.name}`}>
+                    {p.name}：<strong className="font-medium">{p.value}</strong>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           {noteCount > 0 && (
             <label className="flex items-start gap-2 text-[13.5px]">
               <input

@@ -5,7 +5,11 @@ import {
   UploadLookupResult,
   type Material,
 } from '@oasis/contracts/canvas';
-import type { MessageAttachment, RevisionNote } from '@oasis/contracts/conversation';
+import type {
+  MessageAttachment,
+  RevisionNote,
+  RevisionParameter,
+} from '@oasis/contracts/conversation';
 import { MAX_MATERIALS, TaskBody, type TaskSheet } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
@@ -18,11 +22,33 @@ const KEEP_SAME = '只改修改意见涉及的地方，其余与上一版保持�
 
 type RevisionFiles = RevisionMaterialsResult['files'];
 
+/**
+ * 修订任务单里的验收点：一句短话。完整的意见和批注在要求原话和修订说明里，
+ * 验收点只点明要核对什么（批注全文放进来太长，交付消息里的检查清单也难读）。
+ */
+export function revisionCriterion(request: string, noteCount: number, paramCount = 0): string {
+  if (!noteCount && !paramCount)
+    return `修改意见已落实：${request.length > 60 ? `${request.slice(0, 60)}…` : request}`;
+  const parts = [
+    request ? '修改意见' : '',
+    noteCount ? `${noteCount} 条批注` : '',
+    paramCount ? `${paramCount} 项参数` : '',
+  ].filter(Boolean);
+  const last = parts.at(-1)!;
+  // 「和」后面接数字时空一格，和「2 条批注」的写法一致
+  const joined =
+    parts.length > 1
+      ? `${parts.slice(0, -1).join('、')}和${/^\d/.test(last) ? ' ' : ''}${last}`
+      : last;
+  return `${joined}都已落实（见修改意见）`;
+}
+
 /** 上一版的任务单加上修改意见（ADR 0012 §3）；直接给方案建的任务没有任务单，按交付物补一张 */
 export function revisedSheet(
   previous: Pick<TaskBody, 'title' | 'sheet' | 'deliverables'>,
   request: string,
   materials: Material[],
+  criterion = revisionCriterion(request, 0),
 ): TaskSheet {
   const base: TaskSheet = previous.sheet ?? {
     title: previous.title.slice(0, 60),
@@ -40,7 +66,7 @@ export function revisedSheet(
   const quote = request.slice(0, 2000);
   return {
     ...base,
-    criteria: [...base.criteria.slice(0, 7), `修改意见已落实：${request}`.slice(0, 200)],
+    criteria: [...base.criteria.slice(0, 7), criterion.slice(0, 200)],
     style: base.style.includes(KEEP_SAME) ? base.style : [...base.style.slice(0, 7), KEEP_SAME],
     // 有来源的要求最多 32 条：放不下时去掉最早的修改意见，原始要求保留
     requirements: [
@@ -55,7 +81,11 @@ export function revisedSheet(
  * 修改意见的完整文字：用户写的话，加上每条批注一行（ADR 0012 §9）。
  * 任务单的要求、验收点、说明和私聊里的消息都用它，保证各处说的是同一件事。
  */
-export function revisionText(request: string, annotations: RevisionNote[]): string {
+export function revisionText(
+  request: string,
+  annotations: RevisionNote[],
+  parameters: RevisionParameter[] = [],
+): string {
   // 按用户看到的顺序（前端按文件、编号排好）
   const notes = annotations.map((a) => {
     const extra = [
@@ -64,7 +94,14 @@ export function revisionText(request: string, annotations: RevisionNote[]): stri
     ].filter(Boolean);
     return `${a.number}.「${a.file}」${a.where}：${a.note}${extra.length ? `（${extra.join('；')}）` : ''}`;
   });
-  return [request, ...(notes.length ? ['批注：', ...notes] : [])].filter(Boolean).join('\n');
+  const params = parameters.map((p) => `「${p.file}」${p.name}：${p.value}`);
+  return [
+    request,
+    ...(notes.length ? ['批注：', ...notes] : []),
+    ...(params.length ? ['参数：', ...params] : []),
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /** 修订说明：上一版的说明 + 本次修改（超长时截短上一版说明的后部，修改部分完整保留） */
@@ -81,6 +118,7 @@ export function revisionBrief(
     '- 只改修改意见涉及的地方，其余内容、结构和风格与上一版保持一致；',
     '- 新版会整体替换上一版，所以必须交齐任务单里的全部交付物；没要求改的文件从 materials/ 原样复制到交付位置。',
     '- 「保持一致」指内容、构图、主体和风格不变，不要求像素完全相同。图片、视频这类生成的画面，优先用支持参考图的工具在上一版上改（把上一版和标注截图作为参考图），比手工抠图、逐像素合成更快也更自然；改完核对没提到的地方没有明显变化即可。',
+    '- 「参数：」里每一项是用户在参数面板里选定的新值（如字幕字号、配乐音量、材质、尺寸），按它改成品；没列出的参数保持不变。',
     '- 批注里的位置：「第 N 页」指 PDF 或演示文稿的页码，「m:ss」指音视频的时间，画面上的位置以随附的标注截图为准（截图上的编号和批注编号一致）。',
     '',
     '### 修改意见（用户原话）',
@@ -128,11 +166,13 @@ export function createRevisionService(deps: {
       taskId: string;
       request: string;
       annotations: RevisionNote[];
+      parameters?: RevisionParameter[];
       attachments: MessageAttachment[];
       requestId: string;
     }): Promise<Message[]> {
       const { ownerId, requestId } = input;
-      const text = revisionText(input.request, input.annotations);
+      const parameters = input.parameters ?? [];
+      const text = revisionText(input.request, input.annotations, parameters);
       let previous: TaskBody;
       try {
         previous = await deps.task.json('GET', `/internal/tasks/${input.taskId}`, {
@@ -169,7 +209,12 @@ export function createRevisionService(deps: {
         requestId,
       });
       const materials = mergeMaterials([...kept, ...revision.materials], input.attachments);
-      const sheet = revisedSheet(previous, text, materials);
+      const sheet = revisedSheet(
+        previous,
+        text,
+        materials,
+        revisionCriterion(input.request, input.annotations.length, parameters.length),
+      );
       const created = await deps.task.json('POST', '/internal/tasks', {
         body: {
           ownerId,

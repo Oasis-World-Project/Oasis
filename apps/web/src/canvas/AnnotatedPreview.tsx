@@ -42,6 +42,8 @@ interface Props {
   pending: Drawn | null;
   onDraw: (drawn: Drawn) => void;
   jump: Jump | null;
+  /** 参数面板的近似预览（ADR 0012 §12）：视频滤镜、音量（只能调低）、倍速 */
+  look?: { filter?: string; volume?: number; rate?: number };
 }
 
 /** 时间轴：批注处一个红点，点一下跳过去 */
@@ -91,8 +93,21 @@ function MediaView({
   pending,
   onDraw,
   jump,
+  look,
 }: Props & { audio: boolean }) {
   const media = useRef<HTMLVideoElement & HTMLAudioElement>(null);
+  // 参数面板改了音量、语速：只在值变化时套到播放器上，不覆盖用户在播放器里自己调的
+  const volume = look?.volume,
+    rate = look?.rate;
+  useEffect(() => {
+    if (media.current) media.current.volume = volume ?? 1;
+  }, [volume]);
+  useEffect(() => {
+    const el = media.current;
+    if (!el) return;
+    el.preservesPitch = true;
+    el.playbackRate = rate ?? 1;
+  }, [rate]);
   const [state, setState] = useState({ duration: 0, current: 0, paused: true });
   const sync = () => {
     const el = media.current;
@@ -139,6 +154,7 @@ function MediaView({
             ref={media}
             src={file.url}
             controls={!(annotating && state.paused && tool)}
+            style={look?.filter ? { filter: look.filter } : undefined}
             className="block max-h-[62vh] max-w-full rounded-item"
             {...events}
           />

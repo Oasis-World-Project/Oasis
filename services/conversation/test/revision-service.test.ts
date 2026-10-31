@@ -9,6 +9,7 @@ import {
   createRevisionService,
   revisedSheet,
   revisionBrief,
+  revisionCriterion,
   revisionText,
 } from '../src/service/revision-service.ts';
 
@@ -286,7 +287,35 @@ describe('批注与批准（ADR 0012 §9）', () => {
     const body = created[0] as { sheet: TaskSheet; brief: string };
     const text = revisionText('', notes);
     expect(body.sheet.requirements?.at(-1)?.text).toBe(text);
+    // 验收点是一句短话，批注全文只在要求原话和说明里
+    expect(body.sheet.criteria.at(-1)).toBe('2 条批注都已落实（见修改意见）');
     expect(body.brief).toContain(`### 修改意见（用户原话）\n${text}`);
     expect(messages[0]?.content).toBe(`修改「小木屋首页」：${text}`);
+  });
+});
+
+describe('修订任务单的验收点', () => {
+  it('一句短话：只有意见时带开头，有批注时只说条数', () => {
+    expect(revisionCriterion('标题改成「山居」', 0)).toBe('修改意见已落实：标题改成「山居」');
+    expect(revisionCriterion('长'.repeat(100), 0)).toBe(`修改意见已落实：${'长'.repeat(60)}…`);
+    expect(revisionCriterion('', 3)).toBe('3 条批注都已落实（见修改意见）');
+    expect(revisionCriterion('整体暖一点', 2)).toBe('修改意见和 2 条批注都已落实（见修改意见）');
+    expect(revisionCriterion('', 0, 3)).toBe('3 项参数都已落实（见修改意见）');
+    expect(revisionCriterion('暖一点', 1, 2)).toBe(
+      '修改意见、1 条批注和 2 项参数都已落实（见修改意见）',
+    );
+  });
+
+  it('参数作为单独一节，每项一行「文件」名称：新值', () => {
+    expect(
+      revisionText(
+        '',
+        [],
+        [
+          { file: '宣传短片.mp4', name: '字幕字号', value: '大' },
+          { file: '宣传短片.mp4', name: '背景音乐音量', value: '-6 dB' },
+        ],
+      ),
+    ).toBe('参数：\n「宣传短片.mp4」字幕字号：大\n「宣传短片.mp4」背景音乐音量：-6 dB');
   });
 });

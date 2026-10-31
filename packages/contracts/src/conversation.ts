@@ -181,6 +181,14 @@ export const RevisionNote = z.object({
 });
 export type RevisionNote = z.infer<typeof RevisionNote>;
 
+/** 参数面板里改的一项成品参数（ADR 0012 §12），如「字幕字号：大」 */
+export const RevisionParameter = z.object({
+  file: z.string().trim().min(1).max(200),
+  name: z.string().trim().min(1).max(40),
+  value: z.string().trim().min(1).max(200),
+});
+export type RevisionParameter = z.infer<typeof RevisionParameter>;
+
 /**
  * 修改成果（ADR 0012）：把修改意见发到这个私聊，新建一条工作流做出新版。
  * 不再问需求、不再确认任务单；新版交付后整体替换 taskId 那一版。
@@ -189,15 +197,17 @@ export const RevisionBody = z
   .object({
     /** 要修改的是哪个任务的成果（必须已经交付） */
     taskId: z.uuid(),
-    /** 修改意见；带了批注时可以不写 */
+    /** 修改意见；带了批注或参数时可以不写 */
     request: z.string().trim().max(8000).default(''),
     annotations: z.array(RevisionNote).max(100).default([]),
+    parameters: z.array(RevisionParameter).max(40).default([]),
     /** 先传到 canvas 的文件 id（如参考图、标注截图） */
     attachments: z.array(z.uuid()).max(MAX_ATTACHMENTS).default([]),
   })
-  .refine((body) => body.request.length > 0 || body.annotations.length > 0, {
-    message: '写下修改意见，或者带上批注',
-  });
+  .refine(
+    (body) => body.request.length > 0 || body.annotations.length > 0 || body.parameters.length > 0,
+    { message: '写下修改意见，或者带上批注、参数' },
+  );
 
 /** 接需求的几个接口都返回这次新增的消息 */
 export const IntakeResult = z.object({ messages: z.array(MessageBody) });

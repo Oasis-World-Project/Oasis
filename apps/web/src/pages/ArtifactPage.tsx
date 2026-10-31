@@ -16,6 +16,7 @@ import {
   taskArchiveUrl,
   tasksQuery,
 } from '../api/queries.ts';
+import type { RevisionParameter } from '@oasis/contracts/conversation';
 import { ConfirmButton } from '../chat/parts.tsx';
 import { ArtifactReview } from '../canvas/ArtifactReview.tsx';
 import { PreviewPlayer } from '../canvas/PreviewPlayer.tsx';
@@ -41,6 +42,8 @@ export function ArtifactPage() {
     ? tasks.find((t) => t.revisionOf === artifact.taskId && !SETTLED_STATUSES.has(t.status))
     : undefined;
   const [reviseOpen, setReviseOpen] = useState(false);
+  /** 从参数面板来的修改：参数随对话框一起发 */
+  const [parameters, setParameters] = useState<RevisionParameter[]>([]);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const remove = useMutation({
@@ -179,7 +182,10 @@ export function ArtifactPage() {
               <>
                 <button
                   type="button"
-                  onClick={() => setReviseOpen(true)}
+                  onClick={() => {
+                    setParameters([]);
+                    setReviseOpen(true);
+                  }}
                   className={`${pill} border-0 bg-accent text-on-accent`}
                 >
                   <PencilLine size={15} aria-hidden="true" />
@@ -207,6 +213,7 @@ export function ArtifactPage() {
           taskId={artifact.taskId}
           taskTitle={artifact.taskTitle}
           conversationId={artifact.conversationId}
+          parameters={parameters}
           onClose={() => setReviseOpen(false)}
         />
       )}
@@ -223,6 +230,15 @@ export function ArtifactPage() {
             <ArtifactReview
               key={artifact.id}
               artifact={artifact}
+              // 正在修改时不能再发起修改，参数面板也就不给
+              {...(revising
+                ? {}
+                : {
+                    onRevise: (next: RevisionParameter[]) => {
+                      setParameters(next);
+                      setReviseOpen(true);
+                    },
+                  })}
               file={{
                 path: artifact.path,
                 size: artifact.size,

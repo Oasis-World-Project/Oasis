@@ -8,6 +8,7 @@ import {
   IntakeResult,
   MessageList,
   type RevisionNote,
+  type RevisionParameter,
 } from '@oasis/contracts/conversation';
 import { MeBody, VerifyCodeResult } from '@oasis/contracts/identity';
 import { RunEventList, type RunEventBody } from '@oasis/contracts/harness';
@@ -97,7 +98,13 @@ export const confirmIntake = (conversationId: string) => intakeCall(conversation
 /** 修改成果（ADR 0012）：修改意见发到这个私聊，新建一条工作流做出新版；返回新增的消息 */
 export const reviseTask = (
   conversationId: string,
-  body: { taskId: string; request: string; annotations: RevisionNote[]; attachments: string[] },
+  body: {
+    taskId: string;
+    request: string;
+    annotations: RevisionNote[];
+    parameters?: RevisionParameter[];
+    attachments: string[];
+  },
 ) =>
   api(`/conversation/v1/conversations/${conversationId}/revisions`, IntakeResult, {
     method: 'POST',

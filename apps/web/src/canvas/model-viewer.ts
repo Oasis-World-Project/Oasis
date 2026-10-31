@@ -53,6 +53,56 @@ function run(port: MessagePort) {
     last = 0,
     radius = 1;
   let structure = false;
+  // 观看控制（ADR 0012 §12）：只改这个画面里的灯光、视角和线框，不改模型文件
+  let ambient: AmbientLight | undefined,
+    sun: DirectionalLight | undefined,
+    baseColor = new Color(),
+    baseAmbient = 0,
+    baseSun = 0;
+  const LEVELS = { dim: 0.5, normal: 1, bright: 1.6 } as const;
+  /** 色温：在主题光色上乘一个系数（暖偏黄、冷偏蓝） */
+  const TONES = { warm: [1, 0.86, 0.7], neutral: [1, 1, 1], cool: [0.78, 0.88, 1] } as const;
+  const VIEWS = {
+    iso: [1, 0.7, 1.3],
+    front: [0, 0, 1],
+    side: [1, 0, 0],
+    top: [0, 1, 0.0001],
+  } as const;
+  function setLight(level: unknown, tone: unknown) {
+    if (!ambient || !sun) return;
+    const k = LEVELS[level as keyof typeof LEVELS] ?? 1;
+    const [r, g, b] = TONES[tone as keyof typeof TONES] ?? TONES.neutral;
+    const color = baseColor.clone().multiply(new Color(r, g, b));
+    ambient.color.copy(color);
+    sun.color.copy(color);
+    ambient.intensity = baseAmbient * k;
+    sun.intensity = baseSun * k;
+  }
+  function setView(preset: unknown) {
+    const direction = VIEWS[preset as keyof typeof VIEWS];
+    if (!direction || !camera || !controls) return;
+    controls.target.set(0, 0, 0);
+    camera.position
+      .set(direction[0], direction[1], direction[2])
+      .normalize()
+      .multiplyScalar(radius * 3.6);
+    controls.update();
+  }
+  function setWireframe(on: boolean) {
+    model?.scene.traverse((object) => {
+      const mesh = object as Object3D & { material?: Material | Material[] };
+      for (const material of mesh.material
+        ? Array.isArray(mesh.material)
+          ? mesh.material
+          : [mesh.material]
+        : []) {
+        if ('wireframe' in material) {
+          (material as Material & { wireframe: boolean }).wireframe = on;
+          material.needsUpdate = true;
+        }
+      }
+    });
+  }
   const manager = new LoadingManager();
   const urls = new Set<string>();
   let releasedObjects = { geometries: 0, materials: 0, textures: 0 };
@@ -254,15 +304,14 @@ function run(port: MessagePort) {
     });
     scene = new Scene();
     scene.background = new Color(data.theme.ground);
-    scene.add(
-      new AmbientLight(
-        new Color(data.theme.light).multiplyScalar(structure ? 0.2 : 1),
-        structure ? 1 : 2,
-      ),
-    );
-    const light = new DirectionalLight(new Color(data.theme.light), structure ? 0.6 : 3);
-    light.position.set(3, 4, 5);
-    scene.add(light);
+    baseColor = new Color(data.theme.light);
+    baseAmbient = structure ? 1 : 2;
+    baseSun = structure ? 0.6 : 3;
+    ambient = new AmbientLight(baseColor.clone().multiplyScalar(structure ? 0.2 : 1), baseAmbient);
+    scene.add(ambient);
+    sun = new DirectionalLight(baseColor.clone(), baseSun);
+    sun.position.set(3, 4, 5);
+    scene.add(sun);
     camera = new PerspectiveCamera(35, 1, 0.01, 1000);
     controls = new OrbitControls(camera, document.body);
     controls.addEventListener('change', render);
@@ -379,6 +428,10 @@ function run(port: MessagePort) {
       camera.position.add(shift);
       controls.update();
     }
+    if (data.type === 'view') setView(data.preset);
+    // 结构预览（SVG）没有材质和灯光，只给视角
+    if (data.type === 'wireframe' && !structure) setWireframe(data.on === true);
+    if (data.type === 'light' && !structure) setLight(data.level, data.tone);
     if (data.type === 'play' && !structure) setPlaying(data.playing === true);
     if (
       data.type === 'clip' &&

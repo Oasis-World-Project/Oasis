@@ -2,7 +2,16 @@
 // 右侧批注列表（点一条翻到那一页、跳到那一刻；标注时可以删）。画好一处就在侧栏写意见，写好立即保存。
 import type { Annotation, ArtifactBody } from '@oasis/contracts/canvas';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Circle, Eraser, MapPin, MessageSquareText, PenLine, X } from 'lucide-react';
+import type { RevisionParameter } from '@oasis/contracts/conversation';
+import {
+  Circle,
+  Eraser,
+  MapPin,
+  MessageSquareText,
+  PenLine,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client.ts';
 import { artifactQuery, saveAnnotations } from '../api/queries.ts';
@@ -11,6 +20,8 @@ import { previewKindOf } from '../chat/files.ts';
 import { AnnotatedPreview, type Drawn, type Jump } from './AnnotatedPreview.tsx';
 import type { Tool } from './AnnotationLayer.tsx';
 import { nextNumber, surfaceOf, whereOf } from './annotations.ts';
+import { ParameterPanel } from './ParameterPanel.tsx';
+import { fieldsFor, mediaLook, type Values } from './parameters.ts';
 
 const TOOLS: { tool: Tool; label: string; Icon: typeof Circle }[] = [
   { tool: 'ellipse', label: '圈', Icon: Circle },
@@ -21,12 +32,31 @@ const TOOLS: { tool: Tool; label: string; Icon: typeof Circle }[] = [
 const barButton =
   'inline-flex h-9 items-center gap-1.5 rounded-full border-0 px-3.5 text-[13px] font-medium';
 
-export function ArtifactReview({ artifact, file }: { artifact: ArtifactBody; file: PreviewFile }) {
+/** 能在浏览器里近似预览的参数（告诉用户哪些改了能直接看到） */
+const PREVIEWABLE: Partial<Record<string, string[]>> = {
+  video: ['亮度', '色温'],
+  audio: ['语速', '音量（只能听到调低）'],
+};
+
+export function ArtifactReview({
+  artifact,
+  file,
+  onRevise,
+}: {
+  artifact: ArtifactBody;
+  file: PreviewFile;
+  /** 「按这些参数改一版」：交给发给 AI 修改的对话框 */
+  onRevise?: (parameters: RevisionParameter[]) => void;
+}) {
   const queryClient = useQueryClient();
-  const surface = surfaceOf(previewKindOf(artifact.path), !!file.pdfUrl);
+  const kind = previewKindOf(artifact.path);
+  const surface = surfaceOf(kind, !!file.pdfUrl);
   const visual = surface !== 'text' && surface !== 'audio';
+  const fields = onRevise ? fieldsFor(kind) : [];
+  const [values, setValues] = useState<Values>({});
   const [annotating, setAnnotating] = useState(false);
-  const [panel, setPanel] = useState(false);
+  /** 侧栏放什么：批注列表或参数；标注时总是批注 */
+  const [side, setSide] = useState<'notes' | 'params' | null>(null);
   const [tool, setTool] = useState<Tool>('ellipse');
   const [pending, setPending] = useState<Drawn | null>(null);
   const [note, setNote] = useState('');
@@ -75,7 +105,7 @@ export function ArtifactReview({ artifact, file }: { artifact: ArtifactBody; fil
     );
   }
   const remove = (id: string) => save.mutate(list.filter((a) => a.id !== id));
-  const showPanel = annotating || panel;
+  const showPanel = annotating || side === 'notes';
   const pendingWhere = pending
     ? whereOf({ ...pending, id: '', number: 1, note: '', quote: null })
     : '';
@@ -93,11 +123,13 @@ export function ArtifactReview({ artifact, file }: { artifact: ArtifactBody; fil
           pending={pending}
           onDraw={begin}
           jump={jump}
+          look={mediaLook(values)}
         />
         <div
           role="toolbar"
           aria-label="标注工具"
-          className="sticky bottom-3 mx-auto mb-3 flex w-fit max-w-[calc(100%-24px)] flex-wrap items-center justify-center gap-1 rounded-[22px] bg-glass-active p-1 shadow-panel backdrop-blur-xl"
+          // 3D 预览自带一排操作按钮，悬浮的工具条会盖住它们，所以排在预览下面
+          className={`${kind === 'model' ? 'relative mt-2' : 'sticky bottom-3'} mx-auto mb-3 flex w-fit max-w-[calc(100%-24px)] flex-wrap items-center justify-center gap-1 rounded-[22px] bg-glass-active p-1 shadow-panel backdrop-blur-xl`}
         >
           {annotating ? (
             <>
@@ -147,13 +179,24 @@ export function ArtifactReview({ artifact, file }: { artifact: ArtifactBody; fil
               </button>
               <button
                 type="button"
-                aria-pressed={panel}
+                aria-pressed={side === 'notes'}
                 aria-label={`批注列表（${list.length} 条）`}
-                onClick={() => setPanel(!panel)}
+                onClick={() => setSide(side === 'notes' ? null : 'notes')}
                 className={`${barButton} bg-transparent text-ink`}
               >
                 批注 {list.length}
               </button>
+              {fields.length > 0 && (
+                <button
+                  type="button"
+                  aria-pressed={side === 'params'}
+                  onClick={() => setSide(side === 'params' ? null : 'params')}
+                  className={`${barButton} ${side === 'params' ? 'bg-solid text-on-solid' : 'bg-transparent text-ink'}`}
+                >
+                  <SlidersHorizontal size={14} aria-hidden="true" />
+                  参数
+                </button>
+              )}
             </>
           )}
         </div>
@@ -169,7 +212,7 @@ export function ArtifactReview({ artifact, file }: { artifact: ArtifactBody; fil
               <button
                 type="button"
                 aria-label="收起批注"
-                onClick={() => setPanel(false)}
+                onClick={() => setSide(null)}
                 className="flex size-8 items-center justify-center rounded-full border-0 bg-track text-ink"
               >
                 <X size={14} aria-hidden="true" />
@@ -293,6 +336,17 @@ export function ArtifactReview({ artifact, file }: { artifact: ArtifactBody; fil
               ))}
           </ol>
         </aside>
+      )}
+      {!showPanel && side === 'params' && onRevise && (
+        <ParameterPanel
+          file={artifact.name}
+          fields={fields}
+          values={values}
+          onChange={setValues}
+          onRevise={onRevise}
+          onClose={() => setSide(null)}
+          previewable={PREVIEWABLE[kind] ?? []}
+        />
       )}
     </div>
   );

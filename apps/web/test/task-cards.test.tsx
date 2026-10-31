@@ -419,7 +419,13 @@ describe('修改成果（ADR 0012）', () => {
     expect(await screen.findByRole('region', { name: `修改：${SHEET.title}` })).toBeTruthy();
     expect(
       api.bodies.find((b) => b.path.endsWith(`/conversations/${CONV}/revisions`))?.body,
-    ).toEqual({ taskId: TASK, request: '标题改成山居', annotations: [], attachments: [] });
+    ).toEqual({
+      taskId: TASK,
+      request: '标题改成山居',
+      annotations: [],
+      parameters: [],
+      attachments: [],
+    });
   });
 
   it('被替换、被删除的任务：卡片只留一句话，不再查任务、不给下载', async () => {
