@@ -118,6 +118,20 @@ export function ArtifactCard({
         className="relative block h-[168px] overflow-hidden rounded-[22px] bg-glass-strong oasis-dots"
       >
         <Thumb artifact={artifact} />
+        {(artifact.approvedAt || artifact.annotations.length > 0) && (
+          <span className="absolute right-2 top-2 flex gap-1">
+            {artifact.annotations.length > 0 && (
+              <span className="rounded-full bg-accent px-2 py-0.5 text-[11px] font-medium text-on-accent">
+                批注 {artifact.annotations.length}
+              </span>
+            )}
+            {artifact.approvedAt && (
+              <span className="rounded-full bg-solid px-2 py-0.5 text-[11px] font-medium text-on-solid">
+                已批准
+              </span>
+            )}
+          </span>
+        )}
       </Link>
       <div className="flex min-w-0 flex-col gap-0.5 px-2">
         <h3 className="m-0 truncate text-[14.5px] font-medium">

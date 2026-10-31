@@ -5,7 +5,7 @@ import {
   UploadLookupResult,
   type Material,
 } from '@oasis/contracts/canvas';
-import type { MessageAttachment } from '@oasis/contracts/conversation';
+import type { MessageAttachment, RevisionNote } from '@oasis/contracts/conversation';
 import { MAX_MATERIALS, TaskBody, type TaskSheet } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
@@ -51,6 +51,22 @@ export function revisedSheet(
   };
 }
 
+/**
+ * 修改意见的完整文字：用户写的话，加上每条批注一行（ADR 0012 §9）。
+ * 任务单的要求、验收点、说明和私聊里的消息都用它，保证各处说的是同一件事。
+ */
+export function revisionText(request: string, annotations: RevisionNote[]): string {
+  // 按用户看到的顺序（前端按文件、编号排好）
+  const notes = annotations.map((a) => {
+    const extra = [
+      a.quote ? `原文「${a.quote}」` : '',
+      a.snapshot ? `见截图 ${a.snapshot}` : '',
+    ].filter(Boolean);
+    return `${a.number}.「${a.file}」${a.where}：${a.note}${extra.length ? `（${extra.join('；')}）` : ''}`;
+  });
+  return [request, ...(notes.length ? ['批注：', ...notes] : [])].filter(Boolean).join('\n');
+}
+
 /** 修订说明：上一版的说明 + 本次修改（超长时截短上一版说明的后部，修改部分完整保留） */
 export function revisionBrief(
   previousBrief: string,
@@ -58,17 +74,26 @@ export function revisionBrief(
   files: RevisionFiles,
   attachments: Pick<Material, 'name'>[],
 ): string {
+  const approved = files.filter((f) => f.approved);
   const lines = [
     '## 本次是修改',
     '用户看过上一版的成果，提出了下面的修改意见。请在上一版的基础上做出新版：',
     '- 只改修改意见涉及的地方，其余内容、结构和风格与上一版保持一致；',
     '- 新版会整体替换上一版，所以必须交齐任务单里的全部交付物；没要求改的文件从 materials/ 原样复制到交付位置。',
+    '- 批注里的位置：「第 N 页」指 PDF 或演示文稿的页码，「m:ss」指音视频的时间，画面上的位置以随附的标注截图为准（截图上的编号和批注编号一致）。',
     '',
     '### 修改意见（用户原话）',
     request,
     '',
     '### 上一版的文件（在 materials/ 下）',
     ...files.map((f) => `- ${f.material}：上一版的 ${f.path}（交付物「${f.deliverable}」）`),
+    ...(approved.length
+      ? [
+          '',
+          '### 用户已批准的文件（除非修改意见或批注提到，否则原样保留）',
+          ...approved.map((f) => `- ${f.material}`),
+        ]
+      : []),
     ...(attachments.length
       ? [
           '',
@@ -101,10 +126,12 @@ export function createRevisionService(deps: {
       ownerId: string;
       taskId: string;
       request: string;
+      annotations: RevisionNote[];
       attachments: MessageAttachment[];
       requestId: string;
     }): Promise<Message[]> {
       const { ownerId, requestId } = input;
+      const text = revisionText(input.request, input.annotations);
       let previous: TaskBody;
       try {
         previous = await deps.task.json('GET', `/internal/tasks/${input.taskId}`, {
@@ -141,14 +168,14 @@ export function createRevisionService(deps: {
         requestId,
       });
       const materials = mergeMaterials([...kept, ...revision.materials], input.attachments);
-      const sheet = revisedSheet(previous, input.request, materials);
+      const sheet = revisedSheet(previous, text, materials);
       const created = await deps.task.json('POST', '/internal/tasks', {
         body: {
           ownerId,
           payerId: ownerId,
           conversationId: input.conversation.id,
           title: sheet.title,
-          brief: revisionBrief(previous.brief, input.request, revision.files, input.attachments),
+          brief: revisionBrief(previous.brief, text, revision.files, input.attachments),
           sheet,
           materials,
           revisionOf: input.taskId,
@@ -160,7 +187,7 @@ export function createRevisionService(deps: {
         conversationId: input.conversation.id,
         authorKind: 'user',
         authorId: ownerId,
-        content: `修改「${previous.title}」：${input.request}`,
+        content: `修改「${previous.title}」：${text}`,
         status: 'complete',
         kind: 'text',
         data: input.attachments.length ? { attachments: input.attachments } : {},

@@ -127,6 +127,7 @@ export function registerRoutes(
         ownerId,
         taskId: body.taskId,
         request: body.request,
+        annotations: body.annotations,
         attachments,
         requestId: request.id,
       }),

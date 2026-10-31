@@ -479,3 +479,72 @@ describe('修改成果：修订素材、新版替换、删除（ADR 0012）', ()
     expect(objects.objects.size).toBe(0);
   });
 });
+
+describe('批注与批准（ADR 0012 §9）', () => {
+  const send = (
+    method: 'PUT' | 'POST' | 'DELETE',
+    url: string,
+    payload?: Record<string, unknown>,
+    user = KAI,
+  ) =>
+    app.inject({
+      method,
+      url,
+      headers: { [OASIS_HEADERS.userId]: user },
+      ...(payload === undefined ? {} : { payload }),
+    });
+  const note = (number: number, extra: object = {}) => ({
+    id: `30000000-0000-4000-8000-${String(number).padStart(12, '0')}`,
+    number,
+    note: `第 ${number} 处要改`,
+    page: null,
+    time: null,
+    quote: null,
+    shape: null,
+    ...extra,
+  });
+
+  it('整份替换批注：只能改自己的，编号不能重复，坐标必须在画面里', async () => {
+    await service.onTaskStatus(event(T1));
+    const image = repo.rows.find((r) => r.path === 'hero.png')!;
+    const url = `/v1/artifacts/${image.id}/annotations`;
+    const ok = await send('PUT', url, {
+      annotations: [
+        note(1, { shape: { kind: 'ellipse', x: 0.1, y: 0.2, w: 0.3, h: 0.2 } }),
+        note(2, { time: 12.5, shape: { kind: 'pin', x: 0.5, y: 0.5 } }),
+      ],
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json<{ annotations: unknown[] }>().annotations).toHaveLength(2);
+    expect((await get(`/v1/artifacts/${image.id}`)).json()).toMatchObject({
+      annotations: [{ number: 1 }, { number: 2, time: 12.5 }],
+    });
+    expect((await send('PUT', url, { annotations: [note(1), note(1)] })).statusCode).toBe(400);
+    expect(
+      (
+        await send('PUT', url, {
+          annotations: [note(3, { shape: { kind: 'pin', x: 1.5, y: 0 } })],
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect((await send('PUT', url, { annotations: [] }, MIA)).statusCode).toBe(404);
+  });
+
+  it('批准是记号：可以取消；修订素材里带上「已批准」', async () => {
+    await service.onTaskStatus(event(T1));
+    const copy = repo.rows.find((r) => r.path === '首页文案.md')!;
+    const approved = await send('POST', `/v1/artifacts/${copy.id}/approval`);
+    expect(approved.json<{ approvedAt: string | null }>().approvedAt).not.toBeNull();
+    const result = await service.revisionMaterials(KAI, T1, 20, {
+      maxBytes: 1024 * 1024,
+      archive: { bytes: 1024 * 1024, files: 100 },
+    });
+    expect(result.files.find((f) => f.path === '首页文案.md')?.approved).toBe(true);
+    expect(result.files.find((f) => f.path === 'hero.png')?.approved).toBe(false);
+    const undone = await send('DELETE', `/v1/artifacts/${copy.id}/approval`);
+    expect(undone.json<{ approvedAt: string | null }>().approvedAt).toBeNull();
+    expect(
+      (await send('POST', `/v1/artifacts/${copy.id}/approval`, undefined, MIA)).statusCode,
+    ).toBe(404);
+  });
+});

@@ -9,6 +9,7 @@ import {
   createRevisionService,
   revisedSheet,
   revisionBrief,
+  revisionText,
 } from '../src/service/revision-service.ts';
 
 const OWNER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
@@ -63,7 +64,12 @@ describe('任务单与说明', () => {
 
   it('说明附上文件对照和原话；超长时保留上一版说明的开头和完整的修改部分', () => {
     const files = [
-      { material: '上一版-首页文案.md', path: '首页文案.md', deliverable: '首页文案' },
+      {
+        material: '上一版-首页文案.md',
+        path: '首页文案.md',
+        deliverable: '首页文案',
+        approved: false,
+      },
     ];
     const brief = revisionBrief('最初的需求', '标题改成「山居」', files, [{ name: '参考.png' }]);
     expect(brief).toContain('最初的需求');
@@ -160,14 +166,18 @@ beforeEach(() => {
     logger: pino({ level: 'silent' }),
   });
 });
+type Notes = Parameters<ReturnType<typeof createRevisionService>['revise']>[0]['annotations'];
 const revise = (
   attachments = [] as { id: string; name: string; size: number; contentType: string }[],
+  annotations: Notes = [],
+  request = '标题改成「山居」',
 ) =>
   service.revise({
     conversation,
     ownerId: OWNER,
     taskId: OLD,
-    request: '标题改成「山居」',
+    request,
+    annotations,
     attachments,
     requestId: 'r',
   });
@@ -224,5 +234,57 @@ describe('发起修改', () => {
     expect(error).toBeInstanceOf(HttpError);
     expect((error as HttpError).code).toBe('too_many_materials');
     expect(created).toHaveLength(0);
+  });
+});
+
+describe('批注与批准（ADR 0012 §9）', () => {
+  const notes = [
+    {
+      file: 'hero.png',
+      number: 2,
+      where: '画面右下',
+      note: '换成夜景',
+      snapshot: '批注-hero.png',
+    },
+    { file: '首页文案.md', number: 1, where: '', note: '这句太长', quote: '山里的小木屋欢迎你' },
+  ];
+
+  it('每条批注一行：文件、位置、意见、引用原文、见哪张截图', () => {
+    expect(revisionText('整体再温馨一点', notes)).toBe(
+      [
+        '整体再温馨一点',
+        '批注：',
+        '2.「hero.png」画面右下：换成夜景（见截图 批注-hero.png）',
+        '1.「首页文案.md」：这句太长（原文「山里的小木屋欢迎你」）',
+      ].join('\n'),
+    );
+    expect(revisionText('', notes.slice(1))).toBe(
+      '批注：\n1.「首页文案.md」：这句太长（原文「山里的小木屋欢迎你」）',
+    );
+  });
+
+  it('说明里列出用户已批准的文件', () => {
+    const brief = revisionBrief(
+      'b',
+      '改',
+      [
+        { material: '上一版-hero.png', path: 'hero.png', deliverable: '图', approved: true },
+        { material: '上一版-a.md', path: 'a.md', deliverable: '文', approved: false },
+      ],
+      [],
+    );
+    expect(brief).toContain(
+      '### 用户已批准的文件（除非修改意见或批注提到，否则原样保留）\n- 上一版-hero.png',
+    );
+    expect(brief).not.toContain('- 上一版-a.md\n');
+  });
+
+  it('只带批注、不写意见也能发起：任务单、说明和私聊消息用同一段文字', async () => {
+    const messages = await revise([], notes, '');
+    const body = created[0] as { sheet: TaskSheet; brief: string };
+    const text = revisionText('', notes);
+    expect(body.sheet.requirements?.at(-1)?.text).toBe(text);
+    expect(body.brief).toContain(`### 修改意见（用户原话）\n${text}`);
+    expect(messages[0]?.content).toBe(`修改「小木屋首页」：${text}`);
   });
 });

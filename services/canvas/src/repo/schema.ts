@@ -1,5 +1,5 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
-import type { ApplicationSpec, ArtifactCategory } from '@oasis/contracts/canvas';
+import type { Annotation, ApplicationSpec, ArtifactCategory } from '@oasis/contracts/canvas';
 import { bigint, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const uploads = pgTable('uploads', {
@@ -36,5 +36,9 @@ export const artifacts = pgTable('artifacts', {
   syncPath: text('sync_path').notNull(),
   /** 新版替换旧版时，同一同步路径上旧文件的摘要 */
   replacesSha256: text('replaces_sha256'),
+  /** 用户的批注（ADR 0012 §9） */
+  annotations: jsonb('annotations').$type<Annotation[]>().notNull().default([]),
+  /** 用户点了「批准」的时间 */
+  approvedAt: timestamp('approved_at', { withTimezone: true, mode: 'date' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });

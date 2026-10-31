@@ -30,6 +30,8 @@ function artifact(
     conversationId: CONV,
     models: ['deepseek/x'],
     syncPath: `民宿首页/${path}`,
+    annotations: [],
+    approvedAt: null,
     createdAt: `2026-10-24T0${n}:00:00.000Z`,
     ...extra,
   };

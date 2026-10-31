@@ -168,17 +168,36 @@ export const IntakeAnswersBody = z.object({
 /** 从某条用户消息开始接需求（点了「当成任务来做」） */
 export const StartIntakeBody = z.object({ messageId: z.uuid() });
 
+/** 修改时带上的一条批注（ADR 0012 §9）：在哪个文件、哪里、什么意见，见哪张标注截图 */
+export const RevisionNote = z.object({
+  file: z.string().trim().min(1).max(200),
+  number: z.number().int().min(1).max(99),
+  /** 给人看的位置，如「第 2 页」「0:12」「画面左上」 */
+  where: z.string().trim().max(120).default(''),
+  note: z.string().trim().min(1).max(500),
+  quote: z.string().trim().max(300).optional(),
+  /** 随修改上传的标注截图的文件名 */
+  snapshot: z.string().trim().max(200).optional(),
+});
+export type RevisionNote = z.infer<typeof RevisionNote>;
+
 /**
  * 修改成果（ADR 0012）：把修改意见发到这个私聊，新建一条工作流做出新版。
  * 不再问需求、不再确认任务单；新版交付后整体替换 taskId 那一版。
  */
-export const RevisionBody = z.object({
-  /** 要修改的是哪个任务的成果（必须已经交付） */
-  taskId: z.uuid(),
-  request: z.string().trim().min(1).max(8000),
-  /** 先传到 canvas 的文件 id（如参考图、标注截图） */
-  attachments: z.array(z.uuid()).max(MAX_ATTACHMENTS).default([]),
-});
+export const RevisionBody = z
+  .object({
+    /** 要修改的是哪个任务的成果（必须已经交付） */
+    taskId: z.uuid(),
+    /** 修改意见；带了批注时可以不写 */
+    request: z.string().trim().max(8000).default(''),
+    annotations: z.array(RevisionNote).max(100).default([]),
+    /** 先传到 canvas 的文件 id（如参考图、标注截图） */
+    attachments: z.array(z.uuid()).max(MAX_ATTACHMENTS).default([]),
+  })
+  .refine((body) => body.request.length > 0 || body.annotations.length > 0, {
+    message: '写下修改意见，或者带上批注',
+  });
 
 /** 接需求的几个接口都返回这次新增的消息 */
 export const IntakeResult = z.object({ messages: z.array(MessageBody) });

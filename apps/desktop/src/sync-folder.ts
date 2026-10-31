@@ -56,6 +56,23 @@ export function resolveInside(folder: string, relative: string): string {
   return target;
 }
 
+/**
+ * 改名覆盖旧文件。Windows 上杀毒软件或索引服务刚扫到新写的文件时，会短暂占着它，
+ * 改名报 EPERM / EBUSY / EACCES；稍等再试几次。
+ */
+async function replaceFile(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? '';
+      if (attempt >= 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+}
+
 /** 电脑上一个文件的 SHA-256（判断它是不是用户没改过的旧版） */
 async function fileSha256(file: string): Promise<string> {
   const hash = createHash('sha256');
@@ -267,7 +284,7 @@ export function createSyncFolder(recordFile: string) {
         transfers.delete(token);
         try {
           // 替换没改过的旧版：改名覆盖（原子）；其余情况不覆盖已有文件
-          if (item.overwrite) await rename(item.partial, item.target);
+          if (item.overwrite) await replaceFile(item.partial, item.target);
           else await link(item.partial, item.target);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;

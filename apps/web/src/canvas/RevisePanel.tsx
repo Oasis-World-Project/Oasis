@@ -4,8 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Paperclip, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { MAX_ATTACHMENTS, type RevisionNote } from '@oasis/contracts/conversation';
 import { ApiError } from '../api/client.ts';
 import {
+  artifactsQuery,
   createDm,
   dmsQuery,
   messagesQuery,
@@ -13,8 +15,14 @@ import {
   reviseTask,
   tasksQuery,
 } from '../api/queries.ts';
+import { uploadFile } from '../api/upload.ts';
 import { PendingFiles } from '../chat/Attachments.tsx';
 import { useAttachments } from '../chat/use-attachments.ts';
+import { toRevisionNotes } from './annotations.ts';
+import { buildSnapshots } from './snapshots.ts';
+
+/** 标注截图最多带几张（和自己附的文件合计不超过一条消息的上限） */
+const MAX_SNAPSHOTS = 8;
 
 const field =
   'w-full rounded-item border-0 bg-glass-active px-3.5 py-2.5 text-[14px] text-ink shadow-edge-strong outline-none focus-visible:outline-2 focus-visible:outline-accent';
@@ -47,6 +55,12 @@ export function RevisePanel({
   const [request, setRequest] = useState('');
   const files = useAttachments();
   const fileInput = useRef<HTMLInputElement>(null);
+  // 这个任务的成果上的批注（ADR 0012 §9）：默认一起带上
+  const { data: artifacts = [] } = useQuery(artifactsQuery(taskId));
+  const noted = artifacts.filter((a) => a.annotations.length > 0);
+  const noteCount = noted.reduce((n, a) => n + a.annotations.length, 0);
+  const [withNotes, setWithNotes] = useState(true);
+  const [stage, setStage] = useState<string | null>(null);
 
   const send = useMutation({
     mutationFn: async () => {
@@ -54,9 +68,29 @@ export function RevisePanel({
         modelKey === original && conversationId
           ? conversationId
           : (dms.find((d) => d.modelKey === modelKey)?.id ?? (await createDm(modelKey)).id);
-      await reviseTask(target, { taskId, request: request.trim(), attachments: files.ids });
+      let annotations: RevisionNote[] = [];
+      const shots: string[] = [];
+      if (withNotes && noteCount > 0) {
+        setStage('正在合成标注截图…');
+        const room = Math.min(MAX_SNAPSHOTS, MAX_ATTACHMENTS - files.ids.length);
+        const built =
+          room > 0
+            ? await buildSnapshots(noted, artifacts, room)
+            : { files: [], nameOf: () => undefined };
+        setStage('正在上传标注截图…');
+        for (const shot of built.files) shots.push((await uploadFile(shot, () => {})).id);
+        annotations = toRevisionNotes(noted, built.nameOf);
+      }
+      setStage(null);
+      await reviseTask(target, {
+        taskId,
+        request: request.trim(),
+        annotations,
+        attachments: [...files.ids, ...shots],
+      });
       return target;
     },
+    onSettled: () => setStage(null),
     onSuccess: async (target) => {
       files.clear();
       await Promise.all([
@@ -69,7 +103,11 @@ export function RevisePanel({
     },
   });
 
-  const ready = request.trim().length > 0 && !!modelKey && !files.uploading && !files.failed;
+  const ready =
+    (request.trim().length > 0 || (withNotes && noteCount > 0)) &&
+    !!modelKey &&
+    !files.uploading &&
+    !files.failed;
   function submit(event: FormEvent) {
     event.preventDefault();
     if (ready && !send.isPending) send.mutate();
@@ -108,11 +146,26 @@ export function RevisePanel({
               onChange={(e) => setRequest(e.target.value)}
               rows={5}
               maxLength={8000}
-              required
               className={`${field} resize-y`}
               placeholder="比如：标题改成「山居」，第二段再短一点，配图换成夜景"
             />
           </label>
+          {noteCount > 0 && (
+            <label className="flex items-start gap-2 text-[13.5px]">
+              <input
+                type="checkbox"
+                checked={withNotes}
+                onChange={(e) => setWithNotes(e.target.checked)}
+                className="mt-1 accent-accent"
+              />
+              <span>
+                带上画布上的 {noteCount} 条批注
+                <span className="block text-[12px] text-ink-muted">
+                  每条批注写明在哪个文件、哪里；圈画过的画面会合成标注截图一起发过去
+                </span>
+              </span>
+            </label>
+          )}
           <div className="flex flex-col gap-1.5">
             <PendingFiles files={files.files} onRemove={files.remove} />
             {files.notice && <p className="m-0 text-[12.5px] text-accent">{files.notice}</p>}
@@ -169,7 +222,9 @@ export function RevisePanel({
             disabled={!ready || send.isPending}
             className="h-10 rounded-full border-0 bg-accent px-5 text-[13.5px] font-medium text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
           >
-            {send.isPending ? '正在发…' : files.uploading ? '文件还在上传…' : '发给 AI 修改'}
+            {stage ??
+              (send.isPending ? '正在发…' : null) ??
+              (files.uploading ? '文件还在上传…' : '发给 AI 修改')}
           </button>
         </footer>
       </form>

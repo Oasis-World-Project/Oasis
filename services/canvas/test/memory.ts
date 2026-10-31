@@ -60,8 +60,18 @@ export function memoryArtifacts(
         return false;
       if (rows.some((r) => r.ownerId === artifact.ownerId && r.syncPath === artifact.syncPath))
         throw new Error('sync_path 重复');
-      rows.push({ ...artifact, createdAt: new Date((clock += 1000)) });
+      rows.push({
+        annotations: [],
+        approvedAt: null,
+        ...artifact,
+        createdAt: new Date((clock += 1000)),
+      });
       return true;
+    },
+    async setReview(id, patch) {
+      const row = rows.find((r) => r.id === id);
+      if (row) Object.assign(row, patch);
+      return row;
     },
     find: async (id) => rows.find((r) => r.id === id),
     async setApplication(id, spec) {

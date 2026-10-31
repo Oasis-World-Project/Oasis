@@ -1,12 +1,13 @@
 // 各页面用到的查询和操作。查询的 key 集中在这里，便于在操作后刷新对应数据。
 import { ModelList } from '@oasis/contracts/agent';
 import { WalletBody } from '@oasis/contracts/billing';
-import { ArtifactBody, ArtifactList } from '@oasis/contracts/canvas';
+import { ArtifactBody, ArtifactList, type Annotation } from '@oasis/contracts/canvas';
 import {
   ConversationBody,
   ConversationList,
   IntakeResult,
   MessageList,
+  type RevisionNote,
 } from '@oasis/contracts/conversation';
 import { MeBody, VerifyCodeResult } from '@oasis/contracts/identity';
 import { RunEventList, type RunEventBody } from '@oasis/contracts/harness';
@@ -96,7 +97,7 @@ export const confirmIntake = (conversationId: string) => intakeCall(conversation
 /** 修改成果（ADR 0012）：修改意见发到这个私聊，新建一条工作流做出新版；返回新增的消息 */
 export const reviseTask = (
   conversationId: string,
-  body: { taskId: string; request: string; attachments: string[] },
+  body: { taskId: string; request: string; annotations: RevisionNote[]; attachments: string[] },
 ) =>
   api(`/conversation/v1/conversations/${conversationId}/revisions`, IntakeResult, {
     method: 'POST',
@@ -234,6 +235,20 @@ export const artifactQuery = (id: string) =>
   queryOptions({
     queryKey: ['artifact', id],
     queryFn: () => api(`/canvas/v1/artifacts/${id}`, ArtifactBody),
+  });
+
+/** 批注整份替换（ADR 0012 §9），返回更新后的成果 */
+export const saveAnnotations = (id: string, annotations: Annotation[]) =>
+  api(`/canvas/v1/artifacts/${id}/annotations`, ArtifactBody, {
+    method: 'PUT',
+    body: { annotations },
+  });
+
+/** 批准 / 取消批准 */
+export const setApproval = (id: string, approved: boolean) =>
+  api(`/canvas/v1/artifacts/${id}/approval`, ArtifactBody, {
+    method: approved ? 'POST' : 'DELETE',
+    ...(approved ? { body: {} } : {}),
   });
 
 /** 成果内容：预览直接用这个地址（支持分段，视频能拖动），download 时让浏览器另存 */

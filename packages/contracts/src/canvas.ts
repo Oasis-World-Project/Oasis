@@ -88,6 +88,52 @@ export const ApplicationBundle = z.object({
 });
 export type ApplicationBundle = z.infer<typeof ApplicationBundle>;
 
+/** 批注坐标：相对画面（图片、PDF 页、视频帧）的 0–1 */
+const Unit = z.number().min(0).max(1);
+export const AnnotationShape = z.discriminatedUnion('kind', [
+  /** 编号点 */
+  z.object({ kind: z.literal('pin'), x: Unit, y: Unit }),
+  /** 圈：左上角和宽高 */
+  z.object({ kind: z.literal('ellipse'), x: Unit, y: Unit, w: Unit, h: Unit }),
+  /** 画笔 */
+  z.object({
+    kind: z.literal('pen'),
+    points: z
+      .array(z.tuple([Unit, Unit]))
+      .min(2)
+      .max(400),
+  }),
+]);
+export type AnnotationShape = z.infer<typeof AnnotationShape>;
+
+/** 成果上的一条批注（ADR 0012 §9）：编号、意见，以及在哪（第几页、几秒、引用的原文、画的形状） */
+export const Annotation = z.object({
+  id: z.uuid(),
+  number: z.number().int().min(1).max(99),
+  note: z.string().trim().min(1).max(500),
+  /** PDF / PPT 的第几页（从 1 开始） */
+  page: z.number().int().min(1).max(10_000).nullable(),
+  /** 音视频的第几秒 */
+  time: z.number().min(0).max(86_400).nullable(),
+  /** 文档里引用的原文 */
+  quote: z.string().trim().max(300).nullable(),
+  shape: AnnotationShape.nullable(),
+});
+export type Annotation = z.infer<typeof Annotation>;
+
+/** 一份成果的批注最多这么多条 */
+export const MAX_ANNOTATIONS = 50;
+
+/** PUT /v1/artifacts/:id/annotations：整份替换 */
+export const AnnotationList = z
+  .object({ annotations: z.array(Annotation).max(MAX_ANNOTATIONS) })
+  .refine(
+    ({ annotations }) =>
+      new Set(annotations.map((a) => a.id)).size === annotations.length &&
+      new Set(annotations.map((a) => a.number)).size === annotations.length,
+    '批注编号不能重复',
+  );
+
 /**
  * 画布里的一个成果（ADR 0007 §8）：任务完成时，负责交付物的节点交出的一个文件，复制进画布。
  */
@@ -126,6 +172,10 @@ export const ArtifactBody = z.object({
     .regex(/^[a-f0-9]{64}$/)
     .nullable()
     .optional(),
+  /** 用户的批注（ADR 0012 §9）；旧响应缺省为没有 */
+  annotations: z.array(Annotation).default([]),
+  /** 用户点了「批准」的时间；没批准为 null */
+  approvedAt: z.iso.datetime().nullable().default(null),
   createdAt: z.iso.datetime(),
 });
 export type ArtifactBody = z.infer<typeof ArtifactBody>;
@@ -139,8 +189,15 @@ export const RevisionMaterialsBody = z.object({
 });
 export const RevisionMaterialsResult = z.object({
   materials: z.array(Material),
-  /** 素材名和上一版文件的对照（写进修订说明） */
-  files: z.array(z.object({ material: z.string(), path: z.string(), deliverable: z.string() })),
+  /** 素材名和上一版文件的对照（写进修订说明）；approved：用户批准过，除非修改意见提到，否则原样保留 */
+  files: z.array(
+    z.object({
+      material: z.string(),
+      path: z.string(),
+      deliverable: z.string(),
+      approved: z.boolean().default(false),
+    }),
+  ),
 });
 export type RevisionMaterialsResult = z.infer<typeof RevisionMaterialsResult>;
 

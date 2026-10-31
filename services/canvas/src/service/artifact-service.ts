@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { Zip, ZipPassThrough } from 'fflate';
 import {
   ApplicationSpec,
+  type Annotation,
   type ArtifactBody,
   type ArtifactCategory,
   type RevisionMaterialsResult,
@@ -39,6 +40,8 @@ const toBody = (row: Artifact): ArtifactBody => ({
   models: row.models,
   syncPath: row.syncPath,
   replacesSha256: row.replacesSha256,
+  annotations: row.annotations,
+  approvedAt: row.approvedAt?.toISOString() ?? null,
   createdAt: row.createdAt.toISOString(),
 });
 
@@ -329,7 +332,12 @@ export function createArtifactService(deps: {
             sourceTaskId: taskId,
           });
           result.materials.push({ uploadId: id, name, size: row.size });
-          result.files.push({ material: name, path: relative(row), deliverable: row.deliverable });
+          result.files.push({
+            material: name,
+            path: relative(row),
+            deliverable: row.deliverable,
+            approved: row.approvedAt !== null,
+          });
         }
         return result;
       }
@@ -356,6 +364,7 @@ export function createArtifactService(deps: {
           material: name,
           path: row.syncPath,
           deliverable: row.deliverable,
+          approved: row.approvedAt !== null,
         })),
       };
     },
@@ -371,6 +380,19 @@ export function createArtifactService(deps: {
       const row = await repo.find(id);
       if (row?.ownerId !== ownerId) throw new HttpError(404, 'artifact_not_found', '没有这个成果');
       return row;
+    },
+
+    /** 批注整份替换（ADR 0012 §9）：编号不能重复，最多 50 条（契约已校验） */
+    async setAnnotations(ownerId: string, id: string, annotations: Annotation[]) {
+      await service.get(ownerId, id);
+      return toBody((await repo.setReview(id, { annotations }))!);
+    },
+
+    /** 批准 / 取消批准：只是记号，不挡修改 */
+    async setApproval(ownerId: string, id: string, approved: boolean) {
+      const row = await service.get(ownerId, id);
+      if (approved === (row.approvedAt !== null)) return toBody(row);
+      return toBody((await repo.setReview(id, { approvedAt: approved ? new Date() : null }))!);
     },
 
     async family(ownerId: string, id: string): Promise<Artifact[]> {

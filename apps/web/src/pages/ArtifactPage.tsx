@@ -1,9 +1,9 @@
 // 画布里打开一个成果（外观照原型 ⑨⑩）：点阵底，左上返回 / 任务名 / 文件名，右上工作流、回到私聊、下载，
 // 中间预览（图片、视频、音频、PDF、Markdown、文字、静态网页；其他格式提示下载）。
-// 「发给 AI 修改」做出新版整体替换这一版，「删除」连同工作流一起删（ADR 0012）；批注在 5.11b。
+// 「发给 AI 修改」做出新版整体替换这一版，「删除」连同工作流一起删；底部「标注」圈画写批注，「批准」打记号（ADR 0012）。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
-import { ArrowLeft, Download, MessageCircle, PencilLine, Workflow } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, Download, MessageCircle, PencilLine, Workflow } from 'lucide-react';
 import { useState } from 'react';
 import { ApiError } from '../api/client.ts';
 import {
@@ -11,14 +11,16 @@ import {
   artifactQuery,
   artifactsQuery,
   deleteTask,
+  setApproval,
   SETTLED_STATUSES,
   taskArchiveUrl,
   tasksQuery,
 } from '../api/queries.ts';
-import { PreviewBody } from '../chat/FilePreview.tsx';
 import { ConfirmButton } from '../chat/parts.tsx';
+import { ArtifactReview } from '../canvas/ArtifactReview.tsx';
 import { PreviewPlayer } from '../canvas/PreviewPlayer.tsx';
 import { RevisePanel } from '../canvas/RevisePanel.tsx';
+import { pdfCompanion } from '../canvas/snapshots.ts';
 import { formatBytes } from '../ui/format.ts';
 
 const route = getRouteApi('/shell/canvas/artifacts/$artifactId');
@@ -52,15 +54,14 @@ export function ArtifactPage() {
     },
   });
   const position = siblings.findIndex((item) => item.id === artifactId);
-  const candidates = artifact
-    ? siblings.filter(
-        (item) =>
-          item.path === artifact.path.replace(/\.pptx?$/i, '.pdf') &&
-          item.taskId === artifact.taskId &&
-          (!artifact.nodeId || item.nodeId === artifact.nodeId),
-      )
-    : [];
-  const pdf = candidates.length === 1 ? candidates[0] : undefined;
+  const pdf = artifact ? pdfCompanion(artifact, siblings) : undefined;
+  const approve = useMutation({
+    mutationFn: (approved: boolean) => setApproval(artifactId, approved),
+    onSuccess: (body) => {
+      queryClient.setQueryData(artifactQuery(artifactId).queryKey, body);
+      void queryClient.invalidateQueries({ queryKey: ['artifacts'] });
+    },
+  });
   const appFiles = artifact?.application
     ? siblings.filter(
         (item) =>
@@ -148,6 +149,16 @@ export function ArtifactPage() {
                 回到私聊
               </Link>
             )}
+            <button
+              type="button"
+              aria-pressed={artifact.approvedAt !== null}
+              onClick={() => approve.mutate(artifact.approvedAt === null)}
+              disabled={approve.isPending}
+              className={`${pill} border-0 ${artifact.approvedAt ? 'bg-solid text-on-solid' : 'bg-glass-active text-ink shadow-edge-strong'}`}
+            >
+              <BadgeCheck size={15} aria-hidden="true" />
+              {artifact.approvedAt ? '已批准' : '批准'}
+            </button>
             <a
               href={artifactContentUrl(artifact.id, true)}
               download={artifact.name}
@@ -200,14 +211,18 @@ export function ArtifactPage() {
         />
       )}
 
-      <div className="mx-4 mb-4 min-h-0 flex-1 overflow-auto rounded-card bg-glass-active shadow-edge-strong">
+      <div className="mx-4 mb-4 flex min-h-0 flex-1 flex-col">
         {isPending && <p className="m-0 p-6 text-sm text-ink-muted">正在打开…</p>}
         {isError && <p className="m-0 p-6 text-sm text-accent">没找到这个成果。</p>}
         {artifact &&
           (artifact.application ? (
-            <PreviewPlayer artifactId={artifact.id} />
+            <div className="min-h-0 flex-1 overflow-auto rounded-card bg-glass-active shadow-edge-strong">
+              <PreviewPlayer artifactId={artifact.id} />
+            </div>
           ) : (
-            <PreviewBody
+            <ArtifactReview
+              key={artifact.id}
+              artifact={artifact}
               file={{
                 path: artifact.path,
                 size: artifact.size,

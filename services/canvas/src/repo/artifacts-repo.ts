@@ -5,7 +5,8 @@ import type pg from 'pg';
 import { artifacts, uploads } from './schema.ts';
 
 export type Artifact = typeof artifacts.$inferSelect;
-export type NewArtifact = Omit<Artifact, 'createdAt'>;
+/** 新登记的成果没有批注、没有批准（表里有默认值） */
+export type NewArtifact = Omit<Artifact, 'createdAt' | 'annotations' | 'approvedAt'>;
 
 export interface ArtifactsRepo {
   /** 已经登记过（同一个任务、节点、路径）就什么也不做，返回 false */
@@ -27,6 +28,11 @@ export interface ArtifactsRepo {
   replaceTask(oldTaskId: string, rows: NewArtifact[]): Promise<void>;
   /** 删掉这些成果行和修订素材行（对象已经删掉） */
   removeRows(artifactIds: string[], uploadIds: string[]): Promise<void>;
+  /** 批注整份替换、批准记号（ADR 0012 §9） */
+  setReview(
+    id: string,
+    patch: Partial<Pick<Artifact, 'annotations' | 'approvedAt'>>,
+  ): Promise<Artifact | undefined>;
 }
 
 export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
@@ -90,6 +96,10 @@ export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
           await tx.delete(artifacts).where(inArray(artifacts.id, artifactIds));
         if (uploadIds.length) await tx.delete(uploads).where(inArray(uploads.id, uploadIds));
       });
+    },
+    async setReview(id, patch) {
+      const [row] = await db.update(artifacts).set(patch).where(eq(artifacts.id, id)).returning();
+      return row;
     },
   };
 }

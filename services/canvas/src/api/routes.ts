@@ -1,5 +1,6 @@
 // canvas 的接口。/v1/* 经 gateway 给前端（只能看自己的）；/internal/* 给 conversation 和 harness。
 import {
+  AnnotationList,
   ArtifactQuery,
   RevisionMaterialsBody,
   UploadLookupBody,
@@ -124,6 +125,21 @@ export function registerRoutes(
     const user = requireUserId(request),
       row = artifacts.toBody(await artifacts.get(user, id));
     return models ? models.decorate(user, row) : row;
+  });
+
+  // ---- 批注与批准（ADR 0012 §9）----
+  app.put('/v1/artifacts/:id/annotations', async (request) => {
+    const { id } = parseWith(IdParams, request.params);
+    const { annotations } = parseWith(AnnotationList, request.body);
+    return artifacts.setAnnotations(requireUserId(request), id, annotations);
+  });
+  app.post('/v1/artifacts/:id/approval', async (request) => {
+    const { id } = parseWith(IdParams, request.params);
+    return artifacts.setApproval(requireUserId(request), id, true);
+  });
+  app.delete('/v1/artifacts/:id/approval', async (request) => {
+    const { id } = parseWith(IdParams, request.params);
+    return artifacts.setApproval(requireUserId(request), id, false);
   });
 
   if (models)
