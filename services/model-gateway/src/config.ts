@@ -91,7 +91,10 @@ export const modelGatewayEnv = {
   TOOL_IMAGE_MODELS: list(
     'bytedance-seed/seedream-4.5,black-forest-labs/flux.2-pro,google/gemini-2.5-flash-image,openai/gpt-image-2',
   ),
-  TOOL_VISION_MODELS: list('qwen/qwen3-vl-8b-instruct,google/gemini-2.5-flash'),
+  // 按顺序试：前一个被限流或地区用不了时换下一个（不同厂商分摊共享额度上的限流）
+  TOOL_VISION_MODELS: list(
+    'qwen/qwen3-vl-8b-instruct,qwen/qwen3-vl-30b-a3b-instruct,z-ai/glm-4.6v,google/gemini-2.5-flash',
+  ),
   TOOL_VISION_MAX_TOKENS: z.coerce.number().int().min(1).max(8192).default(2048),
   TOOL_FETCH_MAX_BYTES: z.coerce
     .number()

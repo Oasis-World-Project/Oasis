@@ -786,9 +786,10 @@ export function createToolService(deps: {
             if (err instanceof HttpError) throw err;
             throw new HttpError(502, 'tool_failed', `${tool.name}返回的结果看不懂`);
           }
+          // 上游拒绝时冻结已退回、没有收费：地区用不了或被限流（共享额度上常见）就换列表里的下一个模型
           if (
             err instanceof HttpError &&
-            err.code === 'provider_region_unavailable' &&
+            (err.code === 'provider_region_unavailable' || err.code === 'provider_busy') &&
             typeof args.model !== 'string'
           ) {
             lastError = err;

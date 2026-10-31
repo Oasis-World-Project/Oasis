@@ -69,6 +69,8 @@ fake.post('/api/v1/chat/completions', async (request, reply) => {
   record('vision', request.body);
   if (visionStatus === 403 && (request.body as { model: string }).model === 'vision/first')
     return reply.code(403).send({ error: { message: 'not available in your region' } });
+  if (visionStatus === 429 && (request.body as { model: string }).model === 'vision/first')
+    return reply.code(429).send({ error: { message: 'temporarily rate-limited upstream' } });
   return { choices: [{ message: { content: '图中有一只杯子。' } }], usage: { cost: 0.002 } };
 });
 fake.addContentTypeParser('*', (_req, _body, done) => done(null, {}));
@@ -929,6 +931,18 @@ describe('文件场景工具', () => {
     });
     expect(billingCalls.map((r) => r.path)).toEqual(['hold', 'release', 'hold', 'settle']);
     expect(settled[0]).toMatchObject({ data: { taskId: TASK, kind: 'tool', chargedMicro: 2000 } });
+  });
+  it('看图的模型被上游限流：退回冻结，换下一个模型；指定了模型就不换', async () => {
+    visionStatus = 429;
+    const result = await call('image.inspect', { images: [reference], question: '是什么？' });
+    expect(result.text).toContain('杯子');
+    expect(upstream.map((r) => r.body.model)).toEqual(['vision/first', 'vision/second']);
+    expect(billingCalls.map((r) => r.path)).toEqual(['hold', 'release', 'hold', 'settle']);
+    upstream.length = 0;
+    await expect(
+      call('image.inspect', { images: [reference], question: '是什么？', model: 'vision/first' }),
+    ).rejects.toMatchObject({ code: 'provider_busy' });
+    expect(upstream.map((r) => r.body.model)).toEqual(['vision/first']);
   });
   it('网页全文不截断，保留来源与失败信息；超限明确失败', async () => {
     pageText = '研究资料'.repeat(10_000);

@@ -246,7 +246,7 @@ export function ArtifactReview({ artifact, file }: { artifact: ArtifactBody; fil
                 ? visual
                   ? '在画面上圈出、画出或点出要改的地方，再写一句意见。'
                   : surface === 'audio'
-                    ? '播放到要改的地方，点「在这里加批注」。'
+                    ? '播放到要改的地方暂停，再点播放器下面的「在 … 加批注」。'
                     : '点「加一条意见」，可以引用原文。'
                 : '还没有批注。点「标注」标出要改的地方，攒好了再「发给 AI 修改」。'}
             </p>

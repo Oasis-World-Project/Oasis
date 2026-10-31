@@ -75,6 +75,8 @@ describe('任务单与说明', () => {
     expect(brief).toContain('最初的需求');
     expect(brief).toContain('- 上一版-首页文案.md：上一版的 首页文案.md（交付物「首页文案」）');
     expect(brief).toContain('- 参考.png');
+    // 「保持一致」不等于像素不变：生成的画面优先参考上一版改（实测：要求像素不变时节点手工合成到超时）
+    expect(brief).toContain('不要求像素完全相同');
     const long = revisionBrief(`开头${'x'.repeat(30_000)}`, '改', files, []);
     expect(long.length).toBeLessThanOrEqual(20_000);
     expect(long.startsWith('开头')).toBe(true);
