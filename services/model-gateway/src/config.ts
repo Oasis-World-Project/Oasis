@@ -120,6 +120,22 @@ export const modelGatewayEnv = {
   TOOL_SPEECH_MICRO_PER_CHAR: z.coerce.number().int().nonnegative().default(20),
   /** 沙箱算力每核每小时多少钱（微美元；按云服务器成本价约 $0.015）。为 0 时不计费 */
   COMPUTE_PRICE_MICRO_PER_CORE_HOUR: z.coerce.number().int().nonnegative().default(15_000),
+  /** 实时数字人（LiveAvatar，ADR 0013）；没配置时开数字人会话返回 503 */
+  LIVEAVATAR_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value || undefined),
+  LIVEAVATAR_BASE_URL: z.url().default('https://api.liveavatar.com'),
+  /** 给 LiveAvatar 回调的大模型入口：单独端口，只有 /avatar/v1/chat/completions；0 表示不开 */
+  AVATAR_LLM_HOST: z.string().min(1).default('127.0.0.1'),
+  AVATAR_LLM_PORT: z.coerce.number().int().min(0).max(65535).default(4118),
+  /** LiveAvatar 从公网访问上面那个入口的地址，写到 /avatar/v1 为止（它自己补 /chat/completions） */
+  AVATAR_PUBLIC_BASE_URL: z
+    .union([z.literal(''), z.url()])
+    .optional()
+    .transform((value) => value || undefined),
+  /** 数字人回答用的模型：要出字快 */
+  AVATAR_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
   /** 查不到价格时按这个金额冻结（$0.20） */
   FALLBACK_HOLD_MICRO: z.coerce.number().int().positive().default(200_000),
 };

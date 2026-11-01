@@ -64,6 +64,7 @@ pnpm sandbox:check
 | canvas | 4106 | 成果、批注、文件 | 经 gateway |
 | harness | 4107 | Agent 运行时（唯一接触 DeepSeek Harness） | 仅内部 |
 | model-gateway | 4108 | 所有模型调用的唯一出口，计量上报 billing | 仅内部 |
+| model-gateway（数字人入口） | 4118 | 只有 `/avatar/v1/chat/completions`，给 LiveAvatar 回调大模型（ADR 0013）；开发期经 `pnpm avatar:tunnel` 和服务器 nginx 暴露为 `https://oasis-dev.elysiumgrid.space/avatar/v1` | 只这一条路径公网可达 |
 
 每个服务都有 `/health`（进程存活）、`/ready`（依赖可用）、`/v1/meta`（服务名、版本、提交号）。业务接口放在 `/v1/*`，只给服务之间调用的放在 `/internal/*`（gateway 不转发）。
 

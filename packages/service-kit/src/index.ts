@@ -1,7 +1,7 @@
 export { ConfigError, type ConfigOf, type EnvShape } from './config.ts';
 export { connectEventBus, eventBusEnv, type EventBusResource } from './event-bus.ts';
 export { createEnvelope, ensureStream, publishEvent, startEventConsumer } from './events.ts';
-export { errorBody, type ServiceApp } from './http.ts';
+export { createHttpServer, errorBody, type ServiceApp } from './http.ts';
 export { HttpError, parseWith } from './http-error.ts';
 export type { Logger } from './logger.ts';
 export { contentTypeOf, fileResponseHeaders, parseRange } from './file-headers.ts';

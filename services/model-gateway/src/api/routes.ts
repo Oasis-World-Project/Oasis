@@ -1,5 +1,6 @@
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import {
+  AvatarSessionStartBody,
   ChatCompletionRequest,
   ComputeHoldBody,
   ComputeSettleBody,
@@ -15,6 +16,7 @@ import {
 } from '@oasis/service-kit';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import type { AvatarService } from '../service/avatar-service.ts';
 import type { ChatService } from '../service/chat-service.ts';
 import type { ComputeService } from '../service/compute-service.ts';
 import type { DecisionService } from '../service/decision-service.ts';
@@ -26,6 +28,7 @@ const KeyIdParams = z.object({ keyId: z.uuid() });
 const ToolParams = z.object({ key: z.string().min(1).max(50) });
 const JobParams = z.object({ jobId: z.uuid() });
 const CallIdParams = z.object({ callId: z.uuid() });
+const AvatarSessionParams = z.object({ sessionId: z.uuid() });
 /** 工具的参数里可能带着要转写的录音（base64），放宽请求体上限（入口代理是 50MB） */
 const TOOL_BODY = { bodyLimit: 40 * 1024 * 1024 };
 const Attribution = z.object({
@@ -54,22 +57,9 @@ function abortOnClose(reply: FastifyReply): AbortSignal {
   return abort.signal;
 }
 
-export function registerRoutes(
-  app: ServiceApp,
-  services: {
-    chat: ChatService;
-    decisions: DecisionService;
-    runKeys: RunKeyService;
-    tools: ToolService;
-    compute: ComputeService;
-    /** 在当前网络用不了的模型 */
-    unavailableModels: () => Promise<string[]>;
-  },
-): void {
-  const { chat, decisions, runKeys, tools } = services;
-
-  /** OpenAI 兼容的 chat completions：流式时原样转发 SSE。 */
-  async function completions(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
+/** OpenAI 兼容的 chat completions：流式时原样转发 SSE。内部、沙箱和数字人入口共用。 */
+export function createCompletions(chat: ChatService) {
+  return async function completions(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
     const body = parseWith(ChatCompletionRequest, request.body);
     const prepared = await chat.prepare({ caller, requestId: request.id, body });
     const upstream = await chat.open(prepared, abortOnClose(reply));
@@ -87,7 +77,24 @@ export function registerRoutes(
       if (!reply.raw.destroyed) reply.raw.write(chunk);
     });
     reply.raw.end();
-  }
+  };
+}
+
+export function registerRoutes(
+  app: ServiceApp,
+  services: {
+    chat: ChatService;
+    decisions: DecisionService;
+    runKeys: RunKeyService;
+    tools: ToolService;
+    compute: ComputeService;
+    avatars: AvatarService;
+    /** 在当前网络用不了的模型 */
+    unavailableModels: () => Promise<string[]>;
+  },
+): void {
+  const { chat, decisions, runKeys, tools, avatars } = services;
+  const completions = createCompletions(chat);
 
   async function useTool(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
     const { key } = parseWith(ToolParams, request.params);
@@ -174,6 +181,17 @@ export function registerRoutes(
   app.get('/internal/v1/models/unavailable', async () => ({
     models: await services.unavailableModels(),
   }));
+
+  // ---- 实时数字人（ADR 0013）：canvas 替用户开、结束会话 ----
+  app.post('/internal/avatar/sessions', async (request, reply) => {
+    const body = parseWith(AvatarSessionStartBody, request.body);
+    return reply.code(201).send(await avatars.start(requirePayerId(request), body));
+  });
+  app.post('/internal/avatar/sessions/:sessionId/stop', async (request, reply) => {
+    const { sessionId } = parseWith(AvatarSessionParams, request.params);
+    await avatars.stop(requirePayerId(request), sessionId);
+    return reply.code(204).send();
+  });
 
   /** harness 为一次 agent 运行签发临时 Key；明文只在这里返回一次。 */
   app.post('/internal/run-keys', async (request, reply) => {

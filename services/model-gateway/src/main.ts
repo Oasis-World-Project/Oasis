@@ -17,7 +17,8 @@ import {
   type ModelPrice,
   type ProviderClient,
 } from './adapters/openrouter.ts';
-import { registerRoutes } from './api/routes.ts';
+import { createAvatarLlmServer } from './api/avatar-server.ts';
+import { createCompletions, registerRoutes } from './api/routes.ts';
 import { modelGatewayEnv } from './config.ts';
 import { createCallsRepo } from './repo/calls-repo.ts';
 import { createRunKeysRepo } from './repo/run-keys-repo.ts';
@@ -31,6 +32,8 @@ import { createToolService } from './service/tool-service.ts';
 import { createTavilyClient } from './adapters/tavily.ts';
 import { createFalClient } from './adapters/fal.ts';
 import { createRenderClient } from './adapters/runpod.ts';
+import { createLiveAvatarClient } from './adapters/liveavatar.ts';
+import { createAvatarService } from './service/avatar-service.ts';
 
 /** 定时刷新价格表；拉取失败时保留上一版，1 分钟后重试。 */
 function startPriceBook(provider: ProviderClient, refreshMs: number, logger: Logger) {
@@ -176,10 +179,37 @@ await startService({
     });
     tools.start();
     app.addHook('onClose', () => tools.close());
+    const chat = createChatService({ ...common, defaultMaxTokens: config.DEFAULT_MAX_TOKENS });
+    const runKeys = createRunKeyService({ repo: createRunKeysRepo(resources.postgres.pool) });
+    const avatars = createAvatarService({
+      client: createLiveAvatarClient({
+        baseUrl: config.LIVEAVATAR_BASE_URL,
+        apiKey: config.LIVEAVATAR_API_KEY,
+      }),
+      runKeys,
+      publicBaseUrl: config.AVATAR_PUBLIC_BASE_URL,
+      model: config.AVATAR_MODEL,
+      logger,
+    });
+    app.addHook('onClose', () => avatars.close());
+    if (config.AVATAR_LLM_PORT > 0) {
+      const avatarApp = createAvatarLlmServer({
+        logger: logger.child({ component: 'avatar-llm' }),
+        runKeys,
+        completions: createCompletions(chat),
+        isActiveSession: avatars.isActive,
+      });
+      avatarApp
+        .listen({ host: config.AVATAR_LLM_HOST, port: config.AVATAR_LLM_PORT })
+        .then(() => logger.info({ port: config.AVATAR_LLM_PORT }, '数字人大模型入口已启动'))
+        .catch((err: unknown) => logger.error({ err }, '数字人大模型入口没能启动'));
+      app.addHook('onClose', () => avatarApp.close());
+    }
     registerRoutes(app, {
-      chat: createChatService({ ...common, defaultMaxTokens: config.DEFAULT_MAX_TOKENS }),
+      chat,
       decisions: createDecisionService(common),
-      runKeys: createRunKeyService({ repo: createRunKeysRepo(resources.postgres.pool) }),
+      runKeys,
+      avatars,
       tools,
       compute: createComputeService({
         meter,

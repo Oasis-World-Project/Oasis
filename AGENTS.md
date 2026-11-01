@@ -40,7 +40,7 @@
     - 脚本里的 `docker build` 必须带 `-t oasis/<组件>:<标签>`。
     - `pnpm check:engineering` 的 images 检查和 pre-commit 钩子会强制执行这一条。
     - **云渲染 worker 限定例外（用户 2026-10-27 确认）**：仅为 5.9 云渲染 worker，允许将本地构建并验证的 `oasis/harness-render:<精确标签>` 发布到用户明确指定且拥有控制权的私有 registry，由云端凭只读权限按不可变 SHA-256 摘要拉取。远端完整地址可增加 registry 主机与用户自有命名空间，仓库末段必须保持 `oasis/harness-render`；禁止未指定仓库、公开发布、`latest` 和不归用户所有的 Docker Hub `oasis` 命名空间。镜像中不得包含密钥、`.env`、用户文件或会话。本地 Compose 的命名、build、`pull_policy: build` 与沙箱网络边界保持不变。远端发布前必须具备显式发布描述和 registry/仓库/digest 白名单检查，不能整体放宽本地镜像检查。规则允许范围本身不构成创建资源、发布镜像或付费测试的授权，具体执行遵循用户当前授权；详见 ADR 0011 §12.2。
-11. **服务骨架**：每个服务都用 `@oasis/service-kit` 的 `startService` 启动，不自己写监听、探针、信号处理。统一接口：`/health`、`/ready`、`/v1/meta`；业务接口放 `/v1/*`，服务间接口放 `/internal/*`（gateway 不转发）。端口：gateway 8080，其余 4101–4108（见 README）。Node 服务的镜像统一用 `infra/images/node-service/Dockerfile` 按 `SERVICE` 参数构建。相对导入写 `.ts` 后缀，只用可擦除的 TS 语法（不用 enum、namespace、参数属性）。
+11. **服务骨架**：每个服务都用 `@oasis/service-kit` 的 `startService` 启动，不自己写监听、探针、信号处理。统一接口：`/health`、`/ready`、`/v1/meta`；业务接口放 `/v1/*`，服务间接口放 `/internal/*`（gateway 不转发）。端口：gateway 8080，其余 4101–4108（见 README）。唯一例外：model-gateway 另开 4118 的数字人入口（同样用 service-kit 的 `createHttpServer`），只有一条路径，给 LiveAvatar 回调大模型；不和主端口合并，因为主端口的 `/internal/*` 只认请求头里的付费人（ADR 0013 §6）。Node 服务的镜像统一用 `infra/images/node-service/Dockerfile` 按 `SERVICE` 参数构建。相对导入写 `.ts` 后缀，只用可擦除的 TS 语法（不用 enum、namespace、参数属性）。
 12. **前端约定**：
     - 颜色、阴影、圆角、字体一律来自 `@oasis/design-tokens`（CSS 变量 + Tailwind 主题），`apps/web/src` 里不写裸色值（`#xxx`、`rgb()` 等）；缺少的令牌先加进 `packages/design-tokens`。`pnpm check:engineering` 的 tokens 检查和 pre-commit 钩子会拦截。
     - 应用主体是「珍珠雾面」，广场和游戏是「午夜蓝 + 金线」（`data-theme="plaza"`），群主题光用 `data-light="coral|mint|sky|honey"`。
