@@ -33,6 +33,11 @@ const STARTING_TIMEOUT_MS = 5 * 60_000;
 const OVERRUN_MS = 2 * 60_000;
 /** 结束这么久还查不到实际消耗，就按分钟估算 */
 const SETTLE_FALLBACK_MS = 10 * 60_000;
+/**
+ * LiveAvatar 每分钟扫一遍活动会话扣积分，会话记录里的 credits_consumed 在结束后还会补涨
+ * （实测：结束 14 秒时报 1，几分钟后变成 2.2）。结束满 3 分钟才按它结算。
+ */
+const PROVIDER_SETTLE_DELAY_MS = 3 * 60_000;
 
 type StartInput = z.output<typeof AvatarSessionStartBody>;
 
@@ -43,6 +48,13 @@ function providerError(err: unknown): HttpError {
     return new HttpError(503, 'avatar_no_credits', '数字人服务的额度用完了');
   }
   return new HttpError(502, 'avatar_provider_error', '数字人服务暂时连不上，请稍后再试');
+}
+
+/** 套餐对单次时长有上限（免费档 120 秒）：从 LiveAvatar 的报错里读出允许的秒数 */
+function planLimitSeconds(err: unknown): number | undefined {
+  if (!(err instanceof LiveAvatarError) || err.status !== 400) return undefined;
+  const match = /maximum allowed \((\d+)\s*s\)/i.exec(err.message);
+  return match ? Number(match[1]) : undefined;
 }
 
 /** 删除时对方说「没有这个」也算删掉了 */
@@ -153,8 +165,12 @@ export function createAvatarService(deps: {
       await repo.markSettled(row.id, 0, now());
       return;
     }
+    const providerEnd = info?.end_at ? Date.parse(`${String(info.end_at)}Z`) : Number.NaN;
+    const settledDown =
+      Number.isFinite(providerEnd) && now().getTime() - providerEnd >= PROVIDER_SETTLE_DELAY_MS;
+    if (info?.end_at && !settledDown) return; // LiveAvatar 还在补记消耗，下次清扫再结
     const credits =
-      info?.end_at && typeof info.credits_consumed === 'number' ? info.credits_consumed : undefined;
+      settledDown && typeof info?.credits_consumed === 'number' ? info.credits_consumed : undefined;
     let costMicro: number;
     let source: 'provider' | 'estimate';
     if (credits !== undefined) {
@@ -237,7 +253,7 @@ export function createAvatarService(deps: {
       const spec: AvatarSpec = input.spec;
       const id = randomUUID();
       const sandbox = deps.sandbox;
-      const maxSeconds = spec.maxMinutes * 60;
+      let maxSeconds = spec.maxMinutes * 60;
       const pricePerMinuteMicro = sandbox ? 0 : CREDITS_PER_MINUTE * deps.creditMicro;
       await repo.create({
         id,
@@ -284,15 +300,27 @@ export function createAvatarService(deps: {
           openingText: spec.openingText,
         });
         await repo.addResources(id, { contextId });
-        const token = await client.createSessionToken({
-          avatarId: sandbox ? SANDBOX_AVATAR_ID : spec.avatarId,
-          ...(spec.voiceId && !sandbox ? { voiceId: spec.voiceId } : {}),
-          contextId,
-          language: spec.language,
-          llmConfigurationId,
-          sandbox,
-          maxSeconds,
-        });
+        const tokenFor = (seconds: number) =>
+          client.createSessionToken({
+            avatarId: sandbox ? SANDBOX_AVATAR_ID : spec.avatarId,
+            ...(spec.voiceId && !sandbox ? { voiceId: spec.voiceId } : {}),
+            contextId,
+            language: spec.language,
+            llmConfigurationId,
+            sandbox,
+            maxSeconds: seconds,
+          });
+        let token: Awaited<ReturnType<typeof tokenFor>>;
+        try {
+          token = await tokenFor(maxSeconds);
+        } catch (err) {
+          // 套餐不允许这么长（免费档单次最长 120 秒）：按允许的时长再开一次
+          const limit = planLimitSeconds(err);
+          if (!limit || limit >= maxSeconds) throw err;
+          maxSeconds = limit;
+          await repo.setMaxSeconds(id, limit);
+          token = await tokenFor(limit);
+        }
         await repo.addResources(id, { providerSessionId: token.providerSessionId });
         const room = await client.startSession(token.sessionToken);
         const startedAt = now();

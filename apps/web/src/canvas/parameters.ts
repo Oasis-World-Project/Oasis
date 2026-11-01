@@ -74,6 +74,27 @@ const FIELDS: Partial<Record<PreviewKind, Field[]>> = {
 
 export const fieldsFor = (kind: PreviewKind): Field[] => FIELDS[kind] ?? [];
 
+/** 数字人（ADR 0013）：改的是配置文件里的人设、形象和声音，没有可近似预览的项 */
+export const AVATAR_FIELDS: Field[] = [
+  { key: 'tone', label: '语气', kind: 'choice', options: ['更亲切', '更正式', '更简短', '更热情'] },
+  { key: 'language', label: '对话语言', kind: 'choice', options: ['中文', '英文', '日文'] },
+  { key: 'voice', label: '声音', kind: 'choice', options: ['女声', '男声', '更年轻', '更沉稳'] },
+  {
+    key: 'look',
+    label: '形象',
+    kind: 'text',
+    suggestions: ['换成女性', '换成男性', '更正式的着装', '竖屏形象'],
+    placeholder: '想要什么样的形象',
+  },
+  {
+    key: 'maxMinutes',
+    label: '单次最长时长',
+    kind: 'choice',
+    options: ['3 分钟', '5 分钟', '10 分钟', '15 分钟'],
+  },
+  { key: 'handoff', label: '转人工', kind: 'text', placeholder: '什么情况要转人工' },
+];
+
 /** 写进修改意见的值：带单位、带符号 */
 export function formatValue(field: Field, value: Values[string]): string {
   if (field.kind === 'range') {

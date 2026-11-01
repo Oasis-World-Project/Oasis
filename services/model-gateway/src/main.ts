@@ -34,6 +34,7 @@ import { createTavilyClient } from './adapters/tavily.ts';
 import { createFalClient } from './adapters/fal.ts';
 import { createRenderClient } from './adapters/runpod.ts';
 import { createLiveAvatarClient } from './adapters/liveavatar.ts';
+import { createAvatarCatalog } from './service/avatar-catalog.ts';
 import { createAvatarService } from './service/avatar-service.ts';
 
 /** 定时刷新价格表；拉取失败时保留上一版，1 分钟后重试。 */
@@ -128,7 +129,12 @@ await startService({
       prices: priceBook.current,
       fallbackHoldMicro: config.FALLBACK_HOLD_MICRO,
     };
+    const liveAvatar = createLiveAvatarClient({
+      baseUrl: config.LIVEAVATAR_BASE_URL,
+      apiKey: config.LIVEAVATAR_API_KEY,
+    });
     const tools = createToolService({
+      avatarCatalog: createAvatarCatalog(liveAvatar),
       render: createRenderClient({
         baseUrl: config.RUNPOD_BASE_URL,
         endpointId: config.RUNPOD_ENDPOINT_ID,
@@ -183,10 +189,7 @@ await startService({
     const chat = createChatService({ ...common, defaultMaxTokens: config.DEFAULT_MAX_TOKENS });
     const runKeys = createRunKeyService({ repo: createRunKeysRepo(resources.postgres.pool) });
     const avatars = createAvatarService({
-      client: createLiveAvatarClient({
-        baseUrl: config.LIVEAVATAR_BASE_URL,
-        apiKey: config.LIVEAVATAR_API_KEY,
-      }),
+      client: liveAvatar,
       runKeys,
       repo: createAvatarSessionsRepo(resources.postgres.pool),
       calls: callsRepo,

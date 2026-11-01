@@ -1,6 +1,10 @@
 // 数字人测试共用的假依赖：内存会话表、内存调用记录、假计量、假 LiveAvatar。
 import type { AvatarTurn } from '@oasis/contracts/avatar';
-import type { AvatarSessionRequest, LiveAvatarClient } from '../src/adapters/liveavatar.ts';
+import {
+  LiveAvatarError,
+  type AvatarSessionRequest,
+  type LiveAvatarClient,
+} from '../src/adapters/liveavatar.ts';
 import type { AvatarSession, AvatarSessionsRepo } from '../src/repo/avatar-sessions-repo.ts';
 import type { Call, CallsRepo } from '../src/repo/calls-repo.ts';
 import type { NewRunKey, RunKey, RunKeysRepo } from '../src/repo/run-keys-repo.ts';
@@ -66,6 +70,9 @@ export function memorySessions(
     },
     async setCall(id, callId) {
       patch(id, { callId });
+    },
+    async setMaxSeconds(id, maxSeconds) {
+      patch(id, { maxSeconds });
     },
     async markLive(id, startedAt) {
       if (rows.get(id)?.status === 'starting') patch(id, { status: 'live', startedAt });
@@ -148,7 +155,7 @@ export function fakeMeter() {
 }
 
 /** 假 LiveAvatar：记下每一步；能在指定步骤失败；getSession 的返回可以改 */
-export function fakeClient(options: { failAt?: string } = {}) {
+export function fakeClient(options: { failAt?: string; planLimit?: number } = {}) {
   const log: string[] = [];
   const secrets = new Map<string, string>();
   const tokens: AvatarSessionRequest[] = [];
@@ -172,12 +179,20 @@ export function fakeClient(options: { failAt?: string } = {}) {
     deleteContext: async () => void (await step('deleteContext', undefined)),
     createSessionToken: async (input: AvatarSessionRequest) => {
       tokens.push(input);
+      if (options.planLimit && input.maxSeconds > options.planLimit) {
+        throw new LiveAvatarError(
+          400,
+          `LiveAvatar POST /v1/sessions 返回 400：max_session_duration (${input.maxSeconds}s) exceeds the maximum allowed (${options.planLimit}s)`,
+        );
+      }
       return step('createSessionToken', { providerSessionId: 'la-sess', sessionToken: 'tok' });
     },
     startSession: async () =>
       step('startSession', { livekitUrl: 'wss://room', livekitToken: 'lk' }),
     stopSession: async () => void (await step('stopSession', undefined)),
     getSession: async () => sessionInfo,
+    listAvatars: async () => [],
+    listVoices: async () => [],
   } satisfies LiveAvatarClient;
   return {
     client,

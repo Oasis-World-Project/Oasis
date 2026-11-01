@@ -93,6 +93,10 @@ describe('数字人会话', () => {
     await avatars.stop(PAYER, started.sessionId);
     await avatars.stop(PAYER, started.sessionId); // 幂等
     await settleBackground();
+    // 刚结束时 LiveAvatar 报的消耗还会补涨：不结算，只拆资源
+    expect(sessions.rows.get(started.sessionId)).toMatchObject({ settledAt: null });
+    expect(sessions.rows.get(started.sessionId)?.cleanedAt).not.toBeNull();
+    later(3 * 60_000);
     await avatars.sweep();
 
     const ended = sessions.rows.get(started.sessionId);
@@ -176,6 +180,15 @@ describe('数字人会话', () => {
       status: 'ended',
       endReason: 'MAX_DURATION_REACHED',
     });
+  });
+
+  it('套餐限制单次时长（免费档 120 秒）：按允许的时长再开一次，并记下来', async () => {
+    const fake = fakeClient({ planLimit: 120 });
+    const avatars = service(fake.client);
+    const started = await avatars.start(PAYER, { spec });
+    expect(started.maxSeconds).toBe(120);
+    expect(fake.tokens.map((t) => t.maxSeconds)).toEqual([180, 120]);
+    expect(sessions.rows.get(started.sessionId)?.maxSeconds).toBe(120);
   });
 
   it('没配 Key 或没配公网入口时直接 503，不碰 LiveAvatar', async () => {

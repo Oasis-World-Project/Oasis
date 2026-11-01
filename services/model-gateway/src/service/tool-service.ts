@@ -11,6 +11,7 @@ import { RenderArgs, type RenderClient } from '../adapters/runpod.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
 import { ToolAdmissionError, type ToolJob, type ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
 import type { Caller, Meter, MeteredCall } from './metering.ts';
+import { AVATAR_CATALOG_TOOL, type AvatarCatalog } from './avatar-catalog.ts';
 import { TOOLS, type ToolConfig, type ToolDef } from './tools.ts';
 
 /** 长任务的冻结比等待上限多留这么久，免得结算前就被自动退回 */
@@ -31,6 +32,8 @@ export function createToolService(deps: {
   jobTimeoutMs: number;
   config: ToolConfig;
   logger: Logger;
+  /** 数字人形象和声音目录（ADR 0013）；只读、不花钱，不走计量 */
+  avatarCatalog?: AvatarCatalog;
 }) {
   const { meter, config, jobs } = deps;
   const byKey = new Map(TOOLS.map((t) => [t.key, t]));
@@ -506,6 +509,7 @@ export function createToolService(deps: {
           defaultModel: models[0] ?? null,
         };
       });
+      if (deps.avatarCatalog) entries.push(deps.avatarCatalog.entry());
       entries.push({
         key: 'text.batch',
         name: '批量生成文字',
@@ -532,6 +536,9 @@ export function createToolService(deps: {
       maxCostMicro?: number;
       idempotencyKey?: string;
     }): Promise<ToolResult> {
+      if (input.key === AVATAR_CATALOG_TOOL && deps.avatarCatalog) {
+        return deps.avatarCatalog.run(input.args);
+      }
       const tool = byKey.get(input.key);
       if (!tool) throw new HttpError(404, 'tool_not_found', `没有工具 ${input.key}`);
       const parsed = tool.args.safeParse(input.args);

@@ -59,13 +59,14 @@ export function AvatarPreview({ artifactId, spec }: { artifactId: string; spec: 
     live.current = null;
     setEndedAt((at) => at ?? Date.now());
     setPhase((p) => (p === 'idle' ? p : 'ended'));
-    await lk?.disconnect().catch(() => {});
+    // 先通知后台结束、再断开房间：先断开的话 LiveAvatar 会记成「用户断线」
     if (current) {
       await apiVoid(`${sessionPath(current.sessionId)}/stop`, {
         method: 'POST',
         body: reason ? { reason } : {},
       }).catch(() => {});
     }
+    await lk?.disconnect().catch(() => {});
   }, []);
 
   // LiveAvatar 那边结束了（到时长、太久不说话、断线）：这边也收尾
@@ -306,7 +307,7 @@ export function AvatarPreview({ artifactId, spec }: { artifactId: string; spec: 
             {session
               ? session.sandbox
                 ? `开发环境沙箱：免费，约 1 分钟自动结束`
-                : `每分钟 ${formatCost(price)}，单次最长 ${spec.maxMinutes} 分钟`
+                : `每分钟 ${formatCost(price)}，单次最长 ${clockText(session.maxSeconds)}`
               : `单次最长 ${spec.maxMinutes} 分钟，按实际用时计费`}
           </span>
         </div>

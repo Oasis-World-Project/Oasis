@@ -9,6 +9,43 @@ const WithId = z.looseObject({ id: z.string().min(1) });
 const SessionToken = z.looseObject({ session_id: z.string().min(1), session_token: z.string() });
 const Room = z.looseObject({ livekit_url: z.string().min(1), livekit_client_token: z.string() });
 const Credits = z.looseObject({ credits_left: z.coerce.number() });
+const Page = z.looseObject({ next: z.string().nullish(), results: z.array(z.unknown()) });
+const AvatarItem = z.looseObject({
+  id: z.string(),
+  name: z.string(),
+  status: z.string().nullish(),
+  preview_url: z.string().nullish(),
+  is_1080p: z.boolean().nullish(),
+  default_voice: z.looseObject({ name: z.string().nullish() }).nullish(),
+});
+const VoiceItem = z.looseObject({
+  id: z.string(),
+  name: z.string(),
+  language: z.string().nullish(),
+  gender: z.string().nullish(),
+});
+
+export interface CatalogAvatar {
+  id: string;
+  name: string;
+  previewUrl: string | null;
+  is1080p: boolean;
+  /** 竖屏形象（名字里带 Portrait） */
+  portrait: boolean;
+  defaultVoice: string | null;
+  /** 用户在 LiveAvatar 后台自己建的形象 */
+  custom: boolean;
+}
+
+export interface CatalogVoice {
+  id: string;
+  name: string;
+  language: string | null;
+  gender: string | null;
+}
+
+/** 列表最多翻这么多页（每页 100 条） */
+const MAX_PAGES = 5;
 
 export class LiveAvatarError extends Error {
   readonly status: number;
@@ -171,6 +208,54 @@ export function createLiveAvatarClient(options: {
     async stopSession(providerSessionId: string): Promise<void> {
       const body = { session_id: providerSessionId, reason: 'USER_CLOSED' };
       await call('POST', '/v1/sessions/stop', z.unknown(), body);
+    },
+
+    /** 能用的形象：公共形象和用户在 LiveAvatar 后台建的（只要状态正常的） */
+    async listAvatars(): Promise<CatalogAvatar[]> {
+      const out: CatalogAvatar[] = [];
+      for (const [path, custom] of [
+        ['/v1/avatars/public', false],
+        ['/v1/avatars', true],
+      ] as const) {
+        for (let page = 1; page <= MAX_PAGES; page++) {
+          const data = await call('GET', `${path}?page=${page}&page_size=100`, Page);
+          for (const raw of data.results) {
+            const item = AvatarItem.safeParse(raw);
+            if (!item.success || (item.data.status && item.data.status !== 'ACTIVE')) continue;
+            out.push({
+              id: item.data.id,
+              name: item.data.name,
+              previewUrl: item.data.preview_url ?? null,
+              is1080p: item.data.is_1080p ?? false,
+              portrait: /portrait/i.test(item.data.name),
+              defaultVoice: item.data.default_voice?.name ?? null,
+              custom,
+            });
+          }
+          if (!data.next) break;
+        }
+      }
+      return out;
+    },
+
+    async listVoices(): Promise<CatalogVoice[]> {
+      const out: CatalogVoice[] = [];
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const data = await call('GET', `/v1/voices?page=${page}&page_size=100`, Page);
+        for (const raw of data.results) {
+          const item = VoiceItem.safeParse(raw);
+          if (item.success) {
+            out.push({
+              id: item.data.id,
+              name: item.data.name,
+              language: item.data.language ?? null,
+              gender: item.data.gender ?? null,
+            });
+          }
+        }
+        if (!data.next) break;
+      }
+      return out;
     },
 
     /** 会话详情（状态、时长）；字段以 LiveAvatar 返回为准，结算时再取需要的部分 */

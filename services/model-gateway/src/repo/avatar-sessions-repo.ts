@@ -28,6 +28,8 @@ export interface AvatarSessionsRepo {
   addResources(id: string, resources: AvatarResources): Promise<void>;
   setCall(id: string, callId: string): Promise<void>;
   markLive(id: string, startedAt: Date): Promise<void>;
+  /** 套餐不允许那么长时，改成实际允许的单次最长时长 */
+  setMaxSeconds(id: string, maxSeconds: number): Promise<void>;
   /** 结束；只有第一次结束会返回会话（之后返回 undefined） */
   end(id: string, reason: string, endedAt: Date): Promise<AvatarSession | undefined>;
   appendTurn(id: string, turn: AvatarTurn): Promise<void>;
@@ -59,6 +61,9 @@ export function createAvatarSessionsRepo(pool: pg.Pool): AvatarSessionsRepo {
     },
     async setCall(id, callId) {
       await db.update(t).set({ callId }).where(eq(t.id, id));
+    },
+    async setMaxSeconds(id, maxSeconds) {
+      await db.update(t).set({ maxSeconds }).where(eq(t.id, id));
     },
     async markLive(id, startedAt) {
       await db

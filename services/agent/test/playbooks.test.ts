@@ -10,6 +10,7 @@ describe('场景经验手册', () => {
       'audio',
       'data-dashboards',
       'deep-research',
+      'digital-human',
       'documents',
       'images',
       'marketing',

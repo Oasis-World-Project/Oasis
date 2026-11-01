@@ -3,7 +3,15 @@
 // 「发给 AI 修改」做出新版整体替换这一版，「删除」连同工作流一起删；底部「标注」圈画写批注，「批准」打记号（ADR 0012）。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
-import { ArrowLeft, BadgeCheck, Download, MessageCircle, PencilLine, Workflow } from 'lucide-react';
+import {
+  ArrowLeft,
+  BadgeCheck,
+  Download,
+  MessageCircle,
+  PencilLine,
+  SlidersHorizontal,
+  Workflow,
+} from 'lucide-react';
 import { useState } from 'react';
 import { ApiError } from '../api/client.ts';
 import {
@@ -20,6 +28,8 @@ import type { RevisionParameter } from '@oasis/contracts/conversation';
 import { ConfirmButton } from '../chat/parts.tsx';
 import { ArtifactReview } from '../canvas/ArtifactReview.tsx';
 import { AvatarPreview } from '../canvas/AvatarPreview.tsx';
+import { ParameterPanel } from '../canvas/ParameterPanel.tsx';
+import { AVATAR_FIELDS, type Values } from '../canvas/parameters.ts';
 import { PreviewPlayer } from '../canvas/PreviewPlayer.tsx';
 import { RevisePanel } from '../canvas/RevisePanel.tsx';
 import { pdfCompanion } from '../canvas/snapshots.ts';
@@ -45,6 +55,9 @@ export function ArtifactPage() {
   const [reviseOpen, setReviseOpen] = useState(false);
   /** 从参数面板来的修改：参数随对话框一起发 */
   const [parameters, setParameters] = useState<RevisionParameter[]>([]);
+  // 数字人的参数面板（ADR 0013）
+  const [avatarParams, setAvatarParams] = useState(false);
+  const [avatarValues, setAvatarValues] = useState<Values>({});
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const remove = useMutation({
@@ -224,8 +237,35 @@ export function ArtifactPage() {
         {isError && <p className="m-0 p-6 text-sm text-accent">没找到这个成果。</p>}
         {artifact &&
           (artifact.avatar ? (
-            <div className="min-h-0 flex-1 overflow-auto rounded-card bg-glass-active shadow-edge-strong">
-              <AvatarPreview artifactId={artifact.id} spec={artifact.avatar} />
+            <div className="flex min-h-0 flex-1 gap-3">
+              <div className="relative min-h-0 flex-1 overflow-auto rounded-card bg-glass-active shadow-edge-strong">
+                {!revising && !avatarParams && (
+                  <button
+                    type="button"
+                    onClick={() => setAvatarParams(true)}
+                    className="absolute right-4 top-4 z-10 inline-flex h-9 items-center gap-1.5 rounded-full bg-glass-active px-3.5 text-[13px] shadow-edge-strong"
+                  >
+                    <SlidersHorizontal size={15} aria-hidden="true" />
+                    参数
+                  </button>
+                )}
+                <AvatarPreview artifactId={artifact.id} spec={artifact.avatar} />
+              </div>
+              {avatarParams && !revising && (
+                <ParameterPanel
+                  file={artifact.name}
+                  fields={AVATAR_FIELDS}
+                  values={avatarValues}
+                  onChange={setAvatarValues}
+                  onRevise={(next) => {
+                    setParameters(next);
+                    setAvatarParams(false);
+                    setReviseOpen(true);
+                  }}
+                  onClose={() => setAvatarParams(false)}
+                  previewable={[]}
+                />
+              )}
             </div>
           ) : artifact.application ? (
             <div className="min-h-0 flex-1 overflow-auto rounded-card bg-glass-active shadow-edge-strong">

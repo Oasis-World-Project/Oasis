@@ -20,6 +20,8 @@ export interface RoomState {
   providerSessionId: string | null;
   /** 会话结束的原因（LiveAvatar 的 end_reason） */
   ended: string | null;
+  /** 打字提问后 LiveAvatar 会把问题回推一遍（时机不定），收到时跳过 */
+  echoes: string[];
   nextId: number;
 }
 
@@ -37,6 +39,7 @@ export const initialRoom: RoomState = {
   waitingSince: null,
   providerSessionId: null,
   ended: null,
+  echoes: [],
   nextId: 1,
 };
 
@@ -57,9 +60,21 @@ function finishPending(state: RoomState, text?: string): RoomState {
   };
 }
 
+/** 数字人还没说完就被用户打断：那句话按已经收到的字收尾 */
+function interrupted(state: RoomState): RoomState {
+  const last = state.lines.at(-1);
+  if (last?.who !== 'avatar' || !last.pending) return state;
+  // 逐字推送的顺序不可靠，半句话拼不出来，只记被打断
+  return finishPending(state, '（被打断）');
+}
+
 /** 用户打字提问：记一行，并开始计时 */
 export function asked(state: RoomState, text: string, now: number): RoomState {
-  return { ...push(state, 'user', text, false), waitingSince: now };
+  return {
+    ...push(interrupted(state), 'user', text, false),
+    waitingSince: now,
+    echoes: [...state.echoes, text],
+  };
 }
 
 export function reduceEvent(state: RoomState, event: AgentEvent, now: number): RoomState {
@@ -74,10 +89,11 @@ export function reduceEvent(state: RoomState, event: AgentEvent, now: number): R
     case 'user.speak_ended':
       return { ...next, speaking: null, waitingSince: now };
     case 'user.transcription': {
-      // 打字的问题 LiveAvatar 也会回推一遍，别记两次
-      const last = next.lines.at(-1);
-      if (!text || (last?.who === 'user' && last.text === text)) return next;
-      return push(next, 'user', text, false);
+      // 打字的问题 LiveAvatar 也会回推一遍（可能晚到），别记两次
+      if (!text) return next;
+      const echo = next.echoes.indexOf(text);
+      if (echo >= 0) return { ...next, echoes: next.echoes.filter((_, i) => i !== echo) };
+      return push(interrupted(next), 'user', text, false);
     }
     case 'avatar.speak_started':
       return next.waitingSince === null

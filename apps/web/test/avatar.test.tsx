@@ -2,7 +2,7 @@
 import { AvatarSpec } from '@oasis/contracts/avatar';
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import { createMemoryHistory } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
 import { asked, initialRoom, reduceEvent } from '../src/canvas/avatar-room.ts';
@@ -79,6 +79,24 @@ describe('数字人事件 → 对话记录', () => {
     expect(s.waits).toEqual([2500]);
     s = reduceEvent(s, { event_type: 'session.stopped', end_reason: 'IDLE_TIMEOUT' }, 9000);
     expect(s.ended).toBe('IDLE_TIMEOUT');
+  });
+
+  it('数字人没说完就被打断：那句按已收到的字收尾，不会一直停在「正在说」', () => {
+    let s = reduceEvent(
+      initialRoom,
+      { event_type: 'avatar.transcription.chunk', text: '您好，我是' },
+      0,
+    );
+    s = asked(s, '早餐几点？', 100);
+    expect(s.lines.map((l) => [l.text, l.pending])).toEqual([
+      ['（被打断）', false],
+      ['早餐几点？', false],
+    ]);
+    // 回推的问题晚到（数字人已经开始回答）：也不再记一次
+    s = reduceEvent(s, { event_type: 'avatar.transcription.chunk', text: '七点' }, 200);
+    s = reduceEvent(s, { event_type: 'user.transcription', text: '早餐几点？' }, 300);
+    expect(s.lines.filter((l) => l.who === 'user')).toHaveLength(1);
+    expect(s.lines.at(-1)).toMatchObject({ who: 'avatar', pending: true });
   });
 });
 
@@ -199,5 +217,41 @@ describe('数字人对话页', () => {
     await waitFor(() => expect(calls).toContain(`POST /canvas/v1/avatar-sessions/${SESSION}/stop`));
     expect(lk.disconnected.count).toBeGreaterThan(0);
     expect(await screen.findByRole('button', { name: '再对话一次' })).toBeTruthy();
+  });
+
+  it('参数面板：数字人的语气、时长等改过的项变成修改意见', async () => {
+    installFakeApi({
+      signedIn: true,
+      extra: (method, path) => {
+        if (method === 'GET' && path === `/canvas/v1/artifacts/${ARTIFACT}`)
+          return json(200, artifact);
+        if (method === 'GET' && path.startsWith('/canvas/v1/artifacts'))
+          return json(200, { artifacts: [artifact] });
+        if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
+        return undefined;
+      },
+    });
+    const { App, router } = createApp({
+      history: createMemoryHistory({ initialEntries: [`/canvas/artifacts/${ARTIFACT}`] }),
+    });
+    await act(() => router.load());
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: '参数' }));
+    const panel = screen.getByRole('complementary', { name: '参数' });
+    fireEvent.click(
+      within(within(panel).getByRole('radiogroup', { name: '语气' })).getByRole('radio', {
+        name: '更正式',
+      }),
+    );
+    fireEvent.click(
+      within(within(panel).getByRole('radiogroup', { name: '单次最长时长' })).getByRole('radio', {
+        name: '10 分钟',
+      }),
+    );
+    fireEvent.click(within(panel).getByRole('button', { name: '按这些参数改一版（2 项）' }));
+    const dialog = await screen.findByLabelText('修改「民宿前台数字人」');
+    const list = within(dialog).getByRole('region', { name: '参数修改', hidden: true });
+    expect(list.textContent).toContain('语气：更正式');
+    expect(list.textContent).toContain('单次最长时长：10 分钟');
   });
 });
