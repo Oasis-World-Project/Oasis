@@ -1,6 +1,6 @@
 import { OASIS_HEADERS } from '@oasis/contracts/common';
+import { AvatarSessionStartBody, AvatarStopBody } from '@oasis/contracts/avatar';
 import {
-  AvatarSessionStartBody,
   ChatCompletionRequest,
   ComputeHoldBody,
   ComputeSettleBody,
@@ -57,8 +57,8 @@ function abortOnClose(reply: FastifyReply): AbortSignal {
   return abort.signal;
 }
 
-/** OpenAI 兼容的 chat completions：流式时原样转发 SSE。内部、沙箱和数字人入口共用。 */
-export function createCompletions(chat: ChatService) {
+/** OpenAI 兼容的 chat completions：流式时原样转发 SSE。内部和沙箱共用。 */
+function createCompletions(chat: ChatService) {
   return async function completions(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
     const body = parseWith(ChatCompletionRequest, request.body);
     const prepared = await chat.prepare({ caller, requestId: request.id, body });
@@ -189,8 +189,13 @@ export function registerRoutes(
   });
   app.post('/internal/avatar/sessions/:sessionId/stop', async (request, reply) => {
     const { sessionId } = parseWith(AvatarSessionParams, request.params);
-    await avatars.stop(requirePayerId(request), sessionId);
+    const { reason } = parseWith(AvatarStopBody, request.body ?? {});
+    await avatars.stop(requirePayerId(request), sessionId, reason);
     return reply.code(204).send();
+  });
+  app.get('/internal/avatar/sessions/:sessionId', async (request) => {
+    const { sessionId } = parseWith(AvatarSessionParams, request.params);
+    return avatars.view(requirePayerId(request), sessionId);
   });
 
   /** harness 为一次 agent 运行签发临时 Key；明文只在这里返回一次。 */

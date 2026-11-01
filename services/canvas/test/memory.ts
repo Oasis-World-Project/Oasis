@@ -74,6 +74,13 @@ export function memoryArtifacts(
       return row;
     },
     find: async (id) => rows.find((r) => r.id === id),
+    async setAvatar(id, spec) {
+      const row = rows.find((r) => r.id === id);
+      if (row) {
+        row.avatarSpec = spec;
+        row.category = 'app';
+      }
+    },
     async setApplication(id, spec) {
       const row = rows.find((r) => r.id === id);
       if (row) {

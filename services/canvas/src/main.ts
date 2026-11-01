@@ -85,6 +85,14 @@ await startService({
         store,
         harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 60_000 }),
         task: createServiceClient('task', config.TASK_URL, { timeoutMs: 20000 }),
+        ...(config.MODEL_GATEWAY_URL
+          ? {
+              // 开数字人会话要在 LiveAvatar 上建好几样东西，从国内网络发出去会慢
+              modelGateway: createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
+                timeoutMs: 60_000,
+              }),
+            }
+          : {}),
       },
       {
         maxBytes: config.UPLOAD_MAX_BYTES,

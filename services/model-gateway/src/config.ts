@@ -136,6 +136,15 @@ export const modelGatewayEnv = {
     .transform((value) => value || undefined),
   /** 数字人回答用的模型：要出字快 */
   AVATAR_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
+  /** 开发期：所有数字人会话都用 LiveAvatar 沙箱（不扣积分，只有官方测试形象，约 1 分钟自动结束） */
+  AVATAR_SANDBOX: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /** LiveAvatar 每个积分多少钱（微美元；Essential 超额价 $0.095）；FULL 模式每分钟 2 积分 */
+  AVATAR_CREDIT_MICRO: z.coerce.number().int().positive().max(1_000_000).default(95_000),
+  /** 多久清扫一次数字人会话（结束、拆资源、结算） */
+  AVATAR_SWEEP_MS: z.coerce.number().int().min(5_000).default(60_000),
   /** 查不到价格时按这个金额冻结（$0.20） */
   FALLBACK_HOLD_MICRO: z.coerce.number().int().positive().default(200_000),
 };

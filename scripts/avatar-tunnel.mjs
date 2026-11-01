@@ -9,10 +9,20 @@ const host = process.env.AVATAR_TUNNEL_HOST ?? 'tarot-tencent';
 const localPort = Number(process.env.AVATAR_LLM_PORT ?? 4118);
 const remotePort = Number(process.env.AVATAR_TUNNEL_REMOTE_PORT ?? 15200);
 let stopping = false;
+let ssh;
+
+// 退出时一并结束 ssh（只注册一次，重连不再重复注册）
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    stopping = true;
+    ssh?.kill();
+    process.exit(0);
+  });
+}
 
 function open() {
   console.log(`隧道：${host} 127.0.0.1:${remotePort} → 本机 127.0.0.1:${localPort}`);
-  const ssh = spawn(
+  ssh = spawn(
     'ssh',
     [
       '-N',
@@ -39,13 +49,6 @@ function open() {
     console.log(`隧道断开（退出码 ${code}），5 秒后重连`);
     setTimeout(open, 5000);
   });
-  for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.once(signal, () => {
-      stopping = true;
-      ssh.kill();
-      process.exit(0);
-    });
-  }
 }
 
 open();

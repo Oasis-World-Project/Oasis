@@ -19,9 +19,13 @@ import {
   type ObjectStore,
   type ServiceClient,
 } from '@oasis/service-kit';
+import { AVATAR_SPEC_SUFFIX, AvatarSpec } from '@oasis/contracts/avatar';
 import type { Artifact, ArtifactsRepo, NewArtifact } from '../repo/artifacts-repo.ts';
 import type { Upload, UploadsRepo } from '../repo/uploads-repo.ts';
 import { categoryOf, safePath, safeSegment, uniqueName } from './naming.ts';
+
+/** 数字人配置文件上限（30,000 字知识要点加人设，JSON 转义后留足余量） */
+const AVATAR_SPEC_MAX_BYTES = 256 * 1024;
 
 const toBody = (row: Artifact): ArtifactBody => ({
   id: row.id,
@@ -32,6 +36,7 @@ const toBody = (row: Artifact): ArtifactBody => ({
   contentType: row.contentType,
   category: row.category,
   application: row.appSpec,
+  avatar: row.avatarSpec,
   deliverable: row.deliverable,
   taskId: row.taskId,
   nodeId: row.nodeId,
@@ -160,6 +165,7 @@ export function createArtifactService(deps: {
       contentType,
       category: categoryOf(file.path),
       appSpec: null,
+      avatarSpec: null,
       models: file.models,
       objectKey,
     };
@@ -244,6 +250,33 @@ export function createArtifactService(deps: {
       if (!members.some((row) => row.path === `${spec.root}/${spec.entry}` && row.size > 0))
         continue;
       await repo.setApplication(manifest.id, spec);
+    }
+    await registerAvatars(all);
+  }
+
+  /** 数字人配置（ADR 0013）：`*.oasis-avatar.json` 校验通过的记下来；不合格的照普通文件留着 */
+  async function registerAvatars(all: Artifact[]) {
+    for (const file of all.filter(
+      (row) => row.name.endsWith(AVATAR_SPEC_SUFFIX) && !row.avatarSpec,
+    )) {
+      if (file.size > AVATAR_SPEC_MAX_BYTES) continue;
+      const raw = await store.get(file.objectKey);
+      if (raw.length > AVATAR_SPEC_MAX_BYTES) continue;
+      let data: unknown;
+      try {
+        data = JSON.parse(raw.toString('utf8'));
+      } catch {
+        continue;
+      }
+      const parsed = AvatarSpec.safeParse(data);
+      if (!parsed.success) {
+        logger.warn(
+          { artifactId: file.id, issues: parsed.error.issues.slice(0, 3) },
+          '数字人配置不合格，按普通文件登记',
+        );
+        continue;
+      }
+      await repo.setAvatar(file.id, parsed.data);
     }
   }
 

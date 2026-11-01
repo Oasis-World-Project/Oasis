@@ -18,9 +18,10 @@ import {
   type ProviderClient,
 } from './adapters/openrouter.ts';
 import { createAvatarLlmServer } from './api/avatar-server.ts';
-import { createCompletions, registerRoutes } from './api/routes.ts';
+import { registerRoutes } from './api/routes.ts';
 import { modelGatewayEnv } from './config.ts';
 import { createCallsRepo } from './repo/calls-repo.ts';
+import { createAvatarSessionsRepo } from './repo/avatar-sessions-repo.ts';
 import { createRunKeysRepo } from './repo/run-keys-repo.ts';
 import { createToolJobsRepo } from './repo/tool-jobs-repo.ts';
 import { createChatService } from './service/chat-service.ts';
@@ -187,17 +188,25 @@ await startService({
         apiKey: config.LIVEAVATAR_API_KEY,
       }),
       runKeys,
+      repo: createAvatarSessionsRepo(resources.postgres.pool),
+      calls: callsRepo,
+      meter,
       publicBaseUrl: config.AVATAR_PUBLIC_BASE_URL,
       model: config.AVATAR_MODEL,
+      sandbox: config.AVATAR_SANDBOX,
+      creditMicro: config.AVATAR_CREDIT_MICRO,
+      sweepMs: config.AVATAR_SWEEP_MS,
       logger,
     });
+    avatars.startSweeper();
     app.addHook('onClose', () => avatars.close());
     if (config.AVATAR_LLM_PORT > 0) {
       const avatarApp = createAvatarLlmServer({
         logger: logger.child({ component: 'avatar-llm' }),
         runKeys,
-        completions: createCompletions(chat),
-        isActiveSession: avatars.isActive,
+        chat,
+        avatars,
+        model: config.AVATAR_MODEL,
       });
       avatarApp
         .listen({ host: config.AVATAR_LLM_HOST, port: config.AVATAR_LLM_PORT })

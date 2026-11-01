@@ -19,6 +19,10 @@ const T2 = '10000000-0000-4000-8000-000000000002';
 const COPY = '20000000-0000-4000-8000-000000000001';
 const IMAGE = '20000000-0000-4000-8000-000000000002';
 const TALK = '20000000-0000-4000-8000-000000000003';
+const T3 = '10000000-0000-4000-8000-000000000003';
+const SESSION = '30000000-0000-4000-8000-000000000001';
+/** 转给 model-gateway 的数字人会话请求 */
+const gatewayCalls: { method: string; path: string; headers?: object; body?: unknown }[] = [];
 
 const files: Record<string, string> = {
   '首页文案.md': '# 山里的小木屋',
@@ -143,6 +147,7 @@ beforeEach(async () => {
   fileFailures = 0;
   revisionOf.clear();
   retired.length = 0;
+  gatewayCalls.length = 0;
   uploadRows = memoryUploads();
   repo = memoryArtifacts(uploadRows);
   const store = memoryStore();
@@ -171,6 +176,27 @@ beforeEach(async () => {
             harness: {
               json: async () => ({ maxMicro: 500, maxMs: 60_000, idleMs: 20_000 }),
             } as unknown as ServiceClient,
+            modelGateway: {
+              json: async (
+                method: string,
+                path: string,
+                options: { headers?: object; body?: unknown },
+              ) => {
+                gatewayCalls.push({ method, path, headers: options.headers, body: options.body });
+                if (path === '/internal/avatar/sessions') {
+                  return {
+                    sessionId: SESSION,
+                    livekitUrl: 'wss://room',
+                    livekitToken: 'lk',
+                    sandbox: true,
+                    maxSeconds: 300,
+                    pricePerMinuteMicro: 0,
+                    startedAt: '2026-11-01T12:00:00.000Z',
+                  };
+                }
+                return undefined;
+              },
+            } as unknown as ServiceClient,
           },
           { maxBytes: 1024 },
         ),
@@ -195,6 +221,54 @@ const get = (url: string, headers: Record<string, string> = {}, user = KAI) =>
   app.inject({ url, headers: { [OASIS_HEADERS.userId]: user, ...headers } });
 
 describe('任务完成时登记成果', () => {
+  it('数字人配置：合格的登记成数字人，不合格的照普通文件；开会话转给 model-gateway 并带上付费人', async () => {
+    files['前台.oasis-avatar.json'] = JSON.stringify({
+      name: '民宿前台',
+      avatarId: '9c59a215-4c9f-478f-9d95-edca74c7b0d0',
+      prompt: '你是山间民宿的前台',
+      knowledge: [{ title: '早餐', content: '七点到九点半' }],
+    });
+    files['坏的.oasis-avatar.json'] = '{"name":""}';
+    finalFiles = ['前台.oasis-avatar.json', '坏的.oasis-avatar.json'].map((path) => ({
+      deliverable: '数字人',
+      nodeId: COPY,
+      path,
+      size: files[path]!.length,
+    }));
+    await service.onTaskStatus(event(T3));
+    const good = repo.rows.find((row) => row.path === '前台.oasis-avatar.json')!;
+    const bad = repo.rows.find((row) => row.path === '坏的.oasis-avatar.json')!;
+    expect(good).toMatchObject({
+      category: 'app',
+      avatarSpec: { name: '民宿前台', maxMinutes: 5 },
+    });
+    expect(bad.avatarSpec).toBeNull();
+    expect(bad.category).not.toBe('app');
+
+    const post = (url: string, user = KAI) =>
+      app.inject({
+        method: 'POST',
+        url,
+        headers: { [OASIS_HEADERS.userId]: user, 'content-type': 'application/json' },
+        payload: '{}',
+      });
+    const started = await post(`/v1/artifacts/${good.id}/avatar-sessions`);
+    expect(started.statusCode).toBe(201);
+    expect(started.json()).toMatchObject({ sessionId: SESSION, livekitUrl: 'wss://room' });
+    expect(gatewayCalls[0]).toMatchObject({
+      path: '/internal/avatar/sessions',
+      headers: { [OASIS_HEADERS.payerId]: KAI },
+      body: { artifactId: good.id, taskId: T3, spec: { name: '民宿前台' } },
+    });
+    expect((await post(`/v1/artifacts/${bad.id}/avatar-sessions`)).statusCode).toBe(422);
+    expect((await post(`/v1/artifacts/${good.id}/avatar-sessions`, MIA)).statusCode).toBe(404);
+    expect((await post(`/v1/avatar-sessions/${SESSION}/stop`)).statusCode).toBe(204);
+    expect(gatewayCalls.at(-1)).toMatchObject({
+      path: `/internal/avatar/sessions/${SESSION}/stop`,
+      headers: { [OASIS_HEADERS.payerId]: KAI },
+    });
+  });
+
   it('仅同节点最终文件可组成应用，重放补齐描述且按属主取离线包', async () => {
     files['site/oasis-app.json'] = JSON.stringify({
       version: 1,

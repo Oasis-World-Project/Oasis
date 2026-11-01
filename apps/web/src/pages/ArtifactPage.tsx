@@ -19,6 +19,7 @@ import {
 import type { RevisionParameter } from '@oasis/contracts/conversation';
 import { ConfirmButton } from '../chat/parts.tsx';
 import { ArtifactReview } from '../canvas/ArtifactReview.tsx';
+import { AvatarPreview } from '../canvas/AvatarPreview.tsx';
 import { PreviewPlayer } from '../canvas/PreviewPlayer.tsx';
 import { RevisePanel } from '../canvas/RevisePanel.tsx';
 import { pdfCompanion } from '../canvas/snapshots.ts';
@@ -222,7 +223,11 @@ export function ArtifactPage() {
         {isPending && <p className="m-0 p-6 text-sm text-ink-muted">正在打开…</p>}
         {isError && <p className="m-0 p-6 text-sm text-accent">没找到这个成果。</p>}
         {artifact &&
-          (artifact.application ? (
+          (artifact.avatar ? (
+            <div className="min-h-0 flex-1 overflow-auto rounded-card bg-glass-active shadow-edge-strong">
+              <AvatarPreview artifactId={artifact.id} spec={artifact.avatar} />
+            </div>
+          ) : artifact.application ? (
             <div className="min-h-0 flex-1 overflow-auto rounded-card bg-glass-active shadow-edge-strong">
               <PreviewPlayer artifactId={artifact.id} />
             </div>

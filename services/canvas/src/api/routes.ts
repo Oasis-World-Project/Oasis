@@ -31,6 +31,7 @@ import {
   defaultPreviewLimits,
   type PreviewLimits,
 } from '../service/preview-service.ts';
+import { registerAvatarRoutes } from './avatar-routes.ts';
 import { sendStored } from './send-stored.ts';
 import { ModelPreviewSource } from '@oasis/contracts/model-preview';
 import { createModelPreviewService } from '../service/model-preview-service.ts';
@@ -46,6 +47,8 @@ export function registerRoutes(
     store: ObjectStore;
     harness?: ServiceClient;
     task?: ServiceClient;
+    /** 数字人会话（ADR 0013）；没配时不提供 */
+    modelGateway?: ServiceClient;
   },
   options: {
     maxBytes: number;
@@ -56,6 +59,9 @@ export function registerRoutes(
   },
 ): void {
   const { uploads, artifacts, store, harness } = services;
+  if (services.modelGateway) {
+    registerAvatarRoutes(app, { artifacts, modelGateway: services.modelGateway });
+  }
   const previewLimits = options.preview ?? defaultPreviewLimits;
   const preview = createPreviewService(previewLimits);
   const models = services.task

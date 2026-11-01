@@ -13,6 +13,8 @@ export interface ArtifactsRepo {
   insert(artifact: NewArtifact): Promise<boolean>;
   find(id: string): Promise<Artifact | undefined>;
   setApplication(id: string, spec: Artifact['appSpec']): Promise<void>;
+  /** 数字人配置；归到「网页和应用」 */
+  setAvatar(id: string, spec: Artifact['avatarSpec']): Promise<void>;
   list(
     ownerId: string,
     filter: { category?: ArtifactCategory; taskId?: string },
@@ -56,6 +58,12 @@ export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
       await db
         .update(artifacts)
         .set({ appSpec: spec, category: 'app' })
+        .where(eq(artifacts.id, id));
+    },
+    async setAvatar(id, spec) {
+      await db
+        .update(artifacts)
+        .set({ avatarSpec: spec, category: 'app' })
         .where(eq(artifacts.id, id));
     },
     list: (ownerId, filter, limit) =>

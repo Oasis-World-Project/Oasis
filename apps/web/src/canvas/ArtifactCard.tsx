@@ -1,7 +1,7 @@
 // 画布上的一张成果卡片（照原型 ⑧）：缩略图（图片、视频直接显示，其他按类型画个示意）、名字、来自哪个任务、做它的 AI。
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import { Link } from '@tanstack/react-router';
-import { Box, Globe, Music, Play, Table } from 'lucide-react';
+import { Box, Globe, Music, Play, Table, UserRound } from 'lucide-react';
 import { useState } from 'react';
 import { artifactContentUrl } from '../api/queries.ts';
 import { badgeOf, previewKindOf } from '../chat/files.ts';
@@ -35,6 +35,21 @@ function Thumb({ artifact }: { artifact: ArtifactBody }) {
         onError={() => setPosterFailed(true)}
         className="size-full object-cover"
       />
+    );
+  if (artifact.avatar)
+    return artifact.avatar.avatarPreviewUrl && !posterFailed ? (
+      <img
+        src={artifact.avatar.avatarPreviewUrl}
+        alt=""
+        loading="lazy"
+        onError={() => setPosterFailed(true)}
+        className="size-full object-cover"
+      />
+    ) : (
+      <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-ink-muted">
+        <UserRound size={34} aria-hidden="true" />
+        <span className="text-xs">数字人</span>
+      </span>
     );
   if (artifact.application)
     return (

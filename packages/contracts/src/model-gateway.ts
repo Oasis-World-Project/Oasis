@@ -179,32 +179,3 @@ export const ToolJobBody = z.object({
   error: z.string().optional(),
 });
 export type ToolJobBody = z.infer<typeof ToolJobBody>;
-
-/**
- * 实时数字人会话（ADR 0013）。POST /internal/avatar/sessions，付费人在 x-oasis-payer-id 头里。
- * model-gateway 在 LiveAvatar 上建好人设和「回调我们大模型」的配置，开好会话，返回浏览器连 LiveKit 用的地址和令牌。
- */
-export const AvatarSessionStartBody = z.object({
-  name: z.string().trim().min(1).max(64),
-  /** 人设与规则（系统提示词） */
-  prompt: z.string().trim().min(1).max(8000),
-  /** 开场白；第一句说明自己是 AI */
-  openingText: z.string().trim().max(1000).default(''),
-  avatarId: z.uuid(),
-  voiceId: z.uuid().optional(),
-  language: z.string().min(2).max(10).default('zh'),
-  /** LiveAvatar 沙箱：不扣积分，只能用官方测试形象，约 1 分钟自动结束 */
-  sandbox: z.boolean().default(false),
-  maxSeconds: z.number().int().min(30).max(900).default(300),
-});
-export type AvatarSessionStartBody = z.input<typeof AvatarSessionStartBody>;
-
-export const AvatarSessionStarted = z.object({
-  sessionId: z.uuid(),
-  providerSessionId: z.string(),
-  livekitUrl: z.string(),
-  livekitToken: z.string(),
-  sandbox: z.boolean(),
-  maxSeconds: z.number().int(),
-});
-export type AvatarSessionStarted = z.infer<typeof AvatarSessionStarted>;

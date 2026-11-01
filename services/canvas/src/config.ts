@@ -6,6 +6,11 @@ export const canvasEnv = {
   /** 任务完成时取任务详情和成果文件（ADR 0007 §8） */
   TASK_URL: z.url(),
   HARNESS_URL: z.url(),
+  /** 数字人会话（ADR 0013）由 model-gateway 开；没配时成果页不能开实时对话 */
+  MODEL_GATEWAY_URL: z
+    .union([z.literal(''), z.url()])
+    .optional()
+    .transform((value) => value || undefined),
   // ---- 对象存储（素材，5.5c 起还有成果） ----
   ...objectStoreEnv,
   S3_BUCKET: z.string().default('oasis-canvas'),

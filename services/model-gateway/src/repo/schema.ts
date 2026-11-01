@@ -1,12 +1,22 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
-import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  boolean,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
+import type { AvatarSpec, AvatarTurn } from '@oasis/contracts/avatar';
 import type { ToolResult } from '@oasis/contracts/model-gateway';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
 export const calls = pgTable('calls', {
   id: uuid('id').primaryKey(),
-  kind: text('kind', { enum: ['chat', 'decision', 'tool', 'compute'] }).notNull(),
+  kind: text('kind', { enum: ['chat', 'decision', 'tool', 'compute', 'avatar'] }).notNull(),
   payerId: uuid('payer_id').notNull(),
   runId: uuid('run_id'),
   taskId: uuid('task_id'),
@@ -71,4 +81,35 @@ export const toolRunControls = pgTable('tool_run_controls', {
   payerId: uuid('payer_id').notNull(),
   taskId: uuid('task_id'),
   cancelledAt: at('cancelled_at'),
+});
+
+/** 在 LiveAvatar 上建的资源和临时 Key，边建边记（清扫按它拆） */
+export interface AvatarResources {
+  runKeyId?: string;
+  secretId?: string;
+  llmConfigurationId?: string;
+  contextId?: string;
+  providerSessionId?: string;
+}
+
+export const avatarSessions = pgTable('avatar_sessions', {
+  id: uuid('id').primaryKey(),
+  payerId: uuid('payer_id').notNull(),
+  artifactId: uuid('artifact_id'),
+  taskId: uuid('task_id'),
+  status: text('status', { enum: ['starting', 'live', 'ended'] }).notNull(),
+  sandbox: boolean('sandbox').notNull(),
+  maxSeconds: integer('max_seconds').notNull(),
+  pricePerMinuteMicro: bigint('price_per_minute_micro', { mode: 'number' }).notNull(),
+  spec: jsonb('spec').$type<AvatarSpec>().notNull(),
+  resources: jsonb('resources').$type<AvatarResources>().notNull().default({}),
+  callId: uuid('call_id'),
+  turns: jsonb('turns').$type<AvatarTurn[]>().notNull().default([]),
+  startedAt: at('started_at'),
+  endedAt: at('ended_at'),
+  endReason: text('end_reason'),
+  settledAt: at('settled_at'),
+  chargedMicro: bigint('charged_micro', { mode: 'number' }),
+  cleanedAt: at('cleaned_at'),
+  createdAt: at('created_at').notNull().defaultNow(),
 });

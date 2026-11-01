@@ -73,6 +73,7 @@ function setup() {
       taskTitle: '模型',
       conversationId: null,
       appSpec: null,
+      avatarSpec: null,
       models: [],
       syncPath: `模型/${path}`,
       replacesSha256: null,
