@@ -138,6 +138,8 @@ await startService({
       logger,
     });
     previews = createPreviewService({
+      websiteOrigins: config.WEBSITE_TEST_ORIGINS,
+      store,
       repo: createPreviewRepo(resources.postgres.pool),
       executor: createPreviewExecutor({
         docker: createDockerApi(config.DOCKER_SOCKET ?? defaultDockerSocket()),

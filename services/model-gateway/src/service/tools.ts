@@ -1,6 +1,8 @@
 // 工具的定义（ADR 0006）：每个工具 = 参数校验 + 目录信息 + 怎么调供应商、怎么算钱。
 // 目录放在这里（和供应商适配在一起），由 model-gateway 对外提供；以后接新供应商（如 fal.ai）只在这里加。
 import { z } from 'zod';
+import { BrowserTestResult, WebsiteTestArgs } from '@oasis/contracts/ui-test';
+import type { ServiceClient } from '@oasis/service-kit';
 import { createHash } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { HttpError } from '@oasis/service-kit';
@@ -8,6 +10,7 @@ import type { ProviderClient } from '../adapters/openrouter.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
 import type { FalClient } from '../adapters/fal.ts';
 import { RenderArgs, type RenderClient } from '../adapters/runpod.ts';
+import { AndroidTestArgs, type BrowserStackClient } from '../adapters/browserstack.ts';
 import { USD_TO_MICRO, type CostSource } from './pricing.ts';
 
 /** 工具交回给 AI 的文字最多这么长 */
@@ -33,6 +36,10 @@ export interface ToolConfig {
 }
 
 interface ToolDeps {
+  harness?: ServiceClient;
+  taskId?: string;
+  browserstack?: BrowserStackClient;
+  payerId?: string;
   render?: RenderClient;
   openrouter: ProviderClient;
   tavily: SearchClient;
@@ -69,7 +76,7 @@ interface ToolBase {
   /** 调用前冻结多少（微美元），按参数算 */
   holdMicro: (args: Record<string, unknown>) => number;
   /** 依赖哪个供应商（没配 Key 就不能用） */
-  provider: 'openrouter' | 'tavily' | 'fal' | 'runpod';
+  provider: 'openrouter' | 'tavily' | 'fal' | 'runpod' | 'browserstack' | 'harness';
   /** 可以选的模型；不需要模型的工具返回空 */
   models: (config: ToolConfig) => string[];
   args: z.ZodType<Record<string, unknown>>;
@@ -298,6 +305,67 @@ const estimate = (costMicro: number) => ({ costMicro, source: 'estimate' as cons
 const provider = (costUsd: number) => ({ costMicro: usd(costUsd), source: 'provider' as const });
 
 export const TOOLS: ToolDef[] = [
+  {
+    key: 'website.test',
+    name: '外站浏览器测试',
+    description: '在禁网容器测试配置放行的外部 HTTPS 网站，返回断言和截图。仅 GET/HEAD。',
+    usage:
+      '传 url 和 plan，plan 使用 {version:1,steps:[{action:"visible",selector:"h1"},{action:"screenshot"}]}；来源须由管理员提前放行。',
+    unit: '次（算力单独结算）',
+    estimateMicro: 0,
+    holdMicro: () => 1,
+    provider: 'harness',
+    models: () => ['oasis/browser'],
+    modelOf: () => 'oasis/browser',
+    args: WebsiteTestArgs,
+    long: false,
+    run: async (deps, args) => {
+      if (!deps.taskId) throw new HttpError(400, 'task_required', '网站测试需要所属任务');
+      const response = await deps.upstream(() =>
+        deps.harness!.stream('POST', '/internal/websites/check', {
+          body: { ...args, payerId: deps.payerId, taskId: deps.taskId },
+          signal: deps.signal,
+        }),
+      );
+      const result = BrowserTestResult.parse(await response.json());
+      return {
+        text: result.report.passed
+          ? '外站声明式测试步骤通过；覆盖限制见报告。'
+          : '外站测试未通过，请查看报告。',
+        data: result.report,
+        files: [
+          {
+            name: 'website-check.json',
+            mediaType: 'application/json',
+            base64: Buffer.from(JSON.stringify(result.report)).toString('base64'),
+          },
+          ...result.screenshots.map((file) => ({ ...file, mediaType: 'image/jpeg' })),
+        ],
+        cost: { costMicro: 0, source: 'provider' },
+      };
+    },
+  },
+  {
+    key: 'android.test',
+    name: 'Android 原生应用测试',
+    description:
+      '在真实云 Android 设备运行已上传 APK 的声明式测试，保存步骤报告和截图；仅免费计划。',
+    usage:
+      '传 uploadId、device、osVersion 和 steps（click/fill/visible/text/screenshot）。selector 使用 {using:"id"|"accessibility id"|"xpath",value:"…"}。最多 10 步，不支持任意脚本。',
+    unit: '次',
+    estimateMicro: 0,
+    holdMicro: () => 1,
+    provider: 'browserstack',
+    models: () => ['browserstack/android-free'],
+    modelOf: () => 'browserstack/android-free',
+    args: AndroidTestArgs,
+    long: true,
+    start: (deps, args) => deps.browserstack!.start(args, deps.payerId!, deps.signal),
+    check: (deps, id) => deps.browserstack!.check(id, deps.receipt!, deps.signal),
+    cancel: async (deps, id) => {
+      await deps.browserstack!.check(id, deps.receipt!, deps.signal, true);
+    },
+  },
   {
     key: '3d.render',
     name: '云 GPU 渲染',

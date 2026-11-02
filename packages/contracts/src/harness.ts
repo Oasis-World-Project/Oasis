@@ -1,5 +1,6 @@
 // harness 的内部接口（只给 task 等内部服务用，gateway 不转发）：启动一次 agent 运行、查进度、追问、停止、取消。
 import { z } from 'zod';
+import { UiTestReport } from './ui-test.ts';
 
 export const RunStatus = z.enum([
   'queued',
@@ -305,4 +306,9 @@ export const ApplicationCheckResult = z.object({
   passed: z.boolean(),
   reason: z.string().nullable(),
   frameCaptured: z.boolean(),
+  report: UiTestReport.optional(),
+  inputSha256: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
 });

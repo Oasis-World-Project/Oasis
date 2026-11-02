@@ -167,6 +167,8 @@ export function taskFileUrl(
 // ---- 工作流（ADR 0007 §6）----
 const taskPath = (taskId: string) => `/task/v1/tasks/${taskId}`;
 const nodePath = (taskId: string, nodeId: string) => `${taskPath(taskId)}/nodes/${nodeId}`;
+export const applicationReportUrl = (taskId: string, nodeId: string) =>
+  `/api${nodePath(taskId, nodeId)}/application-check`;
 
 /** 改工作流的接口都返回改完的任务 */
 const taskChange = (path: string, method: string, body?: unknown) =>

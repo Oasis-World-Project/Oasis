@@ -356,8 +356,10 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:?}
       <<: [*runtime-env, *nats-env]
       PORT: 4108
+      HARNESS_URL: http://harness:4107
       DATABASE_URL: postgres://svc_model_gateway:${MODEL_GATEWAY_DB_PASSWORD:?}@postgres:5432/model_gateway?sslmode=disable
       BILLING_URL: http://billing:4102
+      CANVAS_URL: http://canvas:4106
     depends_on: *data-deps
 
 networks:

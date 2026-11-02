@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { BrowserTestPlan, type BrowserTestResult } from '@oasis/contracts/ui-test';
+import { createWebsiteFetch, websiteUrl } from '../executor/website-fetch.ts';
 import { ApplicationBundle, ApplicationSpec } from '@oasis/contracts/canvas';
 import {
   PreviewQuoteBody,
@@ -6,7 +8,7 @@ import {
   type PreviewSessionBody,
 } from '@oasis/contracts/harness';
 import { ComputeHold, ComputeOutcome } from '@oasis/contracts/model-gateway';
-import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
+import { HttpError, type Logger, type ObjectStore, type ServiceClient } from '@oasis/service-kit';
 import type { PreviewExecutor, LivePreview } from '../executor/preview-executor.ts';
 import type { PreviewRepo, PreviewRow } from '../repo/preview-repo.ts';
 import type { RunService } from './run-service.ts';
@@ -21,9 +23,11 @@ export function createPreviewService(deps: {
   modelGateway: ServiceClient;
   logger: Logger;
   runs?: RunService;
+  store?: ObjectStore;
   cpus: number;
   maxMs: number;
   idleMs: number;
+  websiteOrigins?: string[];
 }) {
   const live = new Map<string, LivePreview>();
   const lastTouch = new Map<string, number>();
@@ -159,11 +163,23 @@ export function createPreviewService(deps: {
   return {
     quote,
     current,
+    async report(input: { runId: string; payerId: string; taskId: string }) {
+      const run = await deps.runs?.get(input.runId);
+      if (!run || run.payerId !== input.payerId || run.taskId !== input.taskId)
+        throw new HttpError(404, 'run_not_found', '没有这次运行');
+      if (!deps.store) throw new HttpError(503, 'check_unavailable', '检查报告暂不可用');
+      try {
+        return await deps.store.get(`runs/${input.runId}/application-check.json`);
+      } catch {
+        throw new HttpError(404, 'check_not_found', '这次运行还没有浏览器检查报告');
+      }
+    },
     async start(
       access: Access,
       supplied?: ApplicationBundle,
       limitMs = deps.maxMs,
       purpose: 'preview' | 'application-check' = 'preview',
+      website?: string,
     ): Promise<PreviewSessionBody> {
       const active = await deps.repo.active(access.ownerId);
       if (active) {
@@ -210,7 +226,10 @@ export function createPreviewService(deps: {
         await deps.repo.update(id, { computeCallId: hold.callId, heldMicro: hold.heldMicro });
         const box = await deps.executor.start({
           id,
-          kind: bundle.spec.kind,
+          kind: website ? 'website' : bundle.spec.kind,
+          ...(website
+            ? { website: { url: website, fetch: createWebsiteFetch(deps.websiteOrigins ?? []) } }
+            : {}),
           entry: bundle.spec.entry,
           files,
         });
@@ -232,6 +251,39 @@ export function createPreviewService(deps: {
       }
     },
     /** 任务被删除（ADR 0012）：停掉它还开着的预览，照常结算已用的算力 */
+    async checkWebsite(input: {
+      url: string;
+      plan: BrowserTestPlan;
+      payerId: string;
+      taskId: string;
+    }) {
+      websiteUrl(input.url, deps.websiteOrigins ?? []);
+      const plan = BrowserTestPlan.parse(input.plan);
+      const access = { artifactId: randomUUID(), ownerId: input.payerId, taskId: input.taskId };
+      try {
+        await this.start(
+          access,
+          {
+            spec: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
+            files: [{ path: 'index.html', contentBase64: 'IA==' }],
+          },
+          60000,
+          'application-check',
+          input.url,
+        );
+        const { box } = await running(access);
+        const result = await box.test(plan);
+        result.report.diagnostics = box.diagnostics();
+        if (result.report.diagnostics.length) result.report.passed = false;
+        result.report.unchecked.push(
+          '仅测试放行来源的 HTTPS GET/HEAD；登录、写请求、WebSocket 和 IPv6 未检查',
+        );
+        return result;
+      } finally {
+        const row = await owned(access);
+        if (row) await stopRow(row);
+      }
+    },
     async stopTask(taskId: string): Promise<void> {
       for (const row of (await deps.repo.unfinished()).filter((r) => r.taskId === taskId))
         await stopRow(row);
@@ -288,6 +340,19 @@ export function createPreviewService(deps: {
       if (!bundle.success)
         return { passed: false, reason: '运行包包含不安全路径或格式', frameCaptured: false };
       const access = { artifactId: input.runId, ownerId: input.payerId, taskId: input.taskId };
+      const testFile = members.find((file) => file.path === `${spec.root}/oasis-test.json`);
+      let plan: BrowserTestPlan | undefined;
+      if (testFile) {
+        try {
+          if (testFile.size > 64000) throw new Error('测试文件过大');
+          plan = BrowserTestPlan.parse(
+            JSON.parse((await deps.runs.file(input.runId, testFile.path)).content.toString('utf8')),
+          );
+        } catch {
+          return { passed: false, reason: 'oasis-test.json 测试计划不合法', frameCaptured: false };
+        }
+      }
+      const inputSha256 = createHash('sha256').update(JSON.stringify(bundle.data)).digest('hex');
       try {
         await this.start(access, bundle.data, 60_000, 'application-check');
         const waitUntil = Date.now() + 8_000;
@@ -295,10 +360,35 @@ export function createPreviewService(deps: {
           try {
             await this.frame(access);
             await new Promise((resolve) => setTimeout(resolve, 600));
-            const diagnostics = live.get((await owned(access))!.id)?.diagnostics() ?? [];
-            return diagnostics.length
-              ? { passed: false, reason: diagnostics.join('；'), frameCaptured: true }
-              : { passed: true, reason: null, frameCaptured: true };
+            const box = live.get((await owned(access))!.id)!;
+            const result: BrowserTestResult = plan
+              ? await box.test(plan)
+              : {
+                  report: {
+                    version: 1,
+                    target: 'application',
+                    passed: true,
+                    steps: [],
+                    diagnostics: [],
+                    unchecked: ['未提供 oasis-test.json，仅完成启动检查，业务交互未检查'],
+                  },
+                  screenshots: [],
+                };
+            result.report.diagnostics = box.diagnostics();
+            if (result.report.diagnostics.length) result.report.passed = false;
+            if (deps.store)
+              await deps.store.put(
+                `runs/${input.runId}/application-check.json`,
+                Buffer.from(JSON.stringify({ ...result, inputSha256 })),
+                'application/json',
+              );
+            return {
+              passed: result.report.passed,
+              reason: result.report.passed ? null : '浏览器交互断言或页面诊断未通过',
+              frameCaptured: true,
+              report: result.report,
+              inputSha256,
+            };
           } catch (err) {
             if (!(err instanceof HttpError && err.statusCode === 503)) throw err;
           }

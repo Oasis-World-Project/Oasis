@@ -154,6 +154,12 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
   });
 
   /** 节点的全部运行（ADR 0007 §6） */
+  app.get('/v1/tasks/:taskId/nodes/:nodeId/application-check', async (request, reply) => {
+    const { taskId, nodeId } = parseWith(NodeParams, request.params);
+    return reply
+      .headers(fileResponseHeaders('application/json', 'application-check.json', true))
+      .send(await workflows.applicationReport(requireUserId(request), taskId, nodeId));
+  });
   app.get('/v1/tasks/:taskId/nodes/:nodeId/runs', async (request) => {
     const { taskId, nodeId } = parseWith(NodeParams, request.params);
     return { runs: await workflows.nodeRuns(requireUserId(request), taskId, nodeId) };

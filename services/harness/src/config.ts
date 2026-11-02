@@ -4,6 +4,15 @@ import { z } from 'zod';
 const positiveInt = z.coerce.number().int().positive();
 
 export const harnessEnv = {
+  WEBSITE_TEST_ORIGINS: z
+    .string()
+    .default('')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
   ...postgresAndEventBus.env,
   /** 签发、作废运行临时 Key */
   MODEL_GATEWAY_URL: z.url(),

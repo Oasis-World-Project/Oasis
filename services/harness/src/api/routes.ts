@@ -9,6 +9,7 @@ import {
 } from '@oasis/contracts/harness';
 import { parseWith, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
+import { WebsiteTestArgs } from '@oasis/contracts/ui-test';
 import type { RunService } from '../service/run-service.ts';
 import type { PreviewService } from '../service/preview-service.ts';
 import type { MaterialInspector } from '../service/material-inspection.ts';
@@ -69,6 +70,19 @@ export function registerRoutes(
     });
   }
   if (previews) {
+    app.post('/internal/websites/check', async (request) =>
+      previews.checkWebsite(
+        parseWith(WebsiteTestArgs.extend({ payerId: z.uuid(), taskId: z.uuid() }), request.body),
+      ),
+    );
+    app.post('/internal/runs/:runId/application-check/report', async (request, reply) => {
+      const { runId } = parseWith(RunParams, request.params);
+      const { payerId, taskId } = parseWith(
+        z.object({ payerId: z.uuid(), taskId: z.uuid() }),
+        request.body,
+      );
+      return reply.type('application/json').send(await previews.report({ runId, payerId, taskId }));
+    });
     app.post('/internal/runs/:runId/application-check', async (request) => {
       const { runId } = parseWith(RunParams, request.params);
       const { payerId, taskId } = parseWith(

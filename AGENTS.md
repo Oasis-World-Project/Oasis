@@ -63,6 +63,7 @@
 - 第二部分 §1 第 5 条的两个脚本用 Node 实现（`.mjs`），因为主力开发机是 Windows，没有统一的 bash。
 - 清理钩子：Claude Code 已在 `.claude/settings.json` 注册 Stop 钩子；其他 Agent 在任务收尾手动运行 `pnpm cleanup`。
 - 宿主机 Docker 的定时清理（cron 或 Windows 计划任务）尚未配置，需要用户另行同意。
+- 付费验收授权（用户 2026-11-02）：单次验收预算不超过 US$5 可直接执行，无需逐次申请预算；实际支出在任务收尾简要记录。
 
 ---
 

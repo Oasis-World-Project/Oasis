@@ -16,7 +16,7 @@ import { basename, dirname, extname, join, resolve, relative, isAbsolute } from 
 import { runBatch } from './batch.ts';
 
 /** 这些参数是列表：逗号分隔，或者直接写 JSON 数组 */
-const LIST_ARGS = new Set(['urls', 'options', 'scale', 'ref', 'images']);
+const LIST_ARGS = new Set(['urls', 'options', 'scale', 'ref', 'images', 'steps']);
 const AUDIO_FORMATS = new Set(['mp3', 'wav', 'm4a', 'flac', 'ogg', 'webm']);
 
 interface ToolFile {
@@ -68,6 +68,7 @@ export function parseArgs(argv: string[]): {
     i += 1;
     if (name === 'out') out = value;
     else if (name === 'file') file = value;
+    else if (name === 'plan') args[name] = JSON.parse(value) as unknown;
     else if (LIST_ARGS.has(name)) {
       args[name] = value.trim().startsWith('[')
         ? (JSON.parse(value) as unknown)

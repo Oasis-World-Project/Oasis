@@ -32,6 +32,7 @@ import { createRunKeyService } from './service/run-key-service.ts';
 import { createToolService } from './service/tool-service.ts';
 import { createTavilyClient } from './adapters/tavily.ts';
 import { createFalClient } from './adapters/fal.ts';
+import { createBrowserStackClient } from './adapters/browserstack.ts';
 import { createRenderClient } from './adapters/runpod.ts';
 import { createLiveAvatarClient } from './adapters/liveavatar.ts';
 import { createAvatarCatalog } from './service/avatar-catalog.ts';
@@ -134,6 +135,14 @@ await startService({
       apiKey: config.LIVEAVATAR_API_KEY,
     });
     const tools = createToolService({
+      harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 65000 }),
+      browserstack: createBrowserStackClient({
+        username: config.BROWSERSTACK_USERNAME,
+        accessKey: config.BROWSERSTACK_ACCESS_KEY,
+        apiUrl: config.BROWSERSTACK_API_URL,
+        hubUrl: config.BROWSERSTACK_HUB_URL,
+        canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 30000 }),
+      }),
       avatarCatalog: createAvatarCatalog(liveAvatar),
       render: createRenderClient({
         baseUrl: config.RUNPOD_BASE_URL,

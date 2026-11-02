@@ -1006,6 +1006,20 @@ export function createWorkflowService(deps: {
     },
 
     /** 下载节点交出的一个文件（交付消息、工作流视图用） */
+    async applicationReport(ownerId: string, taskId: string, nodeId: string) {
+      const snapshot = await owned(ownerId, taskId);
+      const node = nodeOf(snapshot, nodeId);
+      const runId = node.config.outputsRunId ?? node.currentRunId;
+      if (!runId) throw new HttpError(404, 'check_not_found', '节点还没有可检查的产出');
+      const response = await harness.stream(
+        'POST',
+        `/internal/runs/${runId}/application-check/report`,
+        {
+          body: { payerId: ownerId, taskId },
+        },
+      );
+      return response.body ? Readable.fromWeb(response.body) : Readable.from([]);
+    },
     async file(ownerId: string, taskId: string, nodeId: string, path: string) {
       return readFile(await owned(ownerId, taskId), nodeId, path);
     },

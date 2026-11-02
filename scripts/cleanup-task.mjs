@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // 任务收尾清理（工程规范 §6）：只删除未被 Git 跟踪、可再生成的临时产物，并报告释放空间。
 // 构建目录只报告不删除；Docker 资源只报告，传 --docker 才清理悬空镜像和 72 小时前的构建缓存。
-// 用法：node scripts/cleanup-task.mjs [--build] [--docker] [--quiet]
+// 用法：node scripts/cleanup-task.mjs [--scope=.tmp/<任务目录>] [--build] [--docker] [--quiet]
 import { spawnSync } from 'node:child_process';
-import { readdirSync, rmSync, statSync } from 'node:fs';
+import { readdirSync, rmSync, statSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -45,7 +45,17 @@ function walk(dir) {
     }
   }
 }
-walk(ROOT);
+const scopes = [...args].filter((arg) => arg.startsWith('--scope=')).map((arg) => arg.slice(8));
+if (scopes.length) {
+  for (const scope of scopes) {
+    if (!statSync(path.resolve(ROOT, scope), { throwIfNoEntry: false })) continue;
+    const absolute = realpathSync(path.resolve(ROOT, scope));
+    const rel = path.relative(ROOT, absolute).split(path.sep).join('/');
+    if (!rel.startsWith('.tmp/') || rel.includes('..') || isTracked(rel))
+      throw new Error('定向清理只允许项目 .tmp 下未跟踪的任务子目录');
+    toDelete.push(absolute);
+  }
+} else walk(ROOT);
 if (args.has('--build')) toDelete.push(...buildDirs.splice(0));
 
 const fmt = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1024).toFixed(1)} KB`);

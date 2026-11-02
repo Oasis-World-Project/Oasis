@@ -14,6 +14,12 @@ const list = (fallback: string) =>
     );
 
 export const modelGatewayEnv = {
+  HARNESS_URL: z.url().default('http://127.0.0.1:4107'),
+  BROWSERSTACK_USERNAME: z.string().optional(),
+  BROWSERSTACK_ACCESS_KEY: z.string().optional(),
+  BROWSERSTACK_API_URL: z.url().default('https://api-cloud.browserstack.com'),
+  BROWSERSTACK_HUB_URL: z.url().default('https://hub-cloud.browserstack.com/wd/hub'),
+  CANVAS_URL: z.url().default('http://127.0.0.1:4106'),
   RUNPOD_API_KEY: z.string().optional(),
   RUNPOD_ENDPOINT_ID: z.string().default(''),
   RUNPOD_BASE_URL: z.url().default('https://api.runpod.ai/v2'),

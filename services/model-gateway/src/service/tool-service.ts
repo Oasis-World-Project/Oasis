@@ -4,11 +4,12 @@
 import { Readable } from 'node:stream';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ToolEntry, ToolJobBody, ToolResult } from '@oasis/contracts/model-gateway';
-import { HttpError, type Logger, type ObjectStore } from '@oasis/service-kit';
+import { HttpError, type Logger, type ObjectStore, type ServiceClient } from '@oasis/service-kit';
 import type { ProviderClient } from '../adapters/openrouter.ts';
 import type { FalClient } from '../adapters/fal.ts';
 import { RenderArgs, type RenderClient } from '../adapters/runpod.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
+import type { BrowserStackClient } from '../adapters/browserstack.ts';
 import { ToolAdmissionError, type ToolJob, type ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
 import type { Caller, Meter, MeteredCall } from './metering.ts';
 import { AVATAR_CATALOG_TOOL, type AvatarCatalog } from './avatar-catalog.ts';
@@ -18,6 +19,8 @@ import { TOOLS, type ToolConfig, type ToolDef } from './tools.ts';
 const HOLD_MARGIN_MS = 10 * 60_000;
 
 export function createToolService(deps: {
+  harness?: ServiceClient;
+  browserstack?: BrowserStackClient;
   openrouter: ProviderClient;
   tavily: SearchClient;
   meter: Meter;
@@ -38,13 +41,17 @@ export function createToolService(deps: {
   const { meter, config, jobs } = deps;
   const byKey = new Map(TOOLS.map((t) => [t.key, t]));
   const configured = (tool: ToolDef) =>
-    tool.provider === 'runpod'
-      ? Boolean(deps.render?.configured)
-      : tool.provider === 'tavily'
-        ? deps.tavily.configured
-        : tool.provider === 'fal'
-          ? Boolean(deps.fal?.configured)
-          : deps.openrouter.configured;
+    tool.provider === 'harness'
+      ? Boolean(deps.harness)
+      : tool.provider === 'browserstack'
+        ? Boolean(deps.browserstack?.configured)
+        : tool.provider === 'runpod'
+          ? Boolean(deps.render?.configured)
+          : tool.provider === 'tavily'
+            ? deps.tavily.configured
+            : tool.provider === 'fal'
+              ? Boolean(deps.fal?.configured)
+              : deps.openrouter.configured;
 
   /** 这个工具现在能用的模型：去掉当前网络用不了的 */
   async function usableModels(tool: ToolDef): Promise<string[]> {
@@ -184,6 +191,14 @@ export function createToolService(deps: {
           const tool = byKey.get(job.tool);
           if (!tool?.long) throw new Error('长任务工具不存在');
           const toolDeps = {
+            browserstack: deps.browserstack,
+            receipt: {
+              saved: job.call.providerReceipt,
+              save: async (value: unknown) => {
+                await jobs.mergeCall(id, { providerReceipt: value });
+                job.call.providerReceipt = value;
+              },
+            },
             openrouter: deps.openrouter,
             tavily: deps.tavily,
             fal: deps.fal,
@@ -214,6 +229,7 @@ export function createToolService(deps: {
           const state = await tool
             .check(
               {
+                browserstack: deps.browserstack,
                 openrouter: deps.openrouter,
                 tavily: deps.tavily,
                 fal: deps.fal,
@@ -674,6 +690,10 @@ export function createToolService(deps: {
         // 供应商已经接下了这次调用（可能已经收费）之后才出的错：按估算结算，不退回
         let accepted = false;
         const toolDeps = {
+          harness: deps.harness,
+          taskId: input.caller.taskId,
+          browserstack: deps.browserstack,
+          payerId: input.caller.payerId,
           openrouter: deps.openrouter,
           tavily: deps.tavily,
           fal: deps.fal,
@@ -761,6 +781,12 @@ export function createToolService(deps: {
               );
               await jobs.update(id, { providerJobId, phase: 'pending' });
             } catch (error) {
+              if (tool.provider === 'browserstack') {
+                // 此阶段仅上传 APK，尚未创建任何设备会话；失败不会产生设备运行费用。
+                await meter.fail(call, 'APK 上传未完成，未启动设备');
+                await jobs.finish(id, 'failed', 'APK 上传未完成，未启动设备');
+                throw error;
+              }
               const row = await jobs.get(id);
               if (row?.status !== 'failed')
                 await jobs.update(id, {

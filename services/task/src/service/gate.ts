@@ -421,6 +421,7 @@ export function createGate(deps: {
               );
               if (!result.passed)
                 unmet.push(`浏览器实际运行检查失败：${result.reason ?? '原因未返回'}`);
+              unchecked.push(...(result.report?.unchecked ?? ['浏览器交互测试覆盖未返回']));
             } catch (err) {
               logger.warn({ err, taskId: input.taskId, runId: run.runId }, '浏览器检查未完成');
               unchecked.push('浏览器实际运行检查未完成');

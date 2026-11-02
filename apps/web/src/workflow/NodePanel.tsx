@@ -11,6 +11,7 @@ import {
   runNode,
   stopNode,
   taskFileUrl,
+  applicationReportUrl,
 } from '../api/queries.ts';
 import { FileChip } from '../chat/FileChip.tsx';
 import { FilePreview, type PreviewFile } from '../chat/FilePreview.tsx';
@@ -399,6 +400,15 @@ export function NodePanel({
         </Section>
         {node.outputs.length > 0 && (
           <Section title="产出文件">
+            {node.outputs.some((file) => file.path.endsWith('/oasis-app.json')) && (
+              <a
+                className="text-[13px] text-ink-muted"
+                href={applicationReportUrl(task.id, node.id)}
+                download
+              >
+                下载浏览器检查报告（检查结束后可用）
+              </a>
+            )}
             <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
               {node.outputs.map((file) => (
                 <FileChip

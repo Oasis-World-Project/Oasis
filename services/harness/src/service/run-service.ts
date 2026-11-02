@@ -691,6 +691,8 @@ export function createRunService(deps: {
       for (const row of ended) {
         if (row.outputKey) await store.delete(row.outputKey);
         if (row.sessionKey) await store.delete(row.sessionKey);
+        for (const kind of ['audio', 'video', 'application'])
+          await store.delete(`runs/${row.id}/${kind}-check.json`);
       }
       await repo.removeMany(ended.map((row) => row.id));
       if (ended.length) logger.info({ taskId, runs: ended.length }, '任务已删除，运行存档一并清理');
