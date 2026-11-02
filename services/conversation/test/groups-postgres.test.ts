@@ -246,6 +246,108 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       controller.abort();
     }
   });
+  it('跨仓库实例互斥；单连接池不死锁，生成失败保留已存消息并释放锁', async () => {
+    const singlePool = new pg.Pool({
+      connectionString: process.env.TEST_DATABASE_URL,
+      options: `-c search_path=${schema}`,
+      max: 1,
+    });
+    const single = createConversationRepo(singlePool),
+      other = createConversationRepo(pool);
+    let unblock!: () => void, entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let messageId = '';
+    const pending = single.withIntakeLock(dm, async (scoped) => {
+      const message = await scoped.insertMessage({
+        conversationId: dm,
+        authorKind: 'user',
+        authorId: owner,
+        content: 'saved before model failure',
+        status: 'complete',
+      });
+      messageId = message.id;
+      entered();
+      await gate;
+      throw new Error('model failed');
+    });
+    const rejected = expect(pending).rejects.toThrow('model failed');
+    try {
+      await ready;
+      await expect(other.withIntakeLock(dm, async () => undefined)).rejects.toMatchObject({
+        code: 'intake_busy',
+      });
+      unblock();
+      await rejected;
+      expect((await other.findMessage(dm, messageId))?.content).toBe('saved before model failure');
+      await other.withIntakeLock(dm, async (scoped) => {
+        expect(await scoped.findOwned(dm, owner)).toBeDefined();
+      });
+      await pool.query('delete from messages where id=$1', [messageId]);
+    } finally {
+      unblock();
+      await pending.catch(() => {});
+      await singlePool.end();
+    }
+  });
+  it('卡片与状态原子推进，模拟中途保存失败不留孤儿卡片或错误答案', async () => {
+    const repo = createConversationRepo(pool);
+    const intake = await repo.createIntake({
+      id: randomUUID(),
+      conversationId: dm,
+      request: 'test atomic save',
+      context: [],
+      materials: [],
+    });
+    const initial = await repo.commitIntakeReply(
+      intake!.id,
+      {
+        conversationId: dm,
+        authorKind: 'ai',
+        authorId: 'deepseek',
+        content: 'original questions',
+        status: 'complete',
+        kind: 'questions',
+        data: { intakeId: intake!.id, round: 1, answers: null },
+      },
+      { round: 1 },
+    );
+    expect((await repo.findOpenIntake(dm))?.cardMessageId).toBe(initial.id);
+    const before = (
+      await pool.query('select count(*)::int n from messages where conversation_id=$1', [dm])
+    ).rows[0].n;
+    await expect(
+      repo.commitIntakeReply(
+        intake!.id,
+        {
+          conversationId: dm,
+          authorKind: 'ai',
+          authorId: 'deepseek',
+          content: 'must roll back',
+          status: 'complete',
+        },
+        { turns: null as never },
+      ),
+    ).rejects.toBeDefined();
+    expect(
+      (await pool.query('select count(*)::int n from messages where conversation_id=$1', [dm]))
+        .rows[0].n,
+    ).toBe(before);
+    await expect(
+      repo.saveIntakeAnswers(intake!.id, initial.id, null as never, { q1: 'a' }),
+    ).rejects.toBeDefined();
+    expect((await repo.findMessage(dm, initial.id))?.data.answers).toBeNull();
+    await repo.withIntakeLock(dm, (scoped) =>
+      scoped.saveIntakeAnswers(intake!.id, initial.id, [], { q1: 'a' }),
+    );
+    expect((await repo.findMessage(dm, initial.id))?.data.answers).toEqual({ q1: 'a' });
+    await pool.query('delete from messages where id=$1', [initial.id]);
+    await pool.query('delete from intakes where id=$1', [intake!.id]);
+  });
   it('Contract 与 Expand 可依次回滚重建，原有 DM 数据不丢', async () => {
     await pool.query("delete from conversations where kind='group'");
     const root = new URL('../migrations/', import.meta.url);

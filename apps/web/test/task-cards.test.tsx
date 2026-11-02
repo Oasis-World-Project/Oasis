@@ -164,6 +164,41 @@ afterEach(() => {
 });
 
 describe('问题卡和任务单', () => {
+  it('已回答但生成失败时可继续；失败消息不隐藏入口，重试沿用保存的答案', async () => {
+    const questions = message('questions', { ...QUESTIONS, answers: { q1: 'b', q2: 'a' } });
+    const failed = {
+      ...message('text', {}),
+      status: 'failed',
+      error: '任务单生成失败',
+    } as MessageBody;
+    const sheet = message('sheet', {
+      intakeId: INTAKE,
+      intro: '',
+      sheet: SHEET,
+      status: 'open',
+      taskId: null,
+    });
+    const { chat, api } = fakeChat([questions, failed], {
+      extra: (method, path) => {
+        if (method === 'POST' && path.endsWith('/intake/answers')) {
+          chat.messages = [questions, failed, sheet];
+          return json(200, { messages: [sheet] });
+        }
+      },
+    });
+    await openChat();
+    const resume = await screen.findByRole('button', { name: '继续整理' });
+    expect(screen.queryByRole('radio')).toBeNull();
+    fireEvent.click(resume);
+    await screen.findByRole('region', { name: '任务单' });
+    expect(screen.queryByRole('button', { name: '继续整理' })).toBeNull();
+    expect(api.bodies.find((b) => b.path.endsWith('/intake/answers'))?.body).toEqual({
+      messageId: questions.id,
+      answers: { q1: 'b', q2: 'a' },
+      skip: false,
+    });
+    expect(api.bodies.some((b) => b.path.endsWith('/intake/confirm'))).toBe(false);
+  });
   it('选好答案提交 → 任务单 → 确认后出现「正在搭建工作流」的任务卡', async () => {
     const asked = message('text', {}, 'user', '帮我给小木屋民宿写个官网首页');
     const questions = message('questions', QUESTIONS);
@@ -211,6 +246,7 @@ describe('问题卡和任务单', () => {
     expect(within(sheetCard).getByText('小木屋民宿官网首页')).toBeTruthy();
     expect(within(sheetCard).getByText('有标题、卖点和预订方式')).toBeTruthy();
     expect(api.bodies.find((b) => b.path.endsWith('/intake/answers'))?.body).toEqual({
+      messageId: questions.id,
       answers: { q1: 'b', q2: 'a' },
       skip: false,
     });

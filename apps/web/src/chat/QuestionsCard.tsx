@@ -89,6 +89,11 @@ export function QuestionsCard({
   const answered = card.answers !== null;
   const busy = actions.busy !== null;
 
+  const submit = (skip: boolean) =>
+    actions.run('answer', () =>
+      answerIntake(actions.conversationId, answered ? card.answers! : picked, skip, messageId),
+    );
+
   if (answered || !active) {
     return (
       <CardFrame speaker={speaker} label="问题卡" dim={!answered}>
@@ -97,12 +102,23 @@ export function QuestionsCard({
           status={<StatusTag>{answered ? '已回答' : '没有回答'}</StatusTag>}
         />
         {answered && <Answered card={card} />}
+        {answered && active && (
+          <CardActions>
+            <CardButton tone="accent" disabled={busy} onClick={() => void submit(false)}>
+              {actions.busy === 'answer' ? '正在整理…' : '继续整理'}
+            </CardButton>
+            <CardButton
+              tone="text"
+              disabled={busy}
+              onClick={() => void actions.run('cancel', () => cancelIntake(actions.conversationId))}
+            >
+              先不做了
+            </CardButton>
+          </CardActions>
+        )}
       </CardFrame>
     );
   }
-
-  const submit = (skip: boolean) =>
-    actions.run('answer', () => answerIntake(actions.conversationId, picked, skip));
 
   return (
     <CardFrame speaker={speaker} label="问题卡" glowing={actions.busy === 'answer'}>

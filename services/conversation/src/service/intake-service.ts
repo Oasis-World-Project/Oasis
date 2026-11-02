@@ -17,6 +17,7 @@ import type { Conversation, ConversationRepo, Intake, Message } from '../repo/co
 import { attachmentsOf, mergeMaterials, withAttachmentNote } from './attachments.ts';
 import {
   intakeMessages,
+  intakeResponseFormat,
   parseIntakeReply,
   questionsText,
   sheetText,
@@ -31,7 +32,14 @@ const Decision = z.object({
 /** 建任务的返回里只用得到任务 ID */
 const CreatedTask = z.object({ id: z.uuid() }).loose();
 const Completion = z.object({
-  choices: z.array(z.object({ message: z.object({ content: z.string().nullable() }) })).min(1),
+  choices: z
+    .array(
+      z.object({
+        message: z.object({ content: z.string().nullable() }),
+        finish_reason: z.string().nullable().optional(),
+      }),
+    )
+    .min(1),
 });
 
 export interface IntakeConfig {
@@ -48,7 +56,7 @@ export interface IntakeConfig {
   maxTokens: number;
 }
 
-export function createIntakeService(deps: {
+function intakeActions(deps: {
   repo: ConversationRepo;
   agent: ServiceClient;
   modelGateway: ServiceClient;
@@ -97,14 +105,28 @@ export function createIntakeService(deps: {
     }
   }
 
-  async function complete(ownerId: string, model: string, messages: unknown[], requestId: string) {
+  async function complete(
+    ownerId: string,
+    model: string,
+    messages: unknown[],
+    requestId: string,
+    mustSheet: boolean,
+  ) {
     const result = await deps.modelGateway.json('POST', '/internal/v1/chat/completions', {
-      body: { model, messages, max_tokens: config.maxTokens, stream: false },
+      body: {
+        model,
+        messages,
+        max_tokens: config.maxTokens,
+        stream: false,
+        response_format: intakeResponseFormat(mustSheet),
+        provider: { require_parameters: true },
+        reasoning: { enabled: false },
+      },
       headers: { [OASIS_HEADERS.payerId]: ownerId },
       requestId,
       schema: Completion,
     });
-    return result.choices[0]?.message.content ?? '';
+    return result.choices[0]!;
   }
 
   /**
@@ -117,6 +139,7 @@ export function createIntakeService(deps: {
     ownerId: string,
     requestId: string,
     skipped: boolean,
+    resuming = false,
   ): Promise<IntakeReply> {
     const route = await deps.agent.json(
       'GET',
@@ -124,7 +147,7 @@ export function createIntakeService(deps: {
       { requestId, schema: ModelRoute },
     );
     const roundsLeft = config.maxRounds - intake.round;
-    const mustSheet = skipped || roundsLeft <= 0;
+    const mustSheet = skipped || resuming || roundsLeft <= 0;
     const messages = intakeMessages({
       name: route.name,
       request: intake.request,
@@ -132,34 +155,72 @@ export function createIntakeService(deps: {
       turns: intake.turns,
       roundsLeft,
       skipped,
+      resuming,
       materials: intake.materials,
     });
     const attempts = [route.providerModel, route.providerModel, config.fallbackModel];
     let feedback: string | undefined;
+    let previous: string | undefined;
     for (const model of attempts) {
       const prompt = feedback
         ? [
             ...messages,
+            ...(previous ? [{ role: 'assistant' as const, content: previous }] : []),
             {
               role: 'user',
-              content: `刚才的回答不合格：${feedback}。请只输出一个合格的 JSON 对象。`,
+              content: `刚才的回答不合格：${feedback}。请修复上面的结果，保留所有有效要求，只输出一个合格的 JSON 对象。`,
             },
           ]
         : messages;
       try {
-        const text = await complete(ownerId, model, prompt, requestId);
-        const reply = parseIntakeReply(text, mustSheet);
+        const completion = await complete(ownerId, model, prompt, requestId, mustSheet);
+        previous = completion.message.content ?? '';
+        if (completion.finish_reason === 'length')
+          throw new Error(
+            '输出达到 token 上限而被截断；请压缩表述与短引文、合并验收标准，不得删减有效要求',
+          );
+        if (completion.finish_reason && completion.finish_reason !== 'stop')
+          throw new Error(`生成未正常完成：${completion.finish_reason}`);
+        const reply = parseIntakeReply(previous, mustSheet);
         if (reply.type === 'sheet') reply.sheet.materials = intake.materials.map((m) => m.name);
         if (reply.type === 'sheet' && deps.harness) {
           validateSheetSources(reply.sheet, intake.request, intake.turns);
+          const selections = intake.turns.flatMap((turn) =>
+            turn.kind === 'questions'
+              ? turn.questions.flatMap((q) => {
+                  const raw = turn.answers?.[q.id];
+                  const selected =
+                    raw === AUTO_ANSWER || (raw === undefined && turn.skipped) ? q.default : raw;
+                  const label = q.options.find((option) => option.id === selected)?.label;
+                  return label
+                    ? [
+                        {
+                          key: `answer_${turn.round}_${q.id}`,
+                          text: `第${turn.round}轮「${q.text}」选择「${label}」`,
+                        },
+                      ]
+                    : [];
+                })
+              : [],
+          );
           const checked = await deps.modelGateway.json('POST', '/internal/v1/decisions', {
             body: {
               model: config.detectModel,
-              state: [
-                ...messages.map((m) => m.content),
-                `待核对任务单：${JSON.stringify(reply.sheet)}`,
-              ],
+              state: [messages[1]!.content, `待核对任务单：${JSON.stringify(reply.sheet)}`],
               questions: {
+                ...Object.fromEntries(
+                  selections.map((selection) => [
+                    selection.key,
+                    {
+                      type: 'noul',
+                      instructions: `任务单是否遵守这个明确选择：${selection.text}？应检查整份任务单，不要求逐字复述；只有用户后续明确修改才可撤回。`,
+                      criteria: {
+                        true: '已保持，或用户后续明确修改了这一选择',
+                        false: '遗漏、矛盾、擅自扩大，或无法确认',
+                      },
+                    },
+                  ]),
+                ),
                 preserved: {
                   type: 'noul',
                   instructions:
@@ -175,9 +236,12 @@ export function createIntakeService(deps: {
             requestId,
             schema: Decision,
           });
-          if ((checked.answers.preserved?.noul ?? 0) < 0.5)
+          const unresolved = selections.filter(
+            (selection) => (checked.answers[selection.key]?.noul ?? 0) < 0.5,
+          );
+          if ((checked.answers.preserved?.noul ?? 0) < 0.5 || unresolved.length)
             throw new Error(
-              '任务单未保持原始要求：请逐项对照原话、材料与具体默认答案，修复遗漏、强化或扩大；保留原费用口径，AI假设只补空白',
+              `尚未确认任务单完整保持原始要求${unresolved.length ? '；需逐项复核：' + unresolved.map((s) => s.text).join('；') : ''}。请对照上面的任务单与原话、材料、具体选择，补齐遗漏、撤销擅自强化或扩大；保留原费用口径，AI假设只补空白`,
             );
           reply.sheet.materialWarnings = intake.turns
             .flatMap((t) => (t.kind === 'materials' ? t.files : []))
@@ -186,12 +250,20 @@ export function createIntakeService(deps: {
         }
         return reply;
       } catch (err) {
-        if (err instanceof HttpError && err.statusCode === 402) throw err; // 额度不够
+        // 连接/供应商/审查服务失败不能伪装成 JSON 错误并重新付费生成；400 才可能是模型不支持结构化参数。
+        if (err instanceof HttpError && err.statusCode !== 400) throw err;
         feedback = err instanceof Error ? err.message : String(err);
-        logger.warn({ model, feedback }, '接需求的回答不合格，重试');
+        logger.warn(
+          { requestId, intakeId: intake.id, model, feedback },
+          '接需求的回答不合格，重试',
+        );
       }
     }
-    throw new HttpError(502, 'intake_failed', '没能把需求整理好，请换个说法再说一次');
+    throw new HttpError(
+      502,
+      'intake_failed',
+      '任务单暂时未能生成，原话和已提交的回答已保存，请继续整理或稍后重试',
+    );
   }
 
   /** 走一步并把结果变成消息：问题卡、任务单卡，或一句「好的，不做了」 */
@@ -201,6 +273,7 @@ export function createIntakeService(deps: {
     ownerId: string,
     requestId: string,
     skipped = false,
+    resuming = false,
   ): Promise<Message[]> {
     if (deps.harness && intake.materials.length) {
       const cached = intake.turns
@@ -226,7 +299,7 @@ export function createIntakeService(deps: {
         intake = { ...intake, turns };
       }
     }
-    const reply = await askModel(conversation, intake, ownerId, requestId, skipped);
+    const reply = await askModel(conversation, intake, ownerId, requestId, skipped, resuming);
     const author = conversation.modelKey ?? 'unknown';
     if (reply.type === 'cancel') {
       return cancelIntake(
@@ -245,28 +318,28 @@ export function createIntakeService(deps: {
         questions: reply.questions,
         answers: null,
       };
-      const message = await repo.insertMessage({
-        conversationId: conversation.id,
-        authorKind: 'ai',
-        authorId: author,
-        content: questionsText(reply.intro, reply.questions),
-        status: 'complete',
-        kind: 'questions',
-        data: card,
-      });
-      await repo.updateIntake(intake.id, {
-        status: 'asking',
-        round,
-        cardMessageId: message.id,
-        turns: [
-          ...intake.turns,
-          { kind: 'questions', round, questions: reply.questions, answers: null },
-        ],
-      });
+      const message = await repo.commitIntakeReply(
+        intake.id,
+        {
+          conversationId: conversation.id,
+          authorKind: 'ai',
+          authorId: author,
+          content: questionsText(reply.intro, reply.questions),
+          status: 'complete',
+          kind: 'questions',
+          data: card,
+        },
+        {
+          status: 'asking',
+          round,
+          turns: [
+            ...intake.turns,
+            { kind: 'questions', round, questions: reply.questions, answers: null },
+          ],
+        },
+      );
       out.push(message);
     } else {
-      // 新任务单替换上一版（只留最新一份）
-      await supersede(conversation, intake);
       const card: SheetCard = {
         intakeId: intake.id,
         intro: reply.intro,
@@ -274,33 +347,27 @@ export function createIntakeService(deps: {
         status: 'open',
         taskId: null,
       };
-      const message = await repo.insertMessage({
-        conversationId: conversation.id,
-        authorKind: 'ai',
-        authorId: author,
-        content: [reply.intro, sheetText(reply.sheet)].filter(Boolean).join('\n\n'),
-        status: 'complete',
-        kind: 'sheet',
-        data: card,
-      });
-      await repo.updateIntake(intake.id, {
-        status: 'sheet',
-        cardMessageId: message.id,
-        sheet: reply.sheet,
-        turns: [...intake.turns, { kind: 'sheet', sheet: reply.sheet }],
-      });
+      const message = await repo.commitIntakeReply(
+        intake.id,
+        {
+          conversationId: conversation.id,
+          authorKind: 'ai',
+          authorId: author,
+          content: [reply.intro, sheetText(reply.sheet)].filter(Boolean).join('\n\n'),
+          status: 'complete',
+          kind: 'sheet',
+          data: card,
+        },
+        {
+          status: 'sheet',
+          sheet: reply.sheet,
+          turns: [...intake.turns, { kind: 'sheet', sheet: reply.sheet }],
+        },
+      );
       out.push(message);
     }
     await repo.touchConversation(conversation.id);
     return out;
-  }
-
-  /** 把当前那张任务单卡标成「已被替换」 */
-  async function supersede(conversation: Conversation, intake: Intake) {
-    if (intake.status !== 'sheet' || !intake.cardMessageId) return;
-    const card = await repo.findMessage(conversation.id, intake.cardMessageId);
-    if (card?.kind === 'sheet')
-      await repo.setMessageData(card.id, { ...card.data, status: 'superseded' });
   }
 
   async function cancelIntake(
@@ -407,25 +474,37 @@ export function createIntakeService(deps: {
       conversation: Conversation;
       ownerId: string;
       answers: Record<string, string>;
+      messageId?: string;
       skip: boolean;
       requestId: string;
     }): Promise<Message[]> {
       const intake = await openIntake(input.conversation);
-      const card = intake.cardMessageId
-        ? await repo.findMessage(input.conversation.id, intake.cardMessageId)
-        : undefined;
+      const card = await repo.findQuestionCard(input.conversation.id, intake.id, intake.round);
       if (intake.status !== 'asking' || card?.kind !== 'questions') {
         throw new HttpError(409, 'no_questions', '现在没有要回答的问题');
       }
+      if (input.messageId && input.messageId !== card.id)
+        throw new HttpError(409, 'stale_questions', '这张问题卡已经处理，请刷新查看最新状态');
+      const saved = intake.turns.findLast(
+        (t) => t.kind === 'questions' && t.round === intake.round,
+      );
+      if (saved?.kind === 'questions' && saved.answers !== null)
+        return step(
+          input.conversation,
+          intake,
+          input.ownerId,
+          input.requestId,
+          saved.skipped ?? false,
+          true,
+        );
       const questions = (card.data as QuestionsCard).questions;
       const answers = validAnswers(questions, input.answers);
-      await repo.setMessageData(card.id, { ...card.data, answers });
       const turns = intake.turns.map((t) =>
         t.kind === 'questions' && t.round === intake.round
           ? { ...t, answers, ...(input.skip ? { skipped: true } : {}) }
           : t,
       );
-      const updated = await repo.updateIntake(intake.id, { turns, cardMessageId: null });
+      const updated = await repo.saveIntakeAnswers(intake.id, card.id, turns, answers);
       return step(input.conversation, updated, input.ownerId, input.requestId, input.skip);
     },
 
@@ -502,4 +581,32 @@ function validAnswers(questions: IntakeQuestion[], answers: Record<string, strin
   return result;
 }
 
+/** 所有修改共用同一会话锁与显式连接；模型失败不回滚已经保存的答案。 */
+export function createIntakeService(deps: Parameters<typeof intakeActions>[0]) {
+  const service = intakeActions(deps);
+  const locked = <T extends { conversation: Conversation }>(
+    input: T,
+    work: (service: ReturnType<typeof intakeActions>, input: T) => Promise<Message[]>,
+  ) =>
+    deps.repo.withIntakeLock(input.conversation.id, (repo) =>
+      work(intakeActions({ ...deps, repo }), input),
+    );
+  return {
+    ...service,
+    start: (input: Parameters<typeof service.start>[0]) => locked(input, (s, i) => s.start(i)),
+    startFrom: (input: Parameters<typeof service.startFrom>[0]) =>
+      locked(input, (s, i) => s.startFrom(i)),
+    userSaid: (input: Parameters<typeof service.userSaid>[0]) =>
+      locked(input, async (s, i) => {
+        const current = await s.findOpen(i.conversation.id);
+        if (!current) throw new HttpError(409, 'no_open_intake', '任务状态已变化，请刷新重试');
+        return s.userSaid({ ...i, intake: current });
+      }),
+    answer: (input: Parameters<typeof service.answer>[0]) => locked(input, (s, i) => s.answer(i)),
+    confirm: (input: Parameters<typeof service.confirm>[0]) =>
+      locked(input, (s, i) => s.confirm(i)),
+    cancel: (conversation: Conversation) =>
+      locked({ conversation }, (s, i) => s.cancel(i.conversation)),
+  };
+}
 export type IntakeService = ReturnType<typeof createIntakeService>;

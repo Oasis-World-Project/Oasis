@@ -161,6 +161,7 @@ export const SendMessageBody = z.object({
 
 /** 回答问题卡：题目 id → 选项 id 或 auto；skip = 直接开始（没答的都按默认） */
 export const IntakeAnswersBody = z.object({
+  messageId: z.uuid(),
   answers: z.record(z.string(), z.string()).default({}),
   skip: z.boolean().default(false),
 });

@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
+import { HttpError } from '@oasis/service-kit';
 import { conversations, intakes, messages } from './schema.ts';
 
 export type Conversation = typeof conversations.$inferSelect;
@@ -15,6 +16,22 @@ type IntakePatch = Partial<
 >;
 
 export interface ConversationRepo {
+  saveIntakeAnswers(
+    id: string,
+    cardId: string,
+    turns: Intake['turns'],
+    answers: Record<string, string>,
+  ): Promise<Intake>;
+  commitIntakeReply(id: string, message: NewMessage, patch: IntakePatch): Promise<Message>;
+  withIntakeLock<T>(
+    conversationId: string,
+    work: (repo: ConversationRepo) => Promise<T>,
+  ): Promise<T>;
+  findQuestionCard(
+    conversationId: string,
+    intakeId: string,
+    round: number,
+  ): Promise<Message | undefined>;
   upsertDm(ownerId: string, modelKey: string, title: string): Promise<Conversation>;
   listDms(ownerId: string): Promise<Conversation[]>;
   findOwned(id: string, ownerId: string): Promise<Conversation | undefined>;
@@ -48,9 +65,79 @@ export interface ConversationRepo {
   updateIntake(id: string, patch: IntakePatch): Promise<Intake>;
 }
 
-export function createConversationRepo(pool: pg.Pool): ConversationRepo {
+export function createConversationRepo(pool: pg.Pool | pg.PoolClient): ConversationRepo {
   const db = drizzle(pool);
-  return {
+  const repo: ConversationRepo = {
+    saveIntakeAnswers: (id, cardId, turns, answers) =>
+      db.transaction(async (tx) => {
+        await tx
+          .update(messages)
+          .set({ data: sql`${messages.data} || ${JSON.stringify({ answers })}::jsonb` })
+          .where(eq(messages.id, cardId));
+        const [updated] = await tx
+          .update(intakes)
+          .set({ turns, cardMessageId: cardId, updatedAt: new Date() })
+          .where(eq(intakes.id, id))
+          .returning();
+        if (!updated) throw new HttpError(404, 'intake_not_found', '没有这件任务');
+        return updated;
+      }),
+    commitIntakeReply: (id, message, patch) =>
+      db.transaction(async (tx) => {
+        const [previous] = await tx.select().from(intakes).where(eq(intakes.id, id));
+        if (!previous) throw new HttpError(404, 'intake_not_found', '没有这件任务');
+        if (previous.status === 'sheet' && previous.cardMessageId)
+          await tx
+            .update(messages)
+            .set({ data: sql`${messages.data} || '{"status":"superseded"}'::jsonb` })
+            .where(eq(messages.id, previous.cardMessageId));
+        const [row] = await tx.insert(messages).values(message).returning();
+        await tx
+          .update(intakes)
+          .set({ ...patch, cardMessageId: row!.id, updatedAt: new Date() })
+          .where(eq(intakes.id, id));
+        return row!;
+      }),
+    async withIntakeLock(conversationId, work) {
+      if ('release' in pool) return work(repo);
+      const client = await pool.connect();
+      const key = `intake:${conversationId}`;
+      let locked = false,
+        broken = false;
+      try {
+        locked = (
+          await client.query('select pg_try_advisory_lock(hashtextextended($1,0)) locked', [key])
+        ).rows[0].locked;
+        if (!locked)
+          throw new HttpError(409, 'intake_busy', '正在整理这件任务，请稍候，不要重复提交');
+        return await work(createConversationRepo(client));
+      } finally {
+        if (locked) {
+          try {
+            await client.query('select pg_advisory_unlock(hashtextextended($1,0))', [key]);
+          } catch {
+            broken = true;
+          }
+        }
+        client.release(broken);
+      }
+    },
+    async findQuestionCard(conversationId, intakeId, round) {
+      const [row] = await db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, conversationId),
+            eq(messages.kind, 'questions'),
+            sql`${messages.data}->>'intakeId' = ${intakeId}`,
+            sql`${messages.data}->>'round' = ${String(round)}`,
+          ),
+        )
+        .orderBy(desc(messages.createdAt))
+        .limit(1);
+      return row;
+    },
     async upsertDm(ownerId, modelKey, title) {
       await db
         .insert(conversations)
@@ -204,4 +291,5 @@ export function createConversationRepo(pool: pg.Pool): ConversationRepo {
         .orderBy(asc(messages.createdAt))
         .limit(limit),
   };
+  return repo;
 }

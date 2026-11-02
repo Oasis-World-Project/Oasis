@@ -84,7 +84,7 @@ export function MessageItem({
         <QuestionsCard
           messageId={message.id}
           card={message.data}
-          active={!later.some((m) => m.role === 'assistant')}
+          active={!later.some((m) => m.role === 'assistant' && m.status !== 'failed')}
           speaker={speaker}
         />
       );

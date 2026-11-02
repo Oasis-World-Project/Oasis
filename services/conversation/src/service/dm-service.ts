@@ -25,7 +25,7 @@ const FRIENDLY_ERRORS: Record<string, string> = {
   provider_busy: '这个 AI 现在太忙了，过一会儿再试',
   model_unavailable: '这个 AI 还没有接入',
   stream_interrupted: '回复中断了，已保留收到的部分',
-  intake_failed: '没能把需求整理好，请换个说法再说一次',
+  intake_failed: '任务单暂时未能生成，原话和已提交的回答已保存，请继续整理或稍后重试',
 };
 
 function toConversationBody(row: Conversation): ConversationBody {

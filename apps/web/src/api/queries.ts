@@ -124,7 +124,8 @@ export const answerIntake = (
   conversationId: string,
   answers: Record<string, string>,
   skip: boolean,
-) => intakeCall(conversationId, 'answers', { answers, skip });
+  messageId: string,
+) => intakeCall(conversationId, 'answers', { answers, skip, messageId });
 
 export const cancelIntake = (conversationId: string) => intakeCall(conversationId, 'cancel', {});
 

@@ -93,10 +93,17 @@ export function registerRoutes(
   app.post('/v1/conversations/:id/intake/answers', async (request) => {
     const ownerId = requireUserId(request);
     const { id } = parseWith(IdParams, request.params);
-    const { answers, skip } = parseWith(IntakeAnswersBody, request.body);
+    const { answers, skip, messageId } = parseWith(IntakeAnswersBody, request.body);
     const conversation = await dms.assertOwned(id, ownerId);
     return result(
-      await intake.answer({ conversation, ownerId, answers, skip, requestId: request.id }),
+      await intake.answer({
+        conversation,
+        ownerId,
+        answers,
+        skip,
+        messageId,
+        requestId: request.id,
+      }),
     );
   });
 

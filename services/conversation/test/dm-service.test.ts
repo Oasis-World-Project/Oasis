@@ -115,9 +115,33 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
   };
   let seq = 0;
   const open = (i: Intake) => i.status === 'asking' || i.status === 'sheet';
-  return {
+  const repo: ConversationRepo & { rows: Message[]; intakes: Intake[] } = {
     rows,
     intakes,
+    saveIntakeAnswers: async (id, cardId, turns, answers) => {
+      const card = rows.find((m) => m.id === cardId)!;
+      await repo.setMessageData(cardId, { ...card.data, answers });
+      return repo.updateIntake(id, { turns, cardMessageId: cardId });
+    },
+    commitIntakeReply: async (id, input, patch) => {
+      const previous = intakes.find((i) => i.id === id)!;
+      if (previous.status === 'sheet' && previous.cardMessageId) {
+        const card = rows.find((m) => m.id === previous.cardMessageId)!;
+        await repo.setMessageData(card.id, { ...card.data, status: 'superseded' });
+      }
+      const row = await repo.insertMessage(input);
+      await repo.updateIntake(id, { ...patch, cardMessageId: row.id });
+      return row;
+    },
+    withIntakeLock: async (_id, work) => work(repo),
+    findQuestionCard: async (conversationId, intakeId, round) =>
+      rows.find(
+        (m) =>
+          m.conversationId === conversationId &&
+          m.kind === 'questions' &&
+          m.data.intakeId === intakeId &&
+          m.data.round === round,
+      ),
     upsertDm: async () => conversation,
     listDms: async () => [conversation],
     findOwned: async (id, owner) => (id === CONV && owner === OWNER ? conversation : undefined),
@@ -189,6 +213,7 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
         patch,
       ),
   };
+  return repo;
 }
 
 const agent = Fastify();
@@ -204,16 +229,26 @@ let gatewayMode: 'ok' | 'broke' | 'midway' = 'ok';
 let taskProbability = 0.1;
 /** 接需求时模型依次给出的回答（非流式） */
 let intakeReplies: string[] = [];
+let finishReasons: string[] = [];
 type ChatBody = { model: string; stream?: boolean; messages: { role: string; content: string }[] };
 const seenRequests: { payer: unknown; body: ChatBody }[] = [];
 const intakeRequests: ChatBody[] = [];
 let decisionCalls = 0;
 let preserveProbability = 0.9;
+let selectionFailures = 0;
 const modelGateway = Fastify();
-modelGateway.post('/internal/v1/decisions', async () => {
+modelGateway.post('/internal/v1/decisions', async (request) => {
   decisionCalls += 1;
+  const questions = (request.body as { questions: Record<string, unknown> }).questions;
+  const selections = Object.keys(questions).filter((key) => key.startsWith('answer_'));
   return {
     answers: {
+      ...Object.fromEntries(
+        selections.map((key) => [
+          key,
+          { noul: key === 'answer_1_q1' && selectionFailures-- > 0 ? 0.1 : 0.9 },
+        ]),
+      ),
       is_task: { type: 'noul', noul: taskProbability },
       preserved: { noul: preserveProbability },
     },
@@ -223,7 +258,14 @@ modelGateway.post('/internal/v1/chat/completions', async (request, reply) => {
   const body = request.body as ChatBody;
   if (body.stream === false) {
     intakeRequests.push(body);
-    return { choices: [{ message: { role: 'assistant', content: intakeReplies.shift() ?? '' } }] };
+    return {
+      choices: [
+        {
+          finish_reason: finishReasons.shift() ?? 'stop',
+          message: { role: 'assistant', content: intakeReplies.shift() ?? '' },
+        },
+      ],
+    };
   }
   seenRequests.push({ payer: request.headers['x-oasis-payer-id'], body });
   if (gatewayMode === 'broke')
@@ -312,6 +354,8 @@ beforeEach(() => {
   createdTasks.length = 0;
   decisionCalls = 0;
   preserveProbability = 0.9;
+  selectionFailures = 0;
+  finishReasons = [];
   repo = memoryRepo();
   const logger = pino({ level: 'silent' });
   const clients = {
@@ -675,8 +719,127 @@ describe('接需求', () => {
     expect(events.at(-1)).toEqual({
       type: 'error',
       code: 'intake_failed',
-      message: '没能把需求整理好，请换个说法再说一次',
+      message: '任务单暂时未能生成，原话和已提交的回答已保存，请继续整理或稍后重试',
     });
+  });
+
+  it('失败结果被带回修复；生成请求使用契约约束且不消耗额外推理输出', async () => {
+    await begin();
+    const invalid = JSON.parse(sheet());
+    invalid.sheet.criteria = Array.from({ length: 9 }, (_, i) => `要求${i}`);
+    intakeReplies = [JSON.stringify(invalid), sheet()];
+    await intake.answer({
+      conversation: await conversation(),
+      ownerId: OWNER,
+      answers: {},
+      skip: true,
+      requestId: 'repair',
+    });
+    const retried = intakeRequests.at(-1)!;
+    expect(
+      retried.messages.some((m) => m.role === 'assistant' && m.content.includes('要求8')),
+    ).toBe(true);
+    expect(retried).toMatchObject({
+      response_format: { type: 'json_schema' },
+      reasoning: { enabled: false },
+      provider: { require_parameters: true },
+    });
+  });
+
+  it('回答后生成失败保留卡片；旧版空指针也能恢复，重试不覆盖已保存选择', async () => {
+    await begin();
+    const card = repo.rows.find((m) => m.kind === 'questions')!;
+    intakeReplies = ['x', 'y', 'z'];
+    await expect(
+      intake.answer({
+        conversation: await conversation(),
+        ownerId: OWNER,
+        answers: { q1: 'b' },
+        skip: true,
+        requestId: 'fail',
+      }),
+    ).rejects.toMatchObject({ code: 'intake_failed' });
+    expect(repo.intakes[0]!.cardMessageId).toBe(card.id);
+    // 模拟修复前遗留的状态，答案已保存但卡片指针被提前清空。
+    repo.intakes[0]!.cardMessageId = null;
+    intakeReplies = [questions(2), sheet()];
+    const [resumed] = await intake.answer({
+      conversation: await conversation(),
+      ownerId: OWNER,
+      answers: {},
+      skip: false,
+      requestId: 'resume',
+    });
+    expect(resumed?.kind).toBe('sheet');
+    expect(intakeRequests.at(-1)!.messages[1]!.content).toContain('情侣');
+    expect(intakeRequests.at(-1)!.messages[1]!.content).toContain('直接给出任务单');
+    expect(repo.intakes[0]!.turns.filter((t) => t.kind === 'questions')).toHaveLength(1);
+  });
+
+  it('即使返回可解析 JSON，length 结束也不能当成功；过期问题卡不能错答下一轮', async () => {
+    await begin();
+    finishReasons = ['length', 'stop'];
+    intakeReplies = [sheet('截断结果'), questions(2)];
+    await intake.answer({
+      conversation: await conversation(),
+      ownerId: OWNER,
+      answers: {},
+      skip: false,
+      requestId: 'cut',
+    });
+    expect(repo.intakes[0]!.status).toBe('asking');
+    expect(repo.intakes[0]!.round).toBe(2);
+    expect(intakeRequests.at(-1)!.messages.at(-1)!.content).toContain('被截断');
+    const calls = intakeRequests.length;
+    await expect(
+      intake.answer({
+        conversation: await conversation(),
+        ownerId: OWNER,
+        answers: {},
+        skip: false,
+        messageId: repo.rows.find((m) => m.kind === 'questions')!.id,
+        requestId: 'stale',
+      }),
+    ).rejects.toMatchObject({ code: 'stale_questions' });
+    expect(intakeRequests).toHaveLength(calls);
+  });
+
+  it('需求保持检查指明未确认的用户选择，修复不以降低验收门槛放行', async () => {
+    await begin();
+    const generated = JSON.parse(sheet());
+    generated.sheet.requirements = [
+      { id: 'r1', text: '写官网', sources: [{ kind: 'request', quote: '官网' }] },
+    ];
+    intakeReplies = [JSON.stringify(generated), JSON.stringify(generated)];
+    selectionFailures = 1;
+    const prepared = createIntakeService({
+      repo,
+      agent: createServiceClient('agent', urls.agent),
+      modelGateway: createServiceClient('model-gateway', urls.gateway),
+      task: createServiceClient('task', urls.task),
+      harness: createServiceClient('harness', urls.task),
+      config: {
+        detectModel: 'jev',
+        detectHigh: 0.7,
+        detectLow: 0.4,
+        fallbackModel: 'fallback',
+        maxRounds: 3,
+        maxTokens: 2000,
+      },
+      logger: pino({ level: 'silent' }),
+    });
+    await prepared.answer({
+      conversation: await conversation(),
+      ownerId: OWNER,
+      answers: { q1: 'b' },
+      skip: false,
+      requestId: 'semantic',
+    });
+    expect(intakeRequests.at(-1)!.messages.at(-1)!.content).toContain(
+      '第1轮「首页给谁看（第 1 轮）」选择「情侣」',
+    );
+    expect(intakeRequests).toHaveLength(3);
+    expect(createdTasks).toHaveLength(0);
   });
 
   it('问满 3 轮：告诉 AI 不能再问了', async () => {

@@ -23,6 +23,24 @@ const IntakeReply = z.discriminatedUnion('type', [
 ]);
 export type IntakeReply = z.infer<typeof IntakeReply>;
 
+/** 生成与本地校验共用契约；模型不填写服务端维护的素材字段。 */
+export function intakeResponseFormat(mustSheet: boolean) {
+  const output = z.object({
+    type: mustSheet ? z.enum(['sheet', 'cancel']) : z.enum(['questions', 'sheet', 'cancel']),
+    intro: z.string().max(300),
+    questions: z.array(IntakeQuestion).min(1).max(4).nullable(),
+    sheet: TaskSheet.omit({ materials: true, materialWarnings: true }).required().nullable(),
+  });
+  return {
+    type: 'json_schema',
+    json_schema: {
+      name: 'oasis_intake',
+      strict: true,
+      schema: z.toJSONSchema(output, { target: 'draft-7' }),
+    },
+  };
+}
+
 export interface IntakeState {
   /** 这个 AI 的名字（如 Claude） */
   name: string;
@@ -33,6 +51,8 @@ export interface IntakeState {
   roundsLeft: number;
   /** 用户点了「直接开始」 */
   skipped: boolean;
+  /** 已提交答案后的失败恢复，不再重复追问。 */
+  resuming?: boolean;
   /** 用户给的素材（文件名和大小） */
   materials: Material[];
 }
@@ -52,6 +72,7 @@ function system(name: string): string {
 - 每条 requirement: {"id":"r1","text":"要求","sources":[{"kind":"request","quote":"用户原话中的连续片段"}]}。附件来源用 {"kind":"material","uploadId":"材料ID","sha256":"给出的摘要","quote":"提取正文中的连续原文"}；用户后补用 {"kind":"user","turn":接需求记录下标,"quote":"原文"}；选项用 {"kind":"answer","round":1,"questionId":"q1","optionId":"a","quote":"选项文字"}。最多32条，每条最多1000字；引用不能编造。
 - 用户明确说不做了、只是随便聊聊，就回答 cancel。
 - 只输出一个 JSON 对象，不要任何别的文字，不要代码块。
+- 按响应 Schema 输出所有顶层字段；questions 回答的 sheet 为 null，sheet 回答的 questions 为 null，cancel 两者均为 null。验收标准合并成最多 8 条，细节完整写进 requirements，不得为了条数限制删除用户要求。引文只取能证明来源的短片段，不复制整段需求。
 
 三种回答：
 {"type":"questions","intro":"一句话开场","questions":[{"id":"q1","text":"问题","options":[{"id":"a","label":"选项"},{"id":"b","label":"选项"}],"default":"a"}]}
@@ -74,7 +95,7 @@ function describeTurn(turn: IntakeTurn): string {
       id === undefined
         ? '没答'
         : `${useDefault ? '采用当轮默认项：' : ''}${q.options.find((o) => o.id === id)?.label ?? id}（选项 ${id}）`;
-    return `- ${q.text} → ${label}`;
+    return `- [${q.id}] ${q.text} → ${label}`;
   });
   return `第 ${turn.round} 轮你问的问题和用户的回答：\n${lines.join('\n')}`;
 }
@@ -117,13 +138,15 @@ export function intakeMessages(state: IntakeState): ChatMessage[] {
     );
   const lastSheet = state.turns.some((t) => t.kind === 'sheet');
   parts.push(
-    state.skipped
-      ? '【现在】用户点了「直接开始」：没答的都按默认，直接给出任务单。'
-      : state.roundsLeft <= 0
-        ? '【现在】不能再问了，请直接给出任务单。'
-        : lastSheet
-          ? '【现在】用户对上一版任务单提了意见：改出新的任务单（必要时也可以再问，但尽量不问）。'
-          : `【现在】还可以再问 ${state.roundsLeft} 轮。信息够了就给任务单。`,
+    state.resuming
+      ? '【现在】继续整理已经提交的回答：不再追问，直接给出任务单，保留全部原选择。'
+      : state.skipped
+        ? '【现在】用户点了「直接开始」：没答的都按默认，直接给出任务单。'
+        : state.roundsLeft <= 0
+          ? '【现在】不能再问了，请直接给出任务单。'
+          : lastSheet
+            ? '【现在】用户对上一版任务单提了意见：改出新的任务单（必要时也可以再问，但尽量不问）。'
+            : `【现在】还可以再问 ${state.roundsLeft} 轮。信息够了就给任务单。`,
   );
   return [
     { role: 'system', content: system(state.name) },
