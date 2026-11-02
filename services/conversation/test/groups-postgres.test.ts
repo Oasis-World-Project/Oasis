@@ -348,6 +348,63 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     await pool.query('delete from messages where id=$1', [initial.id]);
     await pool.query('delete from intakes where id=$1', [intake!.id]);
   });
+  it('私聊删除/替换真实事务：清除草稿上下文，保留任务快照，停止与任务识别原子互斥', async () => {
+    const store = createConversationRepo(pool);
+    const conversation = await store.upsertDm(owner, 'chat-actions-test', 'actions');
+    const user = await store.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'user',
+      authorId: owner,
+      content: '旧聊天正文',
+      status: 'complete',
+      data: { intent: 'chat' },
+    });
+    const reply = await store.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'ai',
+      authorId: 'test',
+      content: '旧回答',
+      status: 'complete',
+      data: { replyTo: user.id },
+    });
+    const draft = await store.createIntake({
+      id: randomUUID(),
+      conversationId: conversation.id,
+      request: '任务原话',
+      context: [user, reply].map((m) => ({
+        role: m.authorKind === 'user' ? 'user' : 'assistant',
+        content: m.content,
+        messageId: m.id,
+      })),
+      materials: [],
+    });
+    await store.mutateChat(conversation.id, [user, reply], {
+      id: user.id,
+      content: '新聊天正文',
+      replyId: reply.id,
+    });
+    expect((await store.findMessage(conversation.id, reply.id))?.content).toBe('');
+    expect((await store.findOpenIntake(conversation.id))?.context).toEqual([]);
+    await store.updateIntake(draft!.id, { status: 'confirmed' });
+    const source = await store.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'user',
+      authorId: owner,
+      content: '任务原话',
+      status: 'complete',
+    });
+    expect(await store.taskSourceIds(conversation.id)).toContain(source.id);
+    expect(await store.requestStop(conversation.id, user.id)).toBe(true);
+    expect(await store.mergeMessageData(user.id, { intent: 'task' }, true)).toBeUndefined();
+    await store.mergeMessageData(source.id, { intent: 'task' });
+    expect(await store.requestStop(conversation.id, source.id)).toBe(false);
+    await store.mutateChat(conversation.id, [user, reply]);
+    expect((await store.listMessages(conversation.id, 500)).map((m) => m.id)).toEqual([source.id]);
+    await pool.query('delete from intakes where conversation_id=$1', [conversation.id]);
+    await pool.query('delete from messages where conversation_id=$1', [conversation.id]);
+    await pool.query('delete from conversations where id=$1', [conversation.id]);
+  });
+
   it('Contract 与 Expand 可依次回滚重建，原有 DM 数据不丢', async () => {
     await pool.query("delete from conversations where kind='group'");
     const root = new URL('../migrations/', import.meta.url);

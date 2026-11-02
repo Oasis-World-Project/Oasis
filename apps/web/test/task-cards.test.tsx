@@ -378,6 +378,109 @@ describe('交付消息', () => {
   });
 });
 
+describe('私聊文字操作', () => {
+  it('长文保持短预览，全文放弹窗；任务消息带标记且没有修改入口', async () => {
+    const text = '很长的任务内容。'.repeat(100) + '正文末尾';
+    fakeChat([message('text', { intent: 'task' }, 'user', text)]);
+    await openChat();
+    expect(await screen.findByText('任务 · 已锁定')).toBeTruthy();
+    expect(screen.queryByText(/正文末尾/)).toBeNull();
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '删除' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /查看全文/ }));
+    const dialog = screen.getByRole('dialog', { hidden: true });
+    expect(within(dialog).getByText(text)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭', hidden: true }));
+    expect(screen.queryByRole('dialog', { hidden: true })).toBeNull();
+    expect(screen.queryByText(/正文末尾/)).toBeNull();
+  });
+
+  it('普通聊天可以编辑、重新生成、删除；前端替换缓存中的旧回复', async () => {
+    const user = message('text', { intent: 'chat' }, 'user', '旧问题');
+    const reply = message('text', { replyTo: user.id }, 'assistant', '旧回复');
+    const { chat, api } = fakeChat([user, reply], {
+      extra: (method, path, body) => {
+        if (method === 'POST' && path.endsWith(`/${user.id}/reply`)) {
+          const content = (body as { content?: string }).content;
+          const updated = { ...user, content: content ?? chat.messages[0]!.content };
+          const answered = { ...reply, content: content ? '编辑后的回复' : '重生成的回复' };
+          chat.messages = [updated, answered];
+          return new Response(
+            [
+              { type: 'accepted', userMessage: updated },
+              { type: 'done', message: answered },
+            ]
+              .map((e) => `data: ${JSON.stringify(e)}\n\n`)
+              .join(''),
+            { headers: { 'content-type': 'text/event-stream' } },
+          );
+        }
+        if (method === 'DELETE' && path.endsWith(`/${user.id}`)) {
+          chat.messages = [];
+          return new Response(null, { status: 204 });
+        }
+      },
+    });
+    await openChat();
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }));
+    const dialog = screen.getByRole('dialog', { hidden: true });
+    fireEvent.change(within(dialog).getByLabelText('修改消息内容'), {
+      target: { value: '新问题' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存并重新生成', hidden: true }));
+    expect(await screen.findByText('编辑后的回复')).toBeTruthy();
+    expect(screen.queryByText('旧问题')).toBeNull();
+    expect(screen.queryByText('旧回复')).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: '重新生成' }));
+    expect(await screen.findByText('重生成的回复')).toBeTruthy();
+    expect(api.bodies.filter((b) => b.path.endsWith('/reply')).map((b) => b.body)).toEqual([
+      { content: '新问题' },
+      {},
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    await screen.findByText(/打个招呼/);
+    expect(screen.queryByText('新问题')).toBeNull();
+    expect(screen.queryByText('重生成的回复')).toBeNull();
+  });
+
+  it('回复期间按钮变为停止，只调用私聊 stop，不调用任务控制', async () => {
+    const user = message('text', { intent: 'chat' }, 'user', '聊天');
+    const stopped = message('text', { replyTo: user.id, stopped: true }, 'assistant', '保留的部分');
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const push = (event: object) =>
+      stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+    const { chat, api } = fakeChat([], {
+      extra: (method, path) => {
+        if (method === 'POST' && path.endsWith('/messages')) {
+          chat.messages = [user];
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                stream = controller;
+                push({ type: 'accepted', userMessage: user });
+                push({ type: 'delta', text: '保留的部分' });
+              },
+            }),
+            { headers: { 'content-type': 'text/event-stream' } },
+          );
+        }
+        if (method === 'POST' && path.endsWith(`/${user.id}/stop`)) {
+          chat.messages = [user, stopped];
+          push({ type: 'done', message: stopped });
+          stream.close();
+          return new Response(null, { status: 204 });
+        }
+      },
+    });
+    await openChat();
+    fireEvent.change(screen.getByLabelText('消息'), { target: { value: '聊天' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    fireEvent.click(await screen.findByRole('button', { name: '停止回复' }));
+    expect(await screen.findByText('已停止')).toBeTruthy();
+    expect(api.requests.some((r) => r.includes('/task/') || r.includes('/harness/'))).toBe(false);
+  });
+});
+
 describe('发任务', () => {
   it('「＋」里选「作为任务发布」，发消息时带上 asTask', async () => {
     const { chat, api } = fakeChat([], {

@@ -73,6 +73,7 @@ function intakeActions(deps: {
     content: string;
     history: Message[];
     requestId: string;
+    signal?: AbortSignal;
   }): Promise<number> {
     const recent = input.history
       .slice(-6)
@@ -97,9 +98,11 @@ function intakeActions(deps: {
         headers: { [OASIS_HEADERS.payerId]: input.ownerId },
         requestId: input.requestId,
         schema: Decision,
+        ...(input.signal ? { signal: input.signal } : {}),
       });
       return answers.is_task?.noul ?? 0;
     } catch (err) {
+      input.signal?.throwIfAborted();
       logger.warn({ err }, '判断是不是任务失败，照常聊天');
       return 0;
     }
@@ -402,6 +405,7 @@ function intakeActions(deps: {
     conversation: Conversation;
     ownerId: string;
     request: string;
+    sourceMessageId?: string;
     /** 需求那条消息带的文件 */
     attachments: MessageAttachment[];
     history: Message[];
@@ -413,6 +417,7 @@ function intakeActions(deps: {
       conversationId: input.conversation.id,
       request: input.request,
       context: context.map((m) => ({
+        messageId: m.id,
         role: m.authorKind === 'user' ? ('user' as const) : ('assistant' as const),
         content: withAttachmentNote(m.content.slice(0, 2000), attachmentsOf(m)),
       })),
@@ -420,6 +425,8 @@ function intakeActions(deps: {
       materials: mergeMaterials([], [...context.flatMap(attachmentsOf), ...input.attachments]),
     });
     if (!created) throw new HttpError(409, 'intake_open', '已经有一件正在整理的任务了');
+    if (input.sourceMessageId)
+      await repo.mergeMessageData(input.sourceMessageId, { intent: 'task', intakeId: created.id });
     return step(input.conversation, created, input.ownerId, input.requestId);
   }
 
@@ -458,11 +465,15 @@ function intakeActions(deps: {
       if (message?.authorKind !== 'user') {
         throw new HttpError(404, 'message_not_found', '没有这条消息');
       }
+      if ((await repo.taskSourceIds(input.conversation.id)).includes(message.id))
+        throw new HttpError(409, 'task_message_locked', '这条消息已作为任务提交');
       const history = await repo.recentComplete(input.conversation.id, 10, message.id);
+      await repo.mergeMessageData(message.id, { intent: 'task', stopRequested: false });
       return start({
         conversation: input.conversation,
         ownerId: input.ownerId,
         request: message.content,
+        sourceMessageId: message.id,
         attachments: attachmentsOf(message),
         history: history.filter((m) => m.createdAt < message.createdAt),
         requestId: input.requestId,
@@ -595,7 +606,11 @@ export function createIntakeService(deps: Parameters<typeof intakeActions>[0]) {
     ...service,
     start: (input: Parameters<typeof service.start>[0]) => locked(input, (s, i) => s.start(i)),
     startFrom: (input: Parameters<typeof service.startFrom>[0]) =>
-      locked(input, (s, i) => s.startFrom(i)),
+      deps.repo.withMessageLock(input.conversation.id, (repo) =>
+        repo.withIntakeLock(input.conversation.id, (scoped) =>
+          intakeActions({ ...deps, repo: scoped }).startFrom(input),
+        ),
+      ),
     userSaid: (input: Parameters<typeof service.userSaid>[0]) =>
       locked(input, async (s, i) => {
         const current = await s.findOpen(i.conversation.id);

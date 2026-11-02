@@ -39,6 +39,10 @@ function fakeDsh(stdin: PassThrough, stdout: PassThrough) {
       await sleep(text.includes('SLOW') ? 5_000 : 20);
       if (text.includes('FAIL')) {
         event('turn/end', { reason: { kind: 'error', error: { message: '上游 500' } } });
+      } else if (text.includes('TRUNCATED')) {
+        event('turn/end', { reason: { kind: 'max-tokens' } });
+      } else if (text.includes('NO_END')) {
+        // session/wait 返回空闲，但没有正常结束通知。
       } else {
         event('assistant/message', {
           message: { content: [{ type: 'text', text: `收到：${text}` }] },
@@ -387,6 +391,17 @@ describe('一次 agent 运行', () => {
       unchecked: ['final.mp4'],
     });
   });
+  it.each(['TRUNCATED', 'NO_END'])(
+    '非正常结束不能当成功：%s（即使有产物和空闲通知）',
+    async (prompt) => {
+      const run = await service.start({ ...base, prompt });
+      const row = await finished(run.id);
+      expect(row.status).toBe('failed');
+      expect(row.error).toMatch(/未完成|未收到正常结束/);
+      expect(outbox[0]).toMatchObject({ data: { status: 'failed' } });
+    },
+  );
+
   it('跑完：签发 Key → 起沙箱 → 交任务 → 收产出和会话存档 → 销毁沙箱、作废 Key → 发事件', async () => {
     const run = await service.start({
       ...base,
@@ -568,6 +583,13 @@ describe('一次 agent 运行', () => {
     expect(row.status).toBe('failed');
     expect(row.error).toBe('上游 500');
     expect(events.find((e) => e.kind === 'error')?.data).toEqual({ message: '上游 500' });
+  });
+
+  it('前一轮 completed 不遮住排队追问缺少结束通知', async () => {
+    const run = await service.start({ ...base, prompt: '先做这个' });
+    await until(() => events.find((e) => e.kind === 'user_message'));
+    await service.message(run.id, 'NO_END');
+    expect((await finished(run.id)).status).toBe('failed');
   });
 
   it('取消：立即销毁沙箱、作废 Key，记为已取消', async () => {

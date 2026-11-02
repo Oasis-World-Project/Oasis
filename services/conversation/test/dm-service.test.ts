@@ -114,10 +114,64 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
     lastMessageAt: null,
   };
   let seq = 0;
+  let messageLocked = false;
   const open = (i: Intake) => i.status === 'asking' || i.status === 'sheet';
   const repo: ConversationRepo & { rows: Message[]; intakes: Intake[] } = {
     rows,
     intakes,
+    withMessageLock: async (_id, work) => {
+      if (messageLocked) throw Object.assign(new Error('busy'), { code: 'conversation_busy' });
+      messageLocked = true;
+      try {
+        return await work(repo);
+      } finally {
+        messageLocked = false;
+      }
+    },
+    taskSourceIds: async () =>
+      rows
+        .filter(
+          (r) =>
+            r.authorKind === 'user' &&
+            (r.data.intent === 'task' || intakes.some((i) => i.request === r.content)),
+        )
+        .map((r) => r.id),
+    mergeMessageData: async (id, data, unlessStopped) => {
+      const row = rows.find((r) => r.id === id);
+      if (!row || (unlessStopped && row.data.stopRequested)) return undefined;
+      row.data = { ...row.data, ...data };
+      return row;
+    },
+    requestStop: async (_c, id) => {
+      const row = rows.find((r) => r.id === id);
+      if (!row || row.data.intent === 'task') return false;
+      row.data = { ...row.data, stopRequested: true };
+      return true;
+    },
+    mutateChat: async (_c, obsolete, edit) => {
+      const ids = obsolete.map((m) => m.id).filter((id) => id !== edit?.id && id !== edit?.replyId);
+      for (let i = rows.length - 1; i >= 0; i--) if (ids.includes(rows[i]!.id)) rows.splice(i, 1);
+      if (edit)
+        Object.assign(
+          rows.find((r) => r.id === edit.id)!,
+          { content: edit.content },
+        );
+      if (edit?.replyId)
+        Object.assign(
+          rows.find((r) => r.id === edit.replyId)!,
+          {
+            content: '',
+            status: 'streaming',
+            error: null,
+            data: { replyTo: edit.id, stopped: false },
+          },
+        );
+      for (const draft of intakes.filter((i) => i.status === 'asking' || i.status === 'sheet'))
+        draft.context = draft.context.filter(
+          (c) =>
+            !obsolete.some((m) => (c.messageId ? c.messageId === m.id : c.content === m.content)),
+        );
+    },
     saveIntakeAnswers: async (id, cardId, turns, answers) => {
       const card = rows.find((m) => m.id === cardId)!;
       await repo.setMessageData(cardId, { ...card.data, answers });
@@ -147,7 +201,7 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
     findOwned: async (id, owner) => (id === CONV && owner === OWNER ? conversation : undefined),
     insertMessage: async (m) => {
       const row: Message = {
-        seq: rows.length + 1,
+        seq: seq + 1,
         kind: 'text',
         data: {},
         ...m,
@@ -169,8 +223,15 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
       return row;
     },
     touchConversation: async () => {},
-    recentComplete: async (_c, limit, excludeId) =>
-      rows.filter((r) => r.status === 'complete' && r.id !== excludeId).slice(-limit),
+    recentComplete: async (_c, limit, excludeId, beforeSeq) =>
+      rows
+        .filter(
+          (r) =>
+            r.status === 'complete' &&
+            r.id !== excludeId &&
+            (beforeSeq === undefined || r.seq <= beforeSeq),
+        )
+        .slice(-limit),
     listMessages: async () => rows,
     findMessage: async (_c, id) => rows.find((r) => r.id === id),
     setMessageData: async (id, data) =>
@@ -224,7 +285,9 @@ agent.get('/internal/models/:key/route', async () => ({
   systemPrompt: '你是 Claude',
 }));
 
-let gatewayMode: 'ok' | 'broke' | 'midway' = 'ok';
+let gatewayMode: 'ok' | 'broke' | 'midway' | 'slow' | 'length' | 'no-done' = 'ok';
+let upstreamStopped = false;
+let replySuffix = '我在。';
 /** Jev 判断「是不是任务」的概率 */
 let taskProbability = 0.1;
 /** 接需求时模型依次给出的回答（非流式） */
@@ -268,6 +331,20 @@ modelGateway.post('/internal/v1/chat/completions', async (request, reply) => {
     };
   }
   seenRequests.push({ payer: request.headers['x-oasis-payer-id'], body });
+  if (gatewayMode === 'slow') {
+    reply.hijack();
+    reply.raw.writeHead(200, { 'content-type': 'text/event-stream' });
+    reply.raw.write(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: '收到的部分' } }] })}\n\n`,
+    );
+    await new Promise<void>((resolve) =>
+      reply.raw.on('close', () => {
+        upstreamStopped = true;
+        resolve();
+      }),
+    );
+    return;
+  }
   if (gatewayMode === 'broke')
     return reply
       .code(402)
@@ -278,8 +355,8 @@ modelGateway.post('/internal/v1/chat/completions', async (request, reply) => {
     parts.push(`data: ${JSON.stringify({ error: { message: '回复中断了' } })}\n\n`);
   else
     parts.push(
-      `data: ${JSON.stringify({ choices: [{ delta: { content: '我在。' } }] })}\n\n`,
-      'data: [DONE]\n\n',
+      `data: ${JSON.stringify({ choices: [{ delta: { content: replySuffix }, finish_reason: gatewayMode === 'length' ? 'length' : 'stop' }] })}\n\n`,
+      ...(gatewayMode === 'no-done' ? [] : ['data: [DONE]\n\n']),
     );
   return parts.join('');
 });
@@ -347,6 +424,8 @@ afterAll(async () => {
 });
 beforeEach(() => {
   gatewayMode = 'ok';
+  upstreamStopped = false;
+  replySuffix = '我在。';
   taskProbability = 0.1;
   intakeReplies = [];
   seenRequests.length = 0;
@@ -408,10 +487,180 @@ async function send(
 const lastDone = (events: StreamEvent[]) =>
   (events.at(-1) as Extract<StreamEvent, { type: 'done' }>).message;
 
+describe('普通聊天的替换、删除和停止', () => {
+  it('尚在思考、没有任何正文时也能停止，不继续识别或启动任务', async () => {
+    let stop: Promise<void> | undefined;
+    await service.sendMessage({
+      ownerId: OWNER,
+      conversationId: CONV,
+      content: '普通问题',
+      asTask: false,
+      attachments: [],
+      requestId: 'thinking',
+      emit: (event) => {
+        if (event.type === 'accepted') stop = service.stopReply(OWNER, CONV, event.userMessage.id);
+      },
+    });
+    await stop;
+    expect(seenRequests).toEqual([]);
+    expect(createdTasks).toEqual([]);
+    expect(repo.rows.at(-1)).toMatchObject({
+      content: '',
+      data: { stopped: true },
+      status: 'complete',
+    });
+  });
+  it('修改过去一轮只替换本轮，生成不偷看后续消息；旧正文和旧回复不留在上下文', async () => {
+    await send('旧问题');
+    const user = repo.rows[0]!,
+      reply = repo.rows[1]!;
+    await send('后续问题');
+    const laterIds = repo.rows.slice(2).map((r) => r.id);
+    replySuffix = '替换后的回答';
+    await service.replaceReply({
+      ownerId: OWNER,
+      conversationId: CONV,
+      messageId: user.id,
+      content: '新问题',
+      requestId: 'replace',
+      emit: () => {},
+    });
+    expect(repo.rows).toHaveLength(4);
+    expect(repo.rows[0]?.id).toBe(user.id);
+    expect(repo.rows[1]?.id).toBe(reply.id);
+    expect(repo.rows.slice(2).map((r) => r.id)).toEqual(laterIds);
+    expect(seenRequests.at(-1)!.body.messages.map((m) => m.content)).toEqual([
+      '你是 Claude',
+      '新问题',
+    ]);
+    expect(repo.rows[1]?.content).toBe('你好，替换后的回答');
+    // 重新生成不重新识别为任务，也不创建平行历史。
+    const decisionsBefore = decisionCalls;
+    await service.replaceReply({
+      ownerId: OWNER,
+      conversationId: CONV,
+      messageId: user.id,
+      requestId: 'regen',
+      emit: () => {},
+    });
+    expect(decisionCalls).toBe(decisionsBefore);
+    expect(repo.rows).toHaveLength(4);
+    await service.deleteMessage(OWNER, CONV, user.id);
+    expect(repo.rows.map((r) => r.id)).toEqual(laterIds);
+    await send('继续');
+    expect(
+      seenRequests
+        .at(-1)!
+        .body.messages.some((m) => ['旧问题', '新问题', '你好，替换后的回答'].includes(m.content)),
+    ).toBe(false);
+  });
+
+  it.each(['local', 'persisted'])(
+    '%s 停止会关闭上游连接、保留部分文本，不触发后台任务；拒绝迟到覆盖',
+    async (mode) => {
+      gatewayMode = 'slow';
+      let userId = '';
+      let delta!: () => void;
+      const received = new Promise<void>((resolve) => {
+        delta = resolve;
+      });
+      const pending = service.sendMessage({
+        ownerId: OWNER,
+        conversationId: CONV,
+        content: '普通聊天',
+        asTask: false,
+        attachments: [],
+        requestId: 'slow',
+        emit: (e) => {
+          if (e.type === 'accepted') userId = e.userMessage.id;
+          if (e.type === 'delta') delta();
+        },
+      });
+      await received;
+      await expect(service.deleteMessage(OWNER, CONV, userId)).rejects.toMatchObject({
+        code: 'conversation_busy',
+      });
+      await expect(
+        service.replaceReply({
+          ownerId: OWNER,
+          conversationId: CONV,
+          messageId: userId,
+          content: '另一版',
+          requestId: 'r',
+          emit: () => {},
+        }),
+      ).rejects.toMatchObject({ code: 'conversation_busy' });
+      if (mode === 'local') await service.stopReply(OWNER, CONV, userId);
+      else await repo.requestStop(CONV, userId);
+      await pending;
+      await expect.poll(() => upstreamStopped).toBe(true);
+      expect(repo.rows[1]).toMatchObject({
+        status: 'complete',
+        content: '收到的部分',
+        data: { stopped: true, replyTo: userId },
+      });
+      expect(createdTasks).toEqual([]);
+      gatewayMode = 'ok';
+      await service.replaceReply({
+        ownerId: OWNER,
+        conversationId: CONV,
+        messageId: userId,
+        requestId: 'r',
+        emit: () => {},
+      });
+      expect(repo.rows[1]?.data.stopped).toBe(false);
+      expect(repo.rows[1]?.content).toBe('你好，我在。');
+    },
+  );
+
+  it.each(['length', 'no-done'] as const)('普通回复 %s 也不能伪装正常完成', async (mode) => {
+    gatewayMode = mode;
+    await send('问答');
+    expect(repo.rows.at(-1)?.status).toBe('failed');
+  });
+
+  it('已识别和旧任务来源的消息均有标记，任何消息操作都不能改动任务', async () => {
+    const legacy = await repo.insertMessage({
+      conversationId: CONV,
+      authorKind: 'user',
+      authorId: OWNER,
+      content: '旧任务原话',
+      status: 'complete',
+    });
+    await repo.createIntake({
+      id: TASK_ID,
+      conversationId: CONV,
+      request: legacy.content,
+      context: [],
+      materials: [],
+    });
+    expect((await service.listMessages(OWNER, CONV))[0]).toMatchObject({
+      data: { intent: 'task' },
+    });
+    for (const action of [
+      () => service.deleteMessage(OWNER, CONV, legacy.id),
+      () => service.stopReply(OWNER, CONV, legacy.id),
+      () =>
+        service.replaceReply({
+          ownerId: OWNER,
+          conversationId: CONV,
+          messageId: legacy.id,
+          requestId: 'r',
+          emit: () => {},
+        }),
+    ])
+      await expect(action()).rejects.toMatchObject({ code: 'task_message_locked' });
+    await expect(service.deleteMessage(TASK_ID, CONV, legacy.id)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(repo.rows[0]?.content).toBe('旧任务原话');
+  });
+});
+
 describe('私聊发消息', () => {
   it('先确认收到，再逐段推送回复，最后存下完整回复；由会话主人付费', async () => {
     const events = await send('在吗');
-    expect(events.map((e) => e.type)).toEqual(['accepted', 'delta', 'delta', 'done']);
+    expect(events.map((e) => e.type)).toEqual(['accepted', 'activity', 'delta', 'delta', 'done']);
     expect(lastDone(events)).toMatchObject({
       role: 'assistant',
       kind: 'text',
@@ -505,16 +754,18 @@ const card = (message: MessageBody) => message.data as Record<string, unknown>;
 describe('认出任务', () => {
   it('有点像任务：照常聊天，回复下面附「当成任务来做」；不像任务的不附', async () => {
     taskProbability = 0.5;
-    expect(lastDone(await send('想做个官网，怎么弄比较好？')).data).toEqual({ suggestTask: true });
+    expect(lastDone(await send('想做个官网，怎么弄比较好？')).data).toMatchObject({
+      suggestTask: true,
+    });
     taskProbability = 0.1;
-    expect(lastDone(await send('在吗')).data).toEqual({});
+    expect(lastDone(await send('在吗')).data).toMatchObject({ suggestTask: false });
   });
 
   it('像任务：不聊天，直接出问题卡；点了「发任务」的不用再判断', async () => {
     taskProbability = 0.9;
     intakeReplies = [questions()];
     const events = await send('帮我给小木屋民宿写个官网首页开头');
-    expect(events.map((e) => e.type)).toEqual(['accepted', 'done']);
+    expect(events.map((e) => e.type)).toEqual(['accepted', 'activity', 'done']);
     expect(seenRequests).toHaveLength(0);
     const message = lastDone(events);
     expect(message.kind).toBe('questions');
@@ -945,7 +1196,7 @@ describe('随消息发文件（ADR 0007 §4）', () => {
   it('附件记在用户消息上；聊天时 AI 知道附了哪些文件', async () => {
     const events = await send('看看这张照片', false, [PHOTO.id]);
     const accepted = events[0] as Extract<StreamEvent, { type: 'accepted' }>;
-    expect(accepted.userMessage.data).toEqual({ attachments: [PHOTO] });
+    expect(accepted.userMessage.data).toMatchObject({ attachments: [PHOTO], intent: 'chat' });
     const toModel = seenRequests[0]!.body.messages.at(-1)!.content;
     expect(toModel).toContain('随消息附了文件：民宿照片.jpg（2.3 MB）');
   });

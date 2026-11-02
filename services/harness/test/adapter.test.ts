@@ -74,6 +74,16 @@ describe('dsh 事件翻译', () => {
     ).toBeUndefined();
   });
 
+  it.each(['max-tokens', 'aborted', 'unknown', undefined])(
+    '拒绝非 completed 的结束原因：%s',
+    (kind) => {
+      expect(translateNotification(...event('turn/end', { reason: { kind } }))).toMatchObject({
+        kind: 'error',
+        data: { reason: kind ?? 'unknown' },
+      });
+    },
+  );
+
   it('过长的内容截断', () => {
     const translated = translateNotification(
       ...event('tool/call', { callId: 'c', name: 'write', arguments: 'x'.repeat(10_000) }),

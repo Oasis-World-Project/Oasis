@@ -4,6 +4,11 @@ import { describe, expect, it } from 'vitest';
 import { checkRules, createGate } from '../src/service/gate.ts';
 
 describe('关卡的规则检查', () => {
+  it('expects 与 deliver 重复的缺文件提醒只列一次，仍逐条执行不同约束', () => {
+    expect(
+      checkRules([{ path: 'texture.png', size: 1 }], ['scene.glb', { pattern: 'scene.glb' }]),
+    ).toEqual(['缺少文件 out/scene.glb']);
+  });
   it('未支持的工程 ZIP 和遗漏报告不触发无意义重做，确定损坏或数量不可能满足时仍退回', () => {
     const outputs = [{ path: 'project.zip', size: 100 }];
     const unparsed = [

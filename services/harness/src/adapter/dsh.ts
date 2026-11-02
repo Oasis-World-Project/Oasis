@@ -137,7 +137,18 @@ export function translateNotification(method: string, params: unknown): AgentEve
       if (reason?.kind === 'error') {
         return { kind: 'error', data: { message: clip(reason.error?.message ?? '模型调用失败') } };
       }
-      return { kind: 'turn_end', data: { reason: reason?.kind ?? 'unknown' } };
+      if (reason?.kind === 'completed') return { kind: 'turn_end', data: { reason: 'completed' } };
+      const kind = reason?.kind ?? 'unknown';
+      return {
+        kind: 'error',
+        data: {
+          reason: kind,
+          message:
+            kind === 'max-tokens'
+              ? '输出达到 token 上限，运行未完成'
+              : `运行未正常结束：${clip(kind)}`,
+        },
+      };
     }
     default:
       return undefined;
@@ -154,16 +165,19 @@ export function connectAgent(io: {
   sessionId: string;
   onEvent: (event: AgentEvent) => void;
 }) {
-  /** 最近一轮是怎么结束的：只要最后一轮是 error，这次运行就算失败 */
-  let lastError: string | undefined;
+  /** 只有明确收到 completed 才能成功；空闲或 RPC 返回不等于完成。 */
+  let lastError: string | undefined = '运行未收到正常结束通知';
+  let pendingTurns = 0;
   const rpc = createJsonRpcClient({
     input: io.stdout,
     output: io.stdin,
     onNotification: (method, params) => {
       const event = translateNotification(method, params);
       if (!event) return;
-      if (event.kind === 'error') lastError = String(event.data.message);
-      if (event.kind === 'turn_end') lastError = undefined;
+      if (event.kind === 'error' || event.kind === 'turn_end') {
+        pendingTurns = Math.max(0, pendingTurns - 1);
+        lastError = event.kind === 'error' ? String(event.data.message) : undefined;
+      }
       io.onEvent(event);
     },
   });
@@ -176,12 +190,15 @@ export function connectAgent(io: {
     /** 接着之前存下的会话（会话存档要先放回 sessions/） */
     resume: () => rpc.request('session/resume', session, 60_000),
     /** 交一条用户消息：运行中发的会排在当前这一轮之后处理 */
-    prompt: (text: string) =>
-      rpc.request(
+    prompt: (text: string) => {
+      pendingTurns++;
+      lastError = '运行未收到正常结束通知';
+      return rpc.request(
         'session/prompt',
         { ...session, contentBlocks: [{ type: 'text', text }] },
         30_000,
-      ),
+      );
+    },
     /** 等到会话空闲（所有排队的消息都处理完）；返回失败原因，成功时为 undefined */
     async waitIdle(): Promise<string | undefined> {
       try {
@@ -189,7 +206,7 @@ export function connectAgent(io: {
       } catch (err) {
         return lastError ?? (err instanceof Error ? err.message : String(err));
       }
-      return lastError;
+      return pendingTurns > 0 ? '运行未收到正常结束通知' : lastError;
     },
     shutdown: () => rpc.request('shutdown', undefined, 10_000),
     /** 沙箱没了：让还在等的请求立刻失败 */

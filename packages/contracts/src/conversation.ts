@@ -138,6 +138,11 @@ export const MessageBody = z.discriminatedUnion('kind', [
       suggestTask: z.boolean().optional(),
       /** 用户随消息发的文件（存在 canvas，ADR 0007 §3） */
       attachments: z.array(MessageAttachment).optional(),
+      /** 任务原话与补充一经提交即锁定。 */
+      intent: z.enum(['chat', 'task']).optional(),
+      /** 普通聊天回复对应的用户消息。 */
+      replyTo: z.uuid().optional(),
+      stopped: z.boolean().optional(),
     }),
   }),
   z.object({ ...MessageBase, kind: z.literal('questions'), data: QuestionsCard }),
@@ -168,6 +173,11 @@ export const IntakeAnswersBody = z.object({
 
 /** 从某条用户消息开始接需求（点了「当成任务来做」） */
 export const StartIntakeBody = z.object({ messageId: z.uuid() });
+
+/** 不传 content 为重生成；传入则修改本轮用户消息并替换回复。 */
+export const ReplaceReplyBody = z.object({
+  content: z.string().trim().min(1).max(8000).optional(),
+});
 
 /** 修改时带上的一条批注（ADR 0012 §9）：在哪个文件、哪里、什么意见，见哪张标注截图 */
 export const RevisionNote = z.object({
@@ -220,6 +230,7 @@ export type IntakeResult = z.infer<typeof IntakeResult>;
  */
 export const StreamEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('accepted'), userMessage: MessageBody }),
+  z.object({ type: z.literal('activity'), phase: z.enum(['chat', 'intake']) }),
   z.object({ type: z.literal('delta'), text: z.string() }),
   z.object({ type: z.literal('done'), message: MessageBody }),
   z.object({ type: z.literal('error'), code: z.string(), message: z.string() }),

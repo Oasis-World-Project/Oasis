@@ -236,7 +236,7 @@ export function createRevisionService(deps: {
         content: `修改「${previous.title}」：${text}`,
         status: 'complete',
         kind: 'text',
-        data: input.attachments.length ? { attachments: input.attachments } : {},
+        data: { intent: 'task', attachments: input.attachments },
       });
       const card = await repo.insertMessage({
         conversationId: input.conversation.id,

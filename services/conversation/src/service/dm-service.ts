@@ -67,6 +67,64 @@ export function createDmService(deps: {
   logger: Logger;
 }) {
   const { repo } = deps;
+  // 仅管理普通私聊生成，不持有或调用后台任务的控制句柄。
+  const active = new Map<
+    string,
+    { controller: AbortController; ownerId: string; conversationId: string; canStop: boolean }
+  >();
+
+  async function chatTurn(store: ConversationRepo, conversationId: string, messageId: string) {
+    const rows = await store.listMessages(conversationId, 10000);
+    const user = rows.find((m) => m.id === messageId);
+    if (!user || user.authorKind !== 'user' || user.kind !== 'text')
+      throw new HttpError(404, 'message_not_found', '没有这条用户消息');
+    if ((await store.taskSourceIds(conversationId)).includes(user.id))
+      throw new HttpError(409, 'task_message_locked', '任务消息已锁定，不能编辑、删除或重新生成');
+    const nextUser = rows.find((m) => m.authorKind === 'user' && m.seq > user.seq);
+    const replies = rows.filter(
+      (m) =>
+        m.authorKind === 'ai' &&
+        m.kind === 'text' &&
+        (m.data.replyTo === user.id ||
+          (!m.data.replyTo && m.seq > user.seq && (!nextUser || m.seq < nextUser.seq))),
+    );
+    return { user, replies };
+  }
+
+  async function controlled<T>(
+    store: ConversationRepo,
+    user: Message,
+    work: (signal: AbortSignal) => Promise<T>,
+  ) {
+    const controller = new AbortController();
+    active.set(user.id, {
+      controller,
+      ownerId: user.authorId,
+      conversationId: user.conversationId,
+      canStop: user.data.intent !== 'task',
+    });
+    let checking = false;
+    const timer = setInterval(() => {
+      if (checking) return;
+      checking = true;
+      void store
+        .findMessage(user.conversationId, user.id)
+        .then((row) => {
+          if (!row || row.data.stopRequested) controller.abort();
+        })
+        .catch(() => controller.abort())
+        .finally(() => {
+          checking = false;
+        });
+    }, 250);
+    try {
+      return await work(controller.signal);
+    } finally {
+      clearInterval(timer);
+      active.delete(user.id);
+      await store.mergeMessageData(user.id, { replyPending: false });
+    }
+  }
 
   async function owned(conversationId: string, ownerId: string): Promise<Conversation> {
     const conversation = await repo.findOwned(conversationId, ownerId);
@@ -88,6 +146,7 @@ export function createDmService(deps: {
     messages: ChatMessage[];
     requestId: string;
     onDelta: (text: string) => void;
+    signal: AbortSignal;
   }): Promise<string> {
     const response = await deps.modelGateway.stream('POST', '/internal/v1/chat/completions', {
       body: {
@@ -98,16 +157,23 @@ export function createDmService(deps: {
       },
       headers: { [OASIS_HEADERS.payerId]: input.ownerId },
       requestId: input.requestId,
+      signal: input.signal,
     });
     let text = '';
+    let completed = false;
     let streamError: string | undefined;
     const parser = createSseParser((data) => {
-      if (data === '[DONE]') return;
+      if (data === '[DONE]') {
+        completed = true;
+        return;
+      }
       const chunk = JSON.parse(data) as {
         error?: { message?: string };
-        choices?: { delta?: { content?: string } }[];
+        choices?: { delta?: { content?: string }; finish_reason?: string | null }[];
       };
       if (chunk.error) streamError = chunk.error.message ?? '回复中断了';
+      const finish = chunk.choices?.[0]?.finish_reason;
+      if (finish && finish !== 'stop') streamError = `回复未正常结束：${finish}`;
       const delta = chunk.choices?.[0]?.delta?.content;
       if (delta) {
         text += delta;
@@ -119,6 +185,8 @@ export function createDmService(deps: {
       parser.push(decoder.decode(bytes, { stream: true }));
     }
     parser.end();
+    input.signal.throwIfAborted();
+    if (!completed) streamError ??= '回复未收到完成标记';
     if (streamError) throw new HttpError(502, 'stream_interrupted', streamError);
     return text;
   }
@@ -158,22 +226,39 @@ export function createDmService(deps: {
 
   /** 普通聊天：流式推送回复 */
   async function chat(
+    store: ConversationRepo,
     conversation: Conversation,
-    input: { ownerId: string; requestId: string; emit: (event: StreamEvent) => void },
+    input: {
+      ownerId: string;
+      requestId: string;
+      emit: (event: StreamEvent) => void;
+      signal: AbortSignal;
+      user: Message;
+      placeholder?: Message;
+    },
     suggestTask: boolean,
   ) {
-    const placeholder = await repo.insertMessage({
-      conversationId: conversation.id,
-      authorKind: 'ai',
-      authorId: conversation.modelKey ?? 'unknown',
-      content: '',
-      status: 'streaming',
-      data: suggestTask ? { suggestTask } : {},
-    });
+    const placeholder =
+      input.placeholder ??
+      (await store.insertMessage({
+        conversationId: conversation.id,
+        authorKind: 'ai',
+        authorId: conversation.modelKey ?? 'unknown',
+        content: '',
+        status: 'streaming',
+        data: { suggestTask, replyTo: input.user.id },
+      }));
     let partial = '';
     try {
+      input.signal.throwIfAborted();
       const route = await routeFor(conversation.modelKey ?? '', input.requestId);
-      const history = await repo.recentComplete(conversation.id, deps.historyLimit, placeholder.id);
+      input.signal.throwIfAborted();
+      const history = await store.recentComplete(
+        conversation.id,
+        deps.historyLimit,
+        placeholder.id,
+        input.user.seq,
+      );
       const messages: ChatMessage[] = [
         { role: 'system', content: route.systemPrompt },
         ...history.map((m): ChatMessage => ({
@@ -186,25 +271,36 @@ export function createDmService(deps: {
         providerModel: route.providerModel,
         messages,
         requestId: input.requestId,
+        signal: input.signal,
         onDelta: (delta) => {
           partial += delta;
           input.emit({ type: 'delta', text: delta });
         },
       });
-      const done = await repo.finishMessage(placeholder.id, { content: text, status: 'complete' });
-      await repo.touchConversation(conversation.id);
+      input.signal.throwIfAborted();
+      const done = await store.finishMessage(placeholder.id, { content: text, status: 'complete' });
+      await store.touchConversation(conversation.id);
       input.emit({ type: 'done', message: toMessageBody(done) });
     } catch (err) {
+      if (input.signal.aborted) {
+        await store.mergeMessageData(placeholder.id, { stopped: true });
+        const done = await store.finishMessage(placeholder.id, {
+          content: partial,
+          status: 'complete',
+        });
+        input.emit({ type: 'done', message: toMessageBody(done) });
+        return;
+      }
       const { code, message } = friendly(err);
       if (!(err instanceof HttpError) || err.statusCode >= 500) {
         deps.logger.error({ err, conversationId: conversation.id }, 'AI 回复失败');
       }
-      await repo.finishMessage(placeholder.id, {
+      await store.finishMessage(placeholder.id, {
         content: partial,
         status: 'failed',
         error: message,
       });
-      await repo.touchConversation(conversation.id);
+      await store.touchConversation(conversation.id);
       input.emit({ type: 'error', code, message });
     }
   }
@@ -227,7 +323,82 @@ export function createDmService(deps: {
 
     async listMessages(ownerId: string, conversationId: string): Promise<MessageBody[]> {
       await owned(conversationId, ownerId);
-      return (await repo.listMessages(conversationId, 500)).map(toMessageBody);
+      const taskIds = new Set(await repo.taskSourceIds(conversationId));
+      return (await repo.listMessages(conversationId, 500)).map((m) =>
+        toMessageBody(taskIds.has(m.id) ? { ...m, data: { ...m.data, intent: 'task' } } : m),
+      );
+    },
+
+    async deleteMessage(ownerId: string, conversationId: string, messageId: string) {
+      await owned(conversationId, ownerId);
+      await repo.withMessageLock(conversationId, async (store) => {
+        await store.withIntakeLock(conversationId, async (scoped) => {
+          const { user, replies } = await chatTurn(scoped, conversationId, messageId);
+          await scoped.mutateChat(conversationId, [user, ...replies]);
+        });
+        await store.touchConversation(conversationId);
+      });
+    },
+
+    async stopReply(ownerId: string, conversationId: string, messageId: string) {
+      // 本机在途调用先按已鉴权归属中止，避免长流占满连接池后连停止操作也排队。
+      const inflight = active.get(messageId);
+      if (
+        inflight?.ownerId === ownerId &&
+        inflight.conversationId === conversationId &&
+        inflight.canStop
+      )
+        inflight.controller.abort();
+      await owned(conversationId, ownerId);
+      const { user } = await chatTurn(repo, conversationId, messageId);
+      if (!(await repo.requestStop(conversationId, user.id)))
+        throw new HttpError(409, 'task_message_locked', '任务消息已锁定');
+      active.get(user.id)?.controller.abort();
+    },
+
+    async replaceReply(input: {
+      ownerId: string;
+      conversationId: string;
+      messageId: string;
+      content?: string;
+      requestId: string;
+      emit: (event: StreamEvent) => void;
+    }) {
+      const conversation = await owned(input.conversationId, input.ownerId);
+      await repo.withMessageLock(conversation.id, async (store) => {
+        const { user, reply } = await store.withIntakeLock(conversation.id, async (scoped) => {
+          const { user, replies } = await chatTurn(scoped, conversation.id, input.messageId);
+          const reply = replies[0];
+          await scoped.mutateChat(conversation.id, [user, ...replies], {
+            id: user.id,
+            content: input.content ?? user.content,
+            ...(reply ? { replyId: reply.id } : {}),
+          });
+          return { user, reply };
+        });
+        const updated = (await store.mergeMessageData(user.id, {
+          intent: 'chat',
+          stopRequested: false,
+          replyPending: true,
+        }))!;
+        await controlled(store, updated, async (signal) => {
+          input.emit({ type: 'accepted', userMessage: toMessageBody(updated) });
+          input.emit({ type: 'activity', phase: 'chat' });
+          await chat(
+            store,
+            conversation,
+            {
+              ...input,
+              signal,
+              user: updated,
+              ...(reply
+                ? { placeholder: (await store.findMessage(conversation.id, reply.id))! }
+                : {}),
+            },
+            false,
+          );
+        });
+      });
     },
 
     /**
@@ -269,59 +440,100 @@ export function createDmService(deps: {
       emit: (event: StreamEvent) => void;
     }): Promise<void> {
       const conversation = await owned(input.conversationId, input.ownerId);
-      const userMessage = await repo.insertMessage({
-        conversationId: conversation.id,
-        authorKind: 'user',
-        authorId: input.ownerId,
-        content: input.content,
-        status: 'complete',
-        ...(input.attachments.length > 0 ? { data: { attachments: input.attachments } } : {}),
-      });
-      input.emit({ type: 'accepted', userMessage: toMessageBody(userMessage) });
+      await repo.withMessageLock(conversation.id, async (store) => {
+        const userMessage = await store.insertMessage({
+          conversationId: conversation.id,
+          authorKind: 'user',
+          authorId: input.ownerId,
+          content: input.content,
+          status: 'complete',
+          data: {
+            attachments: input.attachments,
+            intent: input.asTask ? 'task' : 'chat',
+            replyPending: true,
+          },
+        });
+        await controlled(store, userMessage, async (signal) => {
+          input.emit({ type: 'accepted', userMessage: toMessageBody(userMessage) });
 
-      const history = await repo.recentComplete(conversation.id, deps.historyLimit, userMessage.id);
-      let suggestTask: boolean;
-      try {
-        const open = await deps.intake.findOpen(conversation.id);
-        if (open) {
-          return emitAll(
-            input.emit,
-            await deps.intake.userSaid({
-              conversation,
-              intake: open,
-              ownerId: input.ownerId,
-              text: input.content,
-              attachments: input.attachments,
-              requestId: input.requestId,
-            }),
+          const history = await store.recentComplete(
+            conversation.id,
+            deps.historyLimit,
+            userMessage.id,
           );
-        }
-        const probability = input.asTask
-          ? 1
-          : await deps.intake.taskProbability({
-              ownerId: input.ownerId,
-              content: input.content,
-              history,
-              requestId: input.requestId,
-            });
-        if (input.asTask || probability >= deps.detect.high) {
-          return emitAll(
-            input.emit,
-            await deps.intake.start({
-              conversation,
-              ownerId: input.ownerId,
-              request: input.content,
-              attachments: input.attachments,
-              history,
-              requestId: input.requestId,
-            }),
-          );
-        }
-        suggestTask = probability >= deps.detect.low;
-      } catch (err) {
-        return emitFailure(conversation, err, input.emit);
-      }
-      await chat(conversation, input, suggestTask);
+          let suggestTask: boolean;
+          try {
+            const open = await deps.intake.findOpen(conversation.id);
+            if (open) {
+              signal.throwIfAborted();
+              active.get(userMessage.id)!.canStop = false;
+              if (
+                !(await store.mergeMessageData(
+                  userMessage.id,
+                  { intent: 'task', intakeId: open.id },
+                  true,
+                ))
+              )
+                throw new DOMException('已停止', 'AbortError');
+              input.emit({ type: 'activity', phase: 'intake' });
+              return emitAll(
+                input.emit,
+                await deps.intake.userSaid({
+                  conversation,
+                  intake: open,
+                  ownerId: input.ownerId,
+                  text: input.content,
+                  attachments: input.attachments,
+                  requestId: input.requestId,
+                }),
+              );
+            }
+            const probability = input.asTask
+              ? 1
+              : await deps.intake.taskProbability({
+                  ownerId: input.ownerId,
+                  content: input.content,
+                  history,
+                  requestId: input.requestId,
+                  signal,
+                });
+            signal.throwIfAborted();
+            if (input.asTask || probability >= deps.detect.high) {
+              active.get(userMessage.id)!.canStop = false;
+              if (!(await store.mergeMessageData(userMessage.id, { intent: 'task' }, true))) {
+                throw new DOMException('已停止', 'AbortError');
+              }
+              input.emit({ type: 'activity', phase: 'intake' });
+              return emitAll(
+                input.emit,
+                await deps.intake.start({
+                  conversation,
+                  ownerId: input.ownerId,
+                  request: input.content,
+                  sourceMessageId: userMessage.id,
+                  attachments: input.attachments,
+                  history,
+                  requestId: input.requestId,
+                }),
+              );
+            }
+            suggestTask = probability >= deps.detect.low;
+          } catch (err) {
+            if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+              await chat(
+                store,
+                conversation,
+                { ...input, signal: AbortSignal.abort(), user: userMessage },
+                false,
+              );
+              return;
+            }
+            return emitFailure(conversation, err, input.emit);
+          }
+          input.emit({ type: 'activity', phase: 'chat' });
+          await chat(store, conversation, { ...input, signal, user: userMessage }, suggestTask);
+        });
+      });
     },
   };
 }

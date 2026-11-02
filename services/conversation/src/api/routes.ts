@@ -3,12 +3,14 @@ import {
   CreateDmBody,
   IntakeAnswersBody,
   RevisionBody,
+  ReplaceReplyBody,
   SendMessageBody,
   StartIntakeBody,
   type IntakeResult,
   type StreamEvent,
 } from '@oasis/contracts/conversation';
-import { parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
+import { HttpError, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Message } from '../repo/conversation-repo.ts';
 import { toMessageBody, type DmService } from '../service/dm-service.ts';
@@ -16,6 +18,39 @@ import type { IntakeService } from '../service/intake-service.ts';
 import type { RevisionService } from '../service/revision-service.ts';
 
 const IdParams = z.object({ id: z.uuid() });
+const MessageParams = IdParams.extend({ messageId: z.uuid() });
+
+async function eventStream(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  work: (emit: (event: StreamEvent) => void) => Promise<void>,
+) {
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+    [OASIS_HEADERS.requestId]: request.id,
+  });
+  const emit = (event: StreamEvent) => {
+    if (!reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  try {
+    await work(emit);
+  } catch (err) {
+    if (!(err instanceof HttpError) || err.statusCode >= 500)
+      request.log.error({ err }, '消息操作失败');
+    emit({
+      type: 'error',
+      code: err instanceof HttpError ? err.code : 'internal_error',
+      message:
+        err instanceof HttpError && err.statusCode < 500 ? err.message : '操作失败了，请重试',
+    });
+  } finally {
+    reply.raw.end();
+  }
+}
 
 const result = (messages: Message[]): IntakeResult => ({ messages: messages.map(toMessageBody) });
 
@@ -48,20 +83,9 @@ export function registerRoutes(
     // 附件在开始推流之前核对，不对就直接报错（这时还能返回普通的错误响应）
     const attachments = await dms.resolveAttachments(ownerId, ids, request.id);
 
-    reply.hijack();
-    reply.raw.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no',
-      [OASIS_HEADERS.requestId]: request.id,
-    });
-    // 用户中途关掉页面也照常把回复生成完并存库，下次打开能看到
-    const emit = (event: StreamEvent) => {
-      if (!reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-    };
-    try {
-      await dms.sendMessage({
+    // 页面关闭仍保存回复；用户显式停止走独立 stop 接口，不触碰任务运行。
+    await eventStream(request, reply, (emit) =>
+      dms.sendMessage({
         ownerId,
         conversationId: id,
         content,
@@ -69,12 +93,35 @@ export function registerRoutes(
         attachments,
         requestId: request.id,
         emit,
-      });
-    } catch (err) {
-      request.log.error({ err }, '发送消息失败');
-      emit({ type: 'error', code: 'internal_error', message: '发送失败了，请重试' });
-    }
-    reply.raw.end();
+      }),
+    );
+  });
+
+  app.delete('/v1/conversations/:id/messages/:messageId', async (request, reply) => {
+    const { id, messageId } = parseWith(MessageParams, request.params);
+    await dms.deleteMessage(requireUserId(request), id, messageId);
+    return reply.code(204).send();
+  });
+  app.post('/v1/conversations/:id/messages/:messageId/stop', async (request, reply) => {
+    const { id, messageId } = parseWith(MessageParams, request.params);
+    await dms.stopReply(requireUserId(request), id, messageId);
+    return reply.code(204).send();
+  });
+  app.post('/v1/conversations/:id/messages/:messageId/reply', async (request, reply) => {
+    const { id, messageId } = parseWith(MessageParams, request.params);
+    const ownerId = requireUserId(request);
+    const { content } = parseWith(ReplaceReplyBody, request.body);
+    await dms.assertOwned(id, ownerId);
+    await eventStream(request, reply, (emit) =>
+      dms.replaceReply({
+        ownerId,
+        conversationId: id,
+        messageId,
+        ...(content === undefined ? {} : { content }),
+        requestId: request.id,
+        emit,
+      }),
+    );
   });
 
   // ---- 在私聊里接任务（ADR 0005）：都返回这次新增的消息 ----

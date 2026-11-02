@@ -1,6 +1,6 @@
 // 私聊的输入框：「＋」里作为任务发布、添加文件；文件也可以粘贴进来（拖进对话区由页面处理）。
 // 有文件还在上传或上传失败时不能发送。
-import { ArrowUp, ListChecks, Paperclip, Plus, X } from 'lucide-react';
+import { ArrowUp, ListChecks, Paperclip, Plus, Square, X } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { PendingFiles } from './Attachments.tsx';
 import type { useAttachments } from './use-attachments.ts';
@@ -84,6 +84,8 @@ export function Composer({
   attachments,
   onSend,
   textOnly = false,
+  onStop,
+  stopping = false,
 }: {
   locked: boolean;
   sending: boolean;
@@ -95,6 +97,8 @@ export function Composer({
   onSend: (content: string, asTask: boolean) => Promise<boolean>;
   /** 群聊基础阶段只发文字，不显示文件或任务入口。 */
   textOnly?: boolean;
+  onStop?: (() => void) | undefined;
+  stopping?: boolean;
 }) {
   const [draft, setDraft] = useState('');
   const [asTask, setAsTask] = useState(false);
@@ -197,12 +201,16 @@ export function Composer({
         </div>
         <button
           type="button"
-          onClick={() => void send()}
-          disabled={!canSend}
-          aria-label={asTask ? '发布任务' : '发送'}
+          onClick={() => (onStop ? onStop() : void send())}
+          disabled={onStop ? stopping : !canSend}
+          aria-label={onStop ? (stopping ? '正在停止' : '停止回复') : asTask ? '发布任务' : '发送'}
           className="flex size-11 shrink-0 items-center justify-center rounded-full border-0 bg-accent text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
         >
-          <ArrowUp size={18} strokeWidth={2.2} aria-hidden="true" />
+          {onStop ? (
+            <Square size={15} fill="currentColor" aria-hidden="true" />
+          ) : (
+            <ArrowUp size={18} strokeWidth={2.2} aria-hidden="true" />
+          )}
         </button>
       </div>
       <p className="m-0 px-1 text-[11.5px] text-ink-muted">

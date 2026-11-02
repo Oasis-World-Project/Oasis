@@ -7,11 +7,15 @@ export async function sendMessage(
   conversationId: string,
   body: { content: string; asTask?: boolean; attachments?: string[] },
   onEvent: (event: StreamEvent) => void,
+  replaceMessageId?: string,
 ): Promise<void> {
-  const response = await apiFetch(`/conversation/v1/conversations/${conversationId}/messages`, {
-    method: 'POST',
-    body,
-  });
+  const response = await apiFetch(
+    `/conversation/v1/conversations/${conversationId}/messages${replaceMessageId ? `/${replaceMessageId}/reply` : ''}`,
+    {
+      method: 'POST',
+      body: replaceMessageId ? (body.content ? { content: body.content } : {}) : body,
+    },
+  );
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
   let pending = '';
   for (;;) {

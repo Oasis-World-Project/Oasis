@@ -85,7 +85,7 @@ export const intakes = pgTable('intakes', {
   round: integer('round').notNull().default(0),
   request: text('request').notNull(),
   context: jsonb('context')
-    .$type<{ role: 'user' | 'assistant'; content: string }[]>()
+    .$type<{ role: 'user' | 'assistant'; content: string; messageId?: string }[]>()
     .notNull()
     .default([]),
   turns: jsonb('turns').$type<IntakeTurn[]>().notNull().default([]),

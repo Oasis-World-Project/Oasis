@@ -77,7 +77,7 @@ export function checkRules(
     if (matched.length === 0) unmet.push(`缺少文件 out/${pattern}`);
     else if (matched.every((f) => f.size === 0)) unmet.push(`文件 out/${pattern} 是空的`);
   }
-  return unmet;
+  return [...new Set(unmet)];
 }
 
 const DecisionAnswers = z.object({

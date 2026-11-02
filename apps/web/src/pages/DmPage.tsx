@@ -3,8 +3,8 @@
 import type { MessageBody } from '@oasis/contracts/conversation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
-import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
-import { ApiError } from '../api/client.ts';
+import { Fragment, useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
+import { ApiError, apiVoid } from '../api/client.ts';
 import { dmsQuery, messagesQuery, walletQuery } from '../api/queries.ts';
 import { sendMessage } from '../api/stream.ts';
 import { useModelMap } from '../api/use-model-map.ts';
@@ -31,6 +31,8 @@ export function DmPage() {
   const [sending, setSending] = useState(false);
   const [streaming, setStreaming] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [replyTo, setReplyTo] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const scrollToBottom = useStickToBottom(scroller, content);
@@ -51,14 +53,19 @@ export function DmPage() {
   }, [locked]);
 
   /** 发出去；返回是否已被收下（没收下时输入框把草稿还回来） */
-  async function send(content: string, asTask: boolean): Promise<boolean> {
+  async function send(
+    content: string,
+    asTask: boolean,
+    replaceMessageId?: string,
+  ): Promise<boolean> {
     if (locked) return false;
     const key = messagesQuery(conversationId).queryKey;
     setSending(true);
     setNotice(null);
     setHint(null);
-    scrollToBottom();
+    if (!replaceMessageId) scrollToBottom();
     let accepted = false;
+    let acceptedMessageId: string | null = null;
     try {
       await sendMessage(
         conversationId,
@@ -66,29 +73,94 @@ export function DmPage() {
         (event) => {
           if (event.type === 'accepted') {
             accepted = true;
-            attachments.clear();
-            queryClient.setQueryData(key, (old: MessageBody[] = []) => [...old, event.userMessage]);
+            acceptedMessageId = event.userMessage.id;
+            if (!replaceMessageId) attachments.clear();
+            setReplyTo(
+              event.userMessage.kind === 'text' && event.userMessage.data.intent === 'task'
+                ? null
+                : event.userMessage.id,
+            );
+            queryClient.setQueryData(key, (old: MessageBody[] = []) => {
+              const index = old.findIndex((m) => m.id === event.userMessage.id);
+              if (index < 0) return [...old, event.userMessage];
+              const nextUser = old.findIndex((m, i) => i > index && m.role === 'user');
+              return old.flatMap((m, i) =>
+                m.id === event.userMessage.id
+                  ? [event.userMessage]
+                  : replaceMessageId &&
+                      m.kind === 'text' &&
+                      m.role === 'assistant' &&
+                      (m.data.replyTo === replaceMessageId ||
+                        (i > index && (nextUser < 0 || i < nextUser)))
+                    ? []
+                    : [m],
+              );
+            });
             setStreaming('');
+          } else if (event.type === 'activity' && event.phase === 'intake') {
+            setReplyTo(null);
+            queryClient.setQueryData(key, (old: MessageBody[] = []) =>
+              old.map((m) =>
+                m.role === 'user' && m.kind === 'text' && m.id === acceptedMessageId
+                  ? { ...m, data: { ...m.data, intent: 'task' as const } }
+                  : m,
+              ),
+            );
           } else if (event.type === 'delta') {
             setStreaming((text) => (text ?? '') + event.text);
           } else if (event.type === 'done') {
-            queryClient.setQueryData(key, (old: MessageBody[] = []) => [...old, event.message]);
+            queryClient.setQueryData(key, (old: MessageBody[] = []) => {
+              const found = old.some((m) => m.id === event.message.id);
+              if (found) return old.map((m) => (m.id === event.message.id ? event.message : m));
+              const replyTo =
+                event.message.kind === 'text' ? event.message.data.replyTo : undefined;
+              const userIndex = old.findIndex((m) => m.id === replyTo);
+              return userIndex < 0
+                ? [...old, event.message]
+                : [...old.slice(0, userIndex + 1), event.message, ...old.slice(userIndex + 1)];
+            });
             setStreaming(null);
-          }
-          // 'error'：失败原因会随失败的那条回复一起显示，这里不重复提示
+          } else if (event.type === 'error') setNotice(event.message);
         },
+        replaceMessageId,
       );
     } catch (err) {
       setNotice(err instanceof ApiError ? err.message : '发送失败了，请重试');
     } finally {
       setStreaming(null);
       setSending(false);
+      setReplyTo(null);
+      setStopping(false);
       void queryClient.invalidateQueries({ queryKey: key });
       void queryClient.invalidateQueries({ queryKey: walletQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: dmsQuery.queryKey });
     }
     return accepted;
   }
+
+  async function stop() {
+    if (!replyTo || stopping) return;
+    setStopping(true);
+    try {
+      await apiVoid(`/conversation/v1/conversations/${conversationId}/messages/${replyTo}/stop`, {
+        method: 'POST',
+      });
+    } catch (err) {
+      setNotice(err instanceof ApiError ? err.message : '停止失败，请重试');
+      setStopping(false);
+    }
+  }
+
+  const controls = {
+    busy: locked,
+    replace: (id: string, text?: string) => send(text ?? '', false, id),
+    remove: (id: string) =>
+      actions.run('delete-message', () =>
+        apiVoid(`/conversation/v1/conversations/${conversationId}/messages/${id}`, {
+          method: 'DELETE',
+        }),
+      ),
+  };
 
   // 文件拖进对话区就加到要发送的文件里
   const hasFiles = (event: DragEvent) => event.dataTransfer.types.includes('Files');
@@ -110,9 +182,16 @@ export function DmPage() {
   };
 
   const list = messages.data ?? [];
+  const streamingBubble =
+    streaming !== null ? (
+      <Bubble
+        message={{ role: 'assistant', content: streaming, status: 'streaming', error: null }}
+        speaker={speaker}
+      />
+    ) : null;
 
   return (
-    <ChatActionsContext.Provider value={actions}>
+    <ChatActionsContext.Provider value={{ ...actions, busy: sending ? 'reply' : actions.busy }}>
       <section
         aria-label="私聊"
         className={`glass relative flex h-[calc(100vh-44px)] min-h-[520px] flex-col rounded-panel ${
@@ -139,25 +218,18 @@ export function DmPage() {
               </p>
             )}
             {list.map((message, index) => (
-              <MessageItem
-                key={message.id}
-                message={message}
-                messages={list}
-                index={index}
-                speaker={speaker}
-              />
+              <Fragment key={message.id}>
+                <MessageItem
+                  message={message}
+                  messages={list}
+                  index={index}
+                  speaker={speaker}
+                  controls={controls}
+                />
+                {message.id === replyTo && streamingBubble}
+              </Fragment>
             ))}
-            {streaming !== null && (
-              <Bubble
-                message={{
-                  role: 'assistant',
-                  content: streaming,
-                  status: 'streaming',
-                  error: null,
-                }}
-                speaker={speaker}
-              />
-            )}
+            {(!replyTo || !list.some((m) => m.id === replyTo)) && streamingBubble}
           </div>
         </div>
 
@@ -174,6 +246,8 @@ export function DmPage() {
             inputRef={input}
             attachments={attachments}
             onSend={send}
+            onStop={sending && replyTo ? () => void stop() : undefined}
+            stopping={stopping}
           />
         </footer>
       </section>
