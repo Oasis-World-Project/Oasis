@@ -2,10 +2,13 @@
 import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { toolJobs, toolRunControls } from './schema.ts';
+import { toolJobs, toolRunControls, toolTaskDeletions } from './schema.ts';
 export type ToolJob = typeof toolJobs.$inferSelect;
 export class ToolAdmissionError extends Error {}
 export interface ToolJobsRepo {
+  markTaskDeleted(taskId: string): Promise<void>;
+  taskDeleted(taskId: string): Promise<boolean>;
+  deletedResults(limit: number): Promise<ToolJob[]>;
   cancelRun(runId: string, payerId: string, taskId?: string): Promise<void>;
   mergeCall(id: string, patch: Record<string, unknown>): Promise<void>;
   insert(
@@ -30,8 +33,54 @@ export interface ToolJobsRepo {
 export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
   const db = drizzle(pool);
   return {
+    async taskDeleted(taskId) {
+      const rows = await db
+        .select()
+        .from(toolTaskDeletions)
+        .where(eq(toolTaskDeletions.taskId, taskId));
+      return rows.length > 0;
+    },
+    async markTaskDeleted(taskId) {
+      await db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${`task:${taskId}`},0))`,
+        );
+        await tx.insert(toolTaskDeletions).values({ taskId }).onConflictDoNothing();
+        await tx
+          .update(toolJobs)
+          .set({
+            call: sql`${toolJobs.call} || '{"taskDeleted":true,"taskFilesCleaned":false}'::jsonb || case when ${toolJobs.status} = 'pending' then '{"cancelRequested":true}'::jsonb else '{}'::jsonb end`,
+          })
+          .where(sql`${toolJobs.call}->'caller'->>'taskId' = ${taskId}`);
+      });
+    },
+    deletedResults: (limit) =>
+      db
+        .select()
+        .from(toolJobs)
+        .where(
+          and(
+            sql`${toolJobs.call}->>'taskDeleted' = 'true'`,
+            or(
+              sql`coalesce(${toolJobs.call}->>'taskFilesCleaned','false') <> 'true'`,
+              and(sql`${toolJobs.status} <> 'pending'`, sql`${toolJobs.phase} <> 'expired'`),
+            ),
+          ),
+        )
+        .limit(limit),
     async insert(job) {
       return db.transaction(async (tx) => {
+        const caller = job.call.caller as { runId?: string; payerId: string; taskId?: string };
+        if (caller.taskId) {
+          await tx.execute(
+            sql`select pg_advisory_xact_lock(hashtextextended(${`task:${caller.taskId}`},0))`,
+          );
+          const deleted = await tx
+            .select()
+            .from(toolTaskDeletions)
+            .where(eq(toolTaskDeletions.taskId, caller.taskId));
+          if (deleted.length) throw new Error('Task deletion fences new tool admission');
+        }
         if (job.tool === '3d.render') {
           await tx.execute(
             sql`select pg_advisory_xact_lock(hashtextextended('oasis-render-admission',0))`,
@@ -46,7 +95,6 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
             throw new ToolAdmissionError('GPU profile busy or awaiting cost reconciliation');
           }
         }
-        const caller = job.call.caller as { runId?: string; payerId: string; taskId?: string };
         if (caller.runId) {
           await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${caller.runId},0))`);
           await tx

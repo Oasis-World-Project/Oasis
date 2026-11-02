@@ -82,6 +82,11 @@ export const toolRunControls = pgTable('tool_run_controls', {
   taskId: uuid('task_id'),
   cancelledAt: at('cancelled_at'),
 });
+/** 任务级删除围栏，与按 run 的取消不同；阻止删除事件之后的迟到提交。 */
+export const toolTaskDeletions = pgTable('tool_task_deletions', {
+  taskId: uuid('task_id').primaryKey(),
+  deletedAt: at('deleted_at').notNull().defaultNow(),
+});
 
 /** 在 LiveAvatar 上建的资源和临时 Key，边建边记（清扫按它拆） */
 export interface AvatarResources {

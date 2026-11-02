@@ -60,6 +60,8 @@ export function createToolService(deps: {
   }
 
   const resultKey = (jobId: string, fileId: string) => `tool-results/${jobId}/${fileId}`;
+  // 历史版本的工具最多 11 个结果；固定上限同时覆盖旧版未落清单的部分写入。
+  const maxResultFiles = 32;
   const inFlight = new Map<string, Promise<void>>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let ticking = false;
@@ -292,8 +294,23 @@ export function createToolService(deps: {
           )
             cost = { costMicro: quoted, source: 'estimate' };
           const files: ToolResult['files'] = [];
+          if (state.outcome.files.length > maxResultFiles) throw new Error('工具结果文件过多');
           for (const [index, file] of state.outcome.files.entries()) {
             const fileId = String(index);
+            const taskId = call.caller.taskId;
+            if (taskId && (await jobs.taskDeleted(taskId))) {
+              file.body?.destroy();
+              continue;
+            }
+            await jobs.mergeCall(id, {
+              resultFileIds: [
+                ...new Set([
+                  ...(Array.isArray(job.call.resultFileIds) ? job.call.resultFileIds : []),
+                  ...state.outcome.files.slice(0, index + 1).map((_, n) => String(n)),
+                ]),
+              ],
+              taskFilesCleaned: false,
+            });
             const source = file.body ?? Readable.from([Buffer.from(file.base64 ?? '', 'base64')]);
             const saved = await deps.store.putStream(
               resultKey(id, fileId),
@@ -364,6 +381,48 @@ export function createToolService(deps: {
       inFlight.delete(id);
     }
   }
+  /** 与归档/结算持有同一作业租约；删除失败保留清单，定时器和事件重投都可重试。 */
+  async function cleanResult(id: string, deleted = false) {
+    const token = randomUUID();
+    if (!(await jobs.claim(id, token, new Date(Date.now() + 180000)))) return;
+    try {
+      const job = await jobs.get(id);
+      if (!job || (!deleted && job.phase !== 'completed')) return;
+      const recorded = job.call.resultFileIds;
+      const ids = Array.isArray(recorded)
+        ? recorded.filter(
+            (value): value is string => typeof value === 'string' && /^\d+$/.test(value),
+          )
+        : Array.from({ length: maxResultFiles }, (_, n) => String(n));
+      for (const file of job.result?.files ?? []) if (file.id !== undefined) ids.push(file.id);
+      for (const fileId of new Set(ids)) {
+        if (!(await jobs.claim(id, token, new Date(Date.now() + 180000))))
+          throw new Error('工具清理租约丢失');
+        await deps.store.delete(resultKey(id, fileId));
+      }
+      if (!(await jobs.claim(id, token, new Date(Date.now() + 180000))))
+        throw new Error('工具清理租约丢失');
+      if (deleted && job.status === 'pending') {
+        if (job.result)
+          await jobs.update(id, {
+            result: { ...job.result, text: '所属任务已删除', data: undefined, files: [] },
+          });
+        await jobs.mergeCall(id, { resultFileIds: [], taskFilesCleaned: true });
+      } else {
+        // 终态后才删除可能含原始资产/截图的回执；计费和供应商句柄继续保留用于审计。
+        await jobs.mergeCall(id, {
+          resultFileIds: [],
+          taskFilesCleaned: true,
+          providerReceipt: null,
+          inputArgs: null,
+          uploads: null,
+        });
+        await jobs.update(id, { result: null, phase: 'expired' });
+      }
+    } finally {
+      await jobs.unlock(id, token);
+    }
+  }
   async function tick() {
     if (ticking) return;
     ticking = true;
@@ -372,11 +431,13 @@ export function createToolService(deps: {
         await processOne(job.id).catch((err: unknown) =>
           deps.logger.warn({ err, jobId: job.id }, '恢复媒体任务失败，保留状态重试'),
         );
-      for (const job of await jobs.expired(new Date(), 10)) {
-        for (const file of job.result?.files ?? [])
-          if (file.id !== undefined) await deps.store.delete(resultKey(job.id, file.id));
-        await jobs.update(job.id, { result: null, phase: 'expired' });
-      }
+      for (const job of [
+        ...(await jobs.deletedResults(10)),
+        ...(await jobs.expired(new Date(), 10)),
+      ])
+        await cleanResult(job.id, job.call.taskDeleted === true).catch((err: unknown) =>
+          deps.logger.warn({ err, jobId: job.id }, '工具结果清理失败，将重试'),
+        );
     } finally {
       ticking = false;
     }
@@ -392,6 +453,8 @@ export function createToolService(deps: {
       (!call.caller.taskId && call.caller.runId && call.caller.runId !== caller.runId)
     )
       throw new HttpError(404, 'tool_job_not_found', '没有这个任务号');
+    if (call.caller.taskId && (await jobs.taskDeleted(call.caller.taskId)))
+      throw new HttpError(410, 'tool_result_deleted', '所属任务已删除');
     return job;
   }
   async function cancelJob(caller: Caller, id: string) {
@@ -403,6 +466,10 @@ export function createToolService(deps: {
   }
 
   return {
+    async purgeTask(taskId: string) {
+      await jobs.markTaskDeleted(taskId);
+      await tick();
+    },
     cancel: cancelJob,
     async cancelRun(caller: Caller, runId: string) {
       await jobs.cancelRun(runId, caller.payerId, caller.taskId);
@@ -552,6 +619,8 @@ export function createToolService(deps: {
       maxCostMicro?: number;
       idempotencyKey?: string;
     }): Promise<ToolResult> {
+      if (input.caller.taskId && (await jobs.taskDeleted(input.caller.taskId)))
+        throw new HttpError(410, 'tool_result_deleted', '所属任务已删除');
       if (input.key === AVATAR_CATALOG_TOOL && deps.avatarCatalog) {
         return deps.avatarCatalog.run(input.args);
       }

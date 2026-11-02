@@ -248,7 +248,29 @@ const repo: CallsRepo = {
 };
 
 const jobRows = new Map<string, ToolJob>();
+const deletedTasks = new Set<string>();
 const jobs: ToolJobsRepo = {
+  taskDeleted: async (taskId) => deletedTasks.has(taskId),
+  async markTaskDeleted(taskId) {
+    deletedTasks.add(taskId);
+    for (const row of jobRows.values())
+      if ((row.call.caller as { taskId?: string }).taskId === taskId) {
+        row.call = {
+          ...row.call,
+          taskDeleted: true,
+          taskFilesCleaned: false,
+          ...(row.status === 'pending' ? { cancelRequested: true } : {}),
+        };
+      }
+  },
+  deletedResults: async (limit) =>
+    [...jobRows.values()]
+      .filter(
+        (row) =>
+          row.call.taskDeleted &&
+          (!row.call.taskFilesCleaned || (row.status !== 'pending' && row.phase !== 'expired')),
+      )
+      .slice(0, limit),
   async cancelRun(runId, payerId, taskId) {
     for (const row of await this.forRun(runId)) {
       const caller = row.call.caller as { payerId: string; taskId?: string };
@@ -273,6 +295,8 @@ const jobs: ToolJobsRepo = {
       (row) => row.status === 'pending' && (row.call.caller as { runId?: string })?.runId === runId,
     ),
   async insert(job) {
+    if (deletedTasks.has((job.call.caller as { taskId?: string }).taskId ?? ''))
+      throw new Error('Task deleted');
     if (job.requestKey && [...jobRows.values()].some((row) => row.requestKey === job.requestKey))
       return false;
     jobRows.set(job.id, {
@@ -335,6 +359,7 @@ const jobs: ToolJobsRepo = {
 const mediaFiles = new Map<string, Buffer>();
 let renderCleanupFails = false;
 let archiveFails = false;
+let resultDeleteFails = false;
 const mediaStore: ObjectStore = {
   put: async (key, body) => {
     mediaFiles.set(key, body);
@@ -342,6 +367,8 @@ const mediaStore: ObjectStore = {
   get: async (key) => mediaFiles.get(key)!,
   read: async (key) => Readable.from([mediaFiles.get(key)!]),
   delete: async (key) => {
+    if (resultDeleteFails && key.startsWith('tool-results/'))
+      throw new Error('Result delete failed');
     if (renderCleanupFails && key.startsWith('jobs/'))
       throw new Error('Temporary staging delete failure');
     mediaFiles.delete(key);
@@ -577,7 +604,86 @@ beforeEach(() => {
   videoCentsPerSecond = '5';
   videoUsdTariff = true;
   jobRows.clear();
+  deletedTasks.clear();
+  resultDeleteFails = false;
   tools = build('tvly-k');
+});
+
+describe('任务删除回收工具结果', () => {
+  async function completed(taskId = TASK) {
+    tools = build('key', true);
+    const id = (
+      await call('audio.music', { prompt: 'A warm instrumental track', instrumental: true }, taskId)
+    ).job!.id;
+    await tools.job({ payerId: PAYER, taskId }, id, AbortSignal.timeout(3000));
+    return id;
+  }
+  it('只删除目标任务的对象，保留账单，重复事件幂等，拒绝读取和迟到提交', async () => {
+    const id = await completed();
+    const other = await completed('00000000-0000-4000-8000-000000000008');
+    const cost = jobRows.get(id)!.cost;
+    // 旧版在第二个文件写入后未保存清单便中断，也必须回收。
+    delete jobRows.get(id)!.call.resultFileIds;
+    mediaFiles.set(`tool-results/${id}/1`, Buffer.from('legacy partial'));
+    await tools.purgeTask(TASK);
+    await tools.purgeTask(TASK);
+    expect([...mediaFiles.keys()].filter((key) => key.startsWith(`tool-results/${id}/`))).toEqual(
+      [],
+    );
+    expect(mediaFiles.has(`tool-results/${other}/0`)).toBe(true);
+    expect(jobRows.get(id)).toMatchObject({
+      status: 'completed',
+      phase: 'expired',
+      result: null,
+      cost,
+    });
+    await expect(
+      tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000)),
+    ).rejects.toMatchObject({ statusCode: 410 });
+    const holds = billingCalls.length;
+    await expect(
+      call('audio.music', { prompt: 'another track', instrumental: true }, TASK),
+    ).rejects.toMatchObject({ statusCode: 410 });
+    expect(billingCalls).toHaveLength(holds);
+  });
+  it('删除失败保留清单，重启后可继续；不抢在途作业租约', async () => {
+    const id = await completed();
+    jobRows.get(id)!.leaseToken = 'other';
+    jobRows.get(id)!.leaseUntil = new Date(Date.now() + 60000);
+    await tools.purgeTask(TASK);
+    expect(mediaFiles.has(`tool-results/${id}/0`)).toBe(true);
+    jobRows.get(id)!.leaseUntil = null;
+    resultDeleteFails = true;
+    await tools.purgeTask(TASK);
+    expect(jobRows.get(id)!.result).not.toBeNull();
+    expect(jobRows.get(id)!.call.resultFileIds).toEqual(['0']);
+    resultDeleteFails = false;
+    tools = build('key', true);
+    await tools.purgeTask(TASK);
+    expect(mediaFiles.has(`tool-results/${id}/0`)).toBe(false);
+  });
+  it('删除与供应商完成竞争时照常结算，停止归档结果', async () => {
+    geometryMode = true;
+    geometryCancelCompleted = true;
+    tools = build('key', true);
+    const id = (await call('3d.generate', { image: geometryImage }, TASK)).job!.id;
+    await tools.purgeTask(TASK);
+    expect(jobRows.get(id)).toMatchObject({ status: 'completed', phase: 'expired', result: null });
+    expect([...mediaFiles.keys()].some((key) => key.startsWith(`tool-results/${id}/`))).toBe(false);
+    expect(billingCalls.filter((call) => call.path === 'settle')).toHaveLength(1);
+  });
+  it('失败作业的部分写入也回收；未知费用记录不冒充已结算', async () => {
+    const id = await completed();
+    const row = jobRows.get(id)!;
+    row.status = 'pending';
+    row.phase = 'uncertain';
+    row.result = null;
+    row.cost = null;
+    await tools.purgeTask(TASK);
+    expect(mediaFiles.has(`tool-results/${id}/0`)).toBe(false);
+    expect(jobRows.get(id)!.status).toBe('pending');
+    expect(jobRows.get(id)!.cost).toBeNull();
+  });
 });
 
 describe('3D 生成复用长任务', () => {

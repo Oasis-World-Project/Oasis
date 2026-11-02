@@ -1,6 +1,6 @@
 // model-gateway：所有模型调用（聊天、Jev 决策、沙箱里的 agent）的唯一出口，调用前冻结额度、调用后按实际花费结算。
 import { fileURLToPath } from 'node:url';
-import { MODEL_GATEWAY_STREAM } from '@oasis/contracts/events';
+import { MODEL_GATEWAY_STREAM, TASK_STREAM, TaskDeleted } from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
   createServiceClient,
@@ -8,6 +8,7 @@ import {
   type ObjectStore,
   ensureStream,
   startOutboxRelay,
+  startEventConsumer,
   startService,
   type Logger,
   type ServiceResource,
@@ -65,6 +66,7 @@ let priceBook: ReturnType<typeof startPriceBook>;
 let provider: ProviderClient;
 let toolStore: ObjectStore;
 let renderStaging: ObjectStore | undefined;
+let toolService: ReturnType<typeof createToolService> | undefined;
 
 await startService({
   name: 'model-gateway',
@@ -108,10 +110,22 @@ await startService({
       connection: eventBus.connection,
       logger: ctx.logger,
     });
+    const taskDeleted = startEventConsumer({
+      connection: eventBus.connection,
+      stream: TASK_STREAM,
+      durable: 'model-gateway-task-deleted',
+      filterSubject: TaskDeleted.type,
+      logger: ctx.logger,
+      handle: async (envelope) => {
+        if (!toolService) throw new Error('model-gateway 还没就绪');
+        await toolService.purgeTask(TaskDeleted.data.parse(envelope.data).taskId);
+      },
+    });
     return {
       postgres,
       eventBus,
       outbox,
+      taskDeleted,
       objects: objects.resource,
       priceBook: priceBook.resource,
       ...(staging ? { renderStaging: staging.resource } : {}),
@@ -193,6 +207,7 @@ await startService({
       },
       logger,
     });
+    toolService = tools;
     tools.start();
     app.addHook('onClose', () => tools.close());
     const chat = createChatService({ ...common, defaultMaxTokens: config.DEFAULT_MAX_TOKENS });
