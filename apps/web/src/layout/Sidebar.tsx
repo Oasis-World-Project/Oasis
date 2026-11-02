@@ -15,7 +15,7 @@ import {
   Search,
   type LucideIcon,
 } from 'lucide-react';
-import { dmsQuery, meQuery, walletQuery } from '../api/queries.ts';
+import { dmsQuery, groupsQuery, meQuery, walletQuery } from '../api/queries.ts';
 import { useModelMap } from '../api/use-model-map.ts';
 import { AiAvatar, PersonAvatar } from '../ui/Avatar.tsx';
 import { formatUsd, usedPercent } from '../ui/format.ts';
@@ -36,7 +36,7 @@ const MAIN_ENTRIES: NavEntry[] = [
 
 const GROUPS_ENTRY: NavEntry = { to: '/groups', label: '群聊', icon: MessagesSquare };
 const DMS_ENTRY: NavEntry = { to: '/dms', label: '私聊', icon: MessageCircle };
-const SIDEBAR_DM_LIMIT = 8;
+const SIDEBAR_CONVERSATION_LIMIT = 8;
 
 const ITEM_BASE =
   'flex h-[42px] items-center rounded-item text-ink no-underline transition-colors hover:bg-glass-strong aria-[current=page]:bg-glass-active aria-[current=page]:font-medium aria-[current=page]:shadow-raised';
@@ -88,20 +88,19 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* 拉群、搜索在第 4 阶段接入 */}
       <div className={open ? 'flex gap-1.5 pb-2.5' : 'flex flex-col items-center gap-2 pb-2'}>
-        <button
-          type="button"
-          disabled
-          title="拉群：即将开放"
+        <Link
+          to="/groups"
+          hash="create-group"
+          title="创建或加入群"
           aria-label={open ? undefined : '拉群'}
-          className={`flex h-[42px] items-center justify-center gap-1.5 rounded-item border-0 bg-solid text-on-solid disabled:cursor-not-allowed disabled:opacity-55 ${
+          className={`flex h-[42px] items-center justify-center gap-1.5 rounded-item border-0 bg-solid text-on-solid no-underline ${
             open ? 'flex-1 text-sm font-medium' : 'w-[44px]'
           }`}
         >
           <Plus size={16} strokeWidth={2.2} aria-hidden="true" />
           {open && '拉群'}
-        </button>
+        </Link>
         {open && (
           <button
             type="button"
@@ -123,11 +122,17 @@ export function Sidebar() {
 
       {!open && <span aria-hidden="true" className="my-2 h-px w-7 bg-hairline" />}
 
-      <div className={open ? 'mt-4 flex flex-col gap-0.5' : 'flex flex-col items-center gap-1'}>
+      <div
+        className={
+          open
+            ? 'mt-4 flex min-h-0 flex-col gap-0.5 overflow-y-auto'
+            : 'flex min-h-0 flex-col items-center gap-1 overflow-y-auto'
+        }
+      >
         <NavLink entry={GROUPS_ENTRY} open={open} />
-        {open && <span className="px-3 pb-2 pl-[43px] text-xs text-ink-muted">还没有群</span>}
+        <ChatList open={open} kind="group" />
         <NavLink entry={DMS_ENTRY} open={open} />
-        <DmList open={open} />
+        <ChatList open={open} kind="dm" />
       </div>
 
       <span className="min-h-3 flex-1" />
@@ -137,23 +142,29 @@ export function Sidebar() {
   );
 }
 
-function DmList({ open }: { open: boolean }) {
-  const { data: dms = [] } = useQuery(dmsQuery);
+function ChatList({ open, kind }: { open: boolean; kind: 'dm' | 'group' }) {
+  const dms = useQuery({ ...dmsQuery, enabled: kind === 'dm' });
+  const groups = useQuery({ ...groupsQuery, enabled: kind === 'group' });
+  const entries: { id: string; title: string; modelKey?: string | null }[] =
+    (kind === 'dm' ? dms.data : groups.data) ?? [];
   const models = useModelMap();
-  if (dms.length === 0) {
+  if (entries.length === 0) {
     return open ? (
-      <span className="px-3 pb-2 pl-[43px] text-xs text-ink-muted">还没有私聊</span>
+      <span className="px-3 pb-2 pl-[43px] text-xs text-ink-muted">
+        {kind === 'dm' ? '还没有私聊' : '还没有群'}
+      </span>
     ) : null;
   }
   return (
     <>
-      {dms.slice(0, SIDEBAR_DM_LIMIT).map((dm) => {
+      {entries.slice(0, SIDEBAR_CONVERSATION_LIMIT).map((dm) => {
         const model = dm.modelKey ? models.get(dm.modelKey) : undefined;
         return (
           <Link
             key={dm.id}
-            to="/dms/$conversationId"
-            params={{ conversationId: dm.id }}
+            {...(kind === 'dm'
+              ? { to: '/dms/$conversationId' as const, params: { conversationId: dm.id } }
+              : { to: '/groups/$groupId' as const, params: { groupId: dm.id } })}
             aria-label={open ? undefined : dm.title}
             title={open ? undefined : dm.title}
             className={

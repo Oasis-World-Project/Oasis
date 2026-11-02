@@ -1,5 +1,6 @@
 // 各页面用到的查询和操作。查询的 key 集中在这里，便于在操作后刷新对应数据。
 import { ModelList } from '@oasis/contracts/agent';
+import { GroupList, GroupSnapshot, GroupInvite, GroupInvitePreview } from '@oasis/contracts/group';
 import { WalletBody } from '@oasis/contracts/billing';
 import { ArtifactBody, ArtifactList, type Annotation } from '@oasis/contracts/canvas';
 import {
@@ -53,6 +54,40 @@ export const dmsQuery = queryOptions({
   queryKey: ['dms'],
   queryFn: async () => (await api('/conversation/v1/dms', ConversationList)).conversations,
 });
+export const groupsQuery = queryOptions({
+  queryKey: ['groups'],
+  queryFn: async () => (await api('/conversation/v1/groups', GroupList)).groups,
+});
+export const createGroup = (title: string, displayName: string) =>
+  api('/conversation/v1/groups', GroupSnapshot, { method: 'POST', body: { title, displayName } });
+export const previewGroupInvite = (token: string) =>
+  api('/conversation/v1/groups/invites/preview', GroupInvitePreview, {
+    method: 'POST',
+    body: { token },
+  });
+export const redeemGroupInvite = (token: string, displayName: string) =>
+  api('/conversation/v1/groups/invites/redeem', GroupSnapshot, {
+    method: 'POST',
+    body: { token, displayName, acceptHistory: true },
+  });
+export const groupSnapshot = (id: string, before?: number) =>
+  api(
+    `/conversation/v1/groups/${id}${before === undefined ? '' : `?before=${before}`}`,
+    GroupSnapshot,
+  );
+export const createGroupInvite = (id: string) =>
+  api(`/conversation/v1/groups/${id}/invites`, GroupInvite, { method: 'POST', body: {} });
+export const revokeGroupInvite = (id: string) =>
+  apiVoid(`/conversation/v1/groups/${id}/invites`, { method: 'DELETE' });
+export const removeGroupMember = (id: string, userId: string) =>
+  apiVoid(`/conversation/v1/groups/${id}/members/${userId}`, { method: 'DELETE' });
+export const deleteGroup = (id: string) =>
+  apiVoid(`/conversation/v1/groups/${id}`, { method: 'DELETE' });
+export const sendGroupMessage = (id: string, content: string, requestId: string) =>
+  api(`/conversation/v1/groups/${id}/messages`, GroupSnapshot, {
+    method: 'POST',
+    body: { content, requestId },
+  });
 
 export const messagesQuery = (conversationId: string) =>
   queryOptions({

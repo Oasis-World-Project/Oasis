@@ -8,10 +8,10 @@ export function createApp(options: { history?: RouterHistory } = {}) {
   const queryClient: QueryClient = new QueryClient({
     queryCache: new QueryCache({
       onError: (error) => {
-        const { pathname } = router.state.location;
+        const { pathname, hash } = router.state.location;
         if (error instanceof ApiError && error.status === 401 && pathname !== '/login') {
           queryClient.clear();
-          void router.navigate({ to: '/login', search: { redirect: pathname } });
+          void router.navigate({ to: '/login', search: { redirect: pathname }, hash });
         }
       },
     }),

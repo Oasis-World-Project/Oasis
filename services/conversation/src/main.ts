@@ -9,6 +9,9 @@ import {
   startService,
 } from '@oasis/service-kit';
 import { registerRoutes } from './api/routes.ts';
+import { registerGroupRoutes } from './api/group-routes.ts';
+import { createGroupRepo } from './repo/group-repo.ts';
+import { createGroupService } from './service/group-service.ts';
 import { conversationEnv } from './config.ts';
 import { createConversationRepo } from './repo/conversation-repo.ts';
 import { createDmService } from './service/dm-service.ts';
@@ -90,5 +93,16 @@ await startService({
       logger,
     });
     registerRoutes(app, dms, intake, revisions);
+    registerGroupRoutes(
+      app,
+      createGroupService(
+        createGroupRepo(resources.postgres.pool, {
+          members: config.GROUP_MAX_MEMBERS,
+          groups: config.GROUP_MAX_PER_USER,
+          messagesPerMinute: config.GROUP_MESSAGES_PER_MINUTE,
+        }),
+      ),
+      config.GROUP_STREAMS_PER_USER,
+    );
   },
 });

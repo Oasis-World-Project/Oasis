@@ -104,6 +104,7 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
   const rows: Message[] = [];
   const intakes: Intake[] = [];
   const conversation: Conversation = {
+    nextMessageSeq: 0,
     id: CONV,
     kind: 'dm',
     ownerId: OWNER,
@@ -122,6 +123,7 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
     findOwned: async (id, owner) => (id === CONV && owner === OWNER ? conversation : undefined),
     insertMessage: async (m) => {
       const row: Message = {
+        seq: rows.length + 1,
         kind: 'text',
         data: {},
         ...m,

@@ -1,6 +1,6 @@
 // 邮箱验证码登录。新邮箱第一次登录即注册，并获赠 $30 额度。
 import { useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useLocation, useNavigate, useSearch } from '@tanstack/react-router';
 import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client.ts';
 import { meQuery, requestCode, verifyCode } from '../api/queries.ts';
@@ -20,6 +20,7 @@ function messageOf(err: unknown): string {
 export function LoginPage() {
   const navigate = useNavigate();
   const { redirect } = useSearch({ from: '/login' });
+  const { hash } = useLocation();
   const queryClient = useQueryClient();
   const [step, setStep] = useState<'email' | 'code'>('email');
   const [email, setEmail] = useState('');
@@ -57,7 +58,7 @@ export function LoginPage() {
     try {
       const { user } = await verifyCode(email.trim(), code);
       queryClient.setQueryData(meQuery.queryKey, user);
-      await navigate({ to: redirect ?? '/' });
+      await navigate({ to: redirect ?? '/', hash });
     } catch (err) {
       setError(messageOf(err));
       setBusy(false);

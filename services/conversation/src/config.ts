@@ -2,6 +2,10 @@ import { postgresAndEventBus } from '@oasis/service-kit';
 import { z } from 'zod';
 
 export const conversationEnv = {
+  GROUP_MAX_MEMBERS: z.coerce.number().int().min(2).max(100).default(50),
+  GROUP_MAX_PER_USER: z.coerce.number().int().positive().max(100).default(20),
+  GROUP_MESSAGES_PER_MINUTE: z.coerce.number().int().positive().max(120).default(30),
+  GROUP_STREAMS_PER_USER: z.coerce.number().int().positive().max(10).default(3),
   ...postgresAndEventBus.env,
   AGENT_URL: z.url(),
   MODEL_GATEWAY_URL: z.url(),

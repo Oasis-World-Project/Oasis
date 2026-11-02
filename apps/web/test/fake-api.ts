@@ -88,6 +88,8 @@ export function installFakeApi(options: {
         return json(200, { models: MODELS });
       case '/conversation/v1/dms':
         return json(200, { conversations: options.dms ?? [] });
+      case '/conversation/v1/groups':
+        return json(200, { groups: [] });
       default:
         return json(404, { error: { code: 'not_found', message: '没有这个接口' } });
     }

@@ -18,6 +18,7 @@ import { CanvasPage } from './pages/CanvasPage.tsx';
 import { DmPage } from './pages/DmPage.tsx';
 import { DmsPage } from './pages/DmsPage.tsx';
 import { GroupsPage } from './pages/GroupsPage.tsx';
+import { GroupPage } from './pages/GroupPage.tsx';
 import { HomePage } from './pages/HomePage.tsx';
 import { LoginPage } from './pages/LoginPage.tsx';
 import { MePage } from './pages/MePage.tsx';
@@ -34,13 +35,19 @@ async function requireSession({
   location,
 }: {
   context: RouterContext;
-  location: { href: string };
+  location: { href: string; hash: string };
 }) {
   try {
     await context.queryClient.ensureQueryData(meQuery);
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
-      throw redirect({ to: '/login', search: { redirect: location.href } });
+      const separator = location.href.indexOf('#');
+      // 邀请留在 fragment，不随登录跳转写进服务端 URL/日志。
+      throw redirect({
+        to: '/login',
+        search: { redirect: separator < 0 ? location.href : location.href.slice(0, separator) },
+        hash: location.hash,
+      });
     }
     throw err;
   }
@@ -105,6 +112,11 @@ const groupsRoute = createRoute({
   path: '/groups',
   component: GroupsPage,
 });
+const groupRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/groups/$groupId',
+  component: GroupPage,
+});
 const dmsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/dms',
@@ -132,6 +144,7 @@ const routeTree = rootRoute.addChildren([
     workflowRoute,
     artifactRoute,
     groupsRoute,
+    groupRoute,
     dmsRoute,
     dmRoute,
     meRoute,

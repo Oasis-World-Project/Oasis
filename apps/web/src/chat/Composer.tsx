@@ -83,6 +83,7 @@ export function Composer({
   inputRef,
   attachments,
   onSend,
+  textOnly = false,
 }: {
   locked: boolean;
   sending: boolean;
@@ -92,6 +93,8 @@ export function Composer({
   attachments: Attachments;
   /** 发出去；返回 false 表示没发成，草稿要还回来 */
   onSend: (content: string, asTask: boolean) => Promise<boolean>;
+  /** 群聊基础阶段只发文字，不显示文件或任务入口。 */
+  textOnly?: boolean;
 }) {
   const [draft, setDraft] = useState('');
   const [asTask, setAsTask] = useState(false);
@@ -117,7 +120,9 @@ export function Composer({
   }
 
   const placeholder = sending
-    ? 'AI 正在回复…'
+    ? textOnly
+      ? '发送中…'
+      : 'AI 正在回复…'
     : (hint ??
       (attachments.files.length > 0
         ? '说说要拿这些文件做什么…'
@@ -133,12 +138,14 @@ export function Composer({
         </p>
       )}
       <div className="flex items-end gap-1 rounded-card bg-glass-active p-2 shadow-edge-strong">
-        <ComposerMenu
-          asTask={asTask}
-          onToggleTask={() => setAsTask((v) => !v)}
-          onPickFiles={() => picker.current?.click()}
-          disabled={locked}
-        />
+        {!textOnly && (
+          <ComposerMenu
+            asTask={asTask}
+            onToggleTask={() => setAsTask((v) => !v)}
+            onPickFiles={() => picker.current?.click()}
+            disabled={locked}
+          />
+        )}
         <input
           ref={picker}
           type="file"
@@ -175,6 +182,7 @@ export function Composer({
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKeyDown}
             onPaste={(event) => {
+              if (textOnly) return;
               if (event.clipboardData.files.length > 0) {
                 event.preventDefault();
                 attachments.add(event.clipboardData.files);
@@ -202,7 +210,9 @@ export function Composer({
           ? '文件传完就能发送'
           : attachments.failed
             ? '有文件没传上去，移除后再发送'
-            : 'Enter 发送 · Shift + Enter 换行 · 文件可以拖进来或粘贴'}
+            : textOnly
+              ? 'Enter 发送 · Shift + Enter 换行'
+              : 'Enter 发送 · Shift + Enter 换行 · 文件可以拖进来或粘贴'}
       </p>
     </>
   );

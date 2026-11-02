@@ -83,7 +83,13 @@ export function createConversationRepo(pool: pg.Pool): ConversationRepo {
       const [row] = await db
         .select()
         .from(conversations)
-        .where(and(eq(conversations.id, id), eq(conversations.ownerId, ownerId)));
+        .where(
+          and(
+            eq(conversations.id, id),
+            eq(conversations.ownerId, ownerId),
+            eq(conversations.kind, 'dm'),
+          ),
+        );
       return row;
     },
 
