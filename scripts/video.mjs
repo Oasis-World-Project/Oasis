@@ -24,7 +24,7 @@ assert(
   output.startsWith(path.join(root, 'out') + path.sep) && !existsSync(output),
   '选择 out/ 下新的验收目录',
 );
-const image = process.env.SANDBOX_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.2';
+const image = process.env.SANDBOX_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.5';
 assert(/^oasis\/[a-z0-9._-]+:[\w.-]+$/.test(image));
 const docker = createDockerApi(defaultDockerSocket());
 let id;

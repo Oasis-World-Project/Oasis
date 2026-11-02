@@ -69,7 +69,7 @@ interface MediaInspectionLimits {
   files: number;
   timeoutMs: number;
   durationMs: number;
-  maxBytes: number;
+  maxBytes?: number;
 }
 export async function inspectSandboxMedia(
   docker: DockerApi,
@@ -137,7 +137,7 @@ export function createDockerExecutor(deps: {
   pidsLimit: number;
   /** 沙箱里的工作目录，启动前确保 files 里的目录都在它下面 */
   workdir: string;
-  mediaCheck?: { files: number; timeoutMs: number; durationMs: number; maxBytes: number };
+  mediaCheck?: { files: number; timeoutMs: number; durationMs: number; maxBytes?: number };
 }): Executor {
   const { docker } = deps;
   return {

@@ -66,13 +66,14 @@ const transcriptText = (speeches: Speech[]) =>
 
 /** 节点能用的外部工具：都通过沙箱里的 oasis-tool 命令调用，用法让 AI 自己查 */
 function toolsPart(tools: string[]): string[] {
-  if (tools.length === 0) return [];
   return [
     [
       '【可以用的工具】',
-      `- 这次分给你的：${tools.join('、')}。`,
+      tools.length
+        ? `- 规划建议使用：${tools.join('、')}；这不是可用工具白名单。`
+        : '- 根据任务需要自行选择可用工具。',
       '- 都用 oasis-tool 命令调用。先运行 `oasis-tool list` 看每个工具的用法，再按用法调用，例如 `oasis-tool image.generate --prompt "……" --out out/图.png`。',
-      '- 工具按次收费，记在任务花费里：想清楚再调，不要反复试。',
+      '- 工具费用记在任务花费里；可以进行完成交付所需的验证与修复，避免没有进展的重复调用。',
       '- 要等很久的工具（视频）命令会自己等；没等到时按它的提示运行 `oasis-tool wait <任务号>`。',
     ].join('\n'),
   ];
@@ -83,6 +84,7 @@ export function workPrompt(c: NodeContext): string {
   return [
     `你是 Oasis 工作流里的一个节点，负责「${c.title}」。`,
     ...context(c, '你要做的事'),
+    '这是持续子任务。使用原生 goal 跟踪实际交付；可以自行规划、拆分、使用子代理和选择可用模型。目标和必需文件真正完成后才 update_goal complete；遇到可解决的问题继续处理。',
     ...toolsPart(c.tools),
     [
       '【规则】',
@@ -106,7 +108,7 @@ export function speechPrompt(input: {
 }): string {
   const ask = [
     `这是第 ${input.round} 轮（共 ${input.rounds} 轮）。`,
-    '直接在你最后一条消息里说出你的发言（300 字以内），不用写文件，也不用调工具，除非你需要看 in/ 里的材料。',
+    '直接在你最后一条消息里说出你的发言，不用写文件，也不用调工具，除非你需要看 in/ 里的材料。',
   ].join('');
   if (input.round === 1) {
     return [
@@ -138,11 +140,11 @@ export function summaryPrompt(input: { context: NodeContext; transcript: Speech[
 }
 
 /** 停止后继续：接着原会话做完；停下期间用户追加的要求一起带上 */
-export function resumePrompt(newNotes: string[]): string {
+export function resumePrompt(newNotes: string[], interrupted = false): string {
   const notes = newNotes.length
     ? `\n\n【用户新追加的要求】\n${newNotes.map((n) => `- ${n}`).join('\n')}`
     : '';
-  return `你刚才被用户停下了。请接着把没做完的做完，已经做好的不用重做；成果照样写到 out/。${notes}`;
+  return `${interrupted ? '上次执行中断了，已有会话和产物已恢复。先核对实际状态，避免重复已完成的操作。' : '你刚才被用户停下了。'}请接着把没做完的做完，已经做好的不用重做；成果照样写到 out/。${notes}`;
 }
 
 /** 关卡没过：接着原会话改一次 */

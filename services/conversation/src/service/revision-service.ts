@@ -10,7 +10,7 @@ import type {
   RevisionNote,
   RevisionParameter,
 } from '@oasis/contracts/conversation';
-import { MAX_MATERIALS, TaskBody, type TaskSheet } from '@oasis/contracts/task';
+import { TaskBody, type TaskSheet } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Conversation, ConversationRepo, Message } from '../repo/conversation-repo.ts';
@@ -196,15 +196,8 @@ export function createRevisionService(deps: {
             })
           ).uploads.map((u) => ({ uploadId: u.id, name: u.name, size: u.size }))
         : [];
-      const room = MAX_MATERIALS - kept.length - input.attachments.length;
-      if (room < 1)
-        throw new HttpError(
-          422,
-          'too_many_materials',
-          `素材太多了：上一版已有 ${kept.length} 个，最多 ${MAX_MATERIALS} 个，请少附几个文件`,
-        );
       const revision = await deps.canvas.json('POST', '/internal/revisions/materials', {
-        body: { ownerId, taskId: input.taskId, room },
+        body: { ownerId, taskId: input.taskId },
         schema: RevisionMaterialsResult,
         requestId,
       });

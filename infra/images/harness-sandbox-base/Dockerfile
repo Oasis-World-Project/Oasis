@@ -4,7 +4,7 @@
 # 构建（在仓库根目录）：pnpm sandbox:build
 ARG NODE_IMAGE=node:24.21.0-trixie-slim
 FROM ${NODE_IMAGE}
-ARG DSH_VERSION=0.2.1-rc.2
+ARG DSH_VERSION=0.2.1-rc.5
 # 通用文档/数据工具（ADR 0008 G1）；预装包在独立 venv 内，运行时仍可经出口代理安装任务需要的包。
 ARG APT_RETRIES=3
 RUN apt-get -o Acquire::Retries=${APT_RETRIES} update \
@@ -64,5 +64,6 @@ RUN printf '#!/bin/sh\nexec node --no-warnings /opt/oasis/oasis-tool.ts "$@"\n' 
  && printf '#!/bin/sh\nexec python3 /opt/oasis/media.py "$@"\n' > /usr/local/bin/oasis-media \
  && chmod 755 /usr/local/bin/oasis-tool /usr/local/bin/oasis-media
 USER node
+COPY --chown=node:node services/harness/src/adapter/profile/node-goal.mjs /opt/oasis/node-goal.mjs
 WORKDIR /workspace
 ENTRYPOINT ["dsh", "--profile", "oasis"]

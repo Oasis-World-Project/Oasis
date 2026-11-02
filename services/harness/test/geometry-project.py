@@ -191,17 +191,17 @@ script.write_text("\n".join([
     "import bpy, json",
     "s = bpy.context.scene",
     "bpy.ops.mesh.primitive_cube_add()",
-    "s.render.engine = 'CYCLES'; s.cycles.device = 'CPU'; s.cycles.samples = 256; s.cycles.use_denoising = False",
-    "s.render.resolution_x, s.render.resolution_y, s.render.resolution_percentage = 1920, 1080, 100",
+    "s.render.engine = 'CYCLES'; s.cycles.device = 'CPU'; s.cycles.samples = 1; s.cycles.use_denoising = False",
+    "s.render.resolution_x, s.render.resolution_y, s.render.resolution_percentage = 800, 450, 100",
     "s.render.filepath = " + repr(str(root / "draft.png")),
     "bpy.ops.render.render(write_still=True)",
-    "assert (s.render.resolution_percentage, s.cycles.samples) == (100, 256)",
+    "assert (s.render.resolution_percentage, s.cycles.samples) == (100, 1)",
 ]), "utf8")
 run("blender", "--background", "--factory-startup", "--disable-autoexec", "--python-exit-code", "1", "--python", str(script))
 width, height = Image.open(root / "draft.png").size
-assert width * height <= 640 * 480 and width / height > 1.7, (width, height)
+assert (width, height) == (800, 450), (width, height)
 (root / "draft.png").unlink()
-passed("sandbox CPU still render is capped to a 640x480 draft; scene settings restored")
+passed("sandbox CPU render preserves the explicitly requested resolution and sampling")
 passed("no cloud GPU was requested or claimed")
 (root / "checks.json").write_text(json.dumps({"checks": checks, "paidCalls": 0, "cloudGpu": False,
     "blender": run("blender", "--version").splitlines()[0]}, ensure_ascii=False, indent=2), "utf8")

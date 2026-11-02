@@ -15,7 +15,11 @@ import {
   type RunTextsBody,
   type StartRunBody,
 } from '@oasis/contracts/harness';
-import { ComputeHold, RunKeyCreated } from '@oasis/contracts/model-gateway';
+import {
+  ExecutionModels,
+  RunKeyCreated,
+  type ModelCapabilities,
+} from '@oasis/contracts/model-gateway';
 import {
   contentTypeOf,
   createEnvelope,
@@ -29,9 +33,11 @@ import {
   isSessionLock,
   SANDBOX_PATHS,
   sandboxEnv,
+  runtimeFiles,
   type SandboxPackages,
   type AgentConnection,
 } from '../adapter/dsh.ts';
+import { startRunLease } from './run-lease.ts';
 import type { Executor, Sandbox } from '../executor/executor.ts';
 import {
   archiveFile,
@@ -101,6 +107,7 @@ function toRunBody(run: Run): RunBody {
     nodeId: run.nodeId,
     model: run.model,
     status: run.status,
+    resumable: Boolean(run.sessionKey),
     error: run.error,
     outputs: run.outputs,
     summary: run.summary,
@@ -136,17 +143,21 @@ export function createRunService(deps: {
   /** 取用户上传的素材（ADR 0007 §4） */
   canvas: ServiceClient;
   /** 一次运行的素材加起来最多多大 */
-  materialsMaxBytes: number;
+  materialsMaxBytes?: number;
   transferTimeoutMs?: number;
   modelBaseUrl: string;
   packages: SandboxPackages;
   batchEnv?: Record<string, string>;
   inspectionLimits?: InspectionLimits;
   maxConcurrent: number;
-  timeoutMs: number;
+  /** 显式验收超时；生产调用不设置。 */
+  timeoutMs?: number;
+  leaseMs?: number;
+  goalRoundWindow?: number;
+  keyTtlSeconds?: number;
   /** 沙箱的 CPU 核数（算力按 时长 × 核数 计费） */
   cores: number;
-  outputMaxBytes: number;
+  outputMaxBytes?: number;
   serviceName: string;
   logger: Logger;
 }) {
@@ -161,7 +172,7 @@ export function createRunService(deps: {
     data: Record<string, unknown>,
   ) {
     const seq = run.nextSeq++;
-    if (kind === 'assistant_text') run.lastText = String(data.text);
+    if (kind === 'assistant_text' && !data.parentSessionId) run.lastText = String(data.text);
     run.writes = run.writes
       .then(() => repo.appendEvents(runId, [{ seq, kind, data }]))
       .catch((err: unknown) => logger.error({ err, runId, seq }, '写运行事件失败'));
@@ -322,7 +333,8 @@ export function createRunService(deps: {
       const info = metadata.get(m.uploadId);
       if (!info) throw new Error('素材元数据缺失');
       total += info.size;
-      if (total > deps.materialsMaxBytes) throw new StopRun('failed', '素材加起来超过运行上限');
+      if (deps.materialsMaxBytes !== undefined && total > deps.materialsMaxBytes)
+        throw new StopRun('failed', '素材加起来超过运行上限');
       return {
         path: m.path,
         size: info.size,
@@ -345,21 +357,27 @@ export function createRunService(deps: {
     inputs: { path: string; content: Buffer }[],
     materials: Material[],
     run: LiveRun,
+    goal: boolean,
+    models: ModelCapabilities[],
   ) {
     const { id } = row;
     const release = await gate.acquire();
     let sandbox: Sandbox | undefined;
     let keyId: string | undefined;
     // 算力计费：开沙箱前冻结，销毁后按沙箱实际存在的时长结算（单价为 0 时没有 callId）
-    let computeCallId: string | null = null;
-    let sandboxSince: number | undefined;
-    const timer = setTimeout(
-      () =>
-        run.abort.abort(
-          new StopRun('failed', `运行超时（${Math.round(deps.timeoutMs / 60_000)} 分钟）`),
-        ),
-      deps.timeoutMs,
-    );
+    let lease: Awaited<ReturnType<typeof startRunLease>> | undefined;
+    const timer = deps.timeoutMs
+      ? setTimeout(
+          () =>
+            run.abort.abort(
+              new StopRun(
+                'failed',
+                `运行超时（${Math.round((deps.timeoutMs ?? 0) / 60_000)} 分钟）`,
+              ),
+            ),
+          deps.timeoutMs,
+        )
+      : undefined;
     const outcome: Omit<RunOutcome, 'finishedAt'> = {
       status: 'failed',
       error: null,
@@ -383,34 +401,41 @@ export function createRunService(deps: {
           payerId: row.payerId,
           ...(row.taskId ? { taskId: row.taskId } : {}),
           ...(row.nodeId ? { nodeId: row.nodeId } : {}),
-          ttlSeconds: Math.ceil(deps.timeoutMs / 1000) + 600,
+          ttlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
         },
         requestId: id,
         schema: RunKeyCreated,
       });
       keyId = key.keyId;
       await repo.update(id, { runKeyId: keyId });
-      ({ callId: computeCallId } = await deps.modelGateway.json('POST', '/internal/v1/compute', {
-        body: {
-          runId: id,
-          payerId: row.payerId,
-          taskId: row.taskId,
-          nodeId: row.nodeId,
-          cores: deps.cores,
-          maxMs: deps.timeoutMs,
-        },
-        requestId: id,
-        schema: ComputeHold,
-      }));
+      lease = await startRunLease({
+        client: deps.modelGateway,
+        runId: id,
+        payerId: row.payerId,
+        taskId: row.taskId,
+        nodeId: row.nodeId,
+        keyId,
+        keyTtlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
+        cores: deps.cores,
+        windowMs: deps.leaseMs ?? 5 * 60_000,
+        onFailure: (error) =>
+          run.abort.abort(new StopRun('stopped', '运行租约续期失败，已停止：' + String(error))),
+      });
       stopped();
 
       const restored = await continuation(row);
       const files = [
+        ...runtimeFiles({
+          models,
+          sessionId: row.sessionId ?? id,
+          objective: row.prompt,
+          goal,
+          goalRoundWindow: deps.goalRoundWindow ?? 256,
+        }),
         ...inputs.map((f) => ({ path: `in/${f.path}`, content: f.content })),
         // 保证 out/ 目录存在且属于沙箱用户
         { path: `out/${KEEP_FILE}`, content: Buffer.alloc(0) },
       ];
-      sandboxSince = Date.now();
       sandbox = await executor.start({
         runId: id,
         env: {
@@ -438,7 +463,7 @@ export function createRunService(deps: {
         'abort',
         () => {
           const reason: unknown = run.abort.signal.reason;
-          if (reason instanceof StopRun && reason.status === 'stopped') {
+          if (reason instanceof StopRun && reason.status !== 'cancelled') {
             // 停止：先把已经做出来的东西存下来，再销毁沙箱
             run.saved = box
               .pause()
@@ -464,6 +489,7 @@ export function createRunService(deps: {
         stdin: sandbox.stdin,
         stdout: sandbox.stdout,
         sessionId: row.sessionId ?? id,
+        goal,
         onEvent: (event) => record(id, run, event.kind, event.data),
       });
       run.abort.signal.addEventListener('abort', () => agent.abort(new Error('运行已中止')), {
@@ -507,6 +533,13 @@ export function createRunService(deps: {
         outcome.error = err instanceof Error ? err.message : String(err);
       }
     } finally {
+      if (sandbox && outcome.status === 'failed' && !run.abort.signal.aborted) {
+        await sandbox
+          .pause()
+          .then(() => save(sandbox!, id))
+          .then((saved) => Object.assign(outcome, savedOutcome(saved)))
+          .catch((err: unknown) => logger.warn({ err, runId: id }, '失败时保存进度失败'));
+      }
       clearTimeout(timer);
       run.closing = true;
       outcome.summary = run.lastText ?? null;
@@ -532,15 +565,9 @@ export function createRunService(deps: {
           .json('POST', `/internal/run-keys/${keyId}/revoke`, { body: {}, requestId: id })
           .catch((err: unknown) => logger.warn({ err, runId: id }, '作废临时 Key 失败，等它过期'));
       }
-      if (computeCallId) {
-        const elapsedMs = sandboxSince === undefined ? 0 : Date.now() - sandboxSince;
-        await deps.modelGateway
-          .json('POST', `/internal/v1/compute/${computeCallId}/settle`, {
-            body: { cores: deps.cores, elapsedMs },
-            requestId: id,
-          })
-          .catch((err: unknown) => logger.warn({ err, runId: id }, '算力结算失败，冻结将过期退回'));
-      }
+      await lease
+        ?.close()
+        .catch((err: unknown) => logger.warn({ err, runId: id }, '算力租约结算失败'));
       release();
     }
     await run.writes;
@@ -557,6 +584,7 @@ export function createRunService(deps: {
       taskId: row.taskId,
       nodeId: row.nodeId,
       status,
+      resumable: Boolean(outcome.sessionKey),
       error: outcome.error,
       outputs: outcome.outputs,
       summary: outcome.summary,
@@ -613,6 +641,26 @@ export function createRunService(deps: {
     async start(
       body: StartRunBody & Required<Pick<StartRunBody, 'inputs' | 'inputsFrom'>>,
     ): Promise<RunBody> {
+      if (body.runId) {
+        const existing = await repo.get(body.runId);
+        if (existing) {
+          if (existing.payerId !== body.payerId || existing.model !== body.model)
+            throw new HttpError(409, 'run_id_conflict', '这个运行 ID 已经被别的运行用了');
+          return toRunBody(existing);
+        }
+      }
+      // 目录未就绪属于准入等待，不登记失败运行，也不消耗节点重试次数。
+      const { models } = await deps.modelGateway.json('GET', '/internal/v1/models/execution', {
+        schema: ExecutionModels,
+      });
+      if (!models.length)
+        throw new HttpError(503, 'model_catalog_unavailable', '模型能力目录尚未就绪，请稍后重交');
+      if (!models.some((model) => model.id === body.model))
+        throw new HttpError(
+          422,
+          'model_unavailable',
+          '模型执行能力缺失或当前不可用：' + body.model,
+        );
       // 只能拿同一付费人、已成功的运行的产出当输入
       for (const ref of body.inputsFrom) {
         const upstream = await repo.get(ref.runId);
@@ -673,8 +721,8 @@ export function createRunService(deps: {
         path: f.path,
         content: Buffer.from(f.contentBase64, 'base64'),
       }));
-      run.done = execute(row, inputs, body.materials ?? [], run).catch((err: unknown) =>
-        logger.error({ err, runId: id }, '运行收尾失败'),
+      run.done = execute(row, inputs, body.materials ?? [], run, body.goal ?? false, models).catch(
+        (err: unknown) => logger.error({ err, runId: id }, '运行收尾失败'),
       );
       return toRunBody(row);
     },

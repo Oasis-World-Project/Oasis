@@ -21,7 +21,7 @@ import type {
   UpdateNodeBody,
 } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
-import type { Node, NodeRun, Snapshot, Task, TaskStore, Writer } from '../repo/task-store.ts';
+import type { Node, NodeRun, Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
 import { noEffects, type Effects, type Submission } from './effects.ts';
 import type { Gate } from './gate.ts';
 import {
@@ -164,17 +164,11 @@ export function createWorkflowService(deps: {
   harness: ServiceClient;
   gate: Gate;
   maxParallel: number;
-  /** 失败后自动重做几次（ADR 0004：2 次，即最多跑 3 次） */
-  maxRetries: number;
-  /** 关卡没过时最多改几次（ADR 0004：1 次） */
-  maxReworks: number;
-  /** 花费超过预估的几倍时暂停问用户（ADR 0004：3） */
-  budgetMultiplier: number;
   /** 规划员要查模型目录 */
   agent: ServiceClient;
   /** 规划员要排除在当前网络用不了的模型 */
   modelGateway: ServiceClient;
-  planning: Omit<PlanningConfig, 'budgetMultiplier'>;
+  planning: PlanningConfig;
   logger: Logger;
 }) {
   const { store, harness, gate, logger } = deps;
@@ -184,7 +178,7 @@ export function createWorkflowService(deps: {
     agent: deps.agent,
     modelGateway: deps.modelGateway,
     engine: { transact, schedule },
-    config: { ...deps.planning, budgetMultiplier: deps.budgetMultiplier },
+    config: deps.planning,
     logger,
   });
 
@@ -196,6 +190,7 @@ export function createWorkflowService(deps: {
     for (const request of step.requests) {
       const runId = randomUUID();
       const record = {
+        ...(request.goal ? { goal: true } : {}),
         model: request.model,
         prompt: request.prompt,
         inputsFrom: request.inputsFrom,
@@ -254,7 +249,12 @@ export function createWorkflowService(deps: {
       await w.setNode(node.id, { attempts: 0, reworks: 0, warning: null });
     }
     await w.setNode(node.id, { attempts: node.attempts + 1 });
-    await openStep(snapshot, w, node, firstStep(snapshot, node), fx);
+    const previous = node.currentRunId ? await store.findRun(node.currentRunId) : undefined;
+    const step =
+      previous?.status === 'failed' && previous.meta.resumable
+        ? retryStep(snapshot, node, previous)
+        : firstStep(snapshot, node);
+    await openStep(snapshot, w, node, step, fx);
   }
 
   /** 找出能跑的节点并开跑；需要时改任务状态 */
@@ -367,9 +367,9 @@ export function createWorkflowService(deps: {
       throw new HttpError(409, 'workflow_invalid', `工作流有错误：${problems.join('；')}`);
     }
     const { task } = snapshot;
-    // 用户明确要接着跑：花费已经到上限的，上限再加一份
+    // 用户明确选择超出预算后继续：解除本次任务预算，不从估价制造新上限。
     if (task.budgetLimitMicro !== null && task.spentMicro >= task.budgetLimitMicro) {
-      await w.setTask({ budgetLimitMicro: nextLimit(task) });
+      await w.setTask({ budgetLimitMicro: null });
     }
     await w.setTask({ status: 'running', attention: null, finishedAt: null });
     for (const node of snapshot.nodes) {
@@ -381,10 +381,6 @@ export function createWorkflowService(deps: {
     }
     await schedule(snapshot, w, fx);
   }
-
-  /** 花费上限再加一份：当前花费 + 预估 × 倍数 */
-  const nextLimit = (task: Task) =>
-    task.spentMicro + (task.estimateMicro ?? 0) * deps.budgetMultiplier;
 
   // ---------------------------------------------------------------- 事务外的副作用
 
@@ -526,22 +522,10 @@ export function createWorkflowService(deps: {
               }
             : {}),
         });
-      } else if (current.reworks < deps.maxReworks) {
-        logger.info({ nodeId, unmet }, '关卡没过，退回修改');
+      } else {
+        logger.info({ nodeId, unmet }, '关卡没过，接着原会话修复');
         await w.setNode(nodeId, { reworks: current.reworks + 1 });
         await openStep(fresh, w, current, reworkStep(current, unmet), fx);
-      } else {
-        await w.setNode(nodeId, {
-          status: 'succeeded',
-          finishedAt: new Date(),
-          warning: [
-            current.warning,
-            `交付前检查没完全通过：${unmet.join('；')}`,
-            ...(unchecked?.length ? [`未完成的检查：${unchecked.join('；')}`] : []),
-          ]
-            .filter(Boolean)
-            .join('；'),
-        });
       }
       await schedule(fresh, w, fx);
     });
@@ -568,12 +552,6 @@ export function createWorkflowService(deps: {
       await openStep(snapshot, w, node, retryStep(snapshot, node, run), fx);
       return;
     }
-    if (node.attempts <= deps.maxRetries) {
-      logger.info({ nodeId: node.id, attempt: node.attempts, error }, '节点失败，自动重做');
-      await w.setNode(node.id, { attempts: node.attempts + 1 });
-      await openStep(snapshot, w, node, retryStep(snapshot, node, run), fx);
-      return;
-    }
     // 讨论里其他人还在说：一起停掉
     await endRuns(w, openRuns(snapshot, node.id), 'cancel', fx);
     await w.setNode(node.id, { status: 'failed', finishedAt: new Date() });
@@ -582,7 +560,7 @@ export function createWorkflowService(deps: {
       attention: {
         reason: 'node_failed',
         nodeId: node.id,
-        message: `「${node.title}」试了 ${node.attempts} 次都没成功`,
+        message: `「${node.title}」未完成：${error ?? '执行器未能完成任务'}`,
       },
     });
   }
@@ -628,7 +606,10 @@ export function createWorkflowService(deps: {
 
   /** 一次运行结束（来自 harness 的事件或对账）。同一个运行重复到达时只处理一次。 */
   async function onRunFinished(
-    result: Pick<RunFinishedData, 'runId' | 'status' | 'error' | 'outputs' | 'summary'>,
+    result: Pick<
+      RunFinishedData,
+      'runId' | 'status' | 'error' | 'outputs' | 'summary' | 'resumable'
+    >,
   ): Promise<void> {
     const found = await store.findRun(result.runId);
     if (!found) return planning.onFinished(result); // 不是节点的运行：可能是规划员
@@ -637,6 +618,7 @@ export function createWorkflowService(deps: {
       if (!run) return; // 已经处理过
       await w.setRun(run.id, {
         status: result.status,
+        meta: { ...run.meta, resumable: result.resumable ?? false },
         summary: result.summary,
         error: result.error,
         outputs: result.outputs,
@@ -663,7 +645,14 @@ export function createWorkflowService(deps: {
           ...(result.status === 'cancelled' ? { finishedAt: new Date() } : {}),
         });
       } else if (result.status === 'failed') {
-        await onFailure(snapshot, w, node, run, result.error, fx);
+        await onFailure(
+          snapshot,
+          w,
+          node,
+          { ...run, meta: { ...run.meta, resumable: result.resumable ?? false } },
+          result.error,
+          fx,
+        );
       } else if (run.purpose === 'speech') {
         await onSpeech(snapshot, w, node, run, result.summary, fx);
       } else {
@@ -772,6 +761,7 @@ export function createWorkflowService(deps: {
         error: remote.error,
         outputs: remote.outputs,
         summary: remote.summary,
+        resumable: remote.resumable,
       });
     } else if (!remote) {
       const snapshot = await store.get(run.taskId);
@@ -823,7 +813,7 @@ export function createWorkflowService(deps: {
           attention: {
             reason: 'over_budget',
             nodeId: null,
-            message: `已经花了 ${dollars(task.spentMicro)}，超过了预估（${dollars(task.estimateMicro ?? 0)}）的 ${deps.budgetMultiplier} 倍`,
+            message: `已经花了 ${dollars(task.spentMicro)}，达到你设置的预算 ${dollars(limit)}`,
           },
         });
       });
@@ -876,7 +866,7 @@ export function createWorkflowService(deps: {
           ...base,
           status: 'running',
           estimateMicro: estimate,
-          budgetLimitMicro: estimate === null ? null : estimate * deps.budgetMultiplier,
+          budgetLimitMicro: null,
           sheet: null,
         },
         nodes: rows.nodes,
@@ -1083,13 +1073,13 @@ export function createWorkflowService(deps: {
           return schedule(snapshot, w, fx);
         }
         if (reason === 'over_budget' && choice === 'continue') {
-          await w.setTask({ budgetLimitMicro: nextLimit(task) });
+          await w.setTask({ budgetLimitMicro: null });
           return runAll(snapshot, w, fx);
         }
         if (reason === 'over_estimate' && choice === 'continue') {
-          // 用户看了预估决定照做：上限按预估的倍数算
+          // 用户看了预估决定照做：估价不转为预算。
           await w.setTask({
-            budgetLimitMicro: (task.estimateMicro ?? 0) * deps.budgetMultiplier,
+            budgetLimitMicro: null,
             status: 'running',
             attention: null,
           });

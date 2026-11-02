@@ -22,13 +22,14 @@ function fakeDsh(stdin: PassThrough, stdout: PassThrough) {
   const queue: string[] = [];
   const waiters: (() => void)[] = [];
   let busy = false;
+  let sessionId = '';
   const send = (msg: unknown) => stdout.write(`${JSON.stringify(msg)}\n`);
   const event = (type: string, data: unknown) =>
-    send({ jsonrpc: '2.0', method: 'session.event', params: { event: { type, data } } });
+    send({ jsonrpc: '2.0', method: 'session.event', params: { sessionId, event: { type, data } } });
   async function drain() {
     if (busy) return;
     busy = true;
-    send({ jsonrpc: '2.0', method: 'session.status', params: { status: 'running' } });
+    send({ jsonrpc: '2.0', method: 'session.status', params: { sessionId, status: 'running' } });
     while (queue.length > 0) {
       const text = queue.shift() ?? '';
       event('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text }] });
@@ -51,7 +52,7 @@ function fakeDsh(stdin: PassThrough, stdout: PassThrough) {
       }
     }
     busy = false;
-    send({ jsonrpc: '2.0', method: 'session.status', params: { status: 'idle' } });
+    send({ jsonrpc: '2.0', method: 'session.status', params: { sessionId, status: 'idle' } });
     waiters.splice(0).forEach((resolve) => resolve());
   }
   let buffer = '';
@@ -63,10 +64,11 @@ function fakeDsh(stdin: PassThrough, stdout: PassThrough) {
       const req = JSON.parse(buffer.slice(0, i)) as {
         id: number;
         method: string;
-        params: { contentBlocks?: { text: string }[] };
+        params: { sessionId?: string; contentBlocks?: { text: string }[] };
       };
       buffer = buffer.slice(i + 1);
       if (req.method === 'session/prompt') {
+        sessionId = req.params.sessionId ?? '';
         queue.push(req.params.contentBlocks?.[0]?.text ?? '');
         send({ jsonrpc: '2.0', id: req.id, result: { messageId: 'm' } });
         void drain();
@@ -239,6 +241,18 @@ const store: ObjectStore = {
 const issued: Record<string, unknown>[] = [];
 const revoked: string[] = [];
 const modelGateway = Fastify();
+modelGateway.get('/internal/v1/models/execution', async () => ({
+  models: [
+    {
+      id: 'deepseek/deepseek-v4.1-flash',
+      name: 'DeepSeek',
+      contextWindow: 1000000,
+      maxTokens: 131072,
+      input: ['text', 'image'],
+      reasoning: true,
+    },
+  ],
+}));
 modelGateway.post('/internal/run-keys', async (request, reply) => {
   issued.push(request.body as Record<string, unknown>);
   return reply.code(201).send({
@@ -429,7 +443,7 @@ describe('一次 agent 运行', () => {
     expect(revoked).toHaveLength(1);
     // 算力：开沙箱前按最长时间冻结，销毁后按实际时长结算
     expect(compute.map((c) => c.path)).toEqual(['hold', 'settle']);
-    expect(compute[0]?.body).toMatchObject({ runId: run.id, cores: 2, maxMs: 60_000 });
+    expect(compute[0]?.body).toMatchObject({ runId: run.id, cores: 2, maxMs: 300_000 });
     expect(compute[1]?.body).toMatchObject({ cores: 2, elapsedMs: expect.any(Number) });
     expect(outbox[0]).toMatchObject({
       type: 'harness.run.finished',
@@ -582,7 +596,10 @@ describe('一次 agent 运行', () => {
     const row = await finished(run.id);
     expect(row.status).toBe('failed');
     expect(row.error).toBe('上游 500');
-    expect(events.find((e) => e.kind === 'error')?.data).toEqual({ message: '上游 500' });
+    expect(events.find((e) => e.kind === 'error')?.data).toEqual({
+      message: '上游 500',
+      sessionId: run.id,
+    });
   });
 
   it('前一轮 completed 不遮住排队追问缺少结束通知', async () => {

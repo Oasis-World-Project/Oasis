@@ -334,7 +334,7 @@ try {
   await assert.rejects(store.get(staleKey));
   checked('未完成上传记录重启恢复清理');
   const created = await docker.createContainer(`oasis-media-check-${taskId}`, {
-    Image: process.env.SANDBOX_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.2',
+    Image: process.env.SANDBOX_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.5',
     Entrypoint: ['node', '-e', 'setInterval(()=>{},1000)'],
     Labels: { 'oasis.component': 'media-check' },
     HostConfig: {

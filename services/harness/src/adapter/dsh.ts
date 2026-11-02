@@ -3,6 +3,7 @@
 // dsh 升级（SDK 协议、事件格式变化）只改这个目录和 profile/ 下的组合。
 import type { Readable, Writable } from 'node:stream';
 import type { RunEventKind } from '@oasis/contracts/harness';
+import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
 import { createJsonRpcClient } from './jsonrpc.ts';
 
 /** 沙箱镜像里的目录约定（与 infra/images/harness-sandbox-base/Dockerfile 一致） */
@@ -17,7 +18,7 @@ export const SANDBOX_PATHS = {
 } as const;
 
 /** dsh 里指向 model-gateway 的模型路由名（profile/cordis.patch.yml 里定义） */
-const PROVIDER = 'oasis';
+const PROVIDER = 'openrouter';
 
 /** 会话存档里不能带的文件：锁文件会让恢复以为会话还被占着 */
 export const isSessionLock = (path: string) => path.endsWith('.lock');
@@ -47,7 +48,7 @@ export function sandboxEnv(input: {
     // 这把临时 Key 本来就是给这次运行里的 AI 用工具的，所以用一个不会被去掉的名字再给一份
     OASIS_TOOL_AUTH: input.runKey,
     OASIS_MODEL: input.model,
-    OASIS_MODELS: JSON.stringify([{ id: input.model, name: input.model }]),
+    DSH_MAX_TOKENS_AS_SUCCESS: 'false',
     ...(egressProxy
       ? {
           HTTP_PROXY: egressProxy,
@@ -64,6 +65,44 @@ export function sandboxEnv(input: {
   };
 }
 
+/** 元数据用文件传入，避免 Linux 单个环境变量的长度边界。 */
+export function runtimeFiles(input: {
+  models: ModelCapabilities[];
+  sessionId: string;
+  objective: string;
+  goal: boolean;
+  goalRoundWindow: number;
+}) {
+  return [
+    {
+      path: 'in/.oasis-models.json',
+      content: Buffer.from(
+        JSON.stringify(
+          input.models.map(({ reasoning, ...model }) => ({
+            ...model,
+            reasoningEfforts: reasoning ? { off: null, high: 'high' } : false,
+            compat: {
+              thinkingFormat: 'openrouter',
+              supportsReasoningEffort: reasoning,
+              maxTokensField: 'max_tokens',
+            },
+          })),
+        ),
+      ),
+    },
+    {
+      path: 'in/.oasis-execution.json',
+      content: Buffer.from(
+        JSON.stringify({
+          sessionId: input.sessionId,
+          objective: input.objective,
+          goal: input.goal,
+          goalRoundWindow: input.goalRoundWindow,
+        }),
+      ),
+    },
+  ];
+}
 export interface AgentEvent {
   kind: RunEventKind;
   data: Record<string, unknown>;
@@ -155,41 +194,135 @@ export function translateNotification(method: string, params: unknown): AgentEve
   }
 }
 
-/**
- * 沙箱里的一个 dsh 运行时（SDK 模式，经 stdin/stdout 说 JSON-RPC）。
- * 一次运行只用一个会话，会话 ID 就是运行 ID。
- */
+/** 一个根会话及其原生托管代理树。子会话的终态不参与根会话完成判定。 */
 export function connectAgent(io: {
   stdin: Writable;
   stdout: Readable;
   sessionId: string;
+  goal?: boolean;
   onEvent: (event: AgentEvent) => void;
 }) {
-  /** 只有明确收到 completed 才能成功；空闲或 RPC 返回不等于完成。 */
   let lastError: string | undefined = '运行未收到正常结束通知';
   let pendingTurns = 0;
+  let goalPhase: string | undefined;
+  let persistent = io.goal ?? false;
+  let goalActivation: unknown;
+  let goalBlocker: string | undefined;
+  let failureReason: unknown;
+  let revision = 0;
+  const listeners = new Set<() => void>();
+  const parents = new Map<string, string>();
+  const belongs = (id: string): boolean =>
+    id === io.sessionId || (parents.has(id) && belongs(parents.get(id)!));
+  const changed = () => {
+    revision++;
+    for (const listener of listeners) listener();
+    listeners.clear();
+  };
   const rpc = createJsonRpcClient({
     input: io.stdout,
     output: io.stdin,
+    onClose: (error) => {
+      lastError = error.message;
+      changed();
+    },
     onNotification: (method, params) => {
+      const p = (params ?? {}) as {
+        sessionId?: string;
+        parentSessionId?: string;
+        childSessionId?: string;
+        status?: string;
+        event?: { type?: string; data?: Record<string, unknown> };
+      };
+      if (
+        method === 'subagent.started' &&
+        p.parentSessionId &&
+        p.childSessionId &&
+        belongs(p.parentSessionId)
+      ) {
+        parents.set(p.childSessionId, p.parentSessionId);
+        io.onEvent({
+          kind: 'status',
+          data: {
+            status: 'subagent_started',
+            sessionId: p.childSessionId,
+            parentSessionId: p.parentSessionId,
+          },
+        });
+        return;
+      }
+      if ((method === 'session.event' || method === 'session.status') && !p.sessionId) {
+        rpc.abort(new Error('会话通知缺少 sessionId，不能判断根会话是否完成'));
+        return;
+      }
+      if (p.sessionId && !belongs(p.sessionId)) return;
+      const root = !p.sessionId || p.sessionId === io.sessionId;
+      if (p.event?.type === 'oasis/goal-status') {
+        if (root) {
+          goalPhase = p.event.data?.phase as string | undefined;
+          goalActivation = p.event.data?.activation;
+          changed();
+        }
+        io.onEvent({
+          kind: 'status',
+          data: {
+            status: 'goal_status',
+            sessionId: p.sessionId,
+            goalPhase: p.event.data?.phase,
+            goalActivation: p.event.data?.activation,
+          },
+        });
+        return;
+      }
+      if (p.event?.type === 'goal/change') {
+        const goal = p.event.data?.goal as
+          { phase?: string; blockedReason?: { message?: string } } | undefined;
+        if (root) {
+          if (goal?.phase) persistent = true;
+          goalPhase = goal?.phase;
+          goalBlocker = goal?.blockedReason?.message;
+          changed();
+        }
+        io.onEvent({
+          kind: 'status',
+          data: {
+            status: 'goal_changed',
+            sessionId: p.sessionId,
+            goalPhase: goal?.phase,
+            ...(goal?.blockedReason ? { blocker: goal.blockedReason.message } : {}),
+          },
+        });
+        return;
+      }
       const event = translateNotification(method, params);
       if (!event) return;
-      if (event.kind === 'error' || event.kind === 'turn_end') {
-        pendingTurns = Math.max(0, pendingTurns - 1);
-        lastError = event.kind === 'error' ? String(event.data.message) : undefined;
+      if (root) {
+        if (event.kind === 'error' || event.kind === 'turn_end') {
+          pendingTurns = Math.max(0, pendingTurns - 1);
+          lastError = event.kind === 'error' ? String(event.data.message) : undefined;
+          failureReason = event.data.reason;
+        }
+        changed();
       }
-      io.onEvent(event);
+      io.onEvent({
+        ...event,
+        data: {
+          ...event.data,
+          ...(p.sessionId ? { sessionId: p.sessionId } : {}),
+          ...(!root && p.sessionId ? { parentSessionId: parents.get(p.sessionId) } : {}),
+        },
+      });
     },
   });
   const session = { sessionId: io.sessionId };
-
   return {
-    /** 握手：选定模型。dsh 起来要一两秒，给足时间 */
-    initialize: (model: string, cwd: string) =>
-      rpc.request('initialize', { cwd, provider: PROVIDER, model }, 60_000),
-    /** 接着之前存下的会话（会话存档要先放回 sessions/） */
+    initialize: (model: string, cwd: string, reasoningEffort?: string) =>
+      rpc.request(
+        'initialize',
+        { cwd, provider: PROVIDER, model, ...(reasoningEffort ? { reasoningEffort } : {}) },
+        60_000,
+      ),
     resume: () => rpc.request('session/resume', session, 60_000),
-    /** 交一条用户消息：运行中发的会排在当前这一轮之后处理 */
     prompt: (text: string) => {
       pendingTurns++;
       lastError = '运行未收到正常结束通知';
@@ -199,19 +332,31 @@ export function connectAgent(io: {
         30_000,
       );
     },
-    /** 等到会话空闲（所有排队的消息都处理完）；返回失败原因，成功时为 undefined */
     async waitIdle(): Promise<string | undefined> {
       try {
-        await rpc.request('session/wait', session);
-      } catch (err) {
-        return lastError ?? (err instanceof Error ? err.message : String(err));
+        for (;;) {
+          const seen = revision;
+          await rpc.request('session/wait', session);
+          if (lastError && !persistent) return lastError;
+          if (pendingTurns > 0) return '运行未收到正常结束通知';
+          if (!persistent || goalPhase === 'complete') return lastError;
+          if (goalPhase !== 'active')
+            return goalBlocker ?? '持续目标未完成：' + (goalPhase ?? '没有目标状态');
+          if (goalActivation === 'disarmed' && failureReason !== 'max-tokens')
+            return lastError ?? '持续目标停止了自动执行，尚未完成';
+          // 原生驱动可能正在 flush/checkpoint；中间 idle 不等于目标结束。
+          if (seen === revision) await new Promise<void>((resolve) => listeners.add(resolve));
+        }
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
       }
-      return pendingTurns > 0 ? '运行未收到正常结束通知' : lastError;
     },
     shutdown: () => rpc.request('shutdown', undefined, 10_000),
-    /** 沙箱没了：让还在等的请求立刻失败 */
-    abort: (err: Error) => rpc.abort(err),
+    abort: (error: Error) => {
+      lastError = error.message;
+      rpc.abort(error);
+      changed();
+    },
   };
 }
-
 export type AgentConnection = ReturnType<typeof connectAgent>;

@@ -41,6 +41,7 @@ export const RunFinished = {
   data: z.object({
     ...RunRef,
     status: z.enum(['succeeded', 'failed', 'cancelled', 'stopped']),
+    resumable: z.boolean().optional(),
     error: z.string().nullable(),
     outputs: z.array(z.object({ path: z.string(), size: z.number().int().nonnegative() })),
     /** AI 最后说的一句话 */

@@ -337,7 +337,7 @@ export function createArtifactService(deps: {
     async revisionMaterials(
       ownerId: string,
       taskId: string,
-      room: number,
+      room: number | undefined,
       limits: { maxBytes: number; archive: { bytes: number; files: number } },
     ): Promise<RevisionMaterialsResult> {
       const rows = (await repo.listByTask(taskId))
@@ -346,7 +346,7 @@ export function createArtifactService(deps: {
       if (rows.length === 0)
         throw new HttpError(409, 'no_artifacts', '这个任务在画布里没有成果，不能修改');
       const relative = (row: Artifact) => row.syncPath.split('/').slice(1).join('/');
-      if (rows.length <= Math.min(room, REVISION_MAX_FILES)) {
+      if (rows.length <= REVISION_MAX_FILES && (room === undefined || rows.length <= room)) {
         const taken = new Set<string>();
         const result: RevisionMaterialsResult = { materials: [], files: [] };
         for (const row of rows) {

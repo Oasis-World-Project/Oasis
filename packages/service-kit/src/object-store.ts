@@ -55,7 +55,7 @@ export interface ObjectStore {
 }
 
 export interface StreamLimits {
-  maxBytes: number;
+  maxBytes?: number;
   size?: number;
   sha256?: string;
 }
@@ -77,7 +77,8 @@ export async function* checkedParts(
   for await (const value of body) {
     const bytes = Buffer.from(value as Uint8Array);
     size += bytes.length;
-    if (size > limits.maxBytes) throw new HttpError(413, 'file_size', '文件超过传输大小上限');
+    if (limits.maxBytes !== undefined && size > limits.maxBytes)
+      throw new HttpError(413, 'file_size', '文件超过传输大小上限');
     hash.update(bytes);
     let offset = 0;
     while (offset < bytes.length) {

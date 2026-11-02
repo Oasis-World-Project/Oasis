@@ -48,6 +48,12 @@ export function createRunKeyService(deps: { repo: RunKeysRepo; now?: () => Date 
     async revoke(keyId: string): Promise<void> {
       await deps.repo.revoke(keyId, now());
     },
+    async renew(keyId: string, ttlSeconds: number): Promise<void> {
+      const at = now();
+      if (!(await deps.repo.renew(keyId, at, new Date(at.getTime() + ttlSeconds * 1000)))) {
+        throw new HttpError(409, 'run_key_not_active', '运行凭证已停止或过期，不能续期');
+      }
+    },
   };
 }
 

@@ -24,6 +24,11 @@ function memoryRepo(): RunKeysRepo & { rows: RunKey[] } {
     async findActive(keyHash, now) {
       return rows.find((r) => r.keyHash === keyHash && !r.revokedAt && r.expiresAt > now);
     },
+    async renew(id, now, expiresAt) {
+      const row = rows.find((r) => r.id === id && !r.revokedAt && r.expiresAt > now);
+      if (row) row.expiresAt = expiresAt;
+      return Boolean(row);
+    },
     async revoke(id, now) {
       const row = rows.find((r) => r.id === id && !r.revokedAt);
       if (row) row.revokedAt = now;
@@ -69,5 +74,22 @@ describe('运行临时 Key', () => {
       expect(err).toBeInstanceOf(HttpError);
       expect((err as HttpError).statusCode).toBe(401);
     }
+  });
+});
+
+it('运行可跨凭证租约续期；已撤销或已过期的凭证不能复活', async () => {
+  const active = await service.issue({ payerId: PAYER, runId: RUN, ttlSeconds: 60 });
+  clock = new Date(clock.getTime() + 50_000);
+  await service.renew(active.keyId, 60);
+  clock = new Date(clock.getTime() + 50_000);
+  await expect(service.authenticate('Bearer ' + active.key)).resolves.toMatchObject({ runId: RUN });
+  await service.revoke(active.keyId);
+  await expect(service.renew(active.keyId, 60)).rejects.toMatchObject({
+    code: 'run_key_not_active',
+  });
+  const expired = await service.issue({ payerId: PAYER, runId: RUN, ttlSeconds: 1 });
+  clock = new Date(clock.getTime() + 2000);
+  await expect(service.renew(expired.keyId, 60)).rejects.toMatchObject({
+    code: 'run_key_not_active',
   });
 });

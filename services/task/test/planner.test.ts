@@ -34,7 +34,6 @@ const tools = [
     defaultModel: null,
   },
 ];
-const limits = { maxNodes: 2, defaultModel: 'deepseek/x' };
 const node = (key: string, model = 'deepseek/x') => ({
   key,
   title: key,
@@ -45,6 +44,17 @@ const node = (key: string, model = 'deepseek/x') => ({
 });
 
 describe('规划门', () => {
+  it('有效大工作流不再被旧节点数量上限拒绝', () => {
+    const nodes = Array.from({ length: 60 }, (_, index) => node(`n${index}`));
+    expect(
+      checkPlan(
+        JSON.stringify({ nodes, edges: [], deliverables: { 首页文案: 'n0' } }),
+        sheet,
+        catalog,
+        tools,
+      ),
+    ).toHaveProperty('plan');
+  });
   it('合格的方案通过（补上默认值）', () => {
     const result = checkPlan(
       JSON.stringify({
@@ -55,7 +65,6 @@ describe('规划门', () => {
       sheet,
       catalog,
       tools,
-      limits,
     );
     expect(result).toMatchObject({
       plan: {
@@ -64,14 +73,14 @@ describe('规划门', () => {
     });
   });
 
-  it('没有文件、不是 JSON、字段不对、有环、节点太多、模型不能用、交付物没人负责：一次列出', () => {
-    expect(checkPlan(undefined, sheet, catalog, tools, limits)).toEqual({
+  it('没有文件、不是 JSON、字段不对、有环、模型不能用、交付物没人负责：一次列出', () => {
+    expect(checkPlan(undefined, sheet, catalog, tools)).toEqual({
       problems: ['没有找到 out/plan.json'],
     });
-    expect(checkPlan('{', sheet, catalog, tools, limits)).toEqual({
+    expect(checkPlan('{', sheet, catalog, tools)).toEqual({
       problems: ['out/plan.json 不是合法的 JSON'],
     });
-    expect(checkPlan('{"nodes":[]}', sheet, catalog, tools, limits)).toHaveProperty('problems');
+    expect(checkPlan('{"nodes":[]}', sheet, catalog, tools)).toHaveProperty('problems');
     const bad = checkPlan(
       JSON.stringify({
         nodes: [
@@ -88,11 +97,9 @@ describe('规划门', () => {
       sheet,
       catalog,
       tools,
-      limits,
     );
     expect('problems' in bad && bad.problems).toEqual([
       '工作流里有环（经过「a」）',
-      '节点太多了（3 个），最多 2 个',
       '模型 x/unknown 不在可以用的模型里',
       '节点「b」的工具 video.generate 不在可以用的工具里',
       '交付物「首页文案」指定的节点「zzz」不存在',
@@ -101,7 +108,7 @@ describe('规划门', () => {
 });
 
 describe('估算花费', () => {
-  it('批次 uses 按样本行数估价，支持数百行且拒绝超过 1000 行', () => {
+  it('批次 uses 按样本行数估价，支持数百行且不把 1000 行当作任务上限', () => {
     const batchTools = [{ ...tools[0]!, key: 'text.batch', unit: '行', estimateMicro: 2_000 }];
     const result = (uses: number) =>
       checkPlan(
@@ -113,7 +120,6 @@ describe('估算花费', () => {
         sheet,
         catalog,
         batchTools,
-        limits,
       );
     const checked = result(200);
     expect(checked).toHaveProperty('plan');
@@ -121,7 +127,7 @@ describe('估算花费', () => {
       expect(
         estimatePlan(checked.plan, { workRun: 1_000, speechRun: 1_000, computeRun: 0 }, batchTools),
       ).toBe(481_200);
-    expect(result(1001)).toHaveProperty('problems');
+    expect(result(1001)).toHaveProperty('plan');
   });
   it('干活节点一次加工具（次数 × 单价）、讨论按发言次数加汇总，再留两成', () => {
     const plan = {

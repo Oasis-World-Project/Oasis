@@ -11,14 +11,14 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 const [command] = process.argv.slice(2);
 const threed = command === 'build-3d' || command === 'check-3d';
 const image = threed
-  ? (process.env.SANDBOX_3D_IMAGE ?? 'oasis/harness-sandbox-3d:0.2.1-rc.2-blender4.3.2')
-  : (process.env.SANDBOX_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.2');
+  ? (process.env.SANDBOX_3D_IMAGE ?? 'oasis/harness-sandbox-3d:0.2.1-rc.5-blender4.3.2')
+  : (process.env.SANDBOX_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.5');
 if (!/^oasis\/[a-z0-9]+(?:[._-][a-z0-9]+)*:[\w][\w.-]{0,127}$/.test(image)) {
   throw new Error('SANDBOX_IMAGE 必须是 oasis/<组件>:<标签>');
 }
 let result;
 if (command === 'build' || command === 'build-3d') {
-  const base = process.env.SANDBOX_BASE_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.2';
+  const base = process.env.SANDBOX_BASE_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.5';
   if (
     threed &&
     (!/^oasis\/[a-z0-9._-]+:[\w.-]+$/.test(base) ||

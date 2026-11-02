@@ -15,11 +15,6 @@ export type PlannerPlan = z.infer<typeof PlannerPlan>;
 
 export const PLAN_FILE = 'plan.json';
 
-export interface PlannerLimits {
-  maxNodes: number;
-  defaultModel: string;
-}
-
 /** 给规划员的说明 */
 export function plannerPrompt(input: {
   brief: string;
@@ -29,7 +24,7 @@ export function plannerPrompt(input: {
   tools: ToolEntry[];
   /** 这类任务的经验手册（按任务单挑的，可以为空） */
   playbooks: Pick<Playbook, 'content'>[];
-  limits: PlannerLimits;
+  defaultModel: string;
 }): string {
   const models = input.catalog
     .map((m) => `- ${m.providerModel}（${m.name}，${m.vendor}；${m.tags.join('、')}）`)
@@ -51,7 +46,7 @@ export function plannerPrompt(input: {
         kind: 'work',
         role: '资深文案',
         goal: '……写成 out/初稿.md',
-        model: input.limits.defaultModel,
+        model: input.defaultModel,
         tools: [],
         checks: ['从任务单里挑和这个节点相关的验收点'],
         expects: ['初稿.md'],
@@ -62,11 +57,11 @@ export function plannerPrompt(input: {
         title: '定稿讨论',
         kind: 'discussion',
         goal: '比较 in/draft/ 里的初稿……定下怎么改',
-        model: input.limits.defaultModel,
+        model: input.defaultModel,
         rounds: 2,
         participants: [
-          { name: '品牌顾问', model: input.limits.defaultModel, stance: '看重氛围' },
-          { name: '转化顾问', model: input.limits.defaultModel, stance: '看重转化' },
+          { name: '品牌顾问', model: input.defaultModel, stance: '看重氛围' },
+          { name: '转化顾问', model: input.defaultModel, stance: '看重转化' },
         ],
         checks: [],
         expects: [],
@@ -79,20 +74,20 @@ export function plannerPrompt(input: {
     '你是 Oasis 的规划员。用户已经确认了下面的任务单，你要为它排一条工作流，交给 AI 团队去做。',
     '先运行 oasis-tool list 查看实际可用的工具和沙箱软件。',
     `【任务】\n${input.brief}`,
-    `【可以用的模型】（节点里的 model 只能填这些；没有特别理由就用 ${input.limits.defaultModel}）\n${models}`,
-    `【可以用的工具】（干活节点的 tools 只能填这些：写成 {"key": "image.generate", "uses": 预计用几次}；text.batch 和批量 jev.decide 的 uses 按输入行数填，如 200 行就填 200，最多 1000；按目录单位计费。批次必须设置预算，恢复不重发已完成或结果不确定的行。）\n${tools}`,
+    `【可以用的模型】（按能力与交付质量选择启动模型；节点内部可另用其他可用模型和子代理）\n${models}`,
+    `【可以用的工具】（干活节点的 tools 只能填这些：写成 {"key": "image.generate", "uses": 预计用几次}；text.batch 和批量 jev.decide 的 uses 按输入行数填，如 200 行就填 200；按目录单位计费。批次预算只在用户明确设置时携带，恢复不重发已完成或结果不确定的行。）\n${tools}`,
     [
       '【节点】',
       '- work（干活）：一个 AI 在独立的容器里完成一件事，能读写文件、运行命令；成果写到 out/。',
-      '- discussion（讨论）：2–5 位参与者（各自的模型和立场）来回讨论 1–5 轮，最后由汇总者（model）把结论写到 out/。只在需要权衡取舍时用。',
+      '- discussion（讨论）：多位参与者（各自的模型和立场）按任务需要安排讨论轮次，最后由汇总者（model）把结论写到 out/。只在需要权衡取舍时用。',
       '- 连线 from → to：上游的 out/ 会放进下游的 in/<上游节点名>/。没有连线的节点同时开跑。',
     ].join('\n'),
     [
       '【规矩】',
-      `- 最多 ${input.limits.maxNodes} 个节点。简单的事 1–3 个节点就够，别为了显得完整而拆。`,
+      '- 按可独立完成和验收的子任务拆分节点。每个节点内可以继续规划、分工和调用可用工具；不要为了压缩节点数量把不相关的工作绑在一起。',
       '- 能同时做的就并行；一个节点只做一件事。',
       `- 任务单上每样交付物（${deliverables}）都要在 deliverables 里指定由哪个节点交出最终版。`,
-      '- 每个节点 checks 只查本节点能负责的要求（最多5条，可为空）。推荐 {"id":"c1","text":"验收点","requirementIds":["r1"],"files":["报告.docx"]}；files 是检查所需的本节点输出。跨文件一致性交给有全部输入的汇总节点或最终验收，不要求并行节点证明其他文件已一致。expects 写必需文件。',
+      '- 每个节点 checks 只查本节点能负责的要求（可为空）。推荐 {"id":"c1","text":"验收点","requirementIds":["r1"],"files":["报告.docx"]}；files 是检查所需的本节点输出。跨文件一致性交给有全部输入的汇总节点或最终验收，不要求并行节点证明其他文件已一致。expects 写必需文件。',
       '- expects 可写 {"pattern":"图片/*.png","exactCount":20,"width":1024,"height":1024}（正好 20 张），或 {"pattern":"图片/*.png","minCount":20}（至少 20 张）；只计有效非空文件。',
       '- 每个负责交付物的节点必须给出非空 deliver 路径列表（可用 * 通配），明确最终交付哪些文件；草稿与局部素材另存目录。deliver 与 expects 独立，配套 PDF、来源清单和统计报告需要时也列入。',
       '- 路径模式 * 只匹配一层，目录/** 才递归包含嵌套文件。每个 deliver 模式都必须匹配实际文件；完整工程需交齐引用资源。README 所说已附带的文件/脚本必须在最终清单或包内。不要承诺不必要的额外文件。',
@@ -126,7 +121,6 @@ export function checkPlan(
   sheet: TaskSheet,
   catalog: CatalogEntry[],
   tools: ToolEntry[],
-  limits: PlannerLimits,
 ): { plan: PlannerPlan } | { problems: string[] } {
   if (text === undefined) return { problems: [`没有找到 out/${PLAN_FILE}`] };
   let raw: unknown;
@@ -149,9 +143,6 @@ export function checkPlan(
     validatePlan(plan);
   } catch (err) {
     problems.push(err instanceof HttpError ? err.message : String(err));
-  }
-  if (plan.nodes.length > limits.maxNodes) {
-    problems.push(`节点太多了（${plan.nodes.length} 个），最多 ${limits.maxNodes} 个`);
   }
   const usable = new Set(catalog.map((m) => m.providerModel));
   const used = plan.nodes.flatMap((n) => [

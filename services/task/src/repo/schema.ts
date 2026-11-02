@@ -33,6 +33,7 @@ export interface NodeConfig {
 
 /** 交给 harness 的完整请求（没送到时按原样重交） */
 export interface RunRequestRecord {
+  goal?: boolean;
   model: string;
   prompt: string;
   inputsFrom: { runId: string; as: string }[];
@@ -41,6 +42,7 @@ export interface RunRequestRecord {
 
 /** 讨论发言的轮次和发言人 */
 export interface RunMeta {
+  resumable?: boolean;
   round?: number;
   participant?: string;
 }

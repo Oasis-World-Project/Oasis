@@ -15,9 +15,13 @@
     },
     // 沙箱镜像里的命令（不经 package.json 引用，由 Dockerfile 装进镜像）
     "services/harness": {
+      // dsh 仅安装于精确版本沙箱镜像，离线集成测试在容器内调用。
+      "ignoreBinaries": ["dsh"],
       // 解析 worker 由 Worker URL 按源码/编译后扩展名加载，静态 import 图不可见。
       "entry": [
         "sandbox/oasis-tool.ts",
+        "src/adapter/profile/node-goal.mjs",
+        "src/adapter/test/native-provider.mjs",
         "src/service/file-inspection-worker.ts",
         "preview/controller.mjs",
         "media/media-check.mjs",

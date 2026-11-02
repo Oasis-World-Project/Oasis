@@ -12,6 +12,7 @@ export interface RunKeysRepo {
   findActive(keyHash: string, now: Date): Promise<RunKey | undefined>;
   /** 作废；返回是否真的作废了一个原本有效的 Key */
   revoke(id: string, now: Date): Promise<boolean>;
+  renew(id: string, now: Date, expiresAt: Date): Promise<boolean>;
 }
 
 export function createRunKeysRepo(pool: pg.Pool): RunKeysRepo {
@@ -35,6 +36,14 @@ export function createRunKeysRepo(pool: pg.Pool): RunKeysRepo {
         .update(runKeys)
         .set({ revokedAt: now })
         .where(and(eq(runKeys.id, id), isNull(runKeys.revokedAt)))
+        .returning({ id: runKeys.id });
+      return rows.length > 0;
+    },
+    async renew(id, now, expiresAt) {
+      const rows = await db
+        .update(runKeys)
+        .set({ expiresAt })
+        .where(and(eq(runKeys.id, id), isNull(runKeys.revokedAt), gt(runKeys.expiresAt, now)))
         .returning({ id: runKeys.id });
       return rows.length > 0;
     },

@@ -9,9 +9,6 @@ export const NodeKey = z
   .string()
   .regex(/^[\p{L}\p{N}_-]{1,40}$/u, '节点名只能用字母、数字、下划线和短横线，最长 40 个字符');
 
-/** 一个任务最多带几个素材 */
-export const MAX_MATERIALS = 20;
-
 /** 应有的产出文件：out/ 下的相对路径，可以用 * 匹配一段里的任意字符（如 *.md） */
 const OutputPattern = z
   .string()
@@ -24,8 +21,8 @@ export const ExpectedFile = z.union([
   z
     .object({
       pattern: OutputPattern,
-      minCount: z.number().int().min(1).max(1000).optional(),
-      exactCount: z.number().int().min(1).max(1000).optional(),
+      minCount: z.number().int().min(1).optional(),
+      exactCount: z.number().int().min(1).optional(),
       width: z.number().int().min(1).max(30000).optional(),
       height: z.number().int().min(1).max(30000).optional(),
     })
@@ -42,8 +39,8 @@ export const TaskCheck = z.union([
   z.object({
     id: z.string().regex(/^[\w-]{1,60}$/),
     text: z.string().trim().min(1).max(300),
-    requirementIds: z.array(z.string().max(60)).max(32).default([]),
-    files: z.array(OutputPattern).max(20).default([]),
+    requirementIds: z.array(z.string().max(60)).default([]),
+    files: z.array(OutputPattern).default([]),
   }),
 ]);
 export type TaskCheck = z.infer<typeof TaskCheck>;
@@ -74,7 +71,7 @@ export const RequirementSource = z.discriminatedUnion('kind', [
 export const TaskRequirement = z.object({
   id: z.string().regex(/^[\w-]{1,60}$/),
   text: z.string().trim().min(1).max(1000),
-  sources: z.array(RequirementSource).min(1).max(8),
+  sources: z.array(RequirementSource).min(1),
 });
 export const CheckResult = z.object({
   id: z.string(),
@@ -94,22 +91,22 @@ const NodeCommon = {
   role: z.string().max(2000).default(''),
   /** 这个节点要做的事（讨论节点就是讨论的题目） */
   goal: z.string().trim().min(1).max(20_000),
-  /** 关卡的验收点（普通话，最多 5 条）：交出产出前由 Jev 逐条判断 */
-  checks: z.array(TaskCheck).max(5).default([]),
+  /** 关卡的验收点（普通话）：交出产出前由 Jev 逐条判断 */
+  checks: z.array(TaskCheck).default([]),
   /** 关卡的规则检查：这些文件必须在 out/ 里且不是空的 */
-  expects: z.array(ExpectedFile).max(10).default([]),
+  expects: z.array(ExpectedFile).default([]),
   /** 显式选择最终交付文件；缺省保留历史任务行为。 */
-  deliver: z.array(OutputPattern).max(20).optional(),
+  deliver: z.array(OutputPattern).optional(),
 };
 
 /** 节点要用的外部工具（ADR 0006 §5）：工具名和预计用几次（用来估算花费，不是硬上限） */
 export const NodeTool = z.object({
   key: z.string().regex(/^[a-z0-9]+(\.[a-z0-9_-]+)+$/, '工具名形如 image.generate'),
   /** 批量工具按输入行计数，其余工具按目录单位计数。 */
-  uses: z.number().int().min(1).max(1000).default(1),
+  uses: z.number().int().min(1).default(1),
 });
 export type NodeTool = z.infer<typeof NodeTool>;
-const NodeTools = z.array(NodeTool).max(6);
+const NodeTools = z.array(NodeTool);
 
 /** 干活节点：一个 agent 完成一件事 */
 export const WorkPlanNode = z.object({
@@ -133,8 +130,8 @@ export const Participant = z.object({
 export const DiscussionPlanNode = z.object({
   ...NodeCommon,
   kind: z.literal('discussion'),
-  participants: z.array(Participant).min(2).max(5),
-  rounds: z.number().int().min(1).max(5).default(2),
+  participants: z.array(Participant).min(2),
+  rounds: z.number().int().min(1).default(2),
   /** 汇总者用的型号 */
   model: z.string().min(1).max(200),
 });
@@ -147,8 +144,8 @@ export type PlanNode = z.infer<typeof PlanNode>;
 export const PlanEdge = z.object({ from: NodeKey, to: NodeKey });
 
 export const WorkflowPlan = z.object({
-  nodes: z.array(PlanNode).min(1).max(50),
-  edges: z.array(PlanEdge).max(200).default([]),
+  nodes: z.array(PlanNode).min(1),
+  edges: z.array(PlanEdge).default([]),
 });
 export type WorkflowPlan = z.infer<typeof WorkflowPlan>;
 
@@ -166,22 +163,21 @@ export const TaskSheet = z.object({
         form: z.string().trim().min(1).max(60),
       }),
     )
-    .min(1)
-    .max(10),
+    .min(1),
   /** 怎么算做好（普通话） */
-  criteria: z.array(z.string().trim().min(1).max(200)).min(1).max(8),
+  criteria: z.array(z.string().trim().min(1).max(200)).min(1),
   /** 风格与限制 */
-  style: z.array(z.string().trim().min(1).max(200)).max(8).default([]),
+  style: z.array(z.string().trim().min(1).max(200)).default([]),
   /** 用户自己设的花费上限（微美元）；没设为 null */
   budgetMicro: z.number().int().positive().nullable().default(null),
   /** AI 自己定的事（技术假设），让用户知道，不用确认 */
-  assumptions: z.array(z.string().trim().min(1).max(200)).max(8).default([]),
+  assumptions: z.array(z.string().trim().min(1).max(200)).default([]),
   /** 用户给的素材（文件名） */
-  materials: z.array(z.string().max(300)).max(50).default([]),
+  materials: z.array(z.string().max(300)).default([]),
   /** 有来源的有效用户要求；缺省为历史任务，不能补造来源。 */
-  requirements: z.array(TaskRequirement).max(32).optional(),
+  requirements: z.array(TaskRequirement).optional(),
   /** 仅说明素材读取覆盖，不表示已理解图片/视频内容。 */
-  materialWarnings: z.array(z.string().max(500)).max(20).optional(),
+  materialWarnings: z.array(z.string().max(500)).optional(),
 });
 export type TaskSheet = z.infer<typeof TaskSheet>;
 
@@ -200,10 +196,10 @@ export const CreateTaskBody = z
     brief: z.string().trim().min(1).max(20_000),
     sheet: TaskSheet.optional(),
     plan: WorkflowPlan.optional(),
-    /** 预估花费（微美元）；有它才做「超过 3 倍暂停」检查。给任务单时由 task 自己算 */
+    /** 预估花费（微美元），仅用于展示；给任务单时由 task 自己算 */
     estimateMicro: z.number().int().nonnegative().optional(),
     /** 用户给的素材（存在 canvas）：规划员和每个节点都能在沙箱的 materials/ 下看到 */
-    materials: z.array(Material).max(MAX_MATERIALS).default([]),
+    materials: z.array(Material).default([]),
     /** 修改成果：这是哪个任务的新版（ADR 0012）。新版交付后整体替换上一版 */
     revisionOf: z.uuid().optional(),
   })
@@ -287,7 +283,7 @@ export const NodeBody = z.object({
   attempts: z.number().int().nonnegative(),
   /** 用户在节点开跑前追加的要求 */
   userNotes: z.array(z.string()),
-  /** 关卡退回修改过几次（最多 1 次） */
+  /** 关卡退回修改过几次（观测指标，不是限额） */
   reworks: z.number().int().nonnegative(),
   /** 给用户看的提醒（如关卡没过） */
   warning: z.string().nullable(),
@@ -316,7 +312,7 @@ export const TaskBody = z.object({
   attention: Attention.nullable(),
   estimateMicro: z.number().int().nonnegative().nullable(),
   spentMicro: z.number().int().nonnegative(),
-  /** 花到这么多就暂停问用户（预估的 3 倍；用户选择继续后再加 3 倍预估）；没有预估时为 null */
+  /** 用户显式设置的任务预算；null 表示没有任务预算，仍校验钱包余额 */
   budgetLimitMicro: z.number().int().nonnegative().nullable(),
   /** 用户确认的任务单（直接给方案建的任务没有） */
   sheet: TaskSheet.nullable(),
@@ -381,11 +377,11 @@ export const UpdateNodeBody = z
     role: z.string().max(2000),
     goal: NodeCommon.goal,
     model: z.string().min(1).max(200),
-    checks: z.array(TaskCheck).max(5),
-    expects: z.array(ExpectedFile).max(10),
-    deliver: z.array(OutputPattern).max(20),
-    participants: z.array(Participant).min(2).max(5),
-    rounds: z.number().int().min(1).max(5),
+    checks: z.array(TaskCheck),
+    expects: z.array(ExpectedFile),
+    deliver: z.array(OutputPattern),
+    participants: z.array(Participant).min(2),
+    rounds: z.number().int().min(1),
     tools: NodeTools,
   })
   .partial()

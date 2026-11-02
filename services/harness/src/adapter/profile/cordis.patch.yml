@@ -1,21 +1,31 @@
 # Oasis 自己的 dsh 组合（ADR 0003 §5）。镜像构建时从 dsh 自带的 sdk 模板复制出 oasis profile，再叠上这一层。
-# 原则：dsh 只当可拆装的底座。用不上的插件一律关掉（少一个工具，每次模型调用就少一段提示词）；
+# 目标、内部规划、后台作业和代理树沿用原生实现；Oasis 只负责隔离、计费与生命周期衔接。
 # 模型一律走 Oasis 的 model-gateway（经沙箱入口代理），凭每次运行专用的临时 Key 计费。
-# 运行时由环境变量注入：OASIS_MODEL_BASE_URL、OASIS_RUN_KEY、OASIS_MODELS（JSON 数组）、OASIS_MODEL。
+# 路由凭证由环境注入；完整目录与任务授权经 /workspace/in/.oasis-*.json 注入。
 
-# ---- 模型：只有一个路由 oasis，指向 model-gateway ----
+# ---- 复用原生 OpenRouter 型号、推理及回传规则，地址与凭证替换为计费网关 ----
 - id: llm-pi-ai
   config:
     providers:
-      oasis:
+      openrouter:
         displayName: Oasis
         apiKeyEnv: OASIS_RUN_KEY
         api: openai-completions
         baseURL: !!js process.env.OASIS_MODEL_BASE_URL
-        models: !!js JSON.parse(process.env.OASIS_MODELS ?? '[]')
+        models: !!js >-
+          (() => {
+            const require = process.getBuiltinModule('node:module').createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
+            const native = new Set(require('./node_modules/@earendil-works/pi-ai/dist/providers/all.js').getBuiltinModels('openrouter').map(m => m.id));
+            return JSON.parse(process.getBuiltinModule('node:fs').readFileSync('/workspace/in/.oasis-models.json', 'utf8')).map(m => {
+              if (!native.has(m.id)) return m;
+              const { maxTokens, reasoningEfforts, compat, ...capacity } = m;
+              return { ...capacity, ...(reasoningEfforts === false ? { reasoningEfforts: false } : {}) };
+            });
+          })()
+        reasoning: high
 - id: agent-default-model
   config:
-    provider: oasis
+    provider: openrouter
     model: !!js process.env.OASIS_MODEL
 
 # ---- 关掉：DeepSeek 自家账号、模型和网页搜索（模型和联网都走 Oasis） ----
@@ -46,34 +56,8 @@
 - id: user-questions
   disabled: true
 
-# ---- 关掉：编排类能力（工作流由 Oasis 的 task 服务管，节点里不再套一层） ----
-- id: ptc-runtime
-  disabled: true
-- id: workflow-ptc
-  disabled: true
-- id: tool-workflow
-  disabled: true
-- id: goal
-  disabled: true
-- id: goal-round-driver
-  disabled: true
-- id: command-goal
-  disabled: true
-- id: tool-goal
-  disabled: true
+# ---- 内部规划/目标/后台作业和子代理沿用 DSH；交互式计划审批不适用于已获授权的后台任务 ----
 - id: plan-mode
-  disabled: true
-- id: jobs
-  disabled: true
-- id: tool-jobs
-  disabled: true
-- id: subagent-fork-in-process
-  disabled: true
-- id: tool-subagent-fork
-  disabled: true
-- id: tool-subagent-control
-  disabled: true
-- id: tool-subagent-list-agents
   disabled: true
 
 # ---- 关掉：插件管理、远程访问、热重载、遥测、自动起标题（会多花一次模型调用） ----
@@ -114,3 +98,41 @@
 - id: agent-loop
   inject:
     - sessionPersistence
+
+# 产品工作流只约束交付；子任务内部使用原生目标和代理树。
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  config:
+    provider: fork
+    toolName: subagent_fork
+    maxDepth: provider-managed
+- id: sdk-jsonrpc-server
+  config:
+    maxTokensAsSuccess: false
+- insert:
+    - id: agent-preset-registry
+      name: '@deepseek-ai/dsh-agent-preset-registry'
+      config:
+        default: oasis
+    - id: preset-oasis
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: oasis
+        plugins:
+          - id: tool-subagent
+            name: '@deepseek-ai/dsh-tool-subagent'
+            inject: [subagentModelSelection]
+            config:
+              provider: spawn
+              toolName: subagent
+              modelSelectionSettings: true
+              maxDepth: provider-managed
+    - id: subagent-model-selection-settings
+      name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
+      config:
+        enabled: true
+        allowedModels: !!js >-
+          JSON.parse(process.getBuiltinModule('node:fs').readFileSync('/workspace/in/.oasis-models.json', 'utf8')).map(m => ({ provider: 'openrouter', model: m.id }))
+    - id: oasis-node-goal
+      name: /opt/oasis/node-goal.mjs

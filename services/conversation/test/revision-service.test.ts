@@ -1,5 +1,5 @@
 // 修改成果（ADR 0012）：修改意见并进任务单和说明，带上一版文件新建修订任务。
-import { createServiceClient, HttpError } from '@oasis/service-kit';
+import { createServiceClient } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -89,7 +89,7 @@ describe('任务单与说明', () => {
 let previousStatus = 'succeeded';
 let previousMaterials: { uploadId: string; name: string; size: number }[] = [];
 const created: Record<string, unknown>[] = [];
-const roomAsked: number[] = [];
+const roomAsked: (number | undefined)[] = [];
 const server = Fastify();
 server.get('/internal/tasks/:id', async () => ({
   id: OLD,
@@ -190,7 +190,7 @@ describe('发起修改', () => {
     const messages = await revise([
       { id: ATTACHED, name: '参考.png', size: 3, contentType: 'image/png' },
     ]);
-    expect(roomAsked).toEqual([18]);
+    expect(roomAsked).toEqual([undefined]);
     expect(created).toHaveLength(1);
     const body = created[0] as {
       revisionOf: string;
@@ -217,7 +217,7 @@ describe('发起修改', () => {
     expect(messages[1]?.data).toEqual({ taskId: NEW, revisionOf: OLD });
   });
 
-  it('还没交付的不能改；素材放不下时拒绝', async () => {
+  it('还没交付的不能改；修订素材不再被旧的 20 个数量限额拒绝', async () => {
     previousStatus = 'running';
     await expect(revise()).rejects.toMatchObject({ code: 'task_not_delivered' });
     previousStatus = 'succeeded';
@@ -226,17 +226,15 @@ describe('发起修改', () => {
       name: 'x',
       size: 1,
     }));
-    // 去重后只剩 1 个；再附 19 个就放不下上一版文件
+    // 旧素材、19 个附件和上一版成果都应保留。
     const many = Array.from({ length: 19 }, (_, i) => ({
       id: `dddddddd-0000-4000-8000-${String(i).padStart(12, '0')}`,
       name: `${i}.png`,
       size: 1,
       contentType: 'image/png',
     }));
-    const error = await revise(many).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(HttpError);
-    expect((error as HttpError).code).toBe('too_many_materials');
-    expect(created).toHaveLength(0);
+    await revise(many);
+    expect(created).toHaveLength(1);
   });
 });
 

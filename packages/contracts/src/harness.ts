@@ -32,9 +32,11 @@ export const StartRunBody = z.object({
   nodeId: z.uuid().optional(),
   /** 供应商型号，如 deepseek/deepseek-v4.1-flash */
   model: z.string().min(1).max(200),
+  /** 工作节点使用原生持久目标；普通发言仍可只跑一轮。 */
+  goal: z.boolean().default(false),
   /** 交给 agent 的完整任务说明 */
   prompt: z.string().min(1).max(200_000),
-  inputs: z.array(RunInputFile).max(200).default([]),
+  inputs: z.array(RunInputFile).default([]),
   /**
    * 把之前某次运行的产出放进本次沙箱的 in/<as>/ 下（工作流里上游节点交给下游）。
    * 只能引用同一付费人、已成功的运行。
@@ -51,7 +53,6 @@ export const StartRunBody = z.object({
           ),
       }),
     )
-    .max(20)
     .default([]),
   /**
    * 用户给的素材：开沙箱前由 harness 向 canvas 取出，放在沙箱里的 path（如 materials/照片.jpg）。
@@ -71,7 +72,6 @@ export const StartRunBody = z.object({
           ),
       }),
     )
-    .max(20)
     .default([]),
   /**
    * 接着之前某次运行做：放回它的会话（AI 记得前面聊过什么）、它的产出（放回 out/）和它的输入。
@@ -158,6 +158,7 @@ export const RunBody = z.object({
   nodeId: z.uuid().nullable(),
   model: z.string(),
   status: RunStatus,
+  resumable: z.boolean().optional(),
   error: z.string().nullable(),
   outputs: z.array(RunOutputFile),
   /** AI 最后说的一句话（下游节点和界面用） */

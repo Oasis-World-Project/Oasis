@@ -43,7 +43,7 @@ async function* entries(source: Readable) {
 /** 扫描/提取时逐条消费，目录之外只接受普通文件，绝不跟随符号链接。 */
 export async function scanArchive(
   source: Readable,
-  maxBytes: number,
+  maxBytes: number | undefined,
   consume?: (path: string, size: number, stream: Readable) => Promise<void>,
 ) {
   const files: { path: string; size: number; sha256: string }[] = [];
@@ -65,8 +65,7 @@ export async function scanArchive(
     if (
       !Number.isSafeInteger(size) ||
       size < 0 ||
-      total > maxBytes ||
-      files.length >= 10000 ||
+      (maxBytes !== undefined && total > maxBytes) ||
       seen.has(path)
     )
       throw new Error('归档大小、数量或文件名不合格');
@@ -181,7 +180,7 @@ export function rewriteArchive(
   source: Readable,
   prefix: string,
   keep: (path: string) => boolean,
-  maxBytes: number,
+  maxBytes: number | undefined,
   readonly = false,
 ): Readable {
   const archive = pack();

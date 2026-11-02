@@ -233,7 +233,7 @@ if (process.argv[2] === 'accept') {
                 'no-new-privileges',
                 '--entrypoint',
                 'ffmpeg',
-                'oasis/harness-sandbox-base:0.2.1-rc.2',
+                'oasis/harness-sandbox-base:0.2.1-rc.5',
                 '-hide_banner',
                 '-i',
                 'pipe:0',

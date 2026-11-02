@@ -597,9 +597,9 @@ export function createToolService(deps: {
         key: 'text.batch',
         name: '批量生成文字',
         description:
-          '用当前节点模型逐行生成文字，uses 按输入行数估计；支持停止和恢复。单价仅为规划估算，实际按模型 token 计费。',
+          '逐行生成文字，可用 --model 选择模型；uses 按输入行数估计，支持停止和恢复。预算/token/超时只在显式传入时生效，实际按 token 计费。',
         usage:
-          'oasis-tool text.batch --in 提示.jsonl --out out/结果.jsonl --budget_micro 1000000（每行 {"id":"1","prompt":"要求"}；--resume true 恢复）',
+          'oasis-tool text.batch --in 提示.jsonl --out out/结果.jsonl（每行 {"id":"1","prompt":"要求"}；--resume true 恢复）',
         unit: '行',
         estimateMicro: 2_000,
         long: false,

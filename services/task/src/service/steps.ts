@@ -18,6 +18,7 @@ import { materialPaths } from './materials.ts';
 import { incoming } from './schedule.ts';
 
 interface RunRequest {
+  goal?: boolean;
   purpose: NodeRunPurpose;
   model: string;
   prompt: string;
@@ -97,6 +98,7 @@ function speech(snapshot: Snapshot, node: Node, name: string, round: number): Ru
 function summary(snapshot: Snapshot, node: Node): RunRequest {
   return {
     purpose: 'summary',
+    goal: true,
     model: node.model,
     prompt: summaryPrompt({
       context: contextOf(snapshot, node),
@@ -120,6 +122,7 @@ export function firstStep(snapshot: Snapshot, node: Node): Step {
     requests: [
       {
         purpose: 'work',
+        goal: true,
         model: node.model,
         prompt: workPrompt(contextOf(snapshot, node)),
         inputsFrom: inputsOf(snapshot, node),
@@ -131,7 +134,7 @@ export function firstStep(snapshot: Snapshot, node: Node): Step {
 }
 
 /** 停止后继续 */
-export function resumeStep(snapshot: Snapshot, node: Node): Step {
+export function resumeStep(snapshot: Snapshot, node: Node, interrupted = false): Step {
   const config = node.config;
   if (node.kind === 'discussion') {
     const current = config.round ?? 0;
@@ -149,8 +152,9 @@ export function resumeStep(snapshot: Snapshot, node: Node): Step {
     requests: [
       {
         purpose: 'work',
+        goal: true,
         model: node.model,
-        prompt: resumePrompt(node.userNotes.slice(config.notesSeen ?? 0)),
+        prompt: resumePrompt(node.userNotes.slice(config.notesSeen ?? 0), interrupted),
         inputsFrom: [],
         continueFrom: node.currentRunId,
         meta: {},
@@ -173,16 +177,19 @@ export function retryStep(snapshot: Snapshot, node: Node, failed: NodeRun): Step
     return { requests: [speech(snapshot, node, failed.meta.participant, failed.meta.round)] };
   }
   if (failed.purpose === 'summary') return { requests: [summary(snapshot, node)] };
-  // 干活和修改失败：从头再做一次（修改也重新来过，之后照常过关卡）
-  return firstStep(snapshot, node);
+  // 有归档就恢复当前子任务，而不是把已付费的工作从头重放。
+  return failed.meta.resumable
+    ? resumeStep(snapshot, { ...node, currentRunId: failed.id }, true)
+    : firstStep(snapshot, node);
 }
 
-/** 关卡没过：接着刚交出产出的那次运行改一次 */
+/** 关卡没过：接着刚交出产出的那次运行修复 */
 export function reworkStep(node: Node, unmet: string[]): Step {
   return {
     requests: [
       {
         purpose: 'rework',
+        goal: true,
         model: node.model,
         prompt: reworkPrompt(unmet),
         inputsFrom: [],

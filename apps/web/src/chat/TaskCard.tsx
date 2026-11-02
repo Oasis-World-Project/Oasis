@@ -134,8 +134,8 @@ const DECISIONS: Record<
     { choice: 'retry', label: '再试一次' },
     { choice: 'continue', label: '跳过它继续' },
   ],
-  over_budget: [{ choice: 'continue', label: '提高上限继续' }],
-  over_estimate: [{ choice: 'continue', label: '按预估做' }],
+  over_budget: [{ choice: 'continue', label: '解除预算继续' }],
+  over_estimate: [{ choice: 'continue', label: '解除预算继续' }],
   plan_failed: [{ choice: 'retry', label: '重新规划' }],
   workflow_broken: [],
 };

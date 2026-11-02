@@ -26,6 +26,11 @@ export function memoryRunKeys(): RunKeysRepo & { rows: RunKey[] } {
     async findActive(keyHash, now) {
       return rows.find((r) => r.keyHash === keyHash && !r.revokedAt && r.expiresAt > now);
     },
+    async renew(id, now, expiresAt) {
+      const row = rows.find((r) => r.id === id && !r.revokedAt && r.expiresAt > now);
+      if (row) row.expiresAt = expiresAt;
+      return Boolean(row);
+    },
     async revoke(id, now) {
       const row = rows.find((r) => r.id === id && !r.revokedAt);
       if (row) row.revokedAt = now;

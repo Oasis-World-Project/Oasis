@@ -253,6 +253,10 @@ await startService({
         pricePerCoreHourMicro: config.COMPUTE_PRICE_MICRO_PER_CORE_HOUR,
       }),
       unavailableModels: meter.regionBlockedModels,
+      executionModels: () =>
+        [...priceBook.current().values()].flatMap((price) =>
+          price.capabilities ? [price.capabilities] : [],
+        ),
     });
   },
 });

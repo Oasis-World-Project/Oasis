@@ -60,16 +60,11 @@ await startService({
         logger,
       }),
       maxParallel: config.MAX_PARALLEL_NODES,
-      maxRetries: config.MAX_NODE_RETRIES,
-      maxReworks: config.MAX_NODE_REWORKS,
-      budgetMultiplier: config.BUDGET_MULTIPLIER,
       agent: createServiceClient('agent', config.AGENT_URL, { timeoutMs: 5_000 }),
       modelGateway,
       planning: {
         model: config.PLANNER_MODEL,
         defaultModel: config.DEFAULT_NODE_MODEL,
-        maxNodes: config.MAX_PLAN_NODES,
-        maxAttempts: config.MAX_PLAN_ATTEMPTS,
         decisionModel: config.GATE_MODEL,
         rates: {
           workRun: config.ESTIMATE_WORK_RUN_MICRO,

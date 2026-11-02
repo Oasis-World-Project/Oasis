@@ -28,7 +28,7 @@ await new Promise((resolve, reject) => {
       `type=bind,source=${evidence},target=/evidence`,
       '--entrypoint',
       'ffmpeg',
-      'oasis/harness-sandbox-base:0.2.1-rc.2',
+      'oasis/harness-sandbox-base:0.2.1-rc.5',
       '-hide_banner',
       '-loglevel',
       'error',

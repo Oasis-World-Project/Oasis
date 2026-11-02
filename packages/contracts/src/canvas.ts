@@ -188,7 +188,7 @@ export const RevisionMaterialsBody = z.object({
   ownerId: z.uuid(),
   taskId: z.uuid(),
   /** 还能放几份素材：上一版文件放得下（且不超过 10 个）就逐个交，否则打成一个 ZIP */
-  room: z.number().int().min(1).max(20),
+  room: z.number().int().min(1).optional(),
 });
 export const RevisionMaterialsResult = z.object({
   materials: z.array(Material),

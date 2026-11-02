@@ -104,7 +104,9 @@ type NodePatch = Partial<
     | 'finishedAt'
   >
 >;
-type RunPatch = Partial<Pick<NodeRun, 'status' | 'summary' | 'error' | 'outputs' | 'finishedAt'>>;
+type RunPatch = Partial<
+  Pick<NodeRun, 'status' | 'summary' | 'error' | 'outputs' | 'finishedAt' | 'meta'>
+>;
 export type NewNode = Pick<
   Node,
   'id' | 'key' | 'title' | 'kind' | 'role' | 'goal' | 'model' | 'status' | 'config'

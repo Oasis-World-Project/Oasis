@@ -66,9 +66,12 @@ export function createChatService(deps: {
       if (!provider.configured) {
         throw new HttpError(503, 'provider_not_configured', '模型服务还没有配置 API Key');
       }
-      const { max_cost_micro: maxCostMicro, ...providerBody } = input.body;
+      const { max_cost_micro: maxCostMicro, report_cost: reportCost, ...providerBody } = input.body;
       const requested = providerBody.max_completion_tokens ?? providerBody.max_tokens;
-      const maxOutputTokens = requested ?? deps.defaultMaxTokens;
+      const maxOutputTokens =
+        requested ??
+        deps.prices().get(providerBody.model)?.capabilities?.maxTokens ??
+        deps.defaultMaxTokens;
       const body = requested ? providerBody : { ...providerBody, max_tokens: maxOutputTokens };
       const extraChars = input.body.tools ? JSON.stringify(input.body.tools).length : 0;
       const price = deps.prices().get(body.model);
@@ -89,7 +92,7 @@ export function createChatService(deps: {
         maxOutputTokens,
         extraChars,
         price,
-        reportCost: maxCostMicro !== undefined,
+        reportCost: reportCost === true || maxCostMicro !== undefined,
       };
     },
 

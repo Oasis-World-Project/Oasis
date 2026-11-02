@@ -26,6 +26,18 @@ export type ChatMessage = z.infer<typeof ChatMessage>;
 
 const OutputTokens = z.number().int().positive();
 
+/** 供应商公布的执行能力；缺失的能力不能用通用适配器的猜测补齐。 */
+export const ModelCapabilities = z.object({
+  id: z.string(),
+  name: z.string(),
+  contextWindow: z.number().int().positive(),
+  maxTokens: z.number().int().positive(),
+  input: z.array(z.enum(['text', 'image'])).min(1),
+  reasoning: z.boolean(),
+});
+export type ModelCapabilities = z.infer<typeof ModelCapabilities>;
+export const ExecutionModels = z.object({ models: z.array(ModelCapabilities) });
+
 export const ChatCompletionRequest = z.looseObject({
   model: z.string().min(1),
   messages: z.array(ChatMessage).min(1),
@@ -33,6 +45,7 @@ export const ChatCompletionRequest = z.looseObject({
   /** 新版 OpenAI 字段，与 max_tokens 同义；agent 运行时用的是这个 */
   max_completion_tokens: OutputTokens.optional(),
   stream: z.boolean().optional(),
+  report_cost: z.boolean().optional(),
   /** Oasis 派发预算：预计冻结超过此值时拒绝，不透传供应商。 */
   max_cost_micro: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
 });

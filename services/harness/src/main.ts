@@ -120,7 +120,9 @@ await startService({
           .filter(([key]) => key.startsWith('OASIS_BATCH_'))
           .map(([key, value]) => [key, String(value)]),
       ),
-      timeoutMs: config.RUN_TIMEOUT_MS,
+      leaseMs: config.RUN_LEASE_MS,
+      goalRoundWindow: config.GOAL_ROUND_WINDOW,
+      keyTtlSeconds: config.RUN_KEY_TTL_SECONDS,
       cores: config.SANDBOX_CPUS,
       outputMaxBytes: config.OUTPUT_MAX_BYTES,
       inspectionLimits: {

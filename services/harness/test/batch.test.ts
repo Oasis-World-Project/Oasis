@@ -24,7 +24,20 @@ describe('JSONL 批次持久化与费用边界', () => {
     args: Record<string, unknown> = {},
     signal?: AbortSignal,
     kind = 'text.batch',
-  ) => runBatch({ kind, args: { in: source, ...args }, out: output, request, signal });
+  ) =>
+    runBatch({
+      kind,
+      args: {
+        in: source,
+        row_budget_micro: 200_000,
+        budget_micro: 1_000_000,
+        max_tokens: 2048,
+        ...args,
+      },
+      out: output,
+      request,
+      signal,
+    });
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'oasis-batch-'));
     source = join(dir, 'input.jsonl');
@@ -149,20 +162,25 @@ describe('JSONL 批次持久化与费用边界', () => {
       .map((line) => JSON.parse(line));
     expect(saved.map((row) => row.status).sort()).toEqual(['completed', 'uncertain']);
   });
-  it('推理耗尽 token 上限且没有最终正文：按已知费用记录失败，停止后续派发', async () => {
-    const request = vi.fn(async () => ({
-      choices: [{ message: { content: null }, finish_reason: 'length' }],
-      oasis: { costMicro: 12 },
-    }));
-    expect(await run(request, { concurrency: '1' })).toMatchObject({
-      failed: 1,
-      pending: 4,
-      costMicro: 12,
-      uncertain: 0,
-    });
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(JSON.parse((await readFile(output, 'utf8')).trim()).error).toContain('token 上限');
-  });
+  it.each([null, '尚未完成的部分正文'])(
+    '输出被截断（正文 %s）：按已知费用记录失败，停止后续派发',
+    async (content) => {
+      const request = vi.fn(async () => ({
+        choices: [{ message: { content }, finish_reason: 'length' }],
+        oasis: { costMicro: 12 },
+      }));
+      expect(await run(request, { concurrency: '1' })).toMatchObject({
+        failed: 1,
+        pending: 4,
+        costMicro: 12,
+        uncertain: 0,
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+      const saved = JSON.parse((await readFile(output, 'utf8')).trim());
+      expect(saved.status).toBe('failed');
+      expect(saved.error).toMatch(/token 上限|正文被截断/);
+    },
+  );
 
   it('模拟进程硬停：新容器接管旧锁，将 started 转为不确定而不重发', async () => {
     const controller = new AbortController();
@@ -232,13 +250,11 @@ describe('JSONL 批次持久化与费用边界', () => {
         { id: 'x', prompt: 'b' },
       ],
       [{ id: 'x', prompt: 'a', model: 'override' }],
-      rows(1001),
     ]) {
       await input(values);
       await expect(run(request)).rejects.toThrow();
     }
     await input(rows(1));
-    await expect(run(request, { concurrency: '5' })).rejects.toThrow('concurrency');
     await expect(
       runBatch({
         kind: 'text.batch',
@@ -266,4 +282,32 @@ describe('JSONL 批次持久化与费用边界', () => {
     });
     expect(JSON.parse((await readFile(output, 'utf8')).trim()).data).toEqual({ choice: '好' });
   });
+});
+
+it('未显式传入预算/token 时不注入旧测试上限，允许批次选择模型', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oasis-batch-open-'));
+  const cwd = vi.spyOn(process, 'cwd').mockReturnValue(dir);
+  try {
+    await mkdir(join(dir, 'out'));
+    const source = join(dir, 'input.jsonl');
+    await writeFile(source, JSON.stringify({ id: 'one', prompt: 'hello' }));
+    const request = vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject({ model: 'other/model', report_cost: true });
+      expect(body).not.toHaveProperty('max_cost_micro');
+      expect(body).not.toHaveProperty('max_tokens');
+      return { choices: [{ message: { content: 'done' } }], oasis: { costMicro: 2 } };
+    });
+    expect(
+      await runBatch({
+        kind: 'text.batch',
+        args: { in: source, model: 'other/model' },
+        out: join(dir, 'out/result.jsonl'),
+        request,
+      }),
+    ).toMatchObject({ completed: 1, costMicro: 2 });
+  } finally {
+    cwd.mockRestore();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

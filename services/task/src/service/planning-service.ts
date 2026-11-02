@@ -28,13 +28,9 @@ export interface PlanningConfig {
   model: string;
   /** 节点默认用的模型 */
   defaultModel: string;
-  maxNodes: number;
-  /** 规划员最多跑几次（含规划门退回后的修改） */
-  maxAttempts: number;
   /** 判断任务属于哪类场景用的决策模型（Jev） */
   decisionModel: string;
   rates: EstimateRates;
-  budgetMultiplier: number;
 }
 
 const RUN_FINAL = ['succeeded', 'failed', 'cancelled', 'stopped'];
@@ -157,7 +153,7 @@ export function createPlanning(deps: {
             catalog: await catalog(),
             tools: await tools(),
             playbooks: await playbooksFor(task),
-            limits: { maxNodes: config.maxNodes, defaultModel: config.defaultModel },
+            defaultModel: config.defaultModel,
           });
       await harness.json('POST', '/internal/runs', {
         body: {
@@ -165,6 +161,7 @@ export function createPlanning(deps: {
           payerId: task.payerId,
           taskId: task.id,
           model: config.model,
+          goal: true,
           prompt,
           materials: materialPaths(task.materials),
           ...(job.revise ? { continueFrom: job.revise.continueFrom } : {}),
@@ -211,7 +208,7 @@ export function createPlanning(deps: {
     const overUserCap = sheet.budgetMicro !== null && estimate > sheet.budgetMicro;
     await w.setTask({
       estimateMicro: estimate,
-      budgetLimitMicro: sheet.budgetMicro ?? estimate * config.budgetMultiplier,
+      budgetLimitMicro: sheet.budgetMicro,
       deliverables: sheet.deliverables.map((d) => ({
         name: d.name,
         form: d.form,
@@ -243,10 +240,7 @@ export function createPlanning(deps: {
     const toolList = result.status === 'succeeded' ? await tools() : [];
     const checked =
       result.status === 'succeeded'
-        ? checkPlan(await readPlan(result.runId), task.sheet!, await catalog(), toolList, {
-            maxNodes: config.maxNodes,
-            defaultModel: config.defaultModel,
-          })
+        ? checkPlan(await readPlan(result.runId), task.sheet!, await catalog(), toolList)
         : { problems: [`规划员没跑完：${result.error ?? result.status}`] };
     await engine.transact(task.id, async (snapshot, w, fx) => {
       const current = snapshot.task;
@@ -255,20 +249,12 @@ export function createPlanning(deps: {
         logger.info({ taskId: current.id, nodes: checked.plan.nodes.length }, '方案通过规划门');
         return adopt(snapshot, w, fx, checked.plan, toolList);
       }
-      if (current.planAttempts < config.maxAttempts) {
+      if (result.status === 'succeeded') {
         logger.info(
           { taskId: current.id, problems: checked.problems },
           '方案没过规划门，让规划员改',
         );
-        // 规划员跑完了但方案不合格：接着原会话改；规划员自己失败了：从头排
-        return open(
-          snapshot,
-          w,
-          fx,
-          result.status === 'succeeded'
-            ? { continueFrom: result.runId, problems: checked.problems }
-            : undefined,
-        );
+        return open(snapshot, w, fx, { continueFrom: result.runId, problems: checked.problems });
       }
       await w.setTask({
         status: 'needs_attention',

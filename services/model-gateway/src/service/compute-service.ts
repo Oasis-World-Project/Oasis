@@ -62,8 +62,8 @@ export function createComputeService(deps: {
       if (row?.kind !== 'compute' || !row.holdId) {
         throw new HttpError(404, 'call_not_found', '没有这次算力冻结');
       }
-      if (row.status !== 'running') return;
-      await meter.settle(
+      if (row.chargedMicro !== null) return;
+      const paid = await meter.settle(
         {
           id: row.id,
           holdId: row.holdId,
@@ -80,6 +80,8 @@ export function createComputeService(deps: {
         { costMicro: cost(input.cores, input.elapsedMs), source: 'estimate' },
         undefined,
       );
+      if (!paid)
+        throw new HttpError(503, 'compute_settlement_pending', '算力结算尚未完成，不能继续续租');
     },
     async outcome(callId: string) {
       const row = await repo.get(callId);

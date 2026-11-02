@@ -362,16 +362,11 @@ beforeEach(() => {
     harness: createServiceClient('harness', harnessUrl),
     gate: gate as unknown as Gate,
     maxParallel: 3,
-    maxRetries: 2,
-    maxReworks: 1,
-    budgetMultiplier: 3,
     agent: createServiceClient('agent', harnessUrl),
     modelGateway: createServiceClient('model-gateway', harnessUrl),
     planning: {
       model: 'deepseek/planner',
       defaultModel: 'deepseek/x',
-      maxNodes: 4,
-      maxAttempts: 2,
       decisionModel: 'typesafe/jev',
       rates: { workRun: 3_000, speechRun: 3_000, computeRun: 0 },
     },
@@ -489,37 +484,44 @@ describe('工作流调度', () => {
     expect(submitted.filter((s) => s.nodeId === task.nodes[1]?.id)).toHaveLength(1);
   });
 
-  it('失败自动重做 2 次；第 3 次还失败就停下等用户，下游不跑', async () => {
+  it('失败有可恢复归档时沿用同一子任务会话和产物', async () => {
+    const task = await create(['A'], []);
+    const previous = runOf('A', task).runId;
+    await finish(previous, 'failed', { resumable: true });
+    expect(submitted).toHaveLength(1);
+    await service.decide(OWNER, task.id, { choice: 'retry' });
+    expect(runOf('A', task)).toMatchObject({ continueFrom: previous, goal: true, inputsFrom: [] });
+  });
+
+  it('原生执行器明确失败后报告根因，不在外层复制付费运行，下游不跑', async () => {
     const task = await create(['A', 'B'], [['A', 'B']]);
-    await finish(runOf('A', task).runId, 'failed');
-    await finish(runOf('A', task).runId, 'failed');
-    expect(submitted).toHaveLength(3);
     await finish(runOf('A', task).runId, 'failed');
     const detail = await service.get(OWNER, task.id);
     expect(detail.status).toBe('needs_attention');
     expect(detail.attention).toMatchObject({
       reason: 'node_failed',
-      message: '「A」试了 3 次都没成功',
+      message: '「A」未完成：模型出错',
     });
     expect(detail.nodes.find((n) => n.key === 'A')).toMatchObject({
       status: 'failed',
-      attempts: 3,
+      attempts: 1,
     });
-    expect(submitted).toHaveLength(3);
+    expect(submitted).toHaveLength(1);
   });
 
-  it('重做一次后成功，照常往下走', async () => {
+  it('明确重试后成功，照常往下走', async () => {
     const task = await create(['A', 'B'], [['A', 'B']]);
     await finish(runOf('A', task).runId, 'failed');
+    await service.decide(OWNER, task.id, { choice: 'retry' });
     await finish(runOf('A', task).runId, 'succeeded');
     expect(await statusOf(task.id)).toMatchObject({ A: 'succeeded', B: 'running' });
   });
 
-  it('harness 明确拒绝（4xx）按运行失败处理，会自动重做', async () => {
+  it('harness 明确拒绝（4xx）报告错误，不重复提交同一无效请求', async () => {
     rejectNext = true;
     const task = await create(['A'], []);
-    expect(submitted).toHaveLength(1);
-    expect((await service.get(OWNER, task.id)).nodes[0]?.attempts).toBe(2);
+    expect(submitted).toHaveLength(0);
+    expect((await service.get(OWNER, task.id)).status).toBe('needs_attention');
   });
 });
 
@@ -605,17 +607,15 @@ describe('出口关卡', () => {
     expect(runOf('B', task).inputsFrom).toEqual([{ runId: rework.runId, as: 'A' }]);
   });
 
-  it('改过一次还没过：照样往下走，只在节点上留提醒', async () => {
+  it('多轮修改不受一次配额限制；关卡通过之前不放行下游', async () => {
     const task = await create(['A', 'B'], [['A', 'B']]);
-    gateResults = [['语气不够友好'], ['语气不够友好']];
+    gateResults = [['语气不够友好'], ['语气不够友好'], []];
     await finish(runOf('A', task).runId, 'succeeded');
     await finish(runOf('A', task).runId, 'succeeded');
-    const detail = await service.get(OWNER, task.id);
-    expect(detail.nodes.find((n) => n.key === 'A')).toMatchObject({
-      status: 'succeeded',
-      warning: '交付前检查没完全通过：语气不够友好',
-    });
-    expect(await statusOf(task.id)).toMatchObject({ B: 'running' });
+    expect(await statusOf(task.id)).toMatchObject({ A: 'running', B: 'waiting' });
+    expect(runOf('A', task).continueFrom).toBe(runsOf('A', task).at(-2)?.runId);
+    await finish(runOf('A', task).runId, 'succeeded');
+    expect(await statusOf(task.id)).toMatchObject({ A: 'succeeded', B: 'running' });
   });
 
   it('关卡检查中途断了：节点停在检查中，对账时重新检查', async () => {
@@ -683,17 +683,13 @@ describe('讨论节点', () => {
     expect(runOf('D', task).prompt).toContain('【用户新追加的要求】\n- 别超过 100 字');
   });
 
-  it('某人发言失败只重做他这一句；重做用完还失败，停掉同一轮其他人的发言', async () => {
+  it('发言最终失败时保留原因并结束同轮其他在途发言，不自行从头复制', async () => {
     const task = await create([discussion('D', ['甲', '乙'], 1)], []);
     const [jia, yi] = runsOf('D', task);
     await finish(jia?.runId as string, 'failed');
-    const retry = runOf('D', task);
-    expect(retry.model).toBe('deepseek/甲');
-    expect(retry.prompt).toContain('你是「甲」');
-    await finish(retry.runId, 'failed');
-    await finish(runOf('D', task).runId, 'failed');
     expect(await statusOf(task.id)).toMatchObject({ task: 'needs_attention', D: 'failed' });
     expect(cancelled).toEqual([yi?.runId]);
+    expect(submitted).toHaveLength(2);
   });
 });
 
@@ -843,13 +839,13 @@ describe('编辑节点和连线', () => {
 });
 
 describe('需要处理时三选一', () => {
-  const failThrice = async (task: { nodes: { id: string; key: string }[] }, key: string) => {
-    for (let i = 0; i < 3; i++) await finish(runOf(key, task).runId, 'failed');
+  const failNode = async (task: { nodes: { id: string; key: string }[] }, key: string) => {
+    await finish(runOf(key, task).runId, 'failed');
   };
 
   it('节点失败 → 用现在的结果继续：它算完成并留提醒，下游照常跑（拿不到它的产出）', async () => {
     const task = await create(['A', 'B'], [['A', 'B']]);
-    await failThrice(task, 'A');
+    await failNode(task, 'A');
     const detail = await service.decide(OWNER, task.id, { choice: 'continue' });
     expect(detail.status).toBe('running');
     expect(detail.nodes.find((n) => n.key === 'A')).toMatchObject({
@@ -861,13 +857,13 @@ describe('需要处理时三选一', () => {
 
   it('节点失败 → 再试：重做次数重新算', async () => {
     const task = await create(['A'], []);
-    await failThrice(task, 'A');
+    await failNode(task, 'A');
     await service.decide(OWNER, task.id, { choice: 'retry' });
     expect((await service.get(OWNER, task.id)).nodes[0]).toMatchObject({
       status: 'running',
       attempts: 1,
     });
-    expect(submitted).toHaveLength(4);
+    expect(submitted).toHaveLength(2);
   });
 
   it('连线断开时只能接线或取消；不需要处理时不能选', async () => {
@@ -913,31 +909,33 @@ describe('花费', () => {
     expect((await service.get(OWNER, task.id)).spentMicro).toBe(0);
   });
 
-  it('结算事件累加到任务和节点（同一次调用只算一次）；超过预估 3 倍就停下所有节点问用户', async () => {
+  it('估价不产生预算：超过旧的三倍阈值仍运行，结算幂等', async () => {
     const task = await create(['A', 'B'], [], 1_000);
-    expect(task.budgetLimitMicro).toBe(3_000);
+    expect(task.budgetLimitMicro).toBeNull();
     await settle(task.id, keyOf(task, 'A'), CALL(1), 2_000);
     await settle(task.id, keyOf(task, 'A'), CALL(1), 2_000);
-    let detail = await service.get(OWNER, task.id);
-    expect(detail.spentMicro).toBe(2_000);
-    expect(detail.nodes.find((n) => n.key === 'A')?.spentMicro).toBe(2_000);
-
     await settle(task.id, keyOf(task, 'B'), CALL(2), 1_500);
-    detail = await service.get(OWNER, task.id);
-    expect(detail.status).toBe('needs_attention');
-    expect(detail.attention).toMatchObject({
-      reason: 'over_budget',
-      message: '已经花了 $0.0035，超过了预估（$0.001）的 3 倍',
-    });
-    expect(detail.nodes.map((n) => n.status)).toEqual(['stopped', 'stopped']);
-    expect(stopped.sort()).toEqual([runOf('A', task).runId, runOf('B', task).runId].sort());
+    const detail = await service.get(OWNER, task.id);
+    expect(detail.spentMicro).toBe(3_500);
+    expect(detail.nodes.find((n) => n.key === 'A')?.spentMicro).toBe(2_000);
+    expect(detail.status).toBe('running');
+    expect(stopped).toEqual([]);
+  });
 
-    expect((await errorOf(() => service.decide(OWNER, task.id, { choice: 'retry' }))).status).toBe(
-      409,
-    );
-    detail = await service.decide(OWNER, task.id, { choice: 'continue' });
-    expect(detail).toMatchObject({ status: 'running', budgetLimitMicro: 6_500 });
-    expect(runOf('A', task).continueFrom).toBeDefined();
+  it('只有显式预算会触发停止；用户继续后解除预算', async () => {
+    const task = await create(['A', 'B'], [], 1_000);
+    await store.transact(task.id, async (_snapshot, writer) => {
+      await writer.setTask({ budgetLimitMicro: 3_000 });
+    });
+    await settle(task.id, keyOf(task, 'A'), CALL(1), 3_500);
+    const detail = await service.get(OWNER, task.id);
+    expect(detail.status).toBe('needs_attention');
+    expect(detail.attention?.reason).toBe('over_budget');
+    expect(stopped).toHaveLength(2);
+    expect(await service.decide(OWNER, task.id, { choice: 'continue' })).toMatchObject({
+      status: 'running',
+      budgetLimitMicro: null,
+    });
   });
 });
 
@@ -989,7 +987,7 @@ describe('规划（从任务单开始）', () => {
     expect(planner?.model).toBe('deepseek/planner');
     expect(planner?.prompt).toContain('「首页文案」');
     expect(planner?.prompt).toContain('deepseek/x（DeepSeek');
-    expect(planner?.prompt).toContain('最多 4 个节点');
+    expect(planner?.prompt).not.toContain('最多 4 个节点');
     // 经验手册：Jev 判断属于图片类（计入这个任务），只附图片类的
     expect(planner?.prompt).toContain('【这类任务的经验】');
     expect(planner?.prompt).toContain('图片的经验');
@@ -1001,7 +999,7 @@ describe('规划（从任务单开始）', () => {
     expect(detail).toMatchObject({
       status: 'running',
       estimateMicro: 7_200,
-      budgetLimitMicro: 21_600,
+      budgetLimitMicro: null,
     });
     expect(detail.nodes.map((n) => `${n.key}=${n.status}`)).toEqual([
       'write=running',
@@ -1031,7 +1029,7 @@ describe('规划（从任务单开始）', () => {
     expect(detail.estimateMicro).toBe(99_600);
     expect(detail.nodes[0]?.tools).toEqual([{ key: 'image.generate', uses: 2 }]);
     const prompt = runOf('draw', detail).prompt;
-    expect(prompt).toContain('【可以用的工具】\n- 这次分给你的：image.generate。');
+    expect(prompt).toContain('规划建议使用：image.generate');
     expect(prompt).toContain('oasis-tool list');
   });
 
@@ -1065,37 +1063,20 @@ describe('规划（从任务单开始）', () => {
     expect((await service.get(OWNER, task.id)).status).toBe('running');
   });
 
-  it('规划员自己失败了：从头再排；两次都不行就交给用户（重新规划 / 取消）', async () => {
+  it('原生规划失败保留根因；用户选择重新规划后再执行', async () => {
     const task = await fromSheet();
     await plannerDone(undefined, 'failed');
-    expect(plannerRuns().at(-1)!.continueFrom).toBeUndefined();
-    await plannerDone('不是 JSON');
     const detail = await service.get(OWNER, task.id);
     expect(detail.status).toBe('needs_attention');
     expect(detail.attention?.reason).toBe('plan_failed');
-    expect(detail.attention?.message).toContain('不是合法的 JSON');
-    expect(
-      (await errorOf(() => service.decide(OWNER, task.id, { choice: 'continue' }))).status,
-    ).toBe(409);
-
+    expect(detail.attention?.message).toContain('模型出错');
+    expect(plannerRuns()).toHaveLength(1);
     expect((await service.decide(OWNER, task.id, { choice: 'retry' })).status).toBe('planning');
-    expect(plannerRuns()).toHaveLength(3);
+    await plannerDone('不是 JSON');
+    await plannerDone('还是错误');
+    expect((await service.get(OWNER, task.id)).status).toBe('planning');
     await plannerDone(goodPlan);
     expect((await service.get(OWNER, task.id)).status).toBe('running');
-  });
-
-  it('预估超过用户在任务单里设的上限：先不开跑，问用户；照做就按预估定上限开跑', async () => {
-    const task = await fromSheet(1_000);
-    await plannerDone(goodPlan);
-    let detail = await service.get(OWNER, task.id);
-    expect(detail).toMatchObject({
-      status: 'needs_attention',
-      attention: { reason: 'over_estimate', message: '预计要花 $0.0072，超过了你设的上限 $0.001' },
-    });
-    expect(detail.nodes.every((n) => n.status === 'waiting')).toBe(true);
-    detail = await service.decide(OWNER, task.id, { choice: 'continue' });
-    expect(detail).toMatchObject({ status: 'running', budgetLimitMicro: 21_600 });
-    expect(detail.nodes.find((n) => n.key === 'write')?.status).toBe('running');
   });
 
   it('规划中不能改工作流；取消会停掉规划员', async () => {
@@ -1268,9 +1249,9 @@ describe('模型在当前网络用不了', () => {
       attempts: 1,
       warning: '原定的模型 openai/blocked 在当前网络用不了，改用 deepseek/x',
     });
-    // 默认模型也用不了：照常按失败重做
+    // 默认模型也不可用：报告实际故障，不反复付费重放
     await finish(next.runId, 'failed', { error: REGION });
-    expect((await service.get(OWNER, task.id)).nodes[0]?.attempts).toBe(2);
+    expect((await service.get(OWNER, task.id)).status).toBe('needs_attention');
   });
 
   it('讨论里某位参与者碰上了：只换他的模型，重新说这一句', async () => {

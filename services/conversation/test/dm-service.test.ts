@@ -977,7 +977,7 @@ describe('接需求', () => {
   it('失败结果被带回修复；生成请求使用契约约束且不消耗额外推理输出', async () => {
     await begin();
     const invalid = JSON.parse(sheet());
-    invalid.sheet.criteria = Array.from({ length: 9 }, (_, i) => `要求${i}`);
+    invalid.sheet.criteria = ['要求8', 8];
     intakeReplies = [JSON.stringify(invalid), sheet()];
     await intake.answer({
       conversation: await conversation(),

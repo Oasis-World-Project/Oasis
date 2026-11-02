@@ -2,17 +2,31 @@
 // 以及多模态：生图、配音、转写和查询某次生成的实际花费（ADR 0006）。
 // 换供应商只换这个文件。
 import { z } from 'zod';
+import { ModelCapabilities } from '@oasis/contracts/model-gateway';
 
 const ModelsResponse = z.object({
   data: z.array(
     z.looseObject({
       id: z.string(),
+      name: z.string().optional(),
+      context_length: z.number().int().positive().nullish(),
+      top_provider: z
+        .looseObject({ max_completion_tokens: z.number().int().positive().nullish() })
+        .nullish(),
+      architecture: z
+        .looseObject({
+          input_modalities: z.array(z.string()).optional(),
+          output_modalities: z.array(z.string()).optional(),
+        })
+        .nullish(),
+      supported_parameters: z.array(z.string()).optional(),
       pricing: z.looseObject({ prompt: z.string(), completion: z.string() }).optional(),
     }),
   ),
 });
 
 export interface ModelPrice {
+  capabilities?: ModelCapabilities;
   /** 每个输入 token 的美元价格 */
   prompt: number;
   /** 每个输出 token 的美元价格 */
@@ -119,7 +133,25 @@ export function createOpenRouterClient(options: {
           prompt >= 0 &&
           completion >= 0
         ) {
-          prices.set(model.id, { prompt, completion });
+          const parsed = ModelCapabilities.safeParse({
+            id: model.id,
+            name: model.name ?? model.id,
+            contextWindow: model.context_length,
+            maxTokens: model.top_provider?.max_completion_tokens,
+            input: model.architecture?.input_modalities?.filter(
+              (m) => m === 'text' || m === 'image',
+            ),
+            reasoning:
+              model.supported_parameters?.some(
+                (p) => p === 'reasoning' || p === 'reasoning_effort',
+              ) ?? false,
+          });
+          const chat = model.architecture?.output_modalities?.includes('text');
+          prices.set(model.id, {
+            prompt,
+            completion,
+            ...(chat && parsed.success ? { capabilities: parsed.data } : {}),
+          });
         }
       }
       return prices;

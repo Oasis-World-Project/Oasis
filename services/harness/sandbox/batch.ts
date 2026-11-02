@@ -13,9 +13,9 @@ interface Meta {
   digest: string;
   rows: Row[];
   model: string;
-  maxTokens: number;
-  rowBudget: number;
-  budget: number;
+  maxTokens?: number;
+  rowBudget?: number;
+  budget?: number;
 }
 interface Result {
   id: string;
@@ -89,12 +89,12 @@ async function lock(directory: string) {
   return () => rm(path, { recursive: true, force: true });
 }
 
-function rowsOf(text: string, kind: string, maxRows: number): Row[] {
+function rowsOf(text: string, kind: string): Row[] {
   const lines = text
     .replace(/^\uFEFF/, '')
     .split(/\r?\n/)
     .filter((line) => line.trim());
-  if (!lines.length || lines.length > maxRows) throw new Error(`批次需要 1–${maxRows} 行`);
+  if (!lines.length) throw new Error('批次需要至少一行');
   const ids = new Set<string>();
   return lines.map((line, index) => {
     const row = JSON.parse(line) as Row;
@@ -159,9 +159,10 @@ export async function runBatch(input: {
     'max_tokens',
     'budget_micro',
     'row_budget_micro',
+    'model',
+    'timeout_ms',
   ]);
-  if (Object.keys(args).some((key) => !allowed.has(key)))
-    throw new Error('批次包含不支持的参数（模型固定为当前节点模型）');
+  if (Object.keys(args).some((key) => !allowed.has(key))) throw new Error('批次包含不支持的参数');
   if (!input.out) throw new Error('批次必须提供 --out out/结果.jsonl');
   const output = resolve(input.out);
   const rel = relative(resolve('out'), output);
@@ -174,14 +175,17 @@ export async function runBatch(input: {
     rel.split(sep)[0] === '.oasis-batches'
   )
     throw new Error('批次输出必须位于 out/ 内且不能占用保留目录');
-  const maxRows = limit('OASIS_BATCH_MAX_ROWS', 1000, 1000);
   const maxBytes = limit('OASIS_BATCH_MAX_INPUT_BYTES', 5 * 1024 * 1024, 20 * 1024 * 1024);
   const maxConcurrency = limit('OASIS_BATCH_CONCURRENCY', 4, 16);
-  const tokenLimit = limit('OASIS_BATCH_MAX_TOKENS', 2048, 8192);
-  const budgetLimit = limit('OASIS_BATCH_BUDGET_MICRO', 1_000_000, 100_000_000);
-  const rowLimit = limit('OASIS_BATCH_ROW_BUDGET_MICRO', 200_000, 10_000_000);
-  const timeout = limit('OASIS_BATCH_TIMEOUT_MS', 120_000, 600_000);
-  const concurrency = integer(args.concurrency, maxConcurrency, maxConcurrency, 'concurrency');
+  const optionalInteger = (value: unknown, name: string) =>
+    value === undefined ? undefined : integer(value, 1, Number.MAX_SAFE_INTEGER, name);
+  const timeout = optionalInteger(args.timeout_ms, 'timeout_ms');
+  const selectedModel =
+    typeof args.model === 'string' ? args.model : (process.env.OASIS_MODEL ?? '');
+  const concurrency = Math.min(
+    integer(args.concurrency, maxConcurrency, Number.MAX_SAFE_INTEGER, 'concurrency'),
+    maxConcurrency,
+  );
   if (args.resume !== undefined && args.resume !== 'true') throw new Error('--resume 只接受 true');
   const resume = args.resume === 'true';
   const directory = join(resolve('out'), '.oasis-batches', digest(rel));
@@ -199,7 +203,7 @@ export async function runBatch(input: {
     if (args.in !== undefined) {
       if (typeof args.in !== 'string') throw new Error('--in 必须是文件路径');
       if ((await stat(args.in)).size > maxBytes) throw new Error('输入文件超过批次大小上限');
-      rows = rowsOf(await readFile(args.in, 'utf8'), kind, maxRows);
+      rows = rowsOf(await readFile(args.in, 'utf8'), kind);
     }
     const metaPath = join(directory, 'meta.json');
     let meta: Meta;
@@ -209,17 +213,17 @@ export async function runBatch(input: {
         meta.version !== 1 ||
         meta.kind !== kind ||
         meta.output !== rel ||
-        meta.model !== (process.env.OASIS_MODEL ?? '') ||
+        meta.model !== selectedModel ||
         meta.digest !== digest(JSON.stringify(meta.rows)) ||
         (rows && digest(JSON.stringify(rows)) !== meta.digest)
       )
         throw new Error('恢复输入、工具、模型或检查点摘要不一致');
-      rowsOf(meta.rows.map((row) => JSON.stringify(row)).join('\n'), kind, maxRows);
+      rowsOf(meta.rows.map((row) => JSON.stringify(row)).join('\n'), kind);
       if (Buffer.byteLength(JSON.stringify(meta.rows)) > maxBytes)
         throw new Error('恢复输入超过大小上限');
-      integer(meta.maxTokens, 1, tokenLimit, '检查点 token');
-      integer(meta.rowBudget, 1, rowLimit, '检查点行预算');
-      integer(meta.budget, 1, budgetLimit, '检查点预算');
+      optionalInteger(meta.maxTokens, '检查点 token');
+      optionalInteger(meta.rowBudget, '检查点行预算');
+      optionalInteger(meta.budget, '检查点预算');
       if (
         (args.max_tokens !== undefined && Number(args.max_tokens) !== meta.maxTokens) ||
         (args.row_budget_micro !== undefined && Number(args.row_budget_micro) !== meta.rowBudget) ||
@@ -236,10 +240,10 @@ export async function runBatch(input: {
         output: rel,
         digest: digest(JSON.stringify(rows)),
         rows,
-        model: process.env.OASIS_MODEL ?? '',
-        maxTokens: integer(args.max_tokens, tokenLimit, tokenLimit, 'max_tokens'),
-        rowBudget: integer(args.row_budget_micro, rowLimit, rowLimit, 'row_budget_micro'),
-        budget: integer(args.budget_micro, budgetLimit, budgetLimit, 'budget_micro'),
+        model: selectedModel,
+        maxTokens: optionalInteger(args.max_tokens, 'max_tokens'),
+        rowBudget: optionalInteger(args.row_budget_micro ?? args.budget_micro, 'row_budget_micro'),
+        budget: optionalInteger(args.budget_micro, 'budget_micro'),
       };
       if (kind === 'text.batch' && !meta.model) throw new Error('当前节点没有模型');
       await atomic(metaPath, meta);
@@ -260,7 +264,7 @@ export async function runBatch(input: {
       if (saved.status === 'started') {
         saved.status = 'uncertain';
         saved.error = '上次请求已派发但结果未持久保存，不自动重发';
-        saved.costMicro = meta.rowBudget;
+        saved.costMicro = meta.rowBudget ?? 0;
         await atomic(pathOf(row.id), saved);
       }
       results.set(row.id, saved);
@@ -274,15 +278,15 @@ export async function runBatch(input: {
           next++;
           continue;
         }
-        if (used + meta.rowBudget > meta.budget) break;
+        if (meta.budget !== undefined && used + (meta.rowBudget ?? 0) > meta.budget) break;
         next++;
-        used += meta.rowBudget;
-        const result: Result = { id: row.id, status: 'started', costMicro: meta.rowBudget };
+        used += meta.rowBudget ?? 0;
+        const result: Result = { id: row.id, status: 'started', costMicro: meta.rowBudget ?? 0 };
         await atomic(pathOf(row.id), result);
         // 写入期间收到停止时还未派发，删除 started，下次可正常继续。
         if (stopped) {
           await rm(pathOf(row.id));
-          used -= meta.rowBudget;
+          used -= meta.rowBudget ?? 0;
           break;
         }
         try {
@@ -291,20 +295,21 @@ export async function runBatch(input: {
               ? {
                   model: meta.model,
                   stream: false,
-                  max_tokens: meta.maxTokens,
-                  max_cost_micro: meta.rowBudget,
+                  ...(meta.maxTokens ? { max_tokens: meta.maxTokens } : {}),
+                  ...(meta.rowBudget ? { max_cost_micro: meta.rowBudget } : {}),
+                  report_cost: true,
                   messages: [{ role: 'user', content: row.prompt }],
                 }
               : {
                   args: Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'id')),
-                  max_cost_micro: meta.rowBudget,
+                  ...(meta.rowBudget ? { max_cost_micro: meta.rowBudget } : {}),
                 };
           const response = (await input.request(
             kind === 'text.batch' ? '/chat/completions' : '/tools/jev.decide',
             {
               method: 'POST',
               body: JSON.stringify(body),
-              signal: AbortSignal.timeout(timeout),
+              ...(timeout ? { signal: AbortSignal.timeout(timeout) } : {}),
             },
           )) as {
             choices?: { message?: { content?: string }; finish_reason?: string }[];
@@ -319,15 +324,18 @@ export async function runBatch(input: {
           if (
             kind === 'text.batch' &&
             response.choices?.[0]?.finish_reason === 'length' &&
-            !text &&
             Number.isSafeInteger(cost) &&
             cost! >= 0
           ) {
             result.status = 'failed';
             result.error =
               '输出 token 上限已用尽但没有最终正文；本行已计费，未自动重试。请核对费用后另建批次并调整上限。';
+            if (typeof text === 'string' && text) {
+              result.text = text;
+              result.error = '本行正文被截断，部分正文与费用已保存，不作为完整结果，也不自动重发。';
+            }
             result.costMicro = cost!;
-            used += cost! - meta.rowBudget;
+            used += cost! - (meta.rowBudget ?? 0);
             stopped = true;
             await atomic(pathOf(row.id), result);
             results.set(row.id, result);
@@ -339,7 +347,7 @@ export async function runBatch(input: {
           result.text = text;
           result.data = response.data;
           result.costMicro = cost!;
-          used += cost! - meta.rowBudget;
+          used += cost! - (meta.rowBudget ?? 0);
         } catch (error) {
           const code = (error as { code?: string }).code;
           const rejected = [
