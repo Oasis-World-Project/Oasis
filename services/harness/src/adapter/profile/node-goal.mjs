@@ -1,7 +1,20 @@
 // Oasis 的授权与原生 goal 生命周期衔接；不实现 Agent Loop/调度器。
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+const { appendPluginRecord } = await import(
+  createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').resolve(
+    '@deepseek-ai/dsh-session',
+  )
+);
 export const name = 'oasis-node-goal';
-export const inject = ['agents', 'goals', 'agentPresets', 'sessionProjections', 'llm'];
+export const inject = [
+  'agents',
+  'goals',
+  'agentPresets',
+  'sessionProjections',
+  'llm',
+  'subagentModelSelection',
+];
 export function apply(ctx) {
   const request = JSON.parse(readFileSync('/workspace/in/.oasis-execution.json', 'utf8'));
   const window = request.goalRoundWindow;
@@ -22,11 +35,27 @@ export function apply(ctx) {
     if (agent)
       defer(agent, () => {
         const goal = ctx.goals.get(agent);
-        agent.session.append('oasis/goal-status', {
+        appendPluginRecord(agent.session, 'plugin:oasis/goal-status', {
           phase: goal?.phase ?? null,
           activation: goal?.activation ?? null,
         });
       });
+  });
+  // 原生委派工具会在 agent/created 时捕获授权，须在更早的会话发布边界衔接。
+  ctx.on('session/created', (session) => {
+    if (
+      String(session.id) === request.sessionId &&
+      session.firstLiveSeq > 0 &&
+      !ctx.sessionProjections.stateOf(session, 'agentPreset') &&
+      session.requestHeader()?.config.provider === 'oasis' &&
+      ctx.sessionProjections.stateOf(session, 'subagentModelSelectionPolicy') === null
+    ) {
+      const selection = ctx.subagentModelSelection.current();
+      if (selection.enabled && selection.allowedModels.length)
+        session.append('subagent/model-selection-policy', {
+          allowedModels: selection.allowedModels,
+        });
+    }
   });
   ctx.on('agent/created', async ({ agent }) => {
     if (
@@ -35,9 +64,11 @@ export function apply(ctx) {
     )
       return;
     const saved = ctx.sessionProjections.stateOf(agent.session, 'agentPreset');
-    if (saved || agent.session.firstLiveSeq > 0)
+    if (saved || agent.session.firstLiveSeq > 0) {
       await ctx.agentPresets.mount(agent.ctx, saved ?? 'oasis');
-    else await ctx.agentPresets.select(agent, 'oasis');
+      // SDK 的创建通知已取过监听器快照；晚绑定后通知原生工具重算作用域。
+      ctx.emit('tools/change');
+    } else await ctx.agentPresets.select(agent, 'oasis');
   });
   function extend(agent) {
     const goal = ctx.goals.get(agent);

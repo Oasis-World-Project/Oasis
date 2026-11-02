@@ -257,7 +257,7 @@ export function connectAgent(io: {
       }
       if (p.sessionId && !belongs(p.sessionId)) return;
       const root = !p.sessionId || p.sessionId === io.sessionId;
-      if (p.event?.type === 'oasis/goal-status') {
+      if (p.event?.type === 'plugin:oasis/goal-status') {
         if (root) {
           goalPhase = p.event.data?.phase as string | undefined;
           goalActivation = p.event.data?.activation;

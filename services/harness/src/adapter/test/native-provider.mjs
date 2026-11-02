@@ -1,8 +1,9 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
 import process from 'node:process';
+import { zstdDecompressSync } from 'node:zlib';
 let rootCalls = 0;
 let childCalls = 0;
 let grandchildCalls = 0;
@@ -12,6 +13,19 @@ let spawned = false;
 let wrote = false;
 let cap;
 let reasoning;
+const mode = process.env.OASIS_NATIVE_MODE ?? 'fresh';
+const sessionId = JSON.parse(readFileSync('/workspace/in/.oasis-execution.json', 'utf8')).sessionId;
+let historySeen = false;
+if (mode !== 'fresh') {
+  const sessionDirectory = `/home/node/.dsh/sessions/--workspace--/${sessionId}`;
+  mkdirSync(sessionDirectory, { recursive: true });
+  if (existsSync('/workspace/in/legacy-session.jsonl.zstd'))
+    copyFileSync(
+      '/workspace/in/legacy-session.jsonl.zstd',
+      `${sessionDirectory}/session.v${process.env.OASIS_NATIVE_GENERATION ?? '4'}.jsonl.zstd`,
+    );
+  writeFileSync('/workspace/out/legacy.txt', 'legacy-file-kept');
+}
 const server = createServer(async (request, reply) => {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
@@ -22,6 +36,19 @@ const server = createServer(async (request, reply) => {
   cap = body.max_tokens ?? body.max_completion_tokens;
   if (!child) reasoning = body.reasoning?.effort ?? body.reasoning_effort;
   const tools = new Set((body.tools ?? []).map((tool) => tool.function.name));
+  if (mode === 'refuse') throw new Error('A refused archive must never dispatch a model request');
+  if (mode === 'resume' && !child) {
+    const history = JSON.stringify(body.messages);
+    if (
+      !history.includes('LEGACY_CANONICAL_HISTORY_7e82') ||
+      !history.includes('LEGACY_TOOL_DURABLE_7e82')
+    )
+      throw new Error('Legacy history or its tool result was lost');
+    historySeen = true;
+    const delegation = body.tools?.find((tool) => tool.function.name === 'subagent');
+    if (!delegation?.function.parameters.properties.provider)
+      throw new Error('Legacy session resumed without current child-model authorization');
+  }
   let finish = 'stop';
   let content = child ? 'Secondary task complete.' : 'Continue working.';
   let call;
@@ -36,7 +63,7 @@ const server = createServer(async (request, reply) => {
         model: 'test/tertiary',
       },
     };
-  } else if (!child && n === 1) finish = 'length';
+  } else if (!child && n === 1 && mode === 'fresh') finish = 'length';
   else if (!child && n >= 4 && !spawned) {
     if (!tools.has('subagent')) throw new Error('subagent missing');
     spawned = true;
@@ -120,7 +147,7 @@ server.listen(0, '127.0.0.1', () => {
         const message = JSON.parse(line);
         if (
           message.method === 'session.event' &&
-          message.params.sessionId === 'root' &&
+          message.params.sessionId === sessionId &&
           message.params.event.type === 'goal/change'
         )
           goal = message.params.event.data.goal;
@@ -134,7 +161,24 @@ server.listen(0, '127.0.0.1', () => {
   process.stdin.pipe(child.stdin);
   child.on('exit', (code) => {
     server.close();
+    if (mode === 'refuse') {
+      process.stderr.write(`NATIVE_REFUSED ${rootCalls}\n`);
+      process.exit(code || rootCalls ? 1 : 0);
+    }
     const proof = readFileSync('/workspace/out/proof.txt', 'utf8');
+    const archive = readFileSync(
+      `/home/node/.dsh/sessions/--workspace--/${sessionId}/session.v4.jsonl.zstd`,
+    );
+    let offset = 0;
+    let log = '';
+    while (offset < archive.length) {
+      const decoded = zstdDecompressSync(archive.subarray(offset), { info: true });
+      log += decoded.buffer;
+      offset += decoded.engine.bytesWritten;
+    }
+    const records = log.trim().split('\n').map(JSON.parse);
+    const policies = records.filter((event) => event.type === 'subagent/model-selection-policy');
+    writeFileSync('/workspace/evidence/session.jsonl.zstd', archive);
     const result = {
       code,
       rootCalls,
@@ -145,6 +189,11 @@ server.listen(0, '127.0.0.1', () => {
       phase: goal?.phase,
       maxGoalRounds: goal?.maxGoalRounds,
       proof,
+      policyCount: policies.length,
+      policyModels: policies[0]?.data.allowedModels.map((model) => model.model),
+      ...(mode === 'resume'
+        ? { historySeen, legacyOutput: readFileSync('/workspace/out/legacy.txt', 'utf8') }
+        : {}),
     };
     process.stderr.write('NATIVE_PROOF ' + JSON.stringify(result) + '\n');
     process.exit(
@@ -156,7 +205,8 @@ server.listen(0, '127.0.0.1', () => {
           reasoning === 'max' &&
           goal?.phase === 'complete' &&
           goal.maxGoalRounds > 2 &&
-          proof === 'native-proof'
+          proof === 'native-proof' &&
+          (mode !== 'resume' || (historySeen && result.legacyOutput === 'legacy-file-kept'))
         )
         ? 1
         : 0,
