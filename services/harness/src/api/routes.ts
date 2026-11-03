@@ -37,6 +37,7 @@ export function registerRoutes(
 ): void {
   const inspectModel = createModelPreviewInspector();
   const inspectPoster = createModelPosterInspector();
+  app.get('/internal/execution/environment', () => runs.environment());
   app.post(
     '/internal/models/inspect',
     { bodyLimit: Math.ceil(MODEL_PREVIEW_LIMITS.bytes / 3) * 4 + 1000 },

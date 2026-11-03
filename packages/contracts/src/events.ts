@@ -1,6 +1,7 @@
 // 服务之间的异步事件。主题名就是事件类型，形如 <服务>.<对象>.<动作>。
 import { z } from 'zod';
 import { Attention, TaskStatus } from './task.ts';
+import { RunOutputFile } from './harness.ts';
 
 /** 所有事件共用的信封（参照 CloudEvents 精简）。id 同时用作 JetStream 去重 ID。 */
 export const EventEnvelope = z.object({
@@ -43,7 +44,7 @@ export const RunFinished = {
     status: z.enum(['succeeded', 'failed', 'cancelled', 'stopped']),
     resumable: z.boolean().optional(),
     error: z.string().nullable(),
-    outputs: z.array(z.object({ path: z.string(), size: z.number().int().nonnegative() })),
+    outputs: z.array(RunOutputFile),
     /** AI 最后说的一句话 */
     summary: z.string().nullable(),
     finishedAt: z.iso.datetime(),

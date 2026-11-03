@@ -88,6 +88,23 @@ export function createComputeService(deps: {
       if (row?.kind !== 'compute') throw new HttpError(404, 'call_not_found', '没有这次算力调用');
       return { status: row.status, chargedMicro: row.chargedMicro };
     },
+    /** 执行器已停止旧容器后调用；只结算该运行未结清的沙箱算力，不碰供应商长任务。 */
+    async recover(runId: string, input: { payerId: string; cores: number; endedAt: string }) {
+      const rows = (await repo.computeForRun(runId, input.payerId)).sort(
+        (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+      );
+      for (const [index, row] of rows.entries()) {
+        if (row.chargedMicro !== null) continue;
+        const end = Math.min(
+          new Date(input.endedAt).getTime(),
+          rows[index + 1]?.createdAt.getTime() ?? Infinity,
+        );
+        await this.settle(row.id, {
+          cores: input.cores,
+          elapsedMs: Math.max(0, end - row.createdAt.getTime()),
+        });
+      }
+    },
   };
 }
 

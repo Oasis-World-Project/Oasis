@@ -16,6 +16,10 @@ upstream.get('/not-configured', async (_request, reply) =>
 );
 upstream.post('/empty', async (_request, reply) => reply.code(204).send());
 upstream.post('/accepted', async (_request, reply) => reply.code(202).send());
+upstream.get('/slow', async () => {
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  return { done: true };
+});
 
 let baseUrl = '';
 beforeAll(async () => {
@@ -33,6 +37,23 @@ async function capture(promise: Promise<unknown>): Promise<HttpError> {
 }
 
 describe('服务间调用客户端', () => {
+  it('普通请求仍有超时，长模型请求可交由 signal 控制且保持响应校验', async () => {
+    const client = createServiceClient('demo', baseUrl, { timeoutMs: 40 });
+    await expect(client.json('GET', '/slow')).rejects.toMatchObject({
+      code: 'upstream_unavailable',
+    });
+    expect(
+      await client.json('GET', '/slow', {
+        timeoutMs: null,
+        schema: z.object({ done: z.literal(true) }),
+      }),
+    ).toEqual({ done: true });
+    const abort = new AbortController();
+    abort.abort();
+    await expect(
+      client.json('GET', '/slow', { timeoutMs: null, signal: abort.signal }),
+    ).rejects.toMatchObject({ code: 'upstream_unavailable' });
+  });
   it('成功时按 schema 校验响应，并带上请求 ID', async () => {
     const client = createServiceClient('demo', baseUrl);
     const result = await client.json('GET', '/ok', {

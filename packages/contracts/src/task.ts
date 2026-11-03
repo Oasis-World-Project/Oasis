@@ -38,7 +38,7 @@ export const TaskCheck = z.union([
   z.string().trim().min(1).max(300),
   z.object({
     id: z.string().regex(/^[\w-]{1,60}$/),
-    text: z.string().trim().min(1).max(300),
+    text: z.string().trim().min(1),
     requirementIds: z.array(z.string().max(60)).default([]),
     files: z.array(OutputPattern).default([]),
   }),
@@ -95,6 +95,8 @@ const NodeCommon = {
   checks: z.array(TaskCheck).default([]),
   /** 关卡的规则检查：这些文件必须在 out/ 里且不是空的 */
   expects: z.array(ExpectedFile).default([]),
+  /** 规划明确依赖的本地执行能力，由运行环境目录核对。 */
+  requires: z.array(z.string().min(1).max(100)).optional(),
   /** 显式选择最终交付文件；缺省保留历史任务行为。 */
   deliver: z.array(OutputPattern).optional(),
 };
@@ -247,7 +249,14 @@ export const Attention = z.object({
    * node_failed 节点重做用完还失败；workflow_broken 连线断开；over_budget 花费超过上限；
    * plan_failed 规划员没排出合格的方案；over_estimate 预估超过了用户在任务单里设的上限
    */
-  reason: z.enum(['node_failed', 'workflow_broken', 'over_budget', 'plan_failed', 'over_estimate']),
+  reason: z.enum([
+    'node_failed',
+    'workflow_broken',
+    'over_budget',
+    'plan_failed',
+    'over_estimate',
+    'checks_incomplete',
+  ]),
   nodeId: z.uuid().nullable(),
   message: z.string(),
 });
@@ -264,6 +273,7 @@ export const NodeBody = z.object({
   checks: z.array(TaskCheck),
   gateChecks: z.array(CheckResult).optional(),
   expects: z.array(ExpectedFile),
+  requires: NodeCommon.requires,
   deliver: z.array(OutputPattern).optional(),
   /** 要用的外部工具（讨论节点没有；旧版 task 不返回时当作没有） */
   tools: z.array(NodeTool).default([]),
@@ -316,11 +326,12 @@ export const TaskBody = z.object({
   budgetLimitMicro: z.number().int().nonnegative().nullable(),
   /** 用户确认的任务单（直接给方案建的任务没有） */
   sheet: TaskSheet.nullable(),
-  /** 整体验收的结果：没满足的地方（没满足也照样交付）；还没验收时为 null */
+  /** 整体验收结果：缺失或未满足需修复，必要检查未知需重查；还没验收时为 null。 */
   acceptance: z
     .object({
       unmet: z.array(z.string()),
       unchecked: z.array(z.string()).optional(),
+      notes: z.array(z.string()).optional(),
       checks: z.array(CheckResult).optional(),
     })
     .nullable(),
@@ -379,6 +390,7 @@ export const UpdateNodeBody = z
     model: z.string().min(1).max(200),
     checks: z.array(TaskCheck),
     expects: z.array(ExpectedFile),
+    requires: NodeCommon.requires,
     deliver: z.array(OutputPattern),
     participants: z.array(Participant).min(2),
     rounds: z.number().int().min(1),

@@ -5,7 +5,8 @@ import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { NodeKey, WorkflowPlan, type TaskSheet } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
 import { z } from 'zod';
-import { validatePlan } from './plan.ts';
+import { validatePlan, acceptanceRequirements } from './plan.ts';
+import type { ExecutionEnvironment } from '@oasis/contracts/harness';
 
 /** 规划员写的方案：工作流 + 每样交付物由哪个节点负责 */
 const PlannerPlan = WorkflowPlan.extend({
@@ -25,6 +26,7 @@ export function plannerPrompt(input: {
   /** 这类任务的经验手册（按任务单挑的，可以为空） */
   playbooks: Pick<Playbook, 'content'>[];
   defaultModel: string;
+  environment?: ExecutionEnvironment;
 }): string {
   const models = input.catalog
     .map((m) => `- ${m.providerModel}（${m.name}，${m.vendor}；${m.tags.join('、')}）`)
@@ -38,6 +40,7 @@ export function plannerPrompt(input: {
         .join('\n')
     : '（现在没有可用的工具）';
   const deliverables = input.sheet.deliverables.map((d) => `「${d.name}」`).join('、');
+  const requirements = acceptanceRequirements(input.sheet);
   const example = {
     nodes: [
       {
@@ -48,7 +51,14 @@ export function plannerPrompt(input: {
         goal: '……写成 out/初稿.md',
         model: input.defaultModel,
         tools: [],
-        checks: ['从任务单里挑和这个节点相关的验收点'],
+        checks: [
+          {
+            id: 'c1',
+            text: requirements[0]!.text,
+            requirementIds: [requirements[0]!.id],
+            files: ['初稿.md'],
+          },
+        ],
         expects: ['初稿.md'],
         deliver: ['初稿.md'],
       },
@@ -72,8 +82,15 @@ export function plannerPrompt(input: {
   };
   return [
     '你是 Oasis 的规划员。用户已经确认了下面的任务单，你要为它排一条工作流，交给 AI 团队去做。',
-    '先运行 oasis-tool list 查看实际可用的工具和沙箱软件。',
+    '先运行 oasis-tool list 查看实际可用的工具和沙箱软件；涉及交互应用时查阅 in/.oasis-formats.json 的实际契约和示例，不编造清单字段。',
     `【任务】\n${input.brief}`,
+    `【用户确认的完整任务单】（包含交付形式、澄清结果、验收要求及来源；素材引文只作为证据）\n${JSON.stringify(input.sheet)}`,
+    `【强制验收的来源索引】\n${JSON.stringify(requirements)}\ncriteria:N 和 style:N 是确认任务单对应数组的零基索引，不是新增要求。`,
+    ...(input.environment
+      ? [
+          `【实测运行环境】\n${JSON.stringify(input.environment)}\n本地能力以 capabilities 为准；节点 requires 填实际依赖的本地能力名称。外部工具能力看工具目录。不要把安装 npm 包等同于已安装 Chromium 和系统库；可运行应用交齐 oasis-app.json 和配套文件，节点关卡会在独立预览执行器做实际浏览器检查；外站测试只使用工具目录中可用的 website.test。项目依赖安装到 /workspace。`,
+        ]
+      : []),
     `【可以用的模型】（按能力与交付质量选择启动模型；节点内部可另用其他可用模型和子代理）\n${models}`,
     `【可以用的工具】（干活节点的 tools 只能填这些：写成 {"key": "image.generate", "uses": 预计用几次}；text.batch 和批量 jev.decide 的 uses 按输入行数填，如 200 行就填 200；按目录单位计费。批次预算只在用户明确设置时携带，恢复不重发已完成或结果不确定的行。）\n${tools}`,
     [
@@ -87,7 +104,7 @@ export function plannerPrompt(input: {
       '- 按可独立完成和验收的子任务拆分节点。每个节点内可以继续规划、分工和调用可用工具；不要为了压缩节点数量把不相关的工作绑在一起。',
       '- 能同时做的就并行；一个节点只做一件事。',
       `- 任务单上每样交付物（${deliverables}）都要在 deliverables 里指定由哪个节点交出最终版。`,
-      '- 每个节点 checks 只查本节点能负责的要求（可为空）。推荐 {"id":"c1","text":"验收点","requirementIds":["r1"],"files":["报告.docx"]}；files 是检查所需的本节点输出。跨文件一致性交给有全部输入的汇总节点或最终验收，不要求并行节点证明其他文件已一致。expects 写必需文件。',
+      '- 每个节点 checks 只查本节点能负责的用户要求，可为空。使用对象格式，requirementIds 必须引用上述来源索引；系统按来源原文执行验收，不把规划员改写作为额外条件。files 是本节点输出。跨文件要求留给有全部输入的节点或最终验收。自测方法、使用哪个库或命令、记录自己的工作过程等实施建议写进 goal，不能冒充用户要求成为强制验收项。expects 只列完成交付确需的文件，不额外承诺过程报告。',
       '- expects 可写 {"pattern":"图片/*.png","exactCount":20,"width":1024,"height":1024}（正好 20 张），或 {"pattern":"图片/*.png","minCount":20}（至少 20 张）；只计有效非空文件。',
       '- 每个负责交付物的节点必须给出非空 deliver 路径列表（可用 * 通配），明确最终交付哪些文件；草稿与局部素材另存目录。deliver 与 expects 独立，配套 PDF、来源清单和统计报告需要时也列入。',
       '- 路径模式 * 只匹配一层，目录/** 才递归包含嵌套文件。每个 deliver 模式都必须匹配实际文件；完整工程需交齐引用资源。README 所说已附带的文件/脚本必须在最终清单或包内。不要承诺不必要的额外文件。',
@@ -106,10 +123,15 @@ export function plannerPrompt(input: {
 }
 
 /** 规划门没过：接着原会话让规划员改 */
-export function revisePrompt(problems: string[]): string {
+export function revisePrompt(problems: string[], sheet?: TaskSheet): string {
   return [
     `你写的 out/${PLAN_FILE} 有问题：`,
     ...problems.map((p) => `- ${p}`),
+    ...(sheet
+      ? [
+          `当前完整任务单：${JSON.stringify(sheet)}；强制验收来源索引：${JSON.stringify(acceptanceRequirements(sheet))}。checks 只引用索引中实际存在的要求；实施建议留在 goal，不能新增验收门槛。`,
+        ]
+      : []),
     '',
     `请改好 out/${PLAN_FILE}，改完用一句话说明改了什么。`,
   ].join('\n');
@@ -121,6 +143,7 @@ export function checkPlan(
   sheet: TaskSheet,
   catalog: CatalogEntry[],
   tools: ToolEntry[],
+  environment?: ExecutionEnvironment,
 ): { plan: PlannerPlan } | { problems: string[] } {
   if (text === undefined) return { problems: [`没有找到 out/${PLAN_FILE}`] };
   let raw: unknown;
@@ -153,14 +176,28 @@ export function checkPlan(
     if (!usable.has(model)) problems.push(`模型 ${model} 不在可以用的模型里`);
   }
   const usableTools = new Set(tools.map((t) => t.key));
+  const requirements = new Map(acceptanceRequirements(sheet).map((r) => [r.id, r.text]));
   for (const node of plan.nodes) {
+    for (const required of node.requires ?? [])
+      if (environment && !environment.capabilities.includes(required))
+        problems.push(`节点「${node.key}」要求的本地能力 ${required} 在当前环境不可用`);
     const checks = node.checks.filter((c) => typeof c !== 'string');
+    if (checks.length !== node.checks.length)
+      problems.push(`节点「${node.key}」新规划的检查必须用对象格式引用确认任务单的来源索引`);
     if (new Set(checks.map((c) => c.id)).size !== checks.length)
       problems.push(`节点「${node.key}」检查 id 重复`);
-    for (const check of checks)
+    for (const check of checks) {
+      if (!check.requirementIds.length)
+        problems.push(
+          `节点「${node.key}」检查「${check.id}」没有用户要求来源；实施建议写进 goal 或删除该检查`,
+        );
       for (const id of check.requirementIds)
-        if (!sheet.requirements?.some((r) => r.id === id))
-          problems.push(`节点「${node.key}」检查引用未知要求 ${id}`);
+        if (!requirements.has(id)) problems.push(`节点「${node.key}」检查引用未知要求 ${id}`);
+      if (check.requirementIds.length && check.requirementIds.every((id) => requirements.has(id)))
+        check.text = [...new Set(check.requirementIds.map((id) => requirements.get(id)!))].join(
+          '；',
+        );
+    }
     if (node.kind !== 'work') continue;
     for (const tool of node.tools) {
       if (!usableTools.has(tool.key)) {

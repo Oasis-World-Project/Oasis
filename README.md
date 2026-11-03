@@ -48,6 +48,7 @@ pnpm sandbox:check
 - 算力按沙箱运行时长 × CPU 核数计费（model-gateway 的 `COMPUTE_PRICE_MICRO_PER_CORE_HOUR`，默认每核每小时 $0.015；设为 0 就不计费）。
 - 本机开发时 model-gateway 跑在宿主机上，入口代理经 `host.docker.internal:4108` 访问它。Docker Desktop（Windows / macOS）上默认配置就能通（2026-10-22 在 Windows 上实测）；在 Linux 宿主机上要把 `services/model-gateway/.env` 里的 `HOST` 改成 `0.0.0.0`（这会让局域网也能访问 4108，只在自己电脑上这样做）。
 - harness 的 `/ready` 会检查 Docker、沙箱镜像和网络是否都在。设计见 [ADR 0003](docs/adr/0003-task-workflow.md)。
+- `pnpm dev` 中 harness 使用稳定进程，不随源码变动自动重启；修改它后手动重启开发服务。重启会接管原运行和原生会话，`/workspace` 与会话目录保留在带 Oasis 标签的 named volume 中，任务删除后一起清理。项目依赖装进工作目录（如 `.venv`、`node_modules`），不要修改镜像内的系统环境来保存任务状态。接管依赖暂不可用时保留进度等待恢复，用户停止/取消意图优先处理；详见 [ADR 0015](docs/adr/0015-persistent-node-execution.md)。
 
 需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 9 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。
 

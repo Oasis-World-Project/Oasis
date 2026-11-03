@@ -49,7 +49,19 @@ export function checkNewNode(snapshot: Snapshot, node: PlanNode): void {
 
 /** 修改节点：算出要写的列和配置 */
 export function nodeChanges(node: Node, body: UpdateNodeBody) {
-  const { title, role, goal, model, checks, expects, deliver, participants, rounds, tools } = body;
+  const {
+    title,
+    role,
+    goal,
+    model,
+    checks,
+    expects,
+    deliver,
+    participants,
+    rounds,
+    tools,
+    requires,
+  } = body;
   if (node.kind !== 'discussion' && (participants !== undefined || rounds !== undefined)) {
     throw new HttpError(400, 'invalid_node', '只有讨论节点有参与者和轮数');
   }
@@ -62,6 +74,7 @@ export function nodeChanges(node: Node, body: UpdateNodeBody) {
     ...(checks ? { checks } : {}),
     ...(expects ? { expects } : {}),
     ...(deliver !== undefined ? { deliver } : {}),
+    ...(requires !== undefined ? { requires } : {}),
     ...(participants ? { participants } : {}),
     ...(rounds ? { rounds } : {}),
     ...(tools ? { tools } : {}),

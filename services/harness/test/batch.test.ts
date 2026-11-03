@@ -55,6 +55,11 @@ describe('JSONL 批次持久化与费用边界', () => {
   it('限制并发，逐行带入预算，输出按输入顺序；恢复无需原文件且不重复调用', async () => {
     let active = 0;
     let peak = 0;
+    let calls = 0;
+    let releasePair!: () => void;
+    const pairStarted = new Promise<void>((resolve) => {
+      releasePair = resolve;
+    });
     const request = vi.fn(async (_path: string, init?: RequestInit) => {
       active++;
       peak = Math.max(peak, active);
@@ -63,7 +68,8 @@ describe('JSONL 批次持久化与费用边界', () => {
         max_cost_micro: 200_000,
         stream: false,
       });
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (++calls === 2) releasePair();
+      if (calls <= 2) await pairStarted;
       active--;
       return reply();
     });

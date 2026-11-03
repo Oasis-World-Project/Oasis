@@ -14,9 +14,32 @@ let wrote = false;
 let cap;
 let reasoning;
 const mode = process.env.OASIS_NATIVE_MODE ?? 'fresh';
-const sessionId = JSON.parse(readFileSync('/workspace/in/.oasis-execution.json', 'utf8')).sessionId;
+const execution = JSON.parse(readFileSync('/workspace/in/.oasis-execution.json', 'utf8'));
+const sessionId = execution.sessionId;
+const persistent = mode === 'persistent';
+let verified = false;
+function nativeRecords() {
+  const archive = readFileSync(
+    `/home/node/.dsh/sessions/--workspace--/${sessionId}/session.v4.jsonl.zstd`,
+  );
+  let offset = 0;
+  let log = '';
+  while (offset < archive.length) {
+    const decoded = zstdDecompressSync(archive.subarray(offset), { info: true });
+    log += decoded.buffer;
+    offset += decoded.engine.bytesWritten;
+  }
+  return { archive, records: log.trim().split('\n').map(JSON.parse) };
+}
+if (persistent && execution.recovering) {
+  goal = nativeRecords()
+    .records.filter((e) => e.type === 'goal/change')
+    .at(-1)?.data.goal;
+  spawned = true;
+  wrote = true;
+}
 let historySeen = false;
-if (mode !== 'fresh') {
+if (mode !== 'fresh' && !persistent) {
   const sessionDirectory = `/home/node/.dsh/sessions/--workspace--/${sessionId}`;
   mkdirSync(sessionDirectory, { recursive: true });
   if (existsSync('/workspace/in/legacy-session.jsonl.zstd'))
@@ -25,6 +48,7 @@ if (mode !== 'fresh') {
       `${sessionDirectory}/session.v${process.env.OASIS_NATIVE_GENERATION ?? '4'}.jsonl.zstd`,
     );
   writeFileSync('/workspace/out/legacy.txt', 'legacy-file-kept');
+  if (mode === 'recover') writeFileSync('/workspace/out/proof.txt', 'native-proof');
 }
 const server = createServer(async (request, reply) => {
   const chunks = [];
@@ -33,6 +57,12 @@ const server = createServer(async (request, reply) => {
   const child = body.model.startsWith('test/');
   if (body.model === 'test/tertiary') grandchildCalls++;
   const n = child ? ++childCalls : ++rootCalls;
+  if (!child && n === 1 && process.env.OASIS_NATIVE_FAULT === 'disconnect') {
+    reply.writeHead(200, { 'content-type': 'text/event-stream' });
+    reply.write('data: {"choices":[{"delta":{"content":"incomplete network reply"}}]}\n\n');
+    globalThis.setTimeout(() => reply.destroy(), 20);
+    return;
+  }
   cap = body.max_tokens ?? body.max_completion_tokens;
   if (!child) reasoning = body.reasoning?.effort ?? body.reasoning_effort;
   const tools = new Set((body.tools ?? []).map((tool) => tool.function.name));
@@ -52,7 +82,23 @@ const server = createServer(async (request, reply) => {
   let finish = 'stop';
   let content = child ? 'Secondary task complete.' : 'Continue working.';
   let call;
-  if (body.model === 'test/secondary' && !nested) {
+  if (persistent && !execution.recovering && wrote && !child) {
+    writeFileSync('/workspace/project/provider-waiting', 'durable');
+    return; // 故障注入：真实供应商长调用尚未返回时杀死宿主控制进程。
+  }
+  if (persistent && execution.recovering && !verified && !child) {
+    if (!JSON.stringify(body.messages).includes('DURABLE_WORKSPACE_CREATED'))
+      throw new Error('Native history lost across process crash');
+    verified = true;
+    call = {
+      name: 'bash',
+      args: {
+        description: 'verify durable workspace',
+        command:
+          'test -x node_modules/.bin/proof && test "$(cat project/invocations)" = 1 && test "$(cat src/marker.txt)" = durable-source && test "$(node_modules/.bin/proof)" = native-proof && printf DURABLE_WORKSPACE_VERIFIED',
+      },
+    };
+  } else if (body.model === 'test/secondary' && !nested) {
     nested = true;
     call = {
       name: 'subagent',
@@ -83,7 +129,9 @@ const server = createServer(async (request, reply) => {
       name: 'bash',
       args: {
         description: 'write acceptance proof',
-        command: 'mkdir -p out && printf native-proof > out/proof.txt',
+        command: persistent
+          ? `mkdir -p out src project node_modules/.bin; printf durable-source > src/marker.txt; printf 1 > project/invocations; printf '#!/bin/sh\nprintf native-proof\n' > project/proof.sh; chmod +x project/proof.sh; ln -s ../../project/proof.sh node_modules/.bin/proof; printf native-proof > out/proof.txt; printf DURABLE_WORKSPACE_CREATED`
+          : 'mkdir -p out && printf native-proof > out/proof.txt',
       },
     };
   } else if (
@@ -166,18 +214,11 @@ server.listen(0, '127.0.0.1', () => {
       process.exit(code || rootCalls ? 1 : 0);
     }
     const proof = readFileSync('/workspace/out/proof.txt', 'utf8');
-    const archive = readFileSync(
-      `/home/node/.dsh/sessions/--workspace--/${sessionId}/session.v4.jsonl.zstd`,
-    );
-    let offset = 0;
-    let log = '';
-    while (offset < archive.length) {
-      const decoded = zstdDecompressSync(archive.subarray(offset), { info: true });
-      log += decoded.buffer;
-      offset += decoded.engine.bytesWritten;
-    }
-    const records = log.trim().split('\n').map(JSON.parse);
+    const { archive, records } = nativeRecords();
     const policies = records.filter((event) => event.type === 'subagent/model-selection-policy');
+    if (mode === 'recover')
+      goal = records.filter((event) => event.type === 'goal/change').at(-1)?.data.goal;
+    mkdirSync('/workspace/evidence', { recursive: true });
     writeFileSync('/workspace/evidence/session.jsonl.zstd', archive);
     const result = {
       code,
@@ -198,16 +239,21 @@ server.listen(0, '127.0.0.1', () => {
     process.stderr.write('NATIVE_PROOF ' + JSON.stringify(result) + '\n');
     process.exit(
       code ||
-        !(
-          rootCalls > 4 &&
-          childCalls > 0 &&
-          grandchildCalls > 0 &&
-          reasoning === 'max' &&
-          goal?.phase === 'complete' &&
-          goal.maxGoalRounds > 2 &&
-          proof === 'native-proof' &&
-          (mode !== 'resume' || (historySeen && result.legacyOutput === 'legacy-file-kept'))
-        )
+        !(persistent
+          ? execution.recovering &&
+            verified &&
+            goal?.phase === 'complete' &&
+            proof === 'native-proof'
+          : mode === 'recover'
+            ? rootCalls === 0 && goal?.phase === 'complete'
+            : rootCalls > 4 &&
+              childCalls > 0 &&
+              grandchildCalls > 0 &&
+              reasoning === 'max' &&
+              goal?.phase === 'complete' &&
+              goal.maxGoalRounds > 2 &&
+              proof === 'native-proof' &&
+              (mode !== 'resume' || (historySeen && result.legacyOutput === 'legacy-file-kept')))
         ? 1
         : 0,
     );

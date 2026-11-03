@@ -4,6 +4,9 @@
 import type { Readable, Writable } from 'node:stream';
 import type { RunEventKind } from '@oasis/contracts/harness';
 import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
+import type { ExecutionEnvironment } from '@oasis/contracts/harness';
+import { ApplicationSpec } from '@oasis/contracts/canvas';
+import { BrowserTestPlan } from '@oasis/contracts/ui-test';
 import { createJsonRpcClient } from './jsonrpc.ts';
 
 /** 沙箱镜像里的目录约定（与 infra/images/harness-sandbox-base/Dockerfile 一致） */
@@ -22,6 +25,15 @@ const PROVIDER = 'openrouter';
 
 /** 会话存档里不能带的文件：锁文件会让恢复以为会话还被占着 */
 export const isSessionLock = (path: string) => path.endsWith('.lock');
+/** 原生持久文件只在适配层识别；缺失与损坏必须区分。 */
+export const isSessionArchive = (path: string, sessionId?: string) => {
+  const parts = path.split('/');
+  return (
+    parts[0] === '--workspace--' &&
+    (sessionId === undefined || parts[1] === sessionId) &&
+    /^session(?:\.v\d+)?\.jsonl(?:\.zstd)?$/.test(parts[2] ?? '')
+  );
+};
 
 /** 沙箱的环境变量。runKey 是密钥，调用方不得记进日志。 */
 /** 沙箱装软件包的通路：出口代理和仓库地址（ADR 0006 §7） */
@@ -72,8 +84,40 @@ export function runtimeFiles(input: {
   objective: string;
   goal: boolean;
   goalRoundWindow: number;
+  recovering?: boolean;
+  environment?: ExecutionEnvironment;
 }) {
   return [
+    {
+      path: 'in/.oasis-formats.json',
+      content: Buffer.from(
+        JSON.stringify({
+          application: {
+            schema: ApplicationSpec.toJSONSchema(),
+            example: ApplicationSpec.parse({
+              version: 1,
+              kind: 'static',
+              root: 'site',
+              entry: 'index.html',
+            }),
+            location: 'out/<root>/oasis-app.json',
+            paths: 'root 相对 out/；entry 相对 root，清单必须位于该 root 目录内。',
+          },
+          browserTest: {
+            schema: BrowserTestPlan.toJSONSchema(),
+            location: '与 oasis-app.json 同目录的 oasis-test.json',
+          },
+        }),
+      ),
+    },
+    ...(input.environment
+      ? [
+          {
+            path: 'in/.oasis-environment.json',
+            content: Buffer.from(JSON.stringify(input.environment)),
+          },
+        ]
+      : []),
     {
       path: 'in/.oasis-models.json',
       content: Buffer.from(
@@ -98,6 +142,7 @@ export function runtimeFiles(input: {
           objective: input.objective,
           goal: input.goal,
           goalRoundWindow: input.goalRoundWindow,
+          recovering: input.recovering ?? false,
         }),
       ),
     },
@@ -322,7 +367,11 @@ export function connectAgent(io: {
         { cwd, provider: PROVIDER, model, ...(reasoningEffort ? { reasoningEffort } : {}) },
         60_000,
       ),
-    resume: () => rpc.request('session/resume', session, 60_000),
+    resume: async () => {
+      const result = await rpc.request('session/resume', session, 60_000);
+      lastError = undefined;
+      return { result, needsPrompt: persistent && !goalPhase };
+    },
     prompt: (text: string) => {
       pendingTurns++;
       lastError = '运行未收到正常结束通知';

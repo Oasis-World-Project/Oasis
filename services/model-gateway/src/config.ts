@@ -14,6 +14,11 @@ const list = (fallback: string) =>
     );
 
 export const modelGatewayEnv = {
+  /** 专用决策模型地区不可用时，noul 证据判断经同一计费链路回退；留空关闭。 */
+  DECISION_FALLBACK_MODEL: z
+    .string()
+    .default('deepseek/deepseek-v4.1-flash')
+    .transform((value) => value || undefined),
   HARNESS_URL: z.url().default('http://127.0.0.1:4107'),
   BROWSERSTACK_USERNAME: z.string().optional(),
   BROWSERSTACK_ACCESS_KEY: z.string().optional(),

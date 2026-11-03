@@ -25,6 +25,7 @@ export interface Effects {
   accept: string[];
   stop: string[];
   cancel: string[];
+  abortChecks: { taskId: string; nodeId?: string }[];
 }
 
 export const noEffects = (): Effects => ({
@@ -34,6 +35,7 @@ export const noEffects = (): Effects => ({
   accept: [],
   stop: [],
   cancel: [],
+  abortChecks: [],
 });
 
 /** 工作流引擎给规划模块用的两件事：在事务里做决定，以及找出能跑的节点开跑 */

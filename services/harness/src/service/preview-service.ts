@@ -313,8 +313,23 @@ export function createPreviewService(deps: {
         return { passed: false, reason: '应用清单不是 JSON', frameCaptured: false };
       }
       const parsed = ApplicationSpec.safeParse(description);
-      if (!parsed.success || manifestPath !== `${parsed.data.root}/oasis-app.json`)
-        return { passed: false, reason: '应用清单格式或位置不合格', frameCaptured: false };
+      if (!parsed.success)
+        return {
+          passed: false,
+          reason:
+            '应用清单字段错误：' +
+            parsed.error.issues
+              .map((issue) => `${issue.path.join('.') || '清单'}：${issue.message}`)
+              .join('；') +
+            `。清单位于 out/${manifestPath}；root 应为相对 out/ 的目录 ${manifestPath.slice(0, manifestPath.lastIndexOf('/'))}，entry 相对 root。实际契约见 in/.oasis-formats.json。`,
+          frameCaptured: false,
+        };
+      if (manifestPath !== `${parsed.data.root}/oasis-app.json`)
+        return {
+          passed: false,
+          reason: `清单位于 out/${manifestPath}，与 root=${parsed.data.root} 不一致；root 相对 out/，entry 相对 root。`,
+          frameCaptured: false,
+        };
       const spec = parsed.data;
       const members = run.outputs.filter(
         (file) => file.path.startsWith(`${spec.root}/`) && file.size > 0,
@@ -353,6 +368,13 @@ export function createPreviewService(deps: {
         }
       }
       const inputSha256 = createHash('sha256').update(JSON.stringify(bundle.data)).digest('hex');
+      const application = {
+        manifestPath,
+        spec,
+        files: members.map((file) => file.path),
+        ...(plan ? { plan } : {}),
+        network: 'none' as const,
+      };
       try {
         await this.start(access, bundle.data, 60_000, 'application-check');
         const waitUntil = Date.now() + 8_000;
@@ -379,7 +401,7 @@ export function createPreviewService(deps: {
             if (deps.store)
               await deps.store.put(
                 `runs/${input.runId}/application-check.json`,
-                Buffer.from(JSON.stringify({ ...result, inputSha256 })),
+                Buffer.from(JSON.stringify({ ...result, application, inputSha256 })),
                 'application/json',
               );
             return {
@@ -387,6 +409,7 @@ export function createPreviewService(deps: {
               reason: result.report.passed ? null : '浏览器交互断言或页面诊断未通过',
               frameCaptured: true,
               report: result.report,
+              application,
               inputSha256,
             };
           } catch (err) {

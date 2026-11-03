@@ -14,6 +14,9 @@ import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-
 
 /** 节点配置：关卡的验收点和应有文件；讨论节点还有参与者、轮数、进行到第几轮和讨论记录 */
 export interface NodeConfig {
+  requires?: string[];
+  /** 最终验收退回后，等待上游最新产出再在原会话修复。 */
+  repairChecks?: string[];
   checks?: TaskCheck[];
   gateChecks?: CheckResult[];
   expects?: ExpectedFile[];
@@ -33,6 +36,7 @@ export interface NodeConfig {
 
 /** 交给 harness 的完整请求（没送到时按原样重交） */
 export interface RunRequestRecord {
+  requires?: string[];
   goal?: boolean;
   model: string;
   prompt: string;
@@ -80,6 +84,7 @@ export const tasks = pgTable('tasks', {
   acceptance: jsonb('acceptance').$type<{
     unmet: string[];
     unchecked?: string[];
+    notes?: string[];
     checks?: CheckResult[];
   }>(),
   createdAt: at('created_at').notNull().defaultNow(),

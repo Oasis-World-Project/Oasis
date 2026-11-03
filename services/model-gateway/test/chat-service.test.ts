@@ -56,6 +56,7 @@ const finished: CallOutcome[] = [];
 const repo: CallsRepo = {
   start: async (call) => void started.push(call),
   get: async () => undefined,
+  computeForRun: async () => [],
   regionBlockedModels: async () => [],
   finish: async (_id, outcome) => void finished.push(outcome),
 };
@@ -102,6 +103,41 @@ const request = {
 };
 
 describe('一次模型调用', () => {
+  it('后台执行的传输中断先结算再交还原生重试，不改写为普通 SSE 模型错误', async () => {
+    const call = await chat.prepare({
+      caller: { payerId: PAYER, runId: RUN },
+      requestId: 'native-disconnect',
+      body: request,
+    });
+    let forwarded = '';
+    await expect(
+      chat.pump(
+        call,
+        new Response('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'),
+        (chunk) => {
+          forwarded += chunk;
+        },
+        { transportErrors: 'disconnect' },
+      ),
+    ).rejects.toMatchObject({ code: 'stream_interrupted' });
+    expect(forwarded).toContain('partial');
+    expect(forwarded).not.toContain('"error"');
+    expect(finished[0]).toMatchObject({ status: 'failed', costSource: 'estimate' });
+    expect(billingCalls.map((c) => c.path)).toEqual(['/internal/holds', 'settle']);
+  });
+  it('非流式响应体中断也结算估算费用并标失败，不遗留运行中调用', async () => {
+    const call = await chat.prepare({
+      caller: { payerId: PAYER },
+      requestId: 'broken-json',
+      body: { ...request, stream: false },
+    });
+    await expect(chat.finishJson(call, new Response('{"choices":'))).rejects.toMatchObject({
+      code: 'response_interrupted',
+    });
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ status: 'failed', costSource: 'estimate' });
+    expect(billingCalls.map((c) => c.path)).toEqual(['/internal/holds', 'settle']);
+  });
   it('正常 EOF 缺少完成标记或供应商流内报错，都不能记为成功', async () => {
     for (const content of [
       'data: {"choices":[{"delta":{"content":"部分"}}]}\n\n',

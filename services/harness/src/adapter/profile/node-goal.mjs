@@ -69,6 +69,15 @@ export function apply(ctx) {
       // SDK 的创建通知已取过监听器快照；晚绑定后通知原生工具重算作用域。
       ctx.emit('tools/change');
     } else await ctx.agentPresets.select(agent, 'oasis');
+    if (request.recovering && request.goal && agent.session.firstLiveSeq > 0) {
+      const goal = ctx.goals.get(agent);
+      prepared = Boolean(goal);
+      if (goal?.phase === 'active' && goal.activation === 'disarmed') ctx.goals.resume(agent, goal);
+      appendPluginRecord(agent.session, 'plugin:oasis/goal-status', {
+        phase: goal?.phase ?? null,
+        activation: ctx.goals.get(agent)?.activation ?? null,
+      });
+    }
   });
   function extend(agent) {
     const goal = ctx.goals.get(agent);

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ApplicationSpec } from './canvas.ts';
 
 const selector = z.string().min(1).max(500);
 /** 可重跑的声明式步骤；不接受 JavaScript、Shell 或任意驱动命令。 */
@@ -47,6 +48,16 @@ export type UiTestReport = z.infer<typeof UiTestReport>;
 
 /** 截图仅从受信控制协议返回，由服务端验证大小、计算摘要并归档。 */
 export const BrowserTestResult = z.object({
+  /** 仅由平台应用检查器附加，绑定实际通过清单/路径校验的运行包。 */
+  application: z
+    .object({
+      manifestPath: z.string(),
+      spec: ApplicationSpec,
+      files: z.array(z.string()),
+      plan: BrowserTestPlan.optional(),
+      network: z.literal('none'),
+    })
+    .optional(),
   report: UiTestReport,
   screenshots: z
     .array(

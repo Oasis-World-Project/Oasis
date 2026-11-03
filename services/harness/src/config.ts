@@ -66,6 +66,7 @@ export const harnessEnv = {
   // ---- 运行 ----
   /** 同时进行的运行数上限，超出的排队 */
   MAX_CONCURRENT_RUNS: positiveInt.default(4),
+  RECOVERY_INTERVAL_MS: positiveInt.default(15000),
   MEDIA_CHECK_MAX_FILES: positiveInt.max(100).default(20),
   MEDIA_CHECK_TIMEOUT_MS: positiveInt.max(300_000).default(90_000),
   MEDIA_CHECK_MAX_DURATION_MS: positiveInt.max(3600_000).default(20 * 60_000),

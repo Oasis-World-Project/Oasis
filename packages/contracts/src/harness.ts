@@ -1,6 +1,16 @@
 // harness 的内部接口（只给 task 等内部服务用，gateway 不转发）：启动一次 agent 运行、查进度、追问、停止、取消。
 import { z } from 'zod';
-import { UiTestReport } from './ui-test.ts';
+import { UiTestReport, BrowserTestResult } from './ui-test.ts';
+
+/** 实际运行镜像的软件探测；只描述本地环境，不代表外部供应商能力。 */
+export const ExecutionEnvironment = z.object({
+  image: z.string(),
+  imageId: z.string(),
+  software: z.record(z.string(), z.string()),
+  capabilities: z.array(z.string()),
+  notes: z.array(z.string()),
+});
+export type ExecutionEnvironment = z.infer<typeof ExecutionEnvironment>;
 
 export const RunStatus = z.enum([
   'queued',
@@ -34,6 +44,8 @@ export const StartRunBody = z.object({
   model: z.string().min(1).max(200),
   /** 工作节点使用原生持久目标；普通发言仍可只跑一轮。 */
   goal: z.boolean().default(false),
+  /** 规划所需的本地能力；预检失败在登记和冻结之前返回。 */
+  requires: z.array(z.string().min(1).max(100)).default([]),
   /** 交给 agent 的完整任务说明 */
   prompt: z.string().min(1).max(200_000),
   inputs: z.array(RunInputFile).default([]),
@@ -211,6 +223,8 @@ export const RunTextsBody = z.object({
       valid: z.boolean().optional(),
       error: z.string().optional(),
       warning: z.string().optional(),
+      /** 已核验的证据范围；范围外的语义需要其他独立证据。 */
+      evidenceScope: z.enum(['geometry', 'decoded-audio', 'decoded-video']).optional(),
       errorKind: z.enum(['invalid', 'incomplete']).optional(),
       width: z.number().int().positive().optional(),
       height: z.number().int().positive().optional(),
@@ -304,6 +318,7 @@ export const PreviewQuoteBody = z.object({
   idleMs: z.number().int().positive(),
 });
 export const ApplicationCheckResult = z.object({
+  application: BrowserTestResult.shape.application,
   passed: z.boolean(),
   reason: z.string().nullable(),
   frameCaptured: z.boolean(),

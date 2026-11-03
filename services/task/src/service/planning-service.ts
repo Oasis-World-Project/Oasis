@@ -4,8 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { Catalog, PlaybookList, type CatalogEntry, type Playbook } from '@oasis/contracts/agent';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import type { RunFinishedData } from '@oasis/contracts/events';
-import { RunBody } from '@oasis/contracts/harness';
-import { ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
+import { RunBody, ExecutionEnvironment } from '@oasis/contracts/harness';
+import { ExecutionModels, ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
 import type { WorkflowOptions } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
@@ -65,6 +65,10 @@ export function createPlanning(deps: {
     const { models } = await deps.agent.json('GET', '/internal/models/catalog', {
       schema: Catalog,
     });
+    const execution = await deps.modelGateway.json('GET', '/internal/v1/models/execution', {
+      schema: ExecutionModels,
+    });
+    const usable = new Set(execution.models.map((m) => m.id));
     const blocked = await deps.modelGateway
       .json('GET', '/internal/v1/models/unavailable', { schema: Unavailable })
       .then((r) => new Set(r.models))
@@ -72,18 +76,14 @@ export function createPlanning(deps: {
         logger.warn({ err }, '查不到哪些模型用不了，不排除');
         return new Set<string>();
       });
-    return models.filter((m) => !blocked.has(m.providerModel));
+    return models.filter((m) => usable.has(m.providerModel) && !blocked.has(m.providerModel));
   }
 
-  /** 规划员能用的外部工具：现在可用的（查不到时当作没有工具，方案照样能排） */
+  /** 目录不可读时等待恢复，不能把未知当成没有工具而编造替代方案。 */
   async function tools(): Promise<ToolEntry[]> {
     return deps.modelGateway
       .json('GET', '/internal/v1/tools', { schema: ToolList })
-      .then((r) => r.tools.filter((t) => t.available))
-      .catch((err: unknown) => {
-        logger.warn({ err }, '查不到工具目录，这次规划不用工具');
-        return [];
-      });
+      .then((r) => r.tools.filter((t) => t.available));
   }
 
   /**
@@ -113,6 +113,7 @@ export function createPlanning(deps: {
         ]),
       );
       const { answers } = await deps.modelGateway.json('POST', '/internal/v1/decisions', {
+        timeoutMs: null,
         body: { model: config.decisionModel, state, questions },
         headers: { [OASIS_HEADERS.payerId]: task.payerId, [OASIS_HEADERS.taskId]: task.id },
         schema: Answers,
@@ -146,7 +147,7 @@ export function createPlanning(deps: {
     const { task } = job;
     try {
       const prompt = job.revise
-        ? revisePrompt(job.revise.problems)
+        ? revisePrompt(job.revise.problems, task.sheet!)
         : plannerPrompt({
             brief: task.brief,
             sheet: task.sheet!,
@@ -154,6 +155,9 @@ export function createPlanning(deps: {
             tools: await tools(),
             playbooks: await playbooksFor(task),
             defaultModel: config.defaultModel,
+            environment: await harness.json('GET', '/internal/execution/environment', {
+              schema: ExecutionEnvironment,
+            }),
           });
       await harness.json('POST', '/internal/runs', {
         body: {
@@ -240,7 +244,15 @@ export function createPlanning(deps: {
     const toolList = result.status === 'succeeded' ? await tools() : [];
     const checked =
       result.status === 'succeeded'
-        ? checkPlan(await readPlan(result.runId), task.sheet!, await catalog(), toolList)
+        ? checkPlan(
+            await readPlan(result.runId),
+            task.sheet!,
+            await catalog(),
+            toolList,
+            await harness.json('GET', '/internal/execution/environment', {
+              schema: ExecutionEnvironment,
+            }),
+          )
         : { problems: [`规划员没跑完：${result.error ?? result.status}`] };
     await engine.transact(task.id, async (snapshot, w, fx) => {
       const current = snapshot.task;

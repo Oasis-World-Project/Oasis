@@ -100,6 +100,117 @@ const input = {
 };
 
 describe('关卡的验收点检查', () => {
+  it.each([NODE, null])('节点与最终语义验收都取得平台浏览器断言证据：%s', async (nodeId) => {
+    const report = {
+      version: 1,
+      target: 'application',
+      passed: true,
+      steps: [{ index: 0, action: 'text', status: 'passed', actual: '2' }],
+      diagnostics: [],
+      unchecked: [],
+    };
+    const application = {
+      manifestPath: 'site/oasis-app.json',
+      spec: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
+      files: ['site/index.html', 'site/oasis-app.json', 'site/oasis-test.json'],
+      plan: { version: 1, steps: [{ action: 'text', selector: '#count', text: '2' }] },
+      network: 'none',
+    };
+    const harness = fakeClient((path) => {
+      if (path.endsWith('/application-check/report'))
+        return { report, screenshots: [], application, inputSha256: 'a'.repeat(64) };
+      if (path.endsWith('/application-check'))
+        return {
+          passed: true,
+          reason: null,
+          frameCaptured: true,
+          report,
+          application,
+          inputSha256: 'a'.repeat(64),
+        };
+      return {
+        files: [{ path: 'site/oasis-app.json', text: '{}', valid: true }],
+        truncated: false,
+      };
+    });
+    const gateway = fakeClient(() => ({ answers: { c0: { noul: 0.9 }, f0: { noul: 0.1 } } }));
+    const gate = createGate({
+      harness: harness.client,
+      modelGateway: gateway.client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    const result = await gate.check({
+      ...input,
+      nodeId,
+      checks: ['点击两次后显示2'],
+      expects: ['site/oasis-app.json'],
+      runs: [
+        {
+          runId: 'app',
+          summary: '不采用自述',
+          outputs: [{ path: 'site/oasis-app.json', size: 2 }],
+        },
+      ],
+    });
+    expect(result).toEqual({ unmet: [] });
+    const state = (gateway.calls[0]?.body as { state: string[] }).state.join('\n');
+    expect(state).toContain('平台隔离浏览器实际执行的受信报告');
+    expect(state).toContain('"actual":"2"');
+    expect(state).toContain('"network":"none"');
+    expect(state).toContain('ApplicationSpec/ApplicationBundle');
+    expect(state).toContain('"manifestPath":"site/oasis-app.json"');
+    expect(state).toContain('a'.repeat(64));
+    expect(
+      harness.calls.filter((c) => c.path.includes('application-check')).map((c) => c.path),
+    ).toEqual([`/internal/runs/app/application-check${nodeId ? '' : '/report'}`]);
+  });
+  it('几何结构证据可以支持结构要求，不能替代外观证据；范围说明不会卡死已核验的要求', async () => {
+    const harness = fakeClient(() => ({
+      files: [
+        {
+          path: 'model.glb',
+          valid: true,
+          text: '{"meshes":2,"unchecked":["外观"]}',
+          warning: '仅完成几何结构检查，外观尚未核验',
+          evidenceScope: 'geometry',
+        },
+      ],
+      truncated: false,
+    }));
+    const gateway = fakeClient(() => ({
+      answers: { c0: { noul: 0.9 }, f0: { noul: 0.1 }, c1: { noul: 0.1 }, f1: { noul: 0.1 } },
+    }));
+    const gate = createGate({
+      harness: harness.client,
+      modelGateway: gateway.client,
+      model: 'jev',
+      threshold: 0.5,
+      logger: pino({ level: 'silent' }),
+    });
+    const structure = await gate.check({
+      ...input,
+      runs: [{ runId: 'geometry', summary: null, outputs: [{ path: 'model.glb', size: 100 }] }],
+      expects: ['model.glb'],
+      checks: ['包含两个网格'],
+      details: true,
+    });
+    expect(structure.unchecked).toBeUndefined();
+    expect(structure.checks?.[0]?.status).toBe('passed');
+    expect(structure.notes?.join('')).toContain('外观尚未核验');
+    const combined = await gate.check({
+      ...input,
+      runs: [{ runId: 'geometry', summary: null, outputs: [{ path: 'model.glb', size: 100 }] }],
+      expects: ['model.glb'],
+      checks: ['包含两个网格', '外观符合雨夜便利店'],
+      details: true,
+    });
+    expect(combined.checks?.map((c) => c.status)).toEqual(['passed', 'unchecked']);
+    expect(combined.unchecked?.join('')).toContain('外观符合雨夜便利店');
+    expect(JSON.stringify(gateway.calls[0]?.body)).toContain('范围外无独立证据须回答否');
+  });
+
   it('缺乏支持不是违反；互相矛盾的判断也保持未知', async () => {
     const gate = createGate({
       harness: fakeClient(() => ({
@@ -269,10 +380,10 @@ describe('关卡的验收点检查', () => {
       ],
     });
     expect(result.unmet).toContain('视频/工程/字幕「project/project.mlt」工程摘要不符');
-    expect(result.unchecked?.join('\n')).toContain('黑帧');
-    expect(result.unchecked?.join('\n')).toContain('200 毫秒');
+    expect(result.notes?.join('\n')).toContain('黑帧');
+    expect(result.notes?.join('\n')).toContain('200 毫秒');
     expect(result.unchecked?.join('\n')).toContain('subtitles.srt');
-    expect(result.unchecked?.join('\n')).toContain('Shotcut');
+    expect(result.notes?.join('\n')).toContain('Shotcut');
     expect(harness.calls[0]?.body).toEqual({ payerId: PAYER, taskId: TASK });
   });
   it('音频只用受信解码结果判断文件有效，缺少报告保持未检查', async () => {
@@ -496,7 +607,7 @@ describe('关卡的验收点检查', () => {
     expect(call.body.state.join('\n')).toContain('欢迎光临');
   });
 
-  it('规则没过就不问 Jev；Jev 出错就放行', async () => {
+  it('规则没过就不问 Jev；Jev 出错保存为未检查', async () => {
     const gateway = fakeClient(() => {
       throw new Error('连不上');
     });

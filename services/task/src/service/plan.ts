@@ -1,8 +1,17 @@
 // 工作流方案的校验，以及把方案变成库里的节点和连线（ADR 0004 §3、§9）。
 import { randomUUID } from 'node:crypto';
-import type { PlanNode, WorkflowPlan } from '@oasis/contracts/task';
+import type { PlanNode, WorkflowPlan, TaskSheet } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
 import type { NodeConfig } from '../repo/schema.ts';
+
+/** 确认任务单的验收来源索引；不生成新要求或伪造历史来源。 */
+export function acceptanceRequirements(sheet: TaskSheet) {
+  return [
+    ...(sheet.requirements ?? []).map(({ id, text }) => ({ id, text })),
+    ...sheet.criteria.map((text, index) => ({ id: `criteria:${index}`, text })),
+    ...sheet.style.map((text, index) => ({ id: `style:${index}`, text })),
+  ];
+}
 
 /** 找环：返回环上的一个节点名，没有环返回 undefined（Kahn 拓扑排序剩下的就是环上的） */
 export function findCycle(
@@ -55,6 +64,7 @@ export function validatePlan(plan: WorkflowPlan): void {
 /** 方案里的一个节点 → 库里的一行（status 由调用方定：方案里的是等待，用户新建的是新建） */
 export function nodeRow(n: PlanNode, id: string, status: 'waiting' | 'draft') {
   const config: NodeConfig = {
+    ...(n.requires ? { requires: n.requires } : {}),
     checks: n.checks,
     expects: n.expects,
     ...(n.deliver === undefined ? {} : { deliver: n.deliver }),

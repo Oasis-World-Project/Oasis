@@ -54,6 +54,7 @@ ENV DSH_HOME=/home/node/.dsh \
     NODE_ENV=production
 # 从 dsh 自带的 sdk 模板复制出 oasis profile，再叠上 Oasis 的组合（关掉用不上的插件、模型指向 model-gateway）
 RUN dsh oasis --from-default-profile sdk --dump-config > /dev/null
+RUN mkdir -p /home/node/.dsh/sessions
 COPY --chown=node:node services/harness/src/adapter/profile/cordis.patch.yml /home/node/.dsh/profiles/oasis/cordis.patch.yml
 # 沙箱里调用 Oasis 工具的命令（ADR 0006）：Node 直接运行 TypeScript
 COPY services/harness/sandbox/oasis-tool.ts /opt/oasis/oasis-tool.ts

@@ -15,10 +15,13 @@ async function runNative(
     refused?: boolean;
     additionalModel?: boolean;
     generation?: number;
+    recovering?: boolean;
+    bootstrap?: boolean;
+    networkFault?: boolean;
   } = {},
 ) {
   const image = process.env.OASIS_NATIVE_IMAGE!;
-  const sessionId = options.resume ? 'legacy-root' : 'root';
+  const sessionId = options.recovering ? 'root' : options.resume ? 'legacy-root' : 'root';
   if (!/^oasis\/[a-z0-9._-]+:[\w.-]+$/.test(image)) throw new Error('test image must use oasis/');
   const directory = await mkdtemp(join(tmpdir(), 'oasis-native-'));
   const name = `oasis-native-${randomUUID()}`;
@@ -42,6 +45,7 @@ async function runNative(
     objective: 'Write out/proof.txt using a delegated secondary model, then complete the goal.',
     goal: true,
     goalRoundWindow: 2,
+    recovering: options.recovering,
   })) {
     await writeFile(join(directory, file.path.split('/').at(-1)!), file.content);
   }
@@ -64,9 +68,11 @@ async function runNative(
       '--network',
       'none',
       '--env',
-      `OASIS_NATIVE_MODE=${options.refused ? 'refuse' : options.resume ? 'resume' : 'fresh'}`,
+      `OASIS_NATIVE_MODE=${options.recovering && !options.bootstrap ? 'recover' : options.refused ? 'refuse' : options.resume ? 'resume' : 'fresh'}`,
       '--env',
       `OASIS_NATIVE_GENERATION=${options.generation ?? 4}`,
+      '--env',
+      `OASIS_NATIVE_FAULT=${options.networkFault ? 'disconnect' : ''}`,
       '--memory',
       '2g',
       '--pids-limit',
@@ -115,14 +121,16 @@ async function runNative(
       return;
     }
     if (options.resume) await agent.resume();
-    await agent.prompt('Carry out the current goal and mark it complete when verified.');
+    if (!options.recovering || options.bootstrap)
+      await agent.prompt('Carry out the current goal and mark it complete when verified.');
     expect(await agent.waitIdle(), stderr).toBeUndefined();
     await agent.shutdown();
     expect(await exited, stderr).toBe(0);
     expect(stderr).toContain('NATIVE_PROOF');
     expect(stderr).toContain('"policyCount":1');
     expect(stderr).not.toContain('test/unapproved');
-    expect(nested).toBe(true);
+    expect(nested).toBe(!options.recovering || Boolean(options.bootstrap));
+    if (options.recovering && !options.bootstrap) expect(stderr).toContain('"rootCalls":0');
     expect(stderr).not.toContain('did not activate');
     return await readFile(join(directory, 'evidence/session.jsonl.zstd'));
   } finally {
@@ -136,6 +144,20 @@ async function runNative(
 
 describe.skipIf(!process.env.OASIS_NATIVE_IMAGE)('精确版本 DSH 离线集成', () => {
   it('原生目标跨截断、多轮租约和跨模型子代理执行，实际写出文件才结束', () => runNative(), 120_000);
+  it(
+    '原生供应商读取到真实连接中断时，保留同一目标重试并完成',
+    () => runNative({ networkFault: true }),
+    120_000,
+  );
+  it(
+    '控制进程在原生会话创建前退出，原子请求可以首次执行而不会误判为恢复损坏',
+    () => runNative({ recovering: true, bootstrap: true }),
+    120_000,
+  );
+  it('已完成目标在接管时不创建新目标、不重发用户任务、不调用模型', async () => {
+    const fixture = await runNative();
+    await runNative({ fixture, resume: true, recovering: true });
+  }, 120_000);
   it.each(['completed', 'truncated'])(
     'rc.2 的 %s 归档恢复原身份、历史、文件和跨模型能力',
     async (ending) => {

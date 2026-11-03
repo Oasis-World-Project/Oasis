@@ -1,5 +1,5 @@
 // 工作流控制面（ADR 0004、0005）：任务单 → 规划（planning-service）或直接提交方案 → 调度可以跑的节点 → 收到运行结束就推进（讨论的下一轮、汇总、
-// 过关卡、关卡没过改一次）→ 失败自动重做 → 卡住、花费超限时交给用户处理。
+// 过关卡、原会话修复、最终验收）→ 实际失败或证据不足时明确交给用户处理。
 // 用户可以随时停止 / 继续、运行整个工作流或单个节点、改还没开始的节点和连线。
 // 节点真正的执行在 harness；这里只管图、状态和决定。所有决定都在锁住任务行的事务里做，
 // 对外的调用（提交运行、关卡检查、通知停止或取消）在事务之外。
@@ -70,6 +70,7 @@ function toNodeBody(node: Node): NodeBody {
     checks: c.checks ?? [],
     ...(c.gateChecks ? { gateChecks: c.gateChecks } : {}),
     expects: c.expects ?? [],
+    ...(c.requires ? { requires: c.requires } : {}),
     ...(c.deliver === undefined ? {} : { deliver: c.deliver }),
     tools: c.tools ?? [],
     discussion:
@@ -145,6 +146,7 @@ const UNAVAILABLE: Record<Attention['reason'], string> = {
   over_estimate: '预估超过你设的上限时只能照做或取消',
   plan_failed: '工作流没排好时只能重新规划或取消',
   workflow_broken: '工作流的连线断开了：先把线接好再点运行，或者取消任务',
+  checks_incomplete: '检查尚未完成，可以重新检查或取消',
 };
 
 const revising = () =>
@@ -172,6 +174,24 @@ export function createWorkflowService(deps: {
   logger: Logger;
 }) {
   const { store, harness, gate, logger } = deps;
+  const checksInFlight = new Map<
+    string,
+    { taskId: string; nodeId?: string; abort: AbortController; pending: Promise<void> }
+  >();
+  function checkOnce(
+    key: string,
+    owner: { taskId: string; nodeId?: string },
+    check: (signal: AbortSignal) => Promise<void>,
+  ): Promise<void> {
+    const existing = checksInFlight.get(key);
+    if (existing) return existing.pending;
+    const abort = new AbortController();
+    const pending = Promise.resolve()
+      .then(() => check(abort.signal))
+      .finally(() => checksInFlight.delete(key));
+    checksInFlight.set(key, { ...owner, abort, pending });
+    return pending;
+  }
   const planning = createPlanning({
     store,
     harness,
@@ -190,6 +210,7 @@ export function createWorkflowService(deps: {
     for (const request of step.requests) {
       const runId = randomUUID();
       const record = {
+        ...(node.config.requires ? { requires: node.config.requires } : {}),
         ...(request.goal ? { goal: true } : {}),
         model: request.model,
         prompt: request.prompt,
@@ -235,12 +256,31 @@ export function createWorkflowService(deps: {
 
   /** 停下一个运行中或检查中的节点（之后可以接着做） */
   async function halt(snapshot: Snapshot, w: Writer, node: Node, fx: Effects) {
+    fx.abortChecks.push({ taskId: snapshot.task.id, nodeId: node.id });
     await endRuns(w, openRuns(snapshot, node.id), 'stop', fx);
     await w.setNode(node.id, { status: 'stopped' });
   }
 
   /** 让一个节点开跑：新建 / 等待的从头做，停下的接着做，失败的重新算重做次数再做 */
   async function startNode(snapshot: Snapshot, w: Writer, node: Node, fx: Effects) {
+    if (node.config.repairChecks?.length) {
+      const { repairChecks, ...config } = node.config;
+      const clean = { ...node, config };
+      const previous = node.currentRunId ? await store.findRun(node.currentRunId) : undefined;
+      const canResume = previous && (previous.status === 'succeeded' || previous.meta.resumable);
+      const step = canResume
+        ? reworkStep(clean, repairChecks)
+        : previous
+          ? retryStep(snapshot, clean, previous)
+          : firstStep(snapshot, clean);
+      if (canResume) {
+        const latest = firstStep(snapshot, node).requests[0]?.inputsFrom ?? [];
+        for (const request of step.requests) request.inputsFrom = latest;
+      }
+      await w.setNode(node.id, { config, reworks: node.reworks + 1 });
+      await openStep(snapshot, w, node, step, fx);
+      return;
+    }
     if (node.status === 'stopped') {
       await openStep(snapshot, w, node, resumeStep(snapshot, node), fx);
       return;
@@ -280,9 +320,13 @@ export function createWorkflowService(deps: {
 
   /**
    * 整体验收（事务外，ADR 0005 §5）：负责交付物的节点交出的东西一起交给关卡，对照任务单的「怎么算做好」。
-   * 没满足的地方记下来，照样交付（用户定）。
+   * 明确未满足则恢复负责交付的节点修复；检查未知不得标成功。
    */
   async function runAcceptance(taskId: string): Promise<void> {
+    return checkOnce(`accept:${taskId}`, { taskId }, (signal) => checkDelivery(taskId, signal));
+  }
+
+  async function checkDelivery(taskId: string, signal: AbortSignal): Promise<void> {
     const snapshot = await store.get(taskId);
     if (snapshot?.task.status !== 'accepting' || !snapshot.task.sheet) return;
     const { task } = snapshot;
@@ -303,9 +347,10 @@ export function createWorkflowService(deps: {
       }
       return [{ runId, summary: node.summary, outputs, label: d.name }];
     });
-    const { unmet, unchecked, checks } =
+    const { unmet, unchecked, checks, notes } =
       runs.length > 0
         ? await gate.check({
+            signal,
             payerId: task.payerId,
             taskId,
             nodeId: null,
@@ -313,6 +358,7 @@ export function createWorkflowService(deps: {
             runs,
             checks: [
               ...sheet.criteria,
+              ...sheet.style,
               ...deliveryIntegrityChecks(runs.flatMap((r) => r.outputs)),
               ...(sheet.requirements ?? []).map((r) => ({
                 id: r.id,
@@ -326,34 +372,92 @@ export function createWorkflowService(deps: {
             deliveryPaths: runs.flatMap((r) => r.outputs.map((f) => f.path)),
             ownerId: task.ownerId,
             materials: task.materials,
-            execution: { spentMicro: task.spentMicro, budgetMicro: sheet.budgetMicro },
+            execution: { spentMicro: task.spentMicro, budgetMicro: task.budgetLimitMicro },
           })
         : { unmet: [], unchecked: undefined };
-    await store.transact(taskId, async (fresh, w) => {
+    await transact(taskId, async (fresh, w, fx) => {
       if (fresh.task.status !== 'accepting') return;
-      const overBudget = sheet.budgetMicro !== null && fresh.task.spentMicro > sheet.budgetMicro;
+      const currentBudget = fresh.task.budgetLimitMicro;
+      const overBudget = currentBudget !== null && fresh.task.spentMicro > currentBudget;
       const budgetCheck =
-        sheet.budgetMicro === null
+        currentBudget === null
           ? []
           : [
               {
                 id: 'system-budget',
                 text: '任务调用费用不超过用户上限',
                 status: overBudget ? ('unmet' as const) : ('passed' as const),
-                reason: `系统计量 ${fresh.task.spentMicro} 微美元；上限 ${sheet.budgetMicro} 微美元`,
-                evidence: ['task.spentMicro', 'sheet.budgetMicro'],
+                reason: `系统计量 ${fresh.task.spentMicro} 微美元；当前上限 ${currentBudget} 微美元`,
+                evidence: ['task.spentMicro', 'task.budgetLimitMicro'],
               },
             ];
+      const problems = [...missing, ...unmet];
+      const unknown = [
+        ...(unchecked ?? []),
+        ...(checks ?? []).filter((c) => c.status === 'unchecked').map((c) => c.text),
+      ];
       await w.setTask({
         acceptance: {
           unmet: [...missing, ...unmet, ...(overBudget ? ['任务调用费用超过用户上限'] : [])],
           ...(unchecked?.length ? { unchecked } : {}),
+          ...(notes?.length ? { notes } : {}),
           ...(checks || budgetCheck.length ? { checks: [...(checks ?? []), ...budgetCheck] } : {}),
         },
         deliverables,
-        status: 'succeeded',
-        finishedAt: new Date(),
+        finishedAt: null,
       });
+      if (overBudget) {
+        await w.setTask({
+          status: 'needs_attention',
+          attention: {
+            reason: 'over_budget',
+            nodeId: null,
+            message: '验收时系统计量已超过用户设置的调用预算',
+          },
+        });
+      } else if (problems.length) {
+        const owners = new Set(deliverables.map((d) => d.nodeId));
+        const targets = fresh.nodes.filter((n) => owners.has(n.id) && n.currentRunId);
+        if (!targets.length) {
+          await w.setTask({
+            status: 'needs_attention',
+            attention: {
+              reason: 'checks_incomplete',
+              nodeId: null,
+              message: '交付验收未通过且没有可恢复的交付节点：' + problems.join('；'),
+            },
+          });
+          return;
+        }
+        await w.setTask({ status: 'running', attention: null });
+        const affected = new Set(targets.map((n) => n.id));
+        for (;;) {
+          const size = affected.size;
+          for (const edge of fresh.edges)
+            if (edge.fromNodeId && affected.has(edge.fromNodeId) && edge.toNodeId)
+              affected.add(edge.toNodeId);
+          if (size === affected.size) break;
+        }
+        for (const node of fresh.nodes.filter((n) => affected.has(n.id)))
+          await w.setNode(node.id, {
+            status: 'waiting',
+            finishedAt: null,
+            config: {
+              ...node.config,
+              repairChecks: ['整体验收未通过，请按原始任务单核对全部交付物。', ...problems],
+            },
+          });
+        await schedule(fresh, w, fx);
+      } else if (unknown.length) {
+        await w.setTask({
+          status: 'needs_attention',
+          attention: {
+            reason: 'checks_incomplete',
+            nodeId: null,
+            message: '交付尚未完成检查：' + [...new Set(unknown)].join('；'),
+          },
+        });
+      } else await w.setTask({ status: 'succeeded', attention: null, finishedAt: new Date() });
     });
   }
 
@@ -391,6 +495,10 @@ export function createWorkflowService(deps: {
   ): Promise<void> {
     const fx = noEffects();
     await store.transact(taskId, (snapshot, w) => fn(snapshot, w, fx));
+    for (const intent of fx.abortChecks)
+      for (const check of checksInFlight.values())
+        if (check.taskId === intent.taskId && (!intent.nodeId || check.nodeId === intent.nodeId))
+          check.abort.abort();
     for (const how of ['stop', 'cancel'] as const) {
       for (const runId of fx[how]) {
         await harness
@@ -451,14 +559,31 @@ export function createWorkflowService(deps: {
 
   /** 关卡检查（事务外），再按结果推进：通过 → 完成；没过且还能改 → 接着原会话改一次；否则完成并留提醒 */
   async function runGate(taskId: string, nodeId: string, runId: string): Promise<void> {
+    return checkOnce(`node:${taskId}:${nodeId}:${runId}`, { taskId, nodeId }, (signal) =>
+      checkNode(taskId, nodeId, runId, signal),
+    );
+  }
+
+  async function checkNode(
+    taskId: string,
+    nodeId: string,
+    runId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
     const snapshot = await store.get(taskId);
     const node = snapshot?.nodes.find((n) => n.id === nodeId);
     if (!snapshot || node?.status !== 'checking' || node.currentRunId !== runId) return;
+    if (
+      snapshot.task.status === 'needs_attention' &&
+      snapshot.task.attention?.reason === 'checks_incomplete'
+    )
+      return;
     const delivery =
       node.config.deliver === undefined
         ? undefined
         : selectedOutputFiles(node.outputs, node.config.deliver);
-    const { unmet, unchecked, checks } = await gate.check({
+    const { unmet, unchecked, checks, notes } = await gate.check({
+      signal,
       payerId: snapshot.task.payerId,
       taskId,
       nodeId,
@@ -485,7 +610,7 @@ export function createWorkflowService(deps: {
       materials: snapshot.task.materials,
       execution: {
         spentMicro: snapshot.task.spentMicro,
-        budgetMicro: snapshot.task.sheet?.budgetMicro ?? null,
+        budgetMicro: snapshot.task.budgetLimitMicro,
       },
       references: incoming(node, snapshot.edges).flatMap((edge) => {
         const upstream = snapshot.nodes.find((n) => n.id === edge.fromNodeId);
@@ -510,17 +635,23 @@ export function createWorkflowService(deps: {
       const current = fresh.nodes.find((n) => n.id === nodeId);
       if (current?.status !== 'checking' || current.currentRunId !== runId) return;
       if (checks) await w.setNode(nodeId, { config: { ...current.config, gateChecks: checks } });
+      if (unmet.length === 0 && unchecked?.length) {
+        await w.setNode(nodeId, { warning: '未完成的检查：' + unchecked.join('；') });
+        await w.setTask({
+          status: 'needs_attention',
+          attention: {
+            reason: 'checks_incomplete',
+            nodeId,
+            message: `「${current.title}」检查尚未完成：${unchecked.join('；')}`,
+          },
+        });
+        return;
+      }
       if (unmet.length === 0) {
         await w.setNode(nodeId, {
           status: 'succeeded',
           finishedAt: new Date(),
-          ...(unchecked?.length
-            ? {
-                warning: [current.warning, `未完成的检查：${unchecked.join('；')}`]
-                  .filter(Boolean)
-                  .join('；'),
-              }
-            : {}),
+          warning: notes?.length ? notes.join('；') : null,
         });
       } else {
         logger.info({ nodeId, unmet }, '关卡没过，接着原会话修复');
@@ -733,6 +864,7 @@ export function createWorkflowService(deps: {
 
   /** 取消整个任务（在事务里） */
   async function cancelAll(snapshot: Snapshot, w: Writer, fx: Effects) {
+    fx.abortChecks.push({ taskId: snapshot.task.id });
     const now = new Date();
     await endRuns(w, snapshot.activeRuns.filter(isOpen), 'cancel', fx);
     if (snapshot.task.status === 'planning' && snapshot.task.plannerRunId) {
@@ -1054,6 +1186,15 @@ export function createWorkflowService(deps: {
         }
         if (choice === 'cancel') return cancelAll(snapshot, w, fx);
         const { reason, nodeId } = task.attention;
+        if (reason === 'checks_incomplete' && choice === 'retry') {
+          await w.setTask({ status: nodeId ? 'running' : 'accepting', attention: null });
+          if (nodeId) {
+            const node = snapshot.nodes.find((n) => n.id === nodeId);
+            if (node?.status === 'checking' && node.currentRunId)
+              fx.gate.push({ taskId, nodeId, runId: node.currentRunId });
+          } else fx.accept.push(taskId);
+          return;
+        }
         if (reason === 'node_failed') {
           const failed = snapshot.nodes.find((n) => n.id === nodeId && n.status === 'failed');
           if (failed) {

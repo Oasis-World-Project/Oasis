@@ -94,6 +94,8 @@ export function createDockerApi(socketPath: string) {
         throw err;
       }
     },
+    imageId: async (image: string) =>
+      (await json<{ Id: string }>('GET', `/images/${encodeURIComponent(image)}/json`)).Id,
     networkExists: async (network: string) => {
       try {
         await json('GET', `/networks/${encodeURIComponent(network)}`);
@@ -110,6 +112,36 @@ export function createDockerApi(socketPath: string) {
     },
     pauseContainer: async (id: string) => {
       await readAll(await call('POST', `/containers/${id}/pause`));
+    },
+    inspectContainer: (id: string) =>
+      json<{
+        State: { Running: boolean; Paused: boolean; FinishedAt: string };
+        HostConfig: { NanoCpus?: number };
+      }>('GET', `/containers/${id}/json`),
+    stopContainer: async (id: string) => {
+      const state = await json<{ State: { Running: boolean; Paused: boolean } }>(
+        'GET',
+        `/containers/${id}/json`,
+      );
+      if (state.State.Paused) await readAll(await call('POST', `/containers/${id}/unpause`));
+      if (state.State.Running) await readAll(await call('POST', `/containers/${id}/stop?t=10`));
+    },
+    volume: async (name: string): Promise<{ Labels: Record<string, string> } | undefined> => {
+      try {
+        return await json('GET', `/volumes/${encodeURIComponent(name)}`);
+      } catch (err) {
+        if (err instanceof DockerApiError && err.status === 404) return undefined;
+        throw err;
+      }
+    },
+    createVolume: (name: string, labels: Record<string, string>) =>
+      json('POST', '/volumes/create', { Name: name, Labels: labels }),
+    removeVolume: async (name: string) => {
+      try {
+        await readAll(await call('DELETE', `/volumes/${encodeURIComponent(name)}`));
+      } catch (err) {
+        if (!(err instanceof DockerApiError && err.status === 404)) throw err;
+      }
     },
     async exec(id: string, cmd: string[]) {
       const created = await json<{ Id: string }>('POST', `/containers/${id}/exec`, {

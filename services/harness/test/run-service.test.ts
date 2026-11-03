@@ -94,9 +94,17 @@ let pauseFails = false;
 let orphansRemoved: ReadonlySet<string> | undefined;
 /** 起沙箱要多久（模拟容器启动慢） */
 let startDelayMs = 0;
+const workspaces = new Set<string>();
+let noNativeSession = false;
 const executor: Executor = {
   check: async () => {},
+  workspaceExists: async (id) => workspaces.has(id),
+  suspend: async () => ({ endedAt: new Date(), cores: 2 }),
+  purgeWorkspace: async (id) => {
+    workspaces.delete(id);
+  },
   async start(spec) {
+    if (spec.workspaceId) workspaces.add(spec.workspaceId);
     const groups = new Map<string, { path: string; content: Buffer }[]>();
     for (const input of spec.files) {
       const parser = extract();
@@ -133,10 +141,17 @@ const executor: Executor = {
       async readArchive(path) {
         lifecycle.push('archive');
         const dir = path.split('/').at(-1) ?? 'x';
+        if (dir === 'sessions' && noNativeSession) return undefined;
         // 会话目录里带一个锁文件，接着原会话时应该被去掉
         const extra =
           dir === 'sessions'
-            ? [{ path: 'sessions/s/session.lock', content: Buffer.from('1') }]
+            ? [
+                { path: 'sessions/s/session.lock', content: Buffer.from('1') },
+                {
+                  path: `sessions/--workspace--/${spec.workspaceId ?? spec.runId}/session.v4.jsonl.zstd`,
+                  content: Buffer.from('native-fixture'),
+                },
+              ]
             : [{ path: 'out/.oasis-batches/batch/meta.json', content: Buffer.from('{"rows":[]}') }];
         return Readable.from([
           await packFiles([{ path: `${dir}/result.md`, content: Buffer.from('# 成果') }, ...extra]),
@@ -161,7 +176,7 @@ const rows = new Map<string, Run>();
 const events: RunEvent[] = [];
 const outbox: EventEnvelope[] = [];
 const repo: RunsRepo = {
-  async insert(run) {
+  async insert(run, request) {
     if (rows.has(run.id)) return false;
     rows.set(run.id, {
       ...run,
@@ -182,9 +197,23 @@ const repo: RunsRepo = {
       startedAt: null,
       finishedAt: null,
     });
+    if (request)
+      events.push({
+        runId: run.id,
+        seq: 0,
+        kind: 'status',
+        data: { status: 'admitted', request },
+        createdAt: new Date(),
+      });
     return true;
   },
+  request: async (runId) => events.find((e) => e.runId === runId && e.seq === 0)?.data.request,
+  control: async (runId) =>
+    events.filter((e) => e.runId === runId && e.data.status === 'control_requested').at(-1)?.data
+      .how as 'stop' | 'cancel' | undefined,
   get: async (id) => rows.get(id),
+  hasRootPrompt: async (runId) =>
+    events.some((e) => e.runId === runId && e.kind === 'user_message' && !e.data.parentSessionId),
   async update(id, patch) {
     const row = rows.get(id);
     if (row) rows.set(id, { ...row, ...patch });
@@ -201,7 +230,10 @@ const repo: RunsRepo = {
   },
   listEvents: async (runId, after, limit) =>
     events.filter((e) => e.runId === runId && e.seq > after).slice(0, limit),
+  nextSequence: async (runId) =>
+    Math.max(-1, ...events.filter((e) => e.runId === runId).map((e) => e.seq)) + 1,
   listByTask: async (taskId) => [...rows.values()].filter((r) => r.taskId === taskId),
+  listBySession: async (sessionId) => [...rows.values()].filter((r) => r.sessionId === sessionId),
   async removeMany(ids) {
     for (const id of ids) rows.delete(id);
   },
@@ -272,6 +304,12 @@ modelGateway.post('/internal/v1/compute/:id/settle', async (request, reply) => {
   compute.push({ path: 'settle', body: request.body as Record<string, unknown> });
   return reply.code(204).send();
 });
+modelGateway.post('/internal/v1/compute/runs/:id/recover', async (_request, reply) =>
+  reply.code(204).send(),
+);
+modelGateway.post('/internal/v1/tools/runs/:id/cancel', async (_request, reply) =>
+  reply.code(204).send(),
+);
 modelGateway.post('/internal/run-keys/:id/revoke', async (request, reply) => {
   revoked.push((request.params as { id: string }).id);
   return reply.code(204).send();
@@ -306,9 +344,9 @@ modelGateway.get('/internal/uploads/:id/content', async (request, reply) => {
 });
 
 let service: ReturnType<typeof createRunService>;
-beforeAll(async () => {
-  const url = await modelGateway.listen({ port: 0, host: '127.0.0.1' });
-  service = createRunService({
+let url: string;
+const buildService = (override: Partial<Parameters<typeof createRunService>[0]> = {}) =>
+  createRunService({
     repo,
     executor,
     store,
@@ -327,10 +365,16 @@ beforeAll(async () => {
     outputMaxBytes: 1024 * 1024,
     serviceName: 'harness',
     logger: pino({ level: 'silent' }),
+    ...override,
   });
+beforeAll(async () => {
+  url = await modelGateway.listen({ port: 0, host: '127.0.0.1' });
 });
 afterAll(() => modelGateway.close());
 beforeEach(() => {
+  service = buildService();
+  workspaces.clear();
+  noNativeSession = false;
   lifecycle.length = 0;
   pauseFails = false;
   for (const list of [started, destroyed, events, outbox, issued, revoked, methods, compute])
@@ -456,7 +500,15 @@ describe('一次 agent 运行', () => {
     });
     // 运行时上下文那条不是用户说的，不记
     const kinds = events.map((e) => e.kind);
-    expect(kinds).toEqual(['status', 'user_message', 'assistant_text', 'turn_end', 'status']);
+    expect(kinds).toEqual([
+      'status',
+      'status',
+      'user_message',
+      'assistant_text',
+      'turn_end',
+      'status',
+    ]);
+    expect((await service.events(run.id, -1, 100))[0]?.data).toEqual({ status: 'admitted' });
   });
 
   it('任务被删除：已结束运行的产出包、会话存档和记录都删掉；没结束的留到下次', async () => {
@@ -527,10 +579,12 @@ describe('一次 agent 运行', () => {
     expect(errors[1]).toContain('素材加起来超过');
   });
 
-  it('接着之前的运行：放回会话存档（去掉锁文件）、放回产出，并让 dsh 恢复原会话', async () => {
+  it('旧存档没有持久卷时放回会话及产出，并去掉旧锁', async () => {
     const first = await service.start({ ...base, prompt: '先写' });
     await finished(first.id);
     outbox.length = 0;
+    workspaces.clear(); // 旧系统仅有对象存储归档，也没有原子准入请求。
+    for (const event of events) if (event.data.status === 'admitted') delete event.data.request;
     const next = await service.start({ ...base, prompt: '按意见改', continueFrom: first.id });
     await finished(next.id);
     const [workspace, dshHome] = started[1]?.files ?? [];
@@ -538,7 +592,7 @@ describe('一次 agent 运行', () => {
       'result.md',
     );
     const session = (await extractFiles(dshHome?.tar ?? Buffer.alloc(0))).map((f) => f.path);
-    expect(session).toEqual(['result.md']); // sessions/ 下的锁文件被去掉了
+    expect(session).toEqual([`--workspace--/${first.id}/session.v4.jsonl.zstd`, 'result.md']); // 锁文件被去掉，原生日志保留
     expect(dshHome?.dir).toBe('/home/node/.dsh');
     expect(methods).toContain('session/resume');
     expect(rows.get(next.id)).toMatchObject({ sessionId: first.id, continueFrom: first.id });
@@ -640,10 +694,7 @@ describe('一次 agent 运行', () => {
     const next = await service.start({ ...base, prompt: '接着做', continueFrom: run.id });
     expect((await finished(next.id)).status).toBe('succeeded');
     expect(methods).toContain('session/resume');
-    const restored = await extractFiles(started[1]!.files[0]!.tar);
-    expect(restored.some((file) => file.path.includes('.oasis-batches/batch/meta.json'))).toBe(
-      true,
-    );
+    expect(started[1]).toMatchObject({ workspaceId: run.id, restore: true });
   });
 
   it('冻结失败不归档仍在变动的检查点，并明确告知保存失败', async () => {
@@ -696,7 +747,181 @@ describe('一次 agent 运行', () => {
     expect((conflict as HttpError).statusCode).toBe(409);
   });
 
-  it('重启接管：上次没结束的运行记为失败，清理遗留沙箱', async () => {
+  it('优雅重启挂起后保持原运行身份、事件序号和目录，完成只发一次事件', async () => {
+    const run = await service.start({ ...base, prompt: 'SLOW 原始任务' });
+    await until(() =>
+      rows.get(run.id)?.status === 'running' && events.some((e) => e.kind === 'user_message')
+        ? true
+        : undefined,
+    );
+    await service.stopAll();
+    expect(rows.get(run.id)?.status).toBe('queued');
+    expect(outbox).toHaveLength(0);
+    expect(workspaces.has(run.id)).toBe(true);
+    const oldMax = Math.max(...events.map((e) => e.seq));
+    const replacement = buildService();
+    await replacement.recover();
+    await finished(run.id);
+    expect(rows.get(run.id)?.status).toBe('succeeded');
+    expect(rows.size).toBe(1);
+    expect(started.map((s) => s.runId)).toEqual([run.id, run.id]);
+    expect(started[1]).toMatchObject({ workspaceId: run.id, restore: true });
+    expect(events.find((e) => e.data.status === 'recovering')?.seq).toBe(oldMax + 1);
+    expect(new Set(events.map((e) => e.seq)).size).toBe(events.length);
+    expect(outbox).toHaveLength(1);
+    expect(methods).toContain('session/resume');
+    await replacement.stopAll();
+  });
+
+  it('接管排队请求保留内联输入和素材，尚未开始时不恢复不存在的会话', async () => {
+    const id = '8e8e8e8e-8e8e-4e8e-8e8e-8e8e8e8e8e8e';
+    const body = {
+      ...base,
+      runId: id,
+      prompt: '排队任务',
+      inputs: [
+        { path: 'seed.txt', contentBase64: Buffer.from('durable-input').toString('base64') },
+      ],
+    };
+    await repo.insert(
+      {
+        id,
+        payerId: PAYER,
+        taskId: null,
+        nodeId: null,
+        sessionId: id,
+        continueFrom: null,
+        model: base.model,
+        prompt: body.prompt,
+        inputsFrom: [],
+      },
+      { body, persistent: true },
+    );
+    await service.recover();
+    await finished(id);
+    expect(rows.get(id)?.status).toBe('succeeded');
+    expect(methods).not.toContain('session/resume');
+    const files = await extractFiles(started[0]!.files[0]!.tar);
+    expect(files.find((f) => f.path === 'seed.txt')?.content.toString()).toBe('durable-input');
+  });
+
+  it('已开始的运行丢失持久目录时不调用模型、不创建空沙箱', async () => {
+    const run = await service.start({ ...base, prompt: 'SLOW 原始任务' });
+    await until(() => (rows.get(run.id)?.status === 'running' ? true : undefined));
+    await service.stopAll();
+    workspaces.clear();
+    const replacement = buildService();
+    const count = issued.length;
+    await replacement.recover();
+    expect(rows.get(run.id)).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('持久工作目录缺失'),
+    });
+    expect(issued.length).toBe(count);
+    expect(started).toHaveLength(1);
+  });
+
+  it('新运行已登记但尚未挂入内存时，定时接管不会重复派发', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const checked = buildService({
+      repo: {
+        ...repo,
+        async insert(row, request) {
+          const inserted = await repo.insert(row, request);
+          await waiting;
+          return inserted;
+        },
+      },
+    });
+    const starting = checked.start({ ...base, prompt: '唯一一次派发' });
+    try {
+      await until(() => (rows.size ? true : undefined));
+      await checked.recover();
+      expect(started).toHaveLength(0);
+      expect(outbox).toHaveLength(0);
+    } finally {
+      release();
+    }
+    const run = await starting;
+    expect((await finished(run.id)).status).toBe('succeeded');
+    expect(started).toHaveLength(1);
+    expect(outbox).toHaveLength(1);
+    await checked.stopAll();
+  });
+
+  it('运行环境不具备所需能力时，登记和冻结之前拒绝', async () => {
+    const checked = buildService({
+      executor: {
+        ...executor,
+        environment: async () => ({
+          image: 'oasis/test:1',
+          imageId: 'sha256:test',
+          software: { node: '24' },
+          capabilities: ['node'],
+          notes: [],
+        }),
+      },
+    });
+    await expect(
+      checked.start({ ...base, prompt: '需要本地浏览器', requires: ['browser'] }),
+    ).rejects.toMatchObject({ statusCode: 422, code: 'execution_capability_unavailable' });
+    expect(rows.size).toBe(0);
+    expect(issued).toHaveLength(0);
+    expect(compute).toHaveLength(0);
+  });
+
+  it.each(['stop', 'cancel'] as const)(
+    '恢复等待时的 %s 意图持久化；不唤醒模型、不创建新运行',
+    async (how) => {
+      const run = await service.start({ ...base, prompt: 'SLOW 原任务' });
+      await until(() => events.find((e) => e.runId === run.id && e.kind === 'user_message'));
+      await service.stopAll();
+      const replacement = buildService();
+      await replacement[how](run.id);
+      const row = await finished(run.id);
+      expect(row.status).toBe(how === 'stop' ? 'stopped' : 'cancelled');
+      expect(started).toHaveLength(1);
+      expect(rows.size).toBe(1);
+      expect(outbox).toHaveLength(1);
+      expect(events.some((e) => e.data.status === 'control_requested' && e.data.how === how)).toBe(
+        true,
+      );
+      await replacement.stopAll();
+    },
+  );
+
+  it('原生会话创建前崩溃：保留原身份首次派发原子请求', async () => {
+    const id = '7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e7e';
+    const body = { ...base, runId: id, prompt: '首次派发原请求' };
+    await repo.insert(
+      {
+        id,
+        payerId: PAYER,
+        taskId: null,
+        nodeId: null,
+        sessionId: id,
+        continueFrom: null,
+        model: base.model,
+        prompt: body.prompt,
+        inputsFrom: [],
+      },
+      { body, persistent: true },
+    );
+    await repo.update(id, { status: 'running', startedAt: new Date() });
+    workspaces.add(id);
+    noNativeSession = true;
+    await service.recover();
+    expect((await finished(id)).status).toBe('succeeded');
+    expect(methods).not.toContain('session/resume');
+    expect(events.filter((e) => e.kind === 'user_message').map((e) => e.data.text)).toEqual([
+      body.prompt,
+    ]);
+  });
+
+  it('缺少恢复请求时明确失败，不能新建空运行', async () => {
     await repo.insert({
       id: '9e9e9e9e-9e9e-4e9e-8e9e-9e9e9e9e9e9e',
       payerId: PAYER,
@@ -708,7 +933,7 @@ describe('一次 agent 运行', () => {
     await service.recover();
     expect(rows.get('9e9e9e9e-9e9e-4e9e-8e9e-9e9e9e9e9e9e')).toMatchObject({
       status: 'failed',
-      error: '运行中断：harness 重启',
+      error: expect.stringContaining('恢复状态不可用'),
     });
     expect(outbox[0]).toMatchObject({ data: { status: 'failed' } });
     expect(orphansRemoved?.size).toBe(0);

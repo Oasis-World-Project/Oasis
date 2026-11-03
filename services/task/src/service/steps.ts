@@ -1,5 +1,5 @@
 // 节点的下一步要开哪些运行（纯函数）：
-// - 干活节点：一次运行；失败重做从头再来；关卡没过接着原会话改一次。
+// - 干活节点：持续目标；失败优先恢复原会话；关卡未过在原会话修复。
 // - 讨论节点：第一轮每位参与者各说一次（并行）→ 之后每轮每人接着自己的会话回应上一轮别人的发言
 //   → 最后汇总者写结论（之后和干活节点一样过关卡）。
 // - 停止后继续：干活节点接着停下的那次运行的会话；讨论节点把这一步没说完的重新说。
@@ -43,6 +43,7 @@ function upstreamOf(snapshot: Snapshot, node: Node): Node[] {
 function contextOf(snapshot: Snapshot, node: Node): NodeContext {
   return {
     brief: snapshot.task.brief,
+    ...(snapshot.task.sheet ? { sheet: snapshot.task.sheet } : {}),
     title: node.title,
     role: node.role,
     goal: node.goal,

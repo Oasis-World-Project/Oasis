@@ -1,8 +1,8 @@
 import { PassThrough, Readable } from 'node:stream';
 import { pack } from 'tar-stream';
 import { describe, expect, it } from 'vitest';
-import { defaultDockerSocket } from '../src/executor/docker-api.ts';
-import { demultiplex } from '../src/executor/executor.ts';
+import { createDockerApi, defaultDockerSocket } from '../src/executor/docker-api.ts';
+import { createDockerExecutor, demultiplex } from '../src/executor/executor.ts';
 import {
   listFiles,
   packFiles,
@@ -18,6 +18,40 @@ const frame = (stream: 1 | 2, text: string) => {
   header.writeUInt32BE(payload.length, 4);
   return Buffer.concat([header, payload]);
 };
+
+describe.skipIf(!process.env.OASIS_NATIVE_IMAGE)('实际镜像环境探测', () => {
+  it('从实际二进制探测并按镜像摘要缓存，不宣称不存在的本地浏览器', async () => {
+    const docker = createDockerApi(defaultDockerSocket());
+    const executor = createDockerExecutor({
+      docker: {
+        ...docker,
+        createContainer: (name, spec) =>
+          docker.createContainer(name, {
+            ...spec,
+            Labels: {
+              ...(spec.Labels as Record<string, string>),
+              'oasis.component': 'harness-probe-test',
+            },
+          }),
+      },
+      image: process.env.OASIS_NATIVE_IMAGE!,
+      network: 'none',
+      cpus: 1,
+      memoryMb: 2048,
+      pidsLimit: 512,
+      workdir: '/workspace',
+    });
+    const result = await executor.environment!();
+    expect(result.capabilities).toEqual(
+      expect.arrayContaining(['node', 'python', 'ffmpeg', 'libreoffice', 'pdf']),
+    );
+    expect(result.imageId).toMatch(/^sha256:/);
+    expect(result.capabilities).not.toContain('browser');
+    expect((await executor.environment!()).imageId).toBe(result.imageId);
+    if (process.env.OASIS_NATIVE_IMAGE!.includes('sandbox-3d'))
+      expect(result.capabilities).toContain('blender');
+  }, 90000);
+});
 
 describe('Docker 输出拆流', () => {
   it('按帧头把 stdout 和 stderr 分开，帧被拆成几段也能拼回来', async () => {

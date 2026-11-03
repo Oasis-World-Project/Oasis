@@ -74,9 +74,21 @@ function createCompletions(chat: ChatService) {
       'x-accel-buffering': 'no',
       [OASIS_HEADERS.requestId]: request.id,
     });
-    await chat.pump(prepared, upstream, (chunk) => {
-      if (!reply.raw.destroyed) reply.raw.write(chunk);
-    });
+    try {
+      await chat.pump(
+        prepared,
+        upstream,
+        (chunk) => {
+          if (!reply.raw.destroyed) reply.raw.write(chunk);
+        },
+        { transportErrors: caller.runId ? 'disconnect' : 'message' },
+      );
+    } catch (err) {
+      // 原生执行器应看到真实传输失败，由自己的 provider 重试；不能改造成不可重试的模型消息。
+      reply.raw.destroy();
+      request.log.warn({ err }, '模型流未完成，连接已关闭');
+      return;
+    }
     reply.raw.end();
   };
 }
@@ -176,6 +188,21 @@ export function registerRoutes(
   app.post('/internal/v1/compute/:callId/settle', async (request, reply) => {
     const { callId } = parseWith(CallIdParams, request.params);
     await services.compute.settle(callId, parseWith(ComputeSettleBody, request.body));
+    return reply.code(204).send();
+  });
+  app.post('/internal/v1/compute/runs/:runId/recover', async (request, reply) => {
+    const { runId } = parseWith(z.object({ runId: z.uuid() }), request.params);
+    await services.compute.recover(
+      runId,
+      parseWith(
+        z.object({
+          payerId: z.uuid(),
+          cores: z.number().positive().max(64),
+          endedAt: z.iso.datetime(),
+        }),
+        request.body,
+      ),
+    );
     return reply.code(204).send();
   });
   app.get('/internal/v1/compute/:callId', async (request) => {

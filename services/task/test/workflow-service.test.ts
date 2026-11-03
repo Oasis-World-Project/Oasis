@@ -1,8 +1,8 @@
 import { createServiceClient, HttpError } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { EventEnvelope } from '@oasis/contracts/events';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RunFinished, type EventEnvelope } from '@oasis/contracts/events';
 import {
   deletedEvent,
   statusEvent,
@@ -15,7 +15,7 @@ import {
   type TaskStore,
   type Writer,
 } from '../src/repo/task-store.ts';
-import type { Gate } from '../src/service/gate.ts';
+import type { Gate, GateResult } from '../src/service/gate.ts';
 import { createWorkflowService } from '../src/service/workflow-service.ts';
 
 const OWNER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
@@ -191,6 +191,23 @@ let harnessKnows = new Set<string>();
 let finishedRemote = new Map<string, Record<string, unknown>>();
 let rejectNext = false;
 const harness = Fastify();
+harness.get('/internal/v1/models/execution', async () => ({
+  models: ['deepseek/x', 'openai/blocked'].map((id) => ({
+    id,
+    name: id,
+    contextWindow: 100000,
+    maxTokens: 16000,
+    input: ['text'],
+    reasoning: true,
+  })),
+}));
+harness.get('/internal/execution/environment', async () => ({
+  image: 'oasis/test:1',
+  imageId: 'sha256:test',
+  software: { node: '24' },
+  capabilities: ['node'],
+  notes: [],
+}));
 harness.post('/internal/runs', async (request, reply) => {
   const body = request.body as { runId: string };
   if (rejectNext) {
@@ -325,14 +342,18 @@ function runBody(id: string, status: string, extra: Record<string, unknown> = {}
 }
 
 /** 假关卡：按顺序返回预设的结果（默认通过）；设成 'throw' 时这一次检查出错 */
-let gateResults: (string[] | 'throw')[] = [];
+let gateResults: (string[] | GateResult | 'throw')[] = [];
+let gateWaits: (Promise<void> | undefined)[] = [];
+const gateSignals: (AbortSignal | undefined)[] = [];
 const gateCalls: { runId: string; checks: string[] }[] = [];
 const gate = {
-  async check(input: { runs: { runId: string }[]; checks: string[] }) {
+  async check(input: { runs: { runId: string }[]; checks: string[]; signal?: AbortSignal }) {
+    gateSignals.push(input.signal);
     gateCalls.push({ runId: input.runs[0]?.runId ?? '', checks: input.checks });
+    await gateWaits.shift();
     const next = gateResults.shift() ?? [];
     if (next === 'throw') throw new Error('关卡断了');
-    return { unmet: next };
+    return Array.isArray(next) ? { unmet: next } : next;
   },
 };
 
@@ -355,6 +376,8 @@ beforeEach(() => {
   unavailable = [];
   events.length = 0;
   gateResults = [];
+  gateWaits = [];
+  gateSignals.length = 0;
   gateCalls.length = 0;
   store = memoryStore();
   service = createWorkflowService({
@@ -444,6 +467,27 @@ const statusOf = async (taskId: string) => {
 };
 
 describe('工作流调度', () => {
+  it('完成事件解析保留文件摘要，节点及后续交付不会在异步边界丢失校验信息', async () => {
+    const task = await create(['A', 'B'], [['A', 'B']]);
+    const run = runOf('A', task);
+    await service.onRunFinished(
+      RunFinished.data.parse({
+        runId: run.runId,
+        payerId: OWNER,
+        taskId: task.id,
+        nodeId: task.nodes[0]!.id,
+        status: 'succeeded',
+        error: null,
+        summary: null,
+        finishedAt: new Date().toISOString(),
+        outputs: [{ path: 'result.md', size: 3, sha256: 'a'.repeat(64) }],
+      }),
+    );
+    expect((await service.get(OWNER, task.id)).nodes.find((n) => n.key === 'A')?.outputs).toEqual([
+      { path: 'result.md', size: 3, sha256: 'a'.repeat(64) },
+    ]);
+    expect(runOf('B', task).inputsFrom).toEqual([{ runId: run.runId, as: 'A' }]);
+  });
   it('菱形图：A、B 并行 → 都完成后 C 拿着两份上游产出开跑 → C 完成则任务完成', async () => {
     const task = await create(
       ['A', 'B', 'C'],
@@ -617,6 +661,54 @@ describe('出口关卡', () => {
     await finish(runOf('A', task).runId, 'succeeded');
     expect(await statusOf(task.id)).toMatchObject({ A: 'succeeded', B: 'running' });
   });
+
+  it('节点检查未返回时多次对账共享同一检查，不重复发起付费验收', async () => {
+    const task = await create(['A'], []);
+    let release!: () => void;
+    gateWaits = [
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    ];
+    const pending = finish(runOf('A', task).runId, 'succeeded');
+    const overlaps: Promise<void>[] = [];
+    try {
+      await vi.waitFor(() => expect(gateCalls).toHaveLength(1));
+      overlaps.push(service.reconcile(0), service.reconcile(0));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(gateCalls).toHaveLength(1);
+    } finally {
+      release();
+    }
+    await Promise.all([pending, ...overlaps]);
+    expect((await service.get(OWNER, task.id)).status).toBe('succeeded');
+    expect(gateCalls).toHaveLength(1);
+  });
+
+  it.each(['stop', 'cancel'] as const)(
+    '验收长判断由用户 %s 中止，迟到结果不能覆盖用户状态',
+    async (how) => {
+      const task = await create(['A'], []);
+      let release!: () => void;
+      gateWaits = [
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+      ];
+      const pending = finish(runOf('A', task).runId, 'succeeded');
+      try {
+        await vi.waitFor(() => expect(gateSignals).toHaveLength(1));
+        await service[how](OWNER, task.id);
+        expect(gateSignals[0]?.aborted).toBe(true);
+      } finally {
+        release();
+      }
+      await pending;
+      expect((await service.get(OWNER, task.id)).status).toBe(
+        how === 'stop' ? 'stopped' : 'cancelled',
+      );
+    },
+  );
 
   it('关卡检查中途断了：节点停在检查中，对账时重新检查', async () => {
     const task = await create(['A'], []);
@@ -1109,7 +1201,10 @@ describe('下载成果', () => {
 });
 
 describe('整体验收（从任务单来的任务）', () => {
-  const start = async (criteria = ['语气温馨', '不超过 80 字']) => {
+  const start = async (
+    criteria = ['语气温馨', '不超过 80 字'],
+    edges: { from: string; to: string }[] = [],
+  ) => {
     const task = await service.create({
       ownerId: OWNER,
       materials: [],
@@ -1134,7 +1229,7 @@ describe('整体验收（从任务单来的任务）', () => {
       planner.runId,
       JSON.stringify({
         nodes: [work('home'), work('poster')],
-        edges: [],
+        edges,
         deliverables: { 首页文案: 'home', 海报文案: 'poster' },
       }),
     );
@@ -1142,7 +1237,36 @@ describe('整体验收（从任务单来的任务）', () => {
     return service.get(OWNER, task.id);
   };
 
-  it('工作流跑完先验收：负责交付物的节点交出的东西一起看；没满足的记下来，照样完成', async () => {
+  it('最终验收未返回时的并发对账不会重发判断', async () => {
+    const task = await start();
+    await finish(runOf('home', task).runId, 'succeeded', {
+      outputs: [{ path: 'home.md', size: 9 }],
+    });
+    let release!: () => void;
+    gateWaits = [
+      undefined,
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    ];
+    const pending = finish(runOf('poster', task).runId, 'succeeded', {
+      outputs: [{ path: 'poster.md', size: 9 }],
+    });
+    const overlaps: Promise<void>[] = [];
+    try {
+      await vi.waitFor(() => expect(gateCalls).toHaveLength(3));
+      overlaps.push(service.reconcile(0), service.reconcile(0));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(gateCalls).toHaveLength(3);
+    } finally {
+      release();
+    }
+    await Promise.all([pending, ...overlaps]);
+    expect((await service.get(OWNER, task.id)).status).toBe('succeeded');
+    expect(gateCalls).toHaveLength(3);
+  });
+
+  it('整体验收未满足：原会话修复，全部通过后才完成', async () => {
     const task = await start();
     gateResults = [[], [], ['不超过 80 字']]; // 两个节点各自的关卡通过；整体验收有一条没满足
     await finish(runOf('home', task).runId, 'succeeded', {
@@ -1152,13 +1276,19 @@ describe('整体验收（从任务单来的任务）', () => {
       outputs: [{ path: '海报.md', size: 9 }],
     });
     const detail = await service.get(OWNER, task.id);
-    expect(detail).toMatchObject({ status: 'succeeded', acceptance: { unmet: ['不超过 80 字'] } });
+    expect(detail).toMatchObject({
+      status: 'running',
+      finishedAt: null,
+      acceptance: { unmet: ['不超过 80 字'] },
+    });
+    for (const key of ['home', 'poster'])
+      expect(runOf(key, task).continueFrom).toBe(runsOf(key, task)[0]?.runId);
     expect(detail.deliveryFiles?.map((f) => [f.deliverable, f.path])).toEqual([
       ['首页文案', '首页.md'],
       ['海报文案', '海报.md'],
     ]);
     expect(gateCalls.at(-1)).toEqual({
-      runId: runOf('home', task).runId,
+      runId: runsOf('home', task)[0]!.runId,
       checks: [
         '语气温馨',
         '不超过 80 字',
@@ -1168,11 +1298,19 @@ describe('整体验收（从任务单来的任务）', () => {
     expect(events.map((e) => (e.data as { status: string }).status)).toEqual([
       'running',
       'accepting',
-      'succeeded',
+      'running',
     ]);
+    for (const key of ['home', 'poster'])
+      await finish(runOf(key, task).runId, 'succeeded', {
+        outputs: [{ path: key + '.md', size: 9 }],
+      });
+    expect(await service.get(OWNER, task.id)).toMatchObject({
+      status: 'succeeded',
+      acceptance: { unmet: [] },
+    });
   });
 
-  it('负责交付物的节点没交出文件：直接记为没满足（跳过它时就是这样）', async () => {
+  it('跳过失败节点不能让缺文件的整体验收成功', async () => {
     const task = await start();
     await finish(runOf('home', task).runId, 'succeeded', {
       outputs: [{ path: '首页.md', size: 9 }],
@@ -1180,11 +1318,73 @@ describe('整体验收（从任务单来的任务）', () => {
     for (let i = 0; i < 3; i++) await finish(runOf('poster', task).runId, 'failed');
     await service.decide(OWNER, task.id, { choice: 'continue' });
     const detail = await service.get(OWNER, task.id);
-    expect(detail.status).toBe('succeeded');
+    expect(detail.status).toBe('running');
     expect(detail.acceptance?.unmet).toEqual([
       '最终交付缺少文件 out/*.md',
       '「海报文案」没有交出文件',
     ]);
+  });
+
+  it('最终修复沿依赖顺序推进，下游收到上游最新产物且沿用自己的原会话', async () => {
+    const task = await start(['两份文案一致'], [{ from: 'home', to: 'poster' }]);
+    gateResults = [[], [], ['两份文案一致']];
+    await finish(runOf('home', task).runId, 'succeeded', {
+      outputs: [{ path: 'home.md', size: 9 }],
+    });
+    const oldPoster = runOf('poster', task).runId;
+    await finish(oldPoster, 'succeeded', { outputs: [{ path: 'poster.md', size: 9 }] });
+    const newHome = runOf('home', task).runId;
+    expect(runsOf('poster', task)).toHaveLength(1);
+    expect(newHome).not.toBe(runsOf('home', task)[0]!.runId);
+    await finish(newHome, 'succeeded', { outputs: [{ path: 'home.md', size: 10 }] });
+    expect(runOf('poster', task)).toMatchObject({
+      continueFrom: oldPoster,
+      inputsFrom: [{ runId: newHome, as: 'home' }],
+    });
+    await finish(runOf('poster', task).runId, 'succeeded', {
+      outputs: [{ path: 'poster.md', size: 10 }],
+    });
+    expect((await service.get(OWNER, task.id)).status).toBe('succeeded');
+  });
+
+  it('最终检查未知只重查证据，不重做作品、不假报完成', async () => {
+    const task = await start();
+    gateResults = [[], [], { unmet: [], unchecked: ['检查服务不可用'] }];
+    for (const key of ['home', 'poster'])
+      await finish(runOf(key, task).runId, 'succeeded', {
+        outputs: [{ path: key + '.md', size: 9 }],
+      });
+    expect(await service.get(OWNER, task.id)).toMatchObject({
+      status: 'needs_attention',
+      finishedAt: null,
+      attention: { reason: 'checks_incomplete' },
+    });
+    const count = submitted.length;
+    await service.reconcile(0);
+    expect(submitted.length).toBe(count);
+    await service.decide(OWNER, task.id, { choice: 'retry' });
+    expect((await service.get(OWNER, task.id)).status).toBe('succeeded');
+    expect(submitted.length).toBe(count);
+  });
+
+  it('节点检查未知时下游不开跑，重新检查通过再推进', async () => {
+    const task = await create(['A', 'B'], [['A', 'B']]);
+    gateResults = [{ unmet: [], unchecked: ['证据未取得'] }];
+    await finish(runOf('A', task).runId, 'succeeded', { outputs: [{ path: 'a.md', size: 1 }] });
+    expect(await statusOf(task.id)).toMatchObject({
+      task: 'needs_attention',
+      A: 'checking',
+      B: 'waiting',
+    });
+    await service.reconcile(0);
+    expect((await service.get(OWNER, task.id)).status).toBe('needs_attention');
+    await service.decide(OWNER, task.id, { choice: 'retry' });
+    expect(await statusOf(task.id)).toMatchObject({
+      task: 'running',
+      A: 'succeeded',
+      B: 'running',
+    });
+    expect(runsOf('A', task)).toHaveLength(1);
   });
 
   it('验收中途断了：任务停在验收中，对账时重新验收', async () => {

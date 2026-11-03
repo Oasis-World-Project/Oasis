@@ -29,6 +29,7 @@ let executor: Executor;
 let store: ObjectStore;
 let runs: RunService | undefined;
 let previews: PreviewService | undefined;
+let recoveryTimer: NodeJS.Timeout | undefined;
 
 await startService({
   name: 'harness',
@@ -64,6 +65,7 @@ await startService({
       memoryMb: config.SANDBOX_MEMORY_MB,
       pidsLimit: config.SANDBOX_PIDS_LIMIT,
       workdir: SANDBOX_PATHS.workdir,
+      sessionsDir: SANDBOX_PATHS.sessions,
       mediaCheck: {
         files: config.MEDIA_CHECK_MAX_FILES,
         timeoutMs: config.MEDIA_CHECK_TIMEOUT_MS,
@@ -76,6 +78,7 @@ await startService({
       name: 'sandboxes',
       ready: () => executor.check(),
       close: async () => {
+        clearInterval(recoveryTimer);
         await previews?.close();
         await runs?.stopAll();
       },
@@ -182,6 +185,11 @@ await startService({
     );
     // 接管上次进程遗留的运行；Docker 暂时不可用也不阻止启动（/ready 会显示 sandboxes 失败）
     await runs.recover().catch((err: unknown) => logger.warn({ err }, '清理遗留运行失败'));
+    recoveryTimer = setInterval(() => {
+      void runs
+        ?.recover()
+        .catch((err: unknown) => logger.warn({ err }, '运行接管暂未完成，稍后重试'));
+    }, config.RECOVERY_INTERVAL_MS);
     await previews.recover().catch((err: unknown) => logger.warn({ err }, '清理遗留预览失败'));
   },
 });

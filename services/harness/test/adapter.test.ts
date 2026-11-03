@@ -119,7 +119,9 @@ describe('dsh 事件翻译', () => {
       goal: true,
       goalRoundWindow: 256,
     });
-    expect(JSON.parse(files[0]!.content.toString())).toMatchObject([
+    expect(
+      JSON.parse(files.find((f) => f.path.endsWith('.oasis-models.json'))!.content.toString()),
+    ).toMatchObject([
       {
         maxTokens: 131072,
         contextWindow: 1000000,

@@ -399,6 +399,7 @@ async function inspect(): Promise<InspectedFile & { truncated?: boolean }> {
     valid: true,
     ...dimensions,
     ...(warning ? { warning } : {}),
+    ...(ext === '.glb' ? { evidenceScope: 'geometry' } : {}),
     ...(truncated ? { truncated: true } : {}),
   };
 }

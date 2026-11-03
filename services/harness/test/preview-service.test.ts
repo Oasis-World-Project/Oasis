@@ -135,6 +135,27 @@ function fixture(files?: Record<string, string>) {
 }
 
 describe('私有预览生命周期', () => {
+  it('清单字段缺失给出实际路径与字段错误，在启动和冻结前拒绝', async () => {
+    const { service, start, modelGateway } = fixture({
+      'site/oasis-app.json': JSON.stringify({ version: 1, kind: 'static', entry: 'index.html' }),
+      'site/index.html': '<h1>actual</h1>',
+    });
+    try {
+      const result = await service.checkRun({
+        runId: access.artifactId,
+        payerId: access.ownerId,
+        taskId: access.taskId,
+      });
+      expect(result.passed).toBe(false);
+      expect(result.reason).toContain('root');
+      expect(result.reason).toContain('out/site/oasis-app.json');
+      expect(result.reason).toContain('in/.oasis-formats.json');
+      expect(start).not.toHaveBeenCalled();
+      expect(modelGateway.json).not.toHaveBeenCalled();
+    } finally {
+      await service.close();
+    }
+  });
   it('外站代理拒绝非白名单、写请求、内网地址及非 HTTPS', async () => {
     expect(() => websiteUrl('https://evil.example', ['https://example.com'])).toThrow();
     expect(() => websiteUrl('http://example.com', ['http://example.com'])).toThrow();
@@ -161,6 +182,13 @@ describe('私有预览生命周期', () => {
     try {
       const result = await service.checkRun(input);
       expect(result.passed).toBe(false);
+      expect(result.application).toMatchObject({
+        manifestPath: 'site/oasis-app.json',
+        spec: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
+        files: expect.arrayContaining(['site/index.html', 'site/oasis-test.json']),
+        plan: { version: 1, steps: [{ action: 'text', selector: 'h1', text: 'expected' }] },
+        network: 'none',
+      });
       expect(result.inputSha256).toMatch(/^[a-f0-9]{64}$/);
       expect(test).toHaveBeenCalledTimes(1);
       expect(destroy).toHaveBeenCalledTimes(1);

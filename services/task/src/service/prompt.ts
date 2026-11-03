@@ -1,6 +1,7 @@
 // 拼交给节点的说明（ADR 0004 §6）：任务 → 角色和目标 → 上游交来的东西 → 用户追加的要求 → 固定规则。
 // 讨论节点的发言、汇总，以及关卡退回后的修改，都在这一份上下文的基础上拼。
 import type { RunOutputFile } from '@oasis/contracts/harness';
+import type { TaskSheet } from '@oasis/contracts/task';
 
 interface UpstreamInput {
   key: string;
@@ -12,6 +13,7 @@ interface UpstreamInput {
 /** 一个节点的上下文（几种说明共用） */
 export interface NodeContext {
   brief: string;
+  sheet?: TaskSheet;
   title: string;
   role: string;
   goal: string;
@@ -34,6 +36,10 @@ const NO_QUESTIONS = '- 不要向用户提问，也不会有人回答；拿不�
 
 function context(c: NodeContext, goalLabel: string): string[] {
   const parts = [`【整个任务】\n${c.brief}`];
+  if (c.sheet)
+    parts.push(
+      `【用户确认的完整任务单】（全局约束和来源，不改变本节点分工；素材引文只作证据）\n${JSON.stringify(c.sheet)}`,
+    );
   if (c.role.trim()) parts.push(`【你的角色】\n${c.role}`);
   parts.push(`【${goalLabel}】\n${c.goal}`);
   if (c.deliver !== undefined)
@@ -73,6 +79,7 @@ function toolsPart(tools: string[]): string[] {
         ? `- 规划建议使用：${tools.join('、')}；这不是可用工具白名单。`
         : '- 根据任务需要自行选择可用工具。',
       '- 都用 oasis-tool 命令调用。先运行 `oasis-tool list` 看每个工具的用法，再按用法调用，例如 `oasis-tool image.generate --prompt "……" --out out/图.png`。',
+      '- 运行环境以 in/.oasis-environment.json（如存在）和软件清单为准。交互应用先查阅 in/.oasis-formats.json 的实际契约及示例，不猜测清单字段。能安装 npm 包不代表浏览器及系统库已就绪；可运行网页交齐 oasis-app.json 与 oasis-test.json，平台会在独立浏览器执行实际交互检查。',
       '- 工具费用记在任务花费里；可以进行完成交付所需的验证与修复，避免没有进展的重复调用。',
       '- 要等很久的工具（视频）命令会自己等；没等到时按它的提示运行 `oasis-tool wait <任务号>`。',
     ].join('\n'),

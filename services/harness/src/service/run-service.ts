@@ -14,6 +14,8 @@ import {
   type RunEventBody,
   type RunTextsBody,
   type StartRunBody,
+  StartRunBody as StartRunSchema,
+  type ExecutionEnvironment,
 } from '@oasis/contracts/harness';
 import {
   ExecutionModels,
@@ -31,6 +33,7 @@ import {
 import {
   connectAgent,
   isSessionLock,
+  isSessionArchive,
   SANDBOX_PATHS,
   sandboxEnv,
   runtimeFiles,
@@ -47,7 +50,7 @@ import {
   rewriteArchive,
   scanArchive,
 } from '../executor/tar.ts';
-import type { Run, RunOutcome, RunsRepo } from '../repo/runs-repo.ts';
+import type { DurableRunRequest, Run, RunOutcome, RunsRepo } from '../repo/runs-repo.ts';
 import { defaultInspectionLimits, inspectFiles, type InspectionLimits } from './file-inspection.ts';
 
 type Status = RunBody['status'];
@@ -76,6 +79,8 @@ interface LiveRun {
   /** 被停止时从沙箱里取出的产出和会话存档 */
   saved?: Promise<Saved>;
   done: Promise<void>;
+  sessionId?: string;
+  suspended?: boolean;
 }
 
 interface Saved {
@@ -99,7 +104,7 @@ const savedOutcome = (saved: Saved) => ({
   sessionKey: saved.session?.key ?? null,
 });
 
-function toRunBody(run: Run): RunBody {
+function toRunBody(run: Run, resumable = Boolean(run.sessionKey)): RunBody {
   return {
     id: run.id,
     payerId: run.payerId,
@@ -107,7 +112,7 @@ function toRunBody(run: Run): RunBody {
     nodeId: run.nodeId,
     model: run.model,
     status: run.status,
-    resumable: Boolean(run.sessionKey),
+    resumable,
     error: run.error,
     outputs: run.outputs,
     summary: run.summary,
@@ -163,7 +168,32 @@ export function createRunService(deps: {
 }) {
   const { repo, executor, store, logger } = deps;
   const live = new Map<string, LiveRun>();
+  const sessions = new Set<string>();
+  const controlRequests = new Map<string, 'stop' | 'cancel'>();
+  const controlWrites = new Map<string, Promise<void>>();
+  let closing = false;
+  let recoveringRuns = false;
   const gate = createGate(deps.maxConcurrent);
+
+  async function admit(model: string, requires: string[] = []) {
+    await executor.check();
+    const environment = await executor.environment?.();
+    const missing = requires.filter((name) => !environment?.capabilities.includes(name));
+    if (missing.length)
+      throw new HttpError(
+        422,
+        'execution_capability_unavailable',
+        '运行环境不具备所需能力：' + missing.join('、'),
+      );
+    const { models } = await deps.modelGateway.json('GET', '/internal/v1/models/execution', {
+      schema: ExecutionModels,
+    });
+    if (!models.length)
+      throw new HttpError(503, 'model_catalog_unavailable', '模型能力目录尚未就绪，请稍后重交');
+    if (!models.some((entry) => entry.id === model))
+      throw new HttpError(422, 'model_unavailable', '模型执行能力缺失或当前不可用：' + model);
+    return { models, environment };
+  }
 
   function record(
     runId: string,
@@ -191,7 +221,7 @@ export function createRunService(deps: {
   }
 
   /** 把沙箱里的目录打包存进对象存储；目录不存在或为空时返回 undefined */
-  async function archive(sandbox: Sandbox, path: string, key: string) {
+  async function archive(sandbox: Pick<Sandbox, 'readArchive'>, path: string, key: string) {
     const stream = await sandbox.readArchive(path);
     if (!stream) return undefined;
     const upload = new PassThrough();
@@ -224,7 +254,10 @@ export function createRunService(deps: {
   }
 
   /** 取出产出和会话存档（会话存档失败不影响结果） */
-  async function save(sandbox: Sandbox, id: string): Promise<Saved> {
+  async function save(
+    sandbox: Pick<Sandbox, 'readArchive' | 'inspectMedia'>,
+    id: string,
+  ): Promise<Saved> {
     const outputs = await archive(sandbox, SANDBOX_PATHS.outputs, `runs/${id}/outputs.tar`);
     if (
       outputs &&
@@ -290,6 +323,7 @@ export function createRunService(deps: {
   async function continuation(row: Run) {
     const previous = row.continueFrom ? await repo.get(row.continueFrom) : undefined;
     if (!previous) return [];
+    if (await executor.workspaceExists?.(row.sessionId ?? previous.id)) return [];
     const workspace = previous.outputKey
       ? [
           {
@@ -358,9 +392,12 @@ export function createRunService(deps: {
     materials: Material[],
     run: LiveRun,
     goal: boolean,
-    models: ModelCapabilities[],
+    catalog: { models: ModelCapabilities[]; environment?: ExecutionEnvironment },
+    persistent = false,
+    recovering = false,
   ) {
     const { id } = row;
+    const { models, environment } = catalog;
     const release = await gate.acquire();
     let sandbox: Sandbox | undefined;
     let keyId: string | undefined;
@@ -393,7 +430,7 @@ export function createRunService(deps: {
           throw reason instanceof StopRun ? reason : new StopRun('cancelled', '已取消');
       };
       stopped();
-      await repo.update(id, { status: 'starting' });
+      await repo.update(id, { status: 'starting', error: null });
 
       const key = await deps.modelGateway.json('POST', '/internal/run-keys', {
         body: {
@@ -431,13 +468,23 @@ export function createRunService(deps: {
           objective: row.prompt,
           goal,
           goalRoundWindow: deps.goalRoundWindow ?? 256,
+          recovering,
+          environment,
         }),
-        ...inputs.map((f) => ({ path: `in/${f.path}`, content: f.content })),
+        ...(recovering && persistent
+          ? []
+          : inputs.map((f) => ({ path: `in/${f.path}`, content: f.content }))),
         // 保证 out/ 目录存在且属于沙箱用户
         { path: `out/${KEEP_FILE}`, content: Buffer.alloc(0) },
       ];
       sandbox = await executor.start({
         runId: id,
+        ...(persistent
+          ? {
+              workspaceId: row.sessionId ?? id,
+              restore: recovering || Boolean(row.continueFrom && restored.length === 0),
+            }
+          : {}),
         env: {
           ...deps.batchEnv,
           OASIS_TOOL_SCOPE: row.nodeId ?? row.sessionId ?? id,
@@ -450,11 +497,15 @@ export function createRunService(deps: {
         },
         files: [
           { dir: SANDBOX_PATHS.workdir, tar: await packFiles(files) },
-          {
-            dir: SANDBOX_PATHS.workdir,
-            tar: packStreams(await materialFiles(materials, id, row.payerId)),
-          },
-          ...(await upstreamFiles(row)),
+          ...(recovering && persistent
+            ? []
+            : [
+                {
+                  dir: SANDBOX_PATHS.workdir,
+                  tar: packStreams(await materialFiles(materials, id, row.payerId)),
+                },
+                ...(await upstreamFiles(row)),
+              ]),
           ...restored,
         ],
       });
@@ -477,7 +528,11 @@ export function createRunService(deps: {
       );
       // 沙箱启动期间就被取消或停止了：上面的监听来不及收到，这里补上（finally 会销毁沙箱）
       stopped();
-      await repo.update(id, { containerId: sandbox.id, status: 'running', startedAt: new Date() });
+      await repo.update(id, {
+        containerId: sandbox.id,
+        status: 'running',
+        startedAt: row.startedAt ?? new Date(),
+      });
 
       let stderrTail = '';
       sandbox.stderr.setEncoding('utf8');
@@ -501,9 +556,28 @@ export function createRunService(deps: {
         stopped();
         throw new Error(`dsh 启动失败：${String(err)}；stderr：${stderrTail}`, { cause: err });
       }
-      if (row.continueFrom) await agent.resume();
-      run.prompts += 1;
-      await agent.prompt(row.prompt);
+      let fresh = false;
+      if (recovering && executor.workspaceExists) {
+        const source = await sandbox.readArchive(SANDBOX_PATHS.sessions);
+        const paths = source
+          ? (await scanArchive(source, deps.outputMaxBytes)).map((f) => f.path)
+          : [];
+        if (!paths.some((p) => isSessionArchive(p, row.sessionId ?? id))) {
+          if (paths.some((p) => isSessionArchive(p)) || (await repo.hasRootPrompt(id)))
+            throw new Error('原生根会话缺失，不能丢弃已有历史');
+          fresh = true; // 原进程尚未创建原生会话，原子保存的请求仍可首次派发。
+        }
+      }
+      const restoredSession =
+        row.continueFrom || (recovering && !fresh) ? await agent.resume() : undefined;
+      if (!recovering || !goal || fresh || restoredSession?.needsPrompt) {
+        run.prompts += 1;
+        await agent.prompt(
+          recovering && !fresh
+            ? '服务连接中断后已恢复原工作目录和原会话。请从未完成处继续，不重做已有工作。'
+            : row.prompt,
+        );
+      }
       // 任务说明交出去之后才接受追问，保证追问排在任务说明后面
       run.agent = agent;
       const failure = await settle(run, agent);
@@ -546,7 +620,7 @@ export function createRunService(deps: {
       await sandbox
         ?.destroy()
         .catch((err: unknown) => logger.warn({ err, runId: id }, '销毁沙箱失败'));
-      if (outcome.status !== 'succeeded') {
+      if (outcome.status !== 'succeeded' && !run.suspended) {
         await deps.modelGateway
           .json('POST', `/internal/v1/tools/runs/${id}/cancel`, {
             body: {},
@@ -571,7 +645,17 @@ export function createRunService(deps: {
       release();
     }
     await run.writes;
-    await finish(row, outcome);
+    if (run.suspended) {
+      await repo.update(id, {
+        status: 'queued',
+        containerId: null,
+        runKeyId: null,
+        outputs: outcome.outputs,
+        outputKey: outcome.outputKey,
+        sessionKey: outcome.sessionKey,
+        summary: outcome.summary,
+      });
+    } else await finish(row, outcome);
     live.delete(id);
   }
 
@@ -584,7 +668,9 @@ export function createRunService(deps: {
       taskId: row.taskId,
       nodeId: row.nodeId,
       status,
-      resumable: Boolean(outcome.sessionKey),
+      resumable:
+        Boolean(outcome.sessionKey) ||
+        Boolean(await executor.workspaceExists?.(row.sessionId ?? row.id)),
       error: outcome.error,
       outputs: outcome.outputs,
       summary: outcome.summary,
@@ -598,6 +684,60 @@ export function createRunService(deps: {
     const row = await repo.get(id);
     if (!row) throw new HttpError(404, 'run_not_found', '没有这次运行');
     return row;
+  }
+
+  async function requestControl(id: string, how: 'stop' | 'cancel') {
+    controlRequests.set(id, how);
+    const writing = (controlWrites.get(id) ?? Promise.resolve()).then(async () =>
+      repo.appendEvents(id, [
+        {
+          seq: await repo.nextSequence(id),
+          kind: 'status',
+          data: { status: 'control_requested', how },
+        },
+      ]),
+    );
+    controlWrites.set(id, writing);
+    try {
+      await writing;
+    } catch (err) {
+      controlRequests.delete(id);
+      throw err;
+    } finally {
+      if (controlWrites.get(id) === writing) controlWrites.delete(id);
+    }
+  }
+
+  /** 接管等待期间的用户控制意图也必须生效，不能因当前没有 LiveRun 而丢掉。 */
+  async function restoreControl(row: Run): Promise<boolean> {
+    await controlWrites.get(row.id);
+    const stored = await repo.control(row.id);
+    const how = controlRequests.get(row.id) ?? stored;
+    if (!how) return false;
+    const saved =
+      how === 'stop' && executor.readStoredArchive
+        ? await save({ readArchive: (path) => executor.readStoredArchive!(row.id, path) }, row.id)
+        : {};
+    await deps.modelGateway.json('POST', `/internal/v1/tools/runs/${row.id}/cancel`, {
+      body: {},
+      requestId: row.id,
+      headers: {
+        'x-oasis-payer-id': row.payerId,
+        ...(row.taskId ? { 'x-oasis-task-id': row.taskId } : {}),
+      },
+    });
+    await controlWrites.get(row.id);
+    const latest = controlRequests.get(row.id) ?? (await repo.control(row.id)) ?? how;
+    await finish(row, {
+      status: latest === 'cancel' ? 'cancelled' : 'stopped',
+      error: latest === 'cancel' ? '已取消' : '已停止',
+      outputs: saved.outputs?.files.filter((f) => !isPrivateOutput(f.path)) ?? row.outputs,
+      outputKey: saved.outputs?.key ?? row.outputKey,
+      sessionKey: saved.session?.key ?? row.sessionKey,
+      summary: row.summary,
+    });
+    controlRequests.delete(row.id);
+    return true;
   }
 
   async function checkedMedia(
@@ -641,6 +781,7 @@ export function createRunService(deps: {
     async start(
       body: StartRunBody & Required<Pick<StartRunBody, 'inputs' | 'inputsFrom'>>,
     ): Promise<RunBody> {
+      if (closing) throw new HttpError(503, 'harness_closing', '执行服务正在重启，请稍后重交');
       if (body.runId) {
         const existing = await repo.get(body.runId);
         if (existing) {
@@ -650,17 +791,7 @@ export function createRunService(deps: {
         }
       }
       // 目录未就绪属于准入等待，不登记失败运行，也不消耗节点重试次数。
-      const { models } = await deps.modelGateway.json('GET', '/internal/v1/models/execution', {
-        schema: ExecutionModels,
-      });
-      if (!models.length)
-        throw new HttpError(503, 'model_catalog_unavailable', '模型能力目录尚未就绪，请稍后重交');
-      if (!models.some((model) => model.id === body.model))
-        throw new HttpError(
-          422,
-          'model_unavailable',
-          '模型执行能力缺失或当前不可用：' + body.model,
-        );
+      const catalog = await admit(body.model, body.requires);
       // 只能拿同一付费人、已成功的运行的产出当输入
       for (const ref of body.inputsFrom) {
         const upstream = await repo.get(ref.runId);
@@ -679,55 +810,106 @@ export function createRunService(deps: {
         const ended = ['succeeded', 'failed', 'cancelled', 'stopped'].includes(
           previous?.status ?? '',
         );
-        if (previous?.payerId !== body.payerId || !ended || !previous.sessionKey) {
+        const hasWorkspace =
+          previous && Boolean(await executor.workspaceExists?.(previous.sessionId ?? previous.id));
+        if (
+          previous?.payerId !== body.payerId ||
+          !ended ||
+          (!previous.sessionKey && !hasWorkspace)
+        ) {
           throw new HttpError(
             409,
             'continue_unavailable',
             '要接着的那次运行不存在、还没结束或没有会话存档',
           );
         }
+        const oldRequest = (await repo.request(previous.id)) as DurableRunRequest | undefined;
+        if (oldRequest?.persistent) {
+          if (!(await executor.workspaceExists?.(previous.sessionId ?? previous.id)))
+            throw new HttpError(
+              409,
+              'workspace_unavailable',
+              '原会话持久工作目录缺失，不能仅凭旧产出冒充完整恢复',
+            );
+          const history = await repo.listBySession(previous.sessionId ?? previous.id);
+          if (history.some((r) => r.id !== previous!.id && r.createdAt > previous!.createdAt))
+            throw new HttpError(409, 'session_advanced', '该会话已有后续运行，请从最新进度继续');
+        }
       }
       const id = body.runId ?? randomUUID();
-      const inserted = await repo.insert({
-        id,
-        payerId: body.payerId,
-        taskId: body.taskId ?? null,
-        nodeId: body.nodeId ?? null,
-        model: body.model,
-        prompt: body.prompt,
-        inputsFrom:
-          body.inputsFrom.length === 0 && previous ? previous.inputsFrom : body.inputsFrom,
-        sessionId: previous ? (previous.sessionId ?? previous.id) : id,
-        continueFrom: previous?.id ?? null,
-      });
-      const row = await owned(id);
-      if (!inserted) {
-        // 同一个运行 ID 重复提交：参数一致就当作幂等重试，原样返回
-        if (row.payerId !== body.payerId || row.model !== body.model) {
-          throw new HttpError(409, 'run_id_conflict', '这个运行 ID 已经被别的运行用了');
+      const sessionId = previous ? (previous.sessionId ?? previous.id) : id;
+      const finishing = [...live.values()].find((r) => r.sessionId === sessionId && r.closing);
+      if (finishing) await finishing.done;
+      if (sessions.has(sessionId) || [...live.values()].some((r) => r.sessionId === sessionId))
+        throw new HttpError(409, 'session_busy', '原会话仍有运行，不能同时修改同一工作目录');
+      sessions.add(sessionId);
+      const persistent = Boolean(executor.workspaceExists);
+      try {
+        const inserted = await repo.insert(
+          {
+            id,
+            payerId: body.payerId,
+            taskId: body.taskId ?? null,
+            nodeId: body.nodeId ?? null,
+            model: body.model,
+            prompt: body.prompt,
+            inputsFrom:
+              body.inputsFrom.length === 0 && previous ? previous.inputsFrom : body.inputsFrom,
+            sessionId,
+            continueFrom: previous?.id ?? null,
+          },
+          { body, persistent },
+        );
+        const row = await owned(id);
+        if (!inserted) {
+          // 同一个运行 ID 重复提交：参数一致就当作幂等重试，原样返回
+          if (row.payerId !== body.payerId || row.model !== body.model) {
+            throw new HttpError(409, 'run_id_conflict', '这个运行 ID 已经被别的运行用了');
+          }
+          return toRunBody(row);
         }
+        const run: LiveRun = {
+          abort: new AbortController(),
+          prompts: 0,
+          closing: false,
+          nextSeq: await repo.nextSequence(id),
+          writes: Promise.resolve(),
+          done: Promise.resolve(),
+          sessionId,
+        };
+        live.set(id, run);
+        const inputs = body.inputs.map((f) => ({
+          path: f.path,
+          content: Buffer.from(f.contentBase64, 'base64'),
+        }));
+        run.done = execute(
+          row,
+          inputs,
+          body.materials ?? [],
+          run,
+          body.goal ?? false,
+          catalog,
+          persistent,
+        ).catch((err: unknown) => logger.error({ err, runId: id }, '运行收尾失败'));
         return toRunBody(row);
+      } finally {
+        sessions.delete(sessionId);
       }
-      const run: LiveRun = {
-        abort: new AbortController(),
-        prompts: 0,
-        closing: false,
-        nextSeq: 0,
-        writes: Promise.resolve(),
-        done: Promise.resolve(),
-      };
-      live.set(id, run);
-      const inputs = body.inputs.map((f) => ({
-        path: f.path,
-        content: Buffer.from(f.contentBase64, 'base64'),
-      }));
-      run.done = execute(row, inputs, body.materials ?? [], run, body.goal ?? false, models).catch(
-        (err: unknown) => logger.error({ err, runId: id }, '运行收尾失败'),
-      );
-      return toRunBody(row);
     },
 
-    get: async (id: string) => toRunBody(await owned(id)),
+    get: async (id: string) => {
+      const row = await owned(id);
+      return toRunBody(
+        row,
+        Boolean(row.sessionKey) ||
+          Boolean(await executor.workspaceExists?.(row.sessionId ?? row.id)),
+      );
+    },
+    environment: async () => {
+      if (!executor.environment)
+        throw new HttpError(503, 'environment_unavailable', '执行环境尚未提供探测结果');
+      return executor.environment();
+    },
 
     /**
      * 任务被删除（ADR 0012）：删掉它已结束的运行的产出包、会话存档和运行记录。
@@ -742,6 +924,10 @@ export function createRunService(deps: {
         for (const kind of ['audio', 'video', 'application'])
           await store.delete(`runs/${row.id}/${kind}-check.json`);
       }
+      if (ended.length === rows.length)
+        for (const sessionId of new Set(ended.map((r) => r.sessionId ?? r.id)))
+          if (!(await repo.listBySession(sessionId)).some((r) => r.taskId !== taskId))
+            await executor.purgeWorkspace?.(sessionId);
       await repo.removeMany(ended.map((row) => row.id));
       if (ended.length) logger.info({ taskId, runs: ended.length }, '任务已删除，运行存档一并清理');
       return ended.length === rows.length;
@@ -753,7 +939,7 @@ export function createRunService(deps: {
       return rows.map((e) => ({
         seq: e.seq,
         kind: e.kind,
-        data: e.data,
+        data: e.data.status === 'admitted' && e.seq === 0 ? { status: 'admitted' } : e.data,
         createdAt: e.createdAt.toISOString(),
       }));
     },
@@ -803,6 +989,13 @@ export function createRunService(deps: {
             result.files.push({
               path,
               valid: checked?.valid ?? false,
+              ...(checked?.valid
+                ? {
+                    evidenceScope: videoPath.test(path)
+                      ? ('decoded-video' as const)
+                      : ('decoded-audio' as const),
+                  }
+                : {}),
               text: checked ? JSON.stringify(checked) : '',
               ...(checked?.error
                 ? { error: checked.error }
@@ -888,61 +1081,138 @@ export function createRunService(deps: {
      * 已经在收尾（马上就成功了）或已结束的不受影响，不报错。
      */
     async stop(id: string): Promise<void> {
-      await owned(id);
+      const row = await owned(id);
       const run = live.get(id);
       if (run && !run.closing) run.abort.abort(new StopRun('stopped', '已停止'));
+      else if (!run && ['queued', 'starting', 'running'].includes(row.status)) {
+        await requestControl(id, 'stop');
+        void this.recover().catch((err: unknown) =>
+          logger.warn({ err, runId: id }, '停止意图已保存，等待接管执行'),
+        );
+      }
     },
 
     /** 取消：排队中的不再开始，运行中的立即销毁沙箱。已结束的取消不报错。 */
     async cancel(id: string): Promise<void> {
-      await owned(id);
-      live.get(id)?.abort.abort(new StopRun('cancelled', '已取消'));
+      const row = await owned(id);
+      const run = live.get(id);
+      if (run) run.abort.abort(new StopRun('cancelled', '已取消'));
+      else if (['queued', 'starting', 'running'].includes(row.status)) {
+        await requestControl(id, 'cancel');
+        void this.recover().catch((err: unknown) =>
+          logger.warn({ err, runId: id }, '取消意图已保存，等待接管执行'),
+        );
+      }
     },
 
-    /**
-     * 启动时调用：上次进程留下的未结束运行一律记为失败（沙箱里的状态已无法接回），
-     * 并清理遗留的沙箱容器。单实例部署的前提见 ADR 0003。
-     */
+    /** 单实例启动接管：先停旧进程，再恢复原身份和原工作目录；不发布中间失败。 */
     async recover(): Promise<void> {
-      for (const row of await repo.listUnfinished()) {
-        if (live.has(row.id)) continue;
-        await deps.modelGateway
-          .json('POST', `/internal/v1/tools/runs/${row.id}/cancel`, {
-            body: {},
-            requestId: row.id,
-            headers: {
-              'x-oasis-payer-id': row.payerId,
-              ...(row.taskId ? { 'x-oasis-task-id': row.taskId } : {}),
-            },
-          })
-          .catch((err: unknown) =>
-            logger.warn({ err, runId: row.id }, '重启恢复时长任务取消意图未写入'),
-          );
-        await finish(row, {
-          status: 'failed',
-          error: '运行中断：harness 重启',
-          outputs: [],
-          outputKey: null,
-          sessionKey: null,
-          summary: null,
-        });
-        if (row.runKeyId) {
-          await deps.modelGateway
-            .json('POST', `/internal/run-keys/${row.runKeyId}/revoke`, {
-              body: {},
+      if (closing || recoveringRuns) return;
+      recoveringRuns = true;
+      try {
+        for (const row of await repo.listUnfinished()) {
+          if (live.has(row.id) || sessions.has(row.sessionId ?? row.id)) continue;
+          try {
+            const suspended = await executor.suspend?.(row.id);
+            const endedAt = suspended?.endedAt ?? new Date();
+            if (row.runKeyId) {
+              await deps.modelGateway.json('POST', `/internal/run-keys/${row.runKeyId}/revoke`, {
+                body: {},
+                requestId: row.id,
+              });
+            }
+            await deps.modelGateway.json('POST', `/internal/v1/compute/runs/${row.id}/recover`, {
+              body: {
+                payerId: row.payerId,
+                cores: suspended?.cores ?? deps.cores,
+                endedAt: endedAt.toISOString(),
+              },
               requestId: row.id,
-            })
-            .catch(() => undefined);
+            });
+            if (await restoreControl(row)) continue;
+            let request: DurableRunRequest;
+            try {
+              const saved = (await repo.request(row.id)) as DurableRunRequest | undefined;
+              if (!saved) throw new Error('没有与运行原子保存的启动请求');
+              request = {
+                body: StartRunSchema.parse(saved.body),
+                persistent: saved.persistent === true,
+              };
+              if (
+                request.persistent &&
+                row.startedAt &&
+                !(await executor.workspaceExists?.(row.sessionId ?? row.id))
+              )
+                throw new Error('原运行持久工作目录缺失，不能从空目录恢复');
+            } catch (err) {
+              await finish(row, {
+                status: 'failed',
+                error: '恢复状态不可用：' + (err instanceof Error ? err.message : String(err)),
+                outputs: row.outputs,
+                outputKey: row.outputKey,
+                sessionKey: row.sessionKey,
+                summary: row.summary,
+              });
+              continue;
+            }
+            const catalog = await admit(row.model, request.body.requires);
+            const run: LiveRun = {
+              abort: new AbortController(),
+              prompts: 0,
+              closing: false,
+              nextSeq: await repo.nextSequence(row.id),
+              writes: Promise.resolve(),
+              done: Promise.resolve(),
+              sessionId: row.sessionId ?? row.id,
+            };
+            if (await restoreControl(row)) continue;
+            live.set(row.id, run);
+            record(row.id, run, 'status', { status: 'recovering', sessionId: run.sessionId });
+            run.done = execute(
+              row,
+              request.body.inputs.map((f) => ({
+                path: f.path,
+                content: Buffer.from(f.contentBase64, 'base64'),
+              })),
+              request.body.materials ?? [],
+              run,
+              request.body.goal ?? false,
+              catalog,
+              request.persistent,
+              Boolean(row.startedAt),
+            ).catch((err: unknown) => logger.error({ err, runId: row.id }, '恢复运行收尾失败'));
+          } catch (err) {
+            const error = '接管等待：' + (err instanceof Error ? err.message : String(err));
+            if (error !== row.error) {
+              await repo.update(row.id, { error });
+              await repo.appendEvents(row.id, [
+                {
+                  seq: await repo.nextSequence(row.id),
+                  kind: 'status',
+                  data: { status: 'recovery_wait', reason: error },
+                },
+              ]);
+            }
+            logger.warn({ err, runId: row.id }, '接管依赖暂未恢复，保留原进度');
+          }
         }
+        const keep = new Set([...live.keys(), ...(await repo.listUnfinished()).map((r) => r.id)]);
+        const removed = await executor.removeOrphans(keep);
+        if (removed > 0) logger.info({ removed }, '清理了遗留的沙箱容器');
+      } finally {
+        recoveringRuns = false;
       }
-      const removed = await executor.removeOrphans(new Set(live.keys()));
-      if (removed > 0) logger.info({ removed }, '清理了遗留的沙箱容器');
     },
 
     /** 服务关闭：中止所有进行中的运行并等它们收尾。 */
     async stopAll(): Promise<void> {
+      closing = true;
       const runs = [...live.values()];
-      for (const run of runs) run.abort.abort(new StopRun('failed', '运行中断：harness 关闭'));
+      for (const run of runs) {
+        if (run.closing) continue;
+        run.suspended = true;
+        run.abort.abort(new StopRun('stopped', '执行服务关闭，进度保留待接管'));
+      }
       await Promise.all(runs.map((run) => run.done));
     },
   };

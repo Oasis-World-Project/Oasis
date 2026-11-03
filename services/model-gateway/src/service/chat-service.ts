@@ -108,6 +108,7 @@ export function createChatService(deps: {
       call: PreparedCall,
       response: Response,
       write: (chunk: string) => void,
+      options: { transportErrors?: 'message' | 'disconnect' } = {},
     ): Promise<void> {
       let usage: Usage | undefined;
       let completionChars = 0;
@@ -149,26 +150,32 @@ export function createChatService(deps: {
         parser.end();
         if (!completed) {
           error = '流式传输未收到完成标记';
-          write(
-            `data: ${JSON.stringify({ error: { code: 'stream_interrupted', message: '回复中断了' } })}\n\n`,
-          );
         } else if (providerFailed) error = '供应商返回流式错误';
       } catch (err) {
         error = `流式传输中断：${String(err)}`;
+      }
+      if (!completed && options.transportErrors !== 'disconnect')
         write(
           `data: ${JSON.stringify({ error: { code: 'stream_interrupted', message: '回复中断了' } })}\n\n`,
         );
-      }
       await settle(call, usage, completionChars, error);
+      if (!completed && options.transportErrors === 'disconnect')
+        throw new HttpError(503, 'stream_interrupted', '模型传输中断，已记录费用');
       if (terminalChunk !== undefined) write(terminalChunk);
     },
 
     /** 非流式：等上游完整返回，结算后把结果交给调用方。 */
     async finishJson(call: PreparedCall, response: Response): Promise<unknown> {
-      const result = (await response.json()) as {
+      let result: {
         usage?: Usage;
         choices?: { message?: Parameters<typeof deltaChars>[0] }[];
       };
+      try {
+        result = (await response.json()) as typeof result;
+      } catch {
+        await settle(call, undefined, 0, '非流式响应中断或 JSON 损坏，未取得完整用量');
+        throw new HttpError(502, 'response_interrupted', '模型响应未完整读取，用量按估算记录');
+      }
       const message = result.choices?.[0]?.message;
       const costMicro = await settle(call, result.usage, message ? deltaChars(message) : 0);
       return call.reportCost ? { ...result, oasis: { costMicro } } : result;

@@ -239,6 +239,7 @@ let blocked: string[] = [];
 const repo: CallsRepo = {
   start: async () => {},
   get: async (id) => recordedCalls.get(id) as Call | undefined,
+  computeForRun: async () => [],
   regionBlockedModels: async () => blocked,
   async finish(id, outcome, event) {
     recordedCalls.set(id, outcome);

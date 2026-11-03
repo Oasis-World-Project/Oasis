@@ -12,6 +12,8 @@ interface RequestOptions<T> {
   requestId?: string;
   schema?: z.ZodType<T>;
   signal?: AbortSignal;
+  /** 长模型判断由调用方 signal 管理生命周期；null 不设置总时长截止。 */
+  timeoutMs?: number | null;
 }
 
 export interface ServiceClient {
@@ -46,9 +48,11 @@ export function createServiceClient(
     const headers: Record<string, string> = { ...options.headers };
     if (options.body !== undefined) headers['content-type'] = 'application/json';
     if (options.requestId) headers[OASIS_HEADERS.requestId] = options.requestId;
-    const signals = [options.signal, timeout ? AbortSignal.timeout(timeoutMs) : undefined].filter(
-      (s): s is AbortSignal => s !== undefined,
-    );
+    const deadline = options.timeoutMs === undefined ? timeoutMs : options.timeoutMs;
+    const signals = [
+      options.signal,
+      timeout && deadline !== null ? AbortSignal.timeout(deadline) : undefined,
+    ].filter((s): s is AbortSignal => s !== undefined);
     let response: Response;
     try {
       response = await fetch(new URL(path, baseUrl), {

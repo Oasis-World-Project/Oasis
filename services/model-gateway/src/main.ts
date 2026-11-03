@@ -243,7 +243,12 @@ await startService({
     }
     registerRoutes(app, {
       chat,
-      decisions: createDecisionService(common),
+      decisions: createDecisionService({
+        ...common,
+        ...(config.DECISION_FALLBACK_MODEL
+          ? { fallback: { model: config.DECISION_FALLBACK_MODEL, chat } }
+          : {}),
+      }),
       runKeys,
       avatars,
       tools,

@@ -30,8 +30,9 @@ export interface CallsRepo {
   get(id: string): Promise<Call | undefined>;
   /** 写结局；有事件时在同一个事务里写进发件箱 */
   finish(id: string, outcome: CallOutcome, event?: EventEnvelope): Promise<void>;
-  /** 最近一次聊天或工具调用因为「地区不可用」失败的模型（之后没再成功过） */
+  /** 最近一次聊天、工具或决策调用因「地区不可用」失败的模型（之后没再成功过） */
   regionBlockedModels(): Promise<string[]>;
+  computeForRun(runId: string, payerId: string): Promise<Call[]>;
 }
 
 export function createCallsRepo(pool: pg.Pool): CallsRepo {
@@ -44,11 +45,23 @@ export function createCallsRepo(pool: pg.Pool): CallsRepo {
       const [row] = await db.select().from(calls).where(eq(calls.id, id));
       return row;
     },
+    computeForRun: (runId, payerId) =>
+      db
+        .select()
+        .from(calls)
+        .where(
+          and(
+            eq(calls.runId, runId),
+            eq(calls.payerId, payerId),
+            eq(calls.kind, 'compute'),
+            eq(calls.model, 'sandbox'),
+          ),
+        ),
     async regionBlockedModels() {
       const result = await db.execute<{ model: string }>(sql`
         select model from (
           select distinct on (model) model, status, error from calls
-          where kind in ('chat', 'tool') and finished_at is not null
+          where kind in ('chat', 'tool', 'decision') and finished_at is not null
           order by model, finished_at desc
         ) latest
         where status = 'failed' and error ilike ${`%${REGION_ERROR}%`}

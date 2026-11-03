@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkPlan, estimatePlan } from '../src/service/planner.ts';
+import { checkPlan, estimatePlan, plannerPrompt, revisePrompt } from '../src/service/planner.ts';
 
 const sheet = {
   title: 't',
@@ -44,6 +44,76 @@ const node = (key: string, model = 'deepseek/x') => ({
 });
 
 describe('规划门', () => {
+  it('首次规划和原会话修订都携带完整任务单；没有要求编号时不示范虚构编号', () => {
+    const confirmed = {
+      ...sheet,
+      style: ['澄清后仅日文招牌'],
+      criteria: ['1:1画面'],
+      budgetMicro: 123456,
+      assumptions: ['网页拖拽观看'],
+    };
+    const prompt = plannerPrompt({
+      brief: '原始简述',
+      sheet: confirmed,
+      catalog,
+      tools,
+      playbooks: [],
+      defaultModel: 'deepseek/x',
+    });
+    expect(prompt).toContain(JSON.stringify(confirmed));
+    expect(prompt).toContain('criteria:0');
+    expect(prompt).toContain('style:0');
+    expect(prompt).not.toContain('"requirementIds":["r1"]');
+    expect(revisePrompt(['路径有误'], confirmed)).toContain(JSON.stringify(confirmed));
+  });
+  it('新 AI 检查只能引用确认任务单，规划员自行加的自测方法不能升级为强制要求', () => {
+    const check = {
+      id: 'self-check',
+      text: '必须用 Node 桩自检并交日志',
+      requirementIds: ['criteria:0'],
+      files: ['result.md'],
+    };
+    const plan = (checks: unknown[]) =>
+      JSON.stringify({
+        nodes: [{ ...node('home'), checks }],
+        edges: [],
+        deliverables: { 首页文案: 'home' },
+      });
+    expect(checkPlan(plan([check]), sheet, catalog, tools)).toMatchObject({
+      plan: {
+        nodes: [{ checks: [{ id: 'self-check', text: 'c', requirementIds: ['criteria:0'] }] }],
+      },
+    });
+    expect(
+      checkPlan(plan([{ ...check, requirementIds: [] }]), sheet, catalog, tools),
+    ).toMatchObject({ problems: [expect.stringContaining('没有用户要求来源')] });
+    expect(
+      checkPlan(plan([{ ...check, requirementIds: ['criteria:99'] }]), sheet, catalog, tools),
+    ).toMatchObject({ problems: [expect.stringContaining('未知要求')] });
+    expect(checkPlan(plan(['必须提交 Node 自检记录']), sheet, catalog, tools)).toMatchObject({
+      problems: [expect.stringContaining('引用确认任务单')],
+    });
+  });
+  it('节点所需能力必须来自实测环境，不能把包可安装当成浏览器已就绪', () => {
+    const environment = {
+      image: 'oasis/test:1',
+      imageId: 'sha256:test',
+      software: { node: '24' },
+      capabilities: ['node'],
+      notes: [],
+    };
+    const plan = JSON.stringify({
+      nodes: [{ ...node('home'), requires: ['browser'] }],
+      edges: [],
+      deliverables: { 首页文案: 'home' },
+    });
+    expect(checkPlan(plan, sheet, catalog, tools, environment)).toMatchObject({
+      problems: [expect.stringContaining('browser')],
+    });
+    expect(
+      checkPlan(plan.replace('browser', 'node'), sheet, catalog, tools, environment),
+    ).toHaveProperty('plan');
+  });
   it('有效大工作流不再被旧节点数量上限拒绝', () => {
     const nodes = Array.from({ length: 60 }, (_, index) => node(`n${index}`));
     expect(

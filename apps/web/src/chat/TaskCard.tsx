@@ -138,6 +138,7 @@ const DECISIONS: Record<
   over_estimate: [{ choice: 'continue', label: '解除预算继续' }],
   plan_failed: [{ choice: 'retry', label: '重新规划' }],
   workflow_broken: [],
+  checks_incomplete: [{ choice: 'retry', label: '重新检查' }],
 };
 
 /** 需要处理时的说明和选择；任务卡和提醒消息都用它 */
