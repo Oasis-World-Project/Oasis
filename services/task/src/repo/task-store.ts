@@ -34,6 +34,8 @@ type TaskPatch = Partial<
     | 'plannerRunId'
     | 'planAttempts'
     | 'acceptance'
+    // 修改成果时附件并进任务素材（ADR 0012）
+    | 'materials'
   >
 >;
 type NewTask = Omit<

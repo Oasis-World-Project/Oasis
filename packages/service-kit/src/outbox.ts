@@ -7,6 +7,7 @@
 //     created_at timestamptz not null default now(), published_at timestamptz
 //   );
 //   create index outbox_unpublished on outbox (created_at) where published_at is null;
+// 投递过的行留一天（排查用）就删掉：事件里有用户内容的片段，删除要真删除（ADR 0012 §15）。
 import type { NatsConnection } from '@nats-io/transport-node';
 import type { EventEnvelope } from '@oasis/contracts/events';
 import type pg from 'pg';
@@ -19,9 +20,12 @@ export function startOutboxRelay(options: {
   connection: NatsConnection;
   logger: Logger;
   intervalMs?: number;
+  /** 多久清一次投递过的行，默认 10 分钟 */
+  pruneEveryMs?: number;
 }): ServiceResource {
-  const { pool, connection, logger, intervalMs = 500 } = options;
+  const { pool, connection, logger, intervalMs = 500, pruneEveryMs = 10 * 60_000 } = options;
   let stopped = false;
+  let prunedAt = 0;
   let timer: NodeJS.Timeout | undefined;
   let running: Promise<void> = Promise.resolve();
 
@@ -47,10 +51,20 @@ export function startOutboxRelay(options: {
     }
   }
 
+  async function pruneIfDue(): Promise<void> {
+    if (Date.now() - prunedAt < pruneEveryMs) return;
+    prunedAt = Date.now();
+    await pool
+      .query(
+        "delete from outbox where published_at is not null and published_at < now() - interval '1 day'",
+      )
+      .catch((err: unknown) => logger.warn({ err }, '清理发件箱失败，稍后再试'));
+  }
+
   function schedule(): void {
     if (stopped) return;
     timer = setTimeout(() => {
-      running = relayOnce().finally(schedule);
+      running = relayOnce().then(pruneIfDue).finally(schedule);
     }, intervalMs);
   }
   schedule();

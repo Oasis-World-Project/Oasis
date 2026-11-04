@@ -849,6 +849,7 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     tools = build('key', false, true);
     const app = Fastify({ loggerInstance: pino({ level: 'silent' }) });
     registerRoutes(app, {
+      modelRequestMaxBytes: 50 * 1024 ** 2,
       tools,
       runKeys: { authenticate: async () => caller },
       chat: {},
@@ -1203,7 +1204,7 @@ describe('调用工具', () => {
       },
     });
     expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'settle']);
-    expect(billingCalls[0]?.body).toMatchObject({ amountMicro: 200_000 });
+    expect(billingCalls[0]?.body).toMatchObject({ amountMicro: 500_000 });
     expect(settled[0]).toMatchObject({
       data: { kind: 'tool', taskId: TASK, chargedMicro: 40_000 },
     });
@@ -1345,10 +1346,10 @@ describe('长任务（视频）', () => {
       'video_parameters_unsupported',
     );
     expect(billingCalls).toHaveLength(0);
-    videoCentsPerSecond = '50';
+    videoCentsPerSecond = '100';
     videoUsdTariff = false;
     await call('video.generate', { prompt: 'x', duration: 6 });
-    expect(billingCalls[0]?.body.amountMicro).toBe(3_000_000);
+    expect(billingCalls[0]?.body.amountMicro).toBe(6_000_000);
   });
 
   it('提交时冻结（留够时间）并交回任务号；做好前是 pending；做好后按实际花费结算一次', async () => {
@@ -1360,7 +1361,7 @@ describe('长任务（视频）', () => {
       path: 'video',
       body: { model: 'alibaba/wan-2.7', prompt: '木屋的清晨', duration: 6, resolution: '720p' },
     });
-    expect(billingCalls[0]?.body).toMatchObject({ amountMicro: 1_500_000, ttlMs: 40 * 60_000 });
+    expect(billingCalls[0]?.body).toMatchObject({ amountMicro: 4_200_000, ttlMs: 40 * 60_000 });
 
     expect(await job(id)).toEqual({ status: 'pending' });
     const done = await job(id);

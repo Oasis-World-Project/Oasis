@@ -1,9 +1,5 @@
 // 交付消息：做了什么、每样交付物的文件（点开预览、单独下载）、没完全满足的地方和过程中的提醒。
-// 提醒消息：任务需要处理或没能完成；任务还在等处理时，直接在这里也能选。
-import type {
-  DeliveryCard as DeliveryData,
-  NoticeCard as NoticeData,
-} from '@oasis/contracts/conversation';
+import type { DeliveryCard as DeliveryData } from '@oasis/contracts/conversation';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { Images, MessageCircle, PencilLine } from 'lucide-react';
@@ -23,7 +19,7 @@ import {
   StatusTag,
   type Speaker,
 } from './parts.tsx';
-import { RemovedNote, TaskDecisions } from './TaskCard.tsx';
+import { RemovedNote } from './TaskCard.tsx';
 import { useChatActions } from './use-chat-actions.ts';
 
 type DeliveredFile = DeliveryData['files'][number];
@@ -175,30 +171,6 @@ export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: S
           conversationId={actions.conversationId}
           onClose={() => setRevising(false)}
         />
-      )}
-    </CardFrame>
-  );
-}
-
-export function NoticeCard({ card, speaker }: { card: NoticeData; speaker: Speaker }) {
-  const { data: task } = useQuery({ ...taskQuery(card.taskId), enabled: !card.removed });
-  // 已经处理过了（任务不在等处理），这条提醒只留文字
-  const pending = task?.status === 'needs_attention';
-  return (
-    <CardFrame
-      speaker={speaker}
-      label="任务提醒"
-      dim={!!card.removed || (!pending && card.status === 'needs_attention')}
-    >
-      <CardHeading
-        kind={card.status === 'failed' ? '任务没能完成' : '任务需要你处理'}
-        title={task?.title}
-        status={pending ? <StatusTag tone="accent">等你决定</StatusTag> : undefined}
-      />
-      {pending && task ? (
-        <TaskDecisions task={task} />
-      ) : (
-        <p className="m-0 text-[14px] leading-relaxed">{card.message}</p>
       )}
     </CardFrame>
   );

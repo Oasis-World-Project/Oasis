@@ -6,6 +6,10 @@ export interface PreviewFile {
   downloadUrl: string;
   pdfUrl?: string;
   modelPreview?: boolean;
+  /** 网页预览时，同一成果里可被相对地址引用的其他文件（path 与上面同一套相对路径） */
+  assets?: { path: string; url: string }[];
+  /** 网页里以 / 开头的地址从哪个目录算；默认网页所在目录 */
+  root?: string;
 }
 
 export type PreviewKind =

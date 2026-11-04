@@ -1,18 +1,21 @@
 // 能标注的预览（ADR 0012 §9）：图片、PDF 页（标注时用 pdf.js 一页一页画）、视频（暂停后在帧上画，
-// 时间轴上的红点是批注）、音频（时间轴上加批注）。其他格式照常预览，意见在侧栏里写。
+// 时间轴上的红点是批注）、音频（时间轴上加批注）、运行中的网页和应用（桌面版截下当前画面，在截图上画，ADR 0009 §18）。
+// 其他格式照常预览，意见在侧栏里写。
 import type { Annotation, AnnotationShape } from '@oasis/contracts/canvas';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { uploadUrl } from '../api/upload.ts';
 import { PreviewBody, type PreviewFile } from '../chat/FilePreview.tsx';
 import { baseName } from '../chat/files.ts';
 import { AnnotationLayer, type Tool } from './AnnotationLayer.tsx';
 import { formatTime, type Surface } from './annotations.ts';
 
-/** 新画好的一处：形状（音频没有）、第几页、第几秒 */
+/** 新画好的一处：形状（音频没有）、第几页、第几秒、画在哪张截图上 */
 export interface Drawn {
   shape: AnnotationShape | null;
   page: number | null;
   time: number | null;
+  frame?: string | null;
 }
 
 /** 从侧栏点一条批注：翻到那一页、跳到那一刻 */
@@ -44,6 +47,10 @@ interface Props {
   jump: Jump | null;
   /** 参数面板的近似预览（ADR 0012 §12）：视频滤镜、音量（只能调低）、倍速 */
   look?: { filter?: string; volume?: number; rate?: number };
+  /** 运行中的应用本身（不传就按文件预览）；截图批注时它保持运行，只是被截图盖住 */
+  live?: ReactNode;
+  /** 正在看、正在画的那张截图（上传文件 id）；null 表示回到应用本身 */
+  frame?: string | null;
 }
 
 /** 时间轴：批注处一个红点，点一下跳过去 */
@@ -289,6 +296,39 @@ function PdfView({ file, annotations, tool, pending, onDraw, jump }: Props) {
   );
 }
 
+/** 运行中的应用：平时直接操作；有截图时把截图盖在上面画，应用不卸载、状态都在 */
+function AppView({ file, live, frame = null, annotations, tool, pending, onDraw }: Props) {
+  return (
+    <div className="relative min-h-[600px] flex-1">
+      <div
+        data-live-app
+        aria-hidden={frame ? true : undefined}
+        className={`absolute inset-0 ${frame ? 'invisible' : ''}`}
+      >
+        {live ?? <PreviewBody file={file} />}
+      </div>
+      {frame && (
+        <div className="absolute inset-0 flex items-center justify-center overflow-auto bg-glass-active p-4">
+          <div className="relative inline-block max-w-full">
+            <img
+              src={uploadUrl(frame)}
+              alt="批注截图"
+              draggable={false}
+              className="block max-h-[72vh] max-w-full rounded-item"
+            />
+            <AnnotationLayer
+              items={annotations.filter((a) => a.frame === frame)}
+              tool={tool}
+              pending={pending?.frame === frame ? pending.shape : null}
+              onDraw={(shape) => onDraw({ shape, page: null, time: null, frame })}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AnnotatedPreview(props: Props) {
   const { file, surface, annotations, tool, pending, onDraw, annotating, jump } = props;
   useEffect(() => {
@@ -317,10 +357,12 @@ export function AnnotatedPreview(props: Props) {
     case 'video':
     case 'audio':
       return <MediaView {...props} audio={surface === 'audio'} />;
+    case 'app':
+      return <AppView {...props} />;
     case 'pdf':
       // 不标注时仍用浏览器自带的 PDF 查看（能搜索、复制）；标注时由 pdf.js 一页一页画
       return annotating ? <PdfView {...props} /> : <PreviewBody file={file} />;
     default:
-      return <PreviewBody file={file} />;
+      return props.live ?? <PreviewBody file={file} />;
   }
 }

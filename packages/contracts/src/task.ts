@@ -190,6 +190,11 @@ export type TaskSheet = z.infer<typeof TaskSheet>;
  */
 export const CreateTaskBody = z
   .object({
+    /**
+     * 调用方事先定好的任务 ID：同一个 ID 再提交一次直接返回已经建好的任务，
+     * 确认任务单超时后重试不会建出第二个（ADR 0005 §2026-11-04）。
+     */
+    id: z.uuid().optional(),
     ownerId: z.uuid(),
     payerId: z.uuid(),
     conversationId: z.uuid().optional(),
@@ -209,6 +214,19 @@ export const CreateTaskBody = z
     message: '要么给出任务单，要么给出工作流方案',
   });
 export type CreateTaskBody = z.input<typeof CreateTaskBody>;
+
+/**
+ * 修改成果（ADR 0012，2026-11-05 改为在原任务里接着做）：交付节点带着修改意见接着原会话改，
+ * 下游跟着更新；附件（标注截图等）并进任务素材。只有已交付的任务能改。
+ */
+export const ReviseTaskBody = z.object({
+  ownerId: z.uuid(),
+  /** 修改意见的完整文字：用户原话 + 每条批注一行 + 参数 */
+  request: z.string().trim().min(1).max(20_000),
+  materials: z.array(Material).max(20).default([]),
+});
+export type ReviseTaskBody = z.input<typeof ReviseTaskBody>;
+export type ReviseTaskInput = z.infer<typeof ReviseTaskBody>;
 /** 校验后（默认值已补上）的提交内容 */
 export type CreateTaskInput = z.infer<typeof CreateTaskBody>;
 

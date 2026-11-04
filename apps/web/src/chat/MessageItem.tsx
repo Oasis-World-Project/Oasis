@@ -1,10 +1,11 @@
 // 私聊里的一条消息：文字气泡，或问题卡、任务单卡、任务卡、交付消息、提醒（ADR 0005 §7）。
 import type { MessageBody } from '@oasis/contracts/conversation';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { PencilLine, RotateCcw, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { startIntake } from '../api/queries.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { SentAttachments } from './Attachments.tsx';
-import { DeliveryCard, NoticeCard } from './DeliveryCard.tsx';
+import { DeliveryCard } from './DeliveryCard.tsx';
 import { CardButton, type Speaker } from './parts.tsx';
 import { QuestionsCard } from './QuestionsCard.tsx';
 import { SheetCard } from './SheetCard.tsx';
@@ -76,26 +77,168 @@ export interface MessageControls {
   remove: (messageId: string) => Promise<void>;
 }
 
+/** 消息下面的小图标按钮（2026-11-05 用户：不要字，用小图标） */
+function IconAction({
+  label,
+  active = false,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-haspopup={active ? 'dialog' : undefined}
+      disabled={disabled}
+      onClick={onClick}
+      className={`flex size-7 items-center justify-center rounded-full border-0 transition-colors disabled:opacity-40 ${
+        active
+          ? 'bg-glass-strong text-ink'
+          : 'bg-transparent text-ink-muted hover:bg-glass-strong hover:text-ink'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** 点了重新生成、删除先问一句：图标下面弹出的小卡片，点外面或按 Esc 收起 */
+function ConfirmPopover({
+  title,
+  detail,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  detail: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  // 下面放不下（最后一条消息贴着输入框）就往上弹
+  const [up, setUp] = useState(false);
+  useLayoutEffect(() => {
+    const row = box.current?.parentElement?.getBoundingClientRect();
+    const height = box.current?.offsetHeight ?? 0;
+    if (row && row.bottom + height + 160 > window.innerHeight) setUp(true);
+  }, []);
+  useEffect(() => {
+    cancel.current?.focus();
+    const outside = (event: PointerEvent) => {
+      if (box.current && !box.current.contains(event.target as Node)) onCancel();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCancel();
+    };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [onCancel]);
+  return (
+    <div
+      ref={box}
+      role="alertdialog"
+      aria-label={title}
+      className={`absolute right-0 z-20 flex w-80 max-w-[80vw] animate-[oasis-pop_140ms_ease-out] flex-col gap-3 rounded-card bg-glass-active p-4 text-ink shadow-panel backdrop-blur-md ${
+        up ? 'bottom-full mb-1.5 origin-bottom-right' : 'top-full mt-1.5 origin-top-right'
+      }`}
+    >
+      <div className="flex flex-col gap-1">
+        <p className="m-0 text-[13.5px] font-medium">{title}</p>
+        <p className="m-0 text-[12.5px] leading-relaxed text-ink-muted">{detail}</p>
+      </div>
+      <div className="flex justify-end gap-1.5">
+        <button
+          ref={cancel}
+          type="button"
+          onClick={onCancel}
+          className="h-8 rounded-full border-0 bg-transparent px-3 text-[12.5px] text-ink-muted hover:bg-glass-strong hover:text-ink"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          className="h-8 rounded-full border-0 bg-accent px-3.5 text-[12.5px] font-medium text-on-accent hover:opacity-90"
+        >
+          {confirmLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function TextActions({ message, controls }: { message: MessageBody; controls: MessageControls }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
+  const [asking, setAsking] = useState<'replace' | 'remove' | null>(null);
+  const close = useCallback(() => setAsking(null), []);
   return (
-    <div className="-mt-2 flex justify-end gap-2 text-xs text-ink-muted">
-      <CardButton
+    <div className="relative -mt-2 flex justify-end gap-0.5">
+      <IconAction
+        label="编辑消息"
         disabled={controls.busy}
         onClick={() => {
           setDraft(message.content);
           setEditing(true);
         }}
       >
-        编辑
-      </CardButton>
-      <CardButton disabled={controls.busy} onClick={() => void controls.replace(message.id)}>
-        重新生成
-      </CardButton>
-      <CardButton disabled={controls.busy} onClick={() => void controls.remove(message.id)}>
-        删除
-      </CardButton>
+        <PencilLine size={15} aria-hidden="true" />
+      </IconAction>
+      <IconAction
+        label="重新生成回复"
+        active={asking === 'replace'}
+        disabled={controls.busy}
+        onClick={() => setAsking(asking === 'replace' ? null : 'replace')}
+      >
+        <RotateCcw size={15} aria-hidden="true" />
+      </IconAction>
+      <IconAction
+        label="删除消息"
+        active={asking === 'remove'}
+        disabled={controls.busy}
+        onClick={() => setAsking(asking === 'remove' ? null : 'remove')}
+      >
+        <Trash2 size={15} aria-hidden="true" />
+      </IconAction>
+      {asking === 'replace' && (
+        <ConfirmPopover
+          title="重新生成回复？"
+          detail="现在的回复会被新的回答替换。"
+          confirmLabel="重新生成"
+          onCancel={close}
+          onConfirm={() => {
+            setAsking(null);
+            void controls.replace(message.id);
+          }}
+        />
+      )}
+      {asking === 'remove' && (
+        <ConfirmPopover
+          title="删除这条消息？"
+          detail="连同 AI 的回复和附件一起彻底删除，不能恢复。"
+          confirmLabel="删除"
+          onCancel={close}
+          onConfirm={() => {
+            setAsking(null);
+            void controls.remove(message.id);
+          }}
+        />
+      )}
       {editing && (
         <MessageDialog title="编辑消息" onClose={() => setEditing(false)}>
           <p className="text-xs text-ink-muted">
@@ -223,16 +366,12 @@ export function MessageItem({
           speaker={speaker}
           revision={!!message.data.revisionOf}
           {...(message.data.removed ? { removed: message.data.removed } : {})}
-          // 后面已经有这个任务的提醒时，选择放在提醒里（离输入框近），任务卡不重复
-          decisions={
-            !later.some((m) => m.kind === 'notice' && m.data.taskId === message.data.taskId)
-          }
         />
       );
     case 'delivery':
       return <DeliveryCard card={message.data} speaker={speaker} />;
     case 'notice':
-      return <NoticeCard card={message.data} speaker={speaker} />;
+      return null; // 历史过程提醒仍保存在服务端；检查原因和操作统一在工作流。
     case 'text': {
       const asked = messages
         .slice(0, index)

@@ -28,6 +28,7 @@ export function useWorkflowActions(taskId: string) {
       } finally {
         setBusy(null);
         void queryClient.invalidateQueries({ queryKey: key });
+        void queryClient.invalidateQueries({ queryKey: ['tasks'] });
         void queryClient.invalidateQueries({ queryKey: walletQuery.queryKey });
       }
     },

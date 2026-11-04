@@ -137,6 +137,7 @@ await startService({
       billing: createServiceClient('billing', config.BILLING_URL, { timeoutMs: 5_000 }),
       repo: callsRepo,
       logger,
+      reconnectMs: config.UPSTREAM_RECONNECT_MS,
     });
     const common = {
       provider,
@@ -242,6 +243,7 @@ await startService({
       app.addHook('onClose', () => avatarApp.close());
     }
     registerRoutes(app, {
+      modelRequestMaxBytes: config.MODEL_REQUEST_MAX_BYTES,
       chat,
       decisions: createDecisionService({
         ...common,

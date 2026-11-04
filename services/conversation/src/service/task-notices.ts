@@ -1,6 +1,6 @@
-// 任务的结果回到私聊（ADR 0005 §6）：消费 task 的 task.task.status_changed，
-// 完成时发交付消息，需要用户处理或没能完成时发提醒。同一个事件只发一条消息（事件可能重复到达）。
-import type { DeliveryCard, NoticeCard } from '@oasis/contracts/conversation';
+// 消费 task.task.status_changed：完成时发交付，过程状态留在工作流。
+// 同一个事件只发一条消息（事件可能重复到达）。
+import type { DeliveryCard } from '@oasis/contracts/conversation';
 import type { TaskDeletedData, TaskStatusChangedData } from '@oasis/contracts/events';
 import { TaskBody } from '@oasis/contracts/task';
 import type { Logger, ServiceClient } from '@oasis/service-kit';
@@ -62,6 +62,7 @@ export function createTaskNotices(deps: {
   return {
     async onStatusChanged(eventId: string, data: TaskStatusChangedData): Promise<void> {
       if (!data.conversationId) return;
+      if (data.status !== 'succeeded') return; // 过程状态与检查原因只在工作流显示。
       const conversation = await repo.findOwned(data.conversationId, data.ownerId);
       if (!conversation) return;
       const base = {
@@ -70,33 +71,16 @@ export function createTaskNotices(deps: {
         authorId: conversation.modelKey ?? 'unknown',
         status: 'complete' as const,
       };
-      let inserted;
-      if (data.status === 'succeeded') {
-        const task = await deps.task.json('GET', `/internal/tasks/${data.taskId}`, {
-          schema: TaskBody,
-        });
-        const card = deliveryCard(task);
-        inserted = await repo.insertMessageOnce({
-          ...base,
-          kind: 'delivery',
-          content: deliveryText(card),
-          data: { ...card, eventId },
-        });
-      } else if (data.status === 'needs_attention' || data.status === 'failed') {
-        const message =
-          data.status === 'failed'
-            ? `「${data.title}」没能完成。`
-            : `「${data.title}」需要你处理：${data.attention?.message ?? ''}`;
-        const card: NoticeCard = { taskId: data.taskId, status: data.status, message };
-        inserted = await repo.insertMessageOnce({
-          ...base,
-          kind: 'notice',
-          content: message,
-          data: { ...card, eventId },
-        });
-      } else {
-        return; // 规划中、运行中、验收中、已停止、已取消：任务卡自己会显示，不另发消息
-      }
+      const task = await deps.task.json('GET', `/internal/tasks/${data.taskId}`, {
+        schema: TaskBody,
+      });
+      const card = deliveryCard(task);
+      const inserted = await repo.insertMessageOnce({
+        ...base,
+        kind: 'delivery',
+        content: deliveryText(card),
+        data: { ...card, eventId },
+      });
       if (inserted) {
         await repo.touchConversation(conversation.id);
         logger.info({ taskId: data.taskId, status: data.status }, '任务结果发到私聊');
@@ -111,10 +95,9 @@ export function createTaskNotices(deps: {
       if (!data.conversationId) return;
       const conversation = await repo.findOwned(data.conversationId, data.ownerId);
       if (!conversation) return;
-      const marked = await repo.markTaskRemoved(conversation.id, data.taskId, {
-        replacedBy: data.replacedBy,
-      });
-      if (marked) logger.info({ taskId: data.taskId, marked }, '私聊里的任务卡片已标为删除');
+      // 真删除（2026-11-05）：任务的卡片、交付消息、提醒都删掉，不留「已删除」的空壳
+      const removed = await repo.removeTaskMessages(conversation.id, data.taskId);
+      if (removed) logger.info({ taskId: data.taskId, removed }, '私聊里这个任务的消息已删除');
     },
   };
 }

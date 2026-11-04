@@ -1,15 +1,17 @@
 // 路由表：侧栏 7 个入口就是全部一级页面（PRD 信息架构）。广场是沉浸式页面，不带侧栏。
 // 除登录页外都要求已登录：没登录时跳到登录页，登录后回到原来要去的页面。
-import type { QueryClient } from '@tanstack/react-query';
+import { onlineManager, type QueryClient } from '@tanstack/react-query';
+import { useEffect, useSyncExternalStore } from 'react';
 import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
   Outlet,
   redirect,
+  useRouter,
   type RouterHistory,
 } from '@tanstack/react-router';
-import { ApiError } from './api/client.ts';
+import { ApiError, isConnectionError } from './api/client.ts';
 import { meQuery } from './api/queries.ts';
 import { AppShell } from './layout/AppShell.tsx';
 import { AisPage } from './pages/AisPage.tsx';
@@ -28,6 +30,49 @@ import { WorkflowPage } from './pages/WorkflowPage.tsx';
 
 interface RouterContext {
   queryClient: QueryClient;
+}
+
+/** 登录态尚未读到时也能恢复连接，不绕过鉴权进入应用。 */
+function ConnectionFailure({ error }: { error?: unknown }) {
+  const router = useRouter();
+  const online = useSyncExternalStore(onlineManager.subscribe, () => onlineManager.isOnline());
+  const reconnect = isConnectionError(error);
+  useEffect(() => {
+    if (!reconnect) return;
+    const retry = () => {
+      if (onlineManager.isOnline()) void router.invalidate();
+    };
+    const timer = online ? setInterval(retry, 5_000) : undefined;
+    window.addEventListener('online', retry);
+    window.addEventListener('focus', retry);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('online', retry);
+      window.removeEventListener('focus', retry);
+    };
+  }, [router, reconnect, online]);
+  return (
+    <main className="oasis-ground flex min-h-screen items-center justify-center p-6">
+      <section className="glass flex max-w-lg flex-col gap-4 rounded-panel p-8" role="alert">
+        <h1 className="m-0 text-xl">
+          {!online ? '当前离线' : error ? '暂时无法打开 Oasis' : '正在连接 Oasis'}
+        </h1>
+        <p className="m-0 text-sm text-ink-muted">
+          {reconnect || !error
+            ? '连接恢复后会自动重新打开当前页面，已有任务和会话不会因此删除。'
+            : '页面加载失败，请重试。'}
+        </p>
+        <button
+          type="button"
+          disabled={!online}
+          className="rounded-full bg-solid px-5 py-3 text-on-solid"
+          onClick={() => void router.invalidate()}
+        >
+          重新连接
+        </button>
+      </section>
+    </main>
+  );
 }
 
 async function requireSession({
@@ -60,6 +105,9 @@ function safeRedirect(value: unknown): string | undefined {
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: Outlet,
+  errorComponent: ConnectionFailure,
+  pendingComponent: ConnectionFailure,
+  pendingMs: 200,
   notFoundComponent: NotFoundPage,
 });
 
@@ -158,6 +206,8 @@ export function createAppRouter(options: { queryClient: QueryClient; history?: R
     history: options.history,
     context: { queryClient: options.queryClient },
     defaultPreload: 'intent',
+    defaultPendingComponent: ConnectionFailure,
+    defaultPendingMs: 200,
   });
 }
 

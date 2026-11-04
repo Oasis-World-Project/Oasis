@@ -16,6 +16,8 @@ export async function startRunLease(input: {
 }) {
   const { client, runId, cores, windowMs } = input;
   let closed = false;
+  let endedAt: number | undefined;
+  let settleOnClose = true;
   let current: { id: string | null; since: number } | undefined;
   let timer: NodeJS.Timeout | undefined;
   let pending: Promise<void> = Promise.resolve();
@@ -65,20 +67,24 @@ export async function startRunLease(input: {
     });
     if (closed) return;
     const next = await reserve();
-    const now = Date.now();
+    const now = Math.min(Date.now(), endedAt ?? Infinity);
     const previous = current;
     current = { id: next.callId, since: now };
-    if (previous) await settle(previous, now);
+    if (previous && settleOnClose) await settle(previous, now);
     schedule();
   }
   schedule();
   return {
-    async close() {
+    async close(stoppedAt = Date.now(), confirmedStopped = true) {
       if (closed) return;
       closed = true;
+      endedAt = stoppedAt;
+      settleOnClose = confirmedStopped;
       clearTimeout(timer);
       await pending;
-      if (current?.id) unpaid.set(current.id, Math.max(0, Date.now() - current.since));
+      // 没有停止证据时只停止续租，留给接管按 Docker 实际时间结算。
+      if (!confirmedStopped) return;
+      if (current?.id) unpaid.set(current.id, Math.max(0, endedAt - current.since));
       const results = await Promise.allSettled(
         [...unpaid].map(([id, elapsed]) => pay(id, elapsed)),
       );

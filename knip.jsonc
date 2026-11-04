@@ -17,8 +17,11 @@
     "services/harness": {
       // dsh 仅安装于精确版本沙箱镜像，离线集成测试在容器内调用。
       "ignoreBinaries": ["dsh"],
+      // 原生附件恢复回归仅在镜像内加载 dsh 自带的精确依赖；宿主不重复安装底座。
+      "ignoreDependencies": ["@deepseek-ai/cordis", "@deepseek-ai/dsh-attachment-local"],
       // 解析 worker 由 Worker URL 按源码/编译后扩展名加载，静态 import 图不可见。
       "entry": [
+        "src/main.ts",
         "sandbox/oasis-tool.ts",
         "src/adapter/profile/node-goal.mjs",
         "src/adapter/test/native-provider.mjs",
@@ -28,7 +31,8 @@
       ],
     },
     "services/canvas": {
-      "entry": ["src/service/preview-worker.ts"],
+      // 开发启动器把入口作为参数传入；显式保留 main，避免覆盖默认入口推断。
+      "entry": ["src/main.ts", "src/service/preview-worker.ts"],
     },
     // preload 由 Electron 按路径加载（BrowserWindow 的 webPreferences.preload），不经 import
     "apps/desktop": {

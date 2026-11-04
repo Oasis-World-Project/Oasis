@@ -72,12 +72,8 @@ export interface ConversationRepo {
   listMessages(conversationId: string, limit: number): Promise<Message[]>;
   findMessage(conversationId: string, id: string): Promise<Message | undefined>;
   setMessageData(id: string, data: Record<string, unknown>): Promise<Message>;
-  /** 这个任务的任务卡、交付消息和提醒标上「已替换 / 已删除」（ADR 0012）；返回改了几条 */
-  markTaskRemoved(
-    conversationId: string,
-    taskId: string,
-    removed: { replacedBy: string | null },
-  ): Promise<number>;
+  /** 任务被删除：它的任务卡、交付消息和提醒一起删掉（2026-11-05 真删除）；返回删了几条 */
+  removeTaskMessages(conversationId: string, taskId: string): Promise<number>;
   /** 开始接需求；这个会话已经有进行中的就返回 undefined */
   createIntake(
     intake: Pick<Intake, 'id' | 'conversationId' | 'request' | 'context' | 'materials'>,
@@ -372,12 +368,9 @@ export function createConversationRepo(
       return row!;
     },
 
-    async markTaskRemoved(conversationId, taskId, removed) {
+    async removeTaskMessages(conversationId, taskId) {
       const rows = await db
-        .update(messages)
-        .set({
-          data: sql`${messages.data} || jsonb_build_object('removed', ${JSON.stringify(removed)}::jsonb)`,
-        })
+        .delete(messages)
         .where(
           and(
             eq(messages.conversationId, conversationId),

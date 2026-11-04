@@ -30,7 +30,7 @@ import { api, ApiError, apiVoid } from './client.ts';
 
 export const meQuery = queryOptions({
   queryKey: ['me'],
-  queryFn: () => api('/identity/v1/me', MeBody),
+  queryFn: ({ signal }) => api('/identity/v1/me', MeBody, { signal }),
   staleTime: 5 * 60_000,
   retry: false,
 });
@@ -92,9 +92,12 @@ export const sendGroupMessage = (id: string, content: string, requestId: string)
 export const messagesQuery = (conversationId: string) =>
   queryOptions({
     queryKey: ['messages', conversationId],
-    queryFn: async () =>
-      (await api(`/conversation/v1/conversations/${conversationId}/messages`, MessageList))
-        .messages,
+    queryFn: async ({ signal }) =>
+      (
+        await api(`/conversation/v1/conversations/${conversationId}/messages`, MessageList, {
+          signal,
+        })
+      ).messages,
   });
 
 export const requestCode = (email: string) =>
@@ -186,7 +189,7 @@ export const deleteTask = (taskId: string) =>
 /** 自己最近的任务（成果页据此知道哪份成果正在修改） */
 export const tasksQuery = queryOptions({
   queryKey: ['tasks'],
-  queryFn: async () => (await api('/task/v1/tasks', TaskList)).tasks,
+  queryFn: async ({ signal }) => (await api('/task/v1/tasks', TaskList, { signal })).tasks,
 });
 
 /** 节点交出的文件：预览直接用这个地址，download 时让浏览器另存 */
@@ -287,13 +290,6 @@ export const saveAnnotations = (id: string, annotations: Annotation[]) =>
   api(`/canvas/v1/artifacts/${id}/annotations`, ArtifactBody, {
     method: 'PUT',
     body: { annotations },
-  });
-
-/** 批准 / 取消批准 */
-export const setApproval = (id: string, approved: boolean) =>
-  api(`/canvas/v1/artifacts/${id}/approval`, ArtifactBody, {
-    method: approved ? 'POST' : 'DELETE',
-    ...(approved ? { body: {} } : {}),
   });
 
 /** 成果内容：预览直接用这个地址（支持分段，视频能拖动），download 时让浏览器另存 */

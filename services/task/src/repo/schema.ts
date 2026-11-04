@@ -17,6 +17,8 @@ export interface NodeConfig {
   requires?: string[];
   /** 最终验收退回后，等待上游最新产出再在原会话修复。 */
   repairChecks?: string[];
+  /** 用户看过成果后的修改意见（ADR 0012）：开跑时接着原会话按意见改 */
+  revision?: string;
   checks?: TaskCheck[];
   gateChecks?: CheckResult[];
   expects?: ExpectedFile[];
@@ -86,6 +88,13 @@ export const tasks = pgTable('tasks', {
     unchecked?: string[];
     notes?: string[];
     checks?: CheckResult[];
+    /** 整体验收没满足、退回交付节点改过几次（最多一次）；不返回给用户 */
+    repairs?: number;
+    /**
+     * 这一轮是按用户的修改意见改（ADR 0012）：节点和整体验收只查这条意见改好没有、成品还能不能用，
+     * 原任务单在第一轮已经核对过，不再重查；不返回给用户
+     */
+    revision?: string;
   }>(),
   createdAt: at('created_at').notNull().defaultNow(),
   updatedAt: at('updated_at').notNull().defaultNow(),

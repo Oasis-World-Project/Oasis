@@ -52,6 +52,7 @@ export function useChatActionsValue(
         setBusy(null);
         void queryClient.invalidateQueries({ queryKey: key });
         void queryClient.invalidateQueries({ queryKey: ['task'] });
+        void queryClient.invalidateQueries({ queryKey: ['tasks'] });
         void queryClient.invalidateQueries({ queryKey: walletQuery.queryKey });
       }
     },

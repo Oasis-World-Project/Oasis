@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelRepo, ModelRow } from '../src/repo/model-repo.ts';
 import { createModelService, defaultSystemPrompt } from '../src/service/model-service.ts';
+import { TEAM_MODELS } from '../src/service/team-models.ts';
 
 const base = {
   vendor: 'X',
@@ -30,9 +31,24 @@ async function errorCode(promise: Promise<unknown>) {
 }
 
 describe('模型目录', () => {
-  it('规划员的目录只列已接入的模型，带上游模型 ID', async () => {
+  it('规划员的目录：AI 团队的旗舰和强力型号在前，私聊的省钱型号作为快速档，没接入的不列', async () => {
     const catalog = await createModelService(repo).catalog();
-    expect(catalog.map((m) => [m.key, m.providerModel])).toEqual([['ok', 'vendor/ok-1']]);
+    expect(catalog.slice(0, TEAM_MODELS.length).map((m) => m.providerModel)).toEqual(
+      TEAM_MODELS.map((m) => m.providerModel),
+    );
+    expect(catalog[0]).toMatchObject({
+      providerModel: 'deepseek/deepseek-v4-pro-0813',
+      tier: 'flagship',
+    });
+    expect(catalog.slice(TEAM_MODELS.length)).toEqual([
+      expect.objectContaining({
+        key: 'ok',
+        name: 'Ok 1',
+        providerModel: 'vendor/ok-1',
+        tier: 'fast',
+      }),
+    ]);
+    expect(new Set(catalog.map((m) => m.providerModel)).size).toBe(catalog.length);
   });
 
   it('没有上游模型的标记为不可用，对外不暴露上游模型 ID', async () => {

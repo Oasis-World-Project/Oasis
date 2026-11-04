@@ -51,6 +51,9 @@ export interface RunsRepo {
   insert(run: NewRun, request?: DurableRunRequest): Promise<boolean>;
   request(runId: string): Promise<unknown>;
   control(runId: string): Promise<'stop' | 'cancel' | undefined>;
+  suspension?(
+    runId: string,
+  ): Promise<{ endedAt: string; cores: number; keyId?: string | null } | undefined>;
   hasRootPrompt(runId: string): Promise<boolean>;
   get(id: string): Promise<Run | undefined>;
   update(id: string, patch: RunPatch): Promise<void>;
@@ -108,6 +111,22 @@ export function createRunsRepo(pool: pg.Pool): RunsRepo {
         : event?.data.how === 'cancel'
           ? 'cancel'
           : undefined;
+    },
+    async suspension(runId) {
+      const [event] = await db
+        .select()
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, runId), sql`${runEvents.data}->>'status' = 'suspended'`))
+        .orderBy(desc(runEvents.seq))
+        .limit(1);
+      const endedAt = event?.data.endedAt;
+      const cores = event?.data.cores;
+      return typeof endedAt === 'string' &&
+        Number.isFinite(Date.parse(endedAt)) &&
+        typeof cores === 'number' &&
+        cores > 0
+        ? { endedAt, cores, keyId: typeof event?.data.keyId === 'string' ? event.data.keyId : null }
+        : undefined;
     },
     async hasRootPrompt(runId) {
       const rows = await db

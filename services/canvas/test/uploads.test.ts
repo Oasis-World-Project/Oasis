@@ -2,7 +2,7 @@
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import { createService, createServiceClient } from '@oasis/service-kit';
 import { pino } from 'pino';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { registerRoutes } from '../src/api/routes.ts';
 import { createArtifactService } from '../src/service/artifact-service.ts';
 import { createUploadService } from '../src/service/upload-service.ts';
@@ -114,5 +114,35 @@ describe('上传素材', () => {
     const content = await instance.inject({ url: `/internal/uploads/${b.id}/content` });
     expect(content.body).toBe('png');
     expect(content.headers['content-type']).toBe('image/png');
+  });
+});
+
+describe('真删除（2026-11-05）', () => {
+  it('随消息发出时认领；删除接口连对象和记录一起删，别人的删不了；没被用上的文件清扫时删掉', async () => {
+    const store = memoryStore();
+    const repo = memoryUploads();
+    const uploads = createUploadService({ repo, store });
+    const kept = await uploads.upload(KAI, '要发的.png', Buffer.from('a'));
+    const dropped = await uploads.upload(KAI, '加了又移除.png', Buffer.from('b'));
+    const theirs = await uploads.upload(MIA, '别人的.png', Buffer.from('c'));
+    await uploads.lookup(KAI, [kept.id], false, true);
+    await uploads.lookup(MIA, [theirs.id], false, true);
+    expect(repo.rows.get(kept.id)?.claimedAt).toBeInstanceOf(Date);
+    expect(repo.rows.get(dropped.id)?.claimedAt).toBeNull();
+
+    // 清扫：传完 24 小时还没被用上的删掉，用上的留着
+    for (const row of repo.rows.values()) row.createdAt = new Date(Date.now() - 25 * 3600_000);
+    uploads.start();
+    await vi.waitFor(() => expect(repo.rows.has(dropped.id)).toBe(false));
+    uploads.close();
+    expect(store.objects.has(`uploads/${KAI}/${dropped.id}`)).toBe(false);
+    expect(repo.rows.has(kept.id)).toBe(true);
+
+    // 删除接口：只删自己的，对象和记录都删；再删一次什么也不发生
+    expect(await uploads.remove(KAI, [kept.id, theirs.id])).toBe(1);
+    expect(repo.rows.has(kept.id)).toBe(false);
+    expect(store.objects.has(`uploads/${KAI}/${kept.id}`)).toBe(false);
+    expect(repo.rows.has(theirs.id)).toBe(true);
+    expect(await uploads.remove(KAI, [kept.id])).toBe(0);
   });
 });

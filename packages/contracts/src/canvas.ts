@@ -38,6 +38,13 @@ export const UploadLookupBody = z.object({
   ids: z.array(z.uuid()).min(1).max(20),
   /** 只返回还在的，不因为少了某个就报错（ADR 0012：筛掉已随上一版删除的修订素材） */
   partial: z.boolean().default(false),
+  /** 随消息发出：记下文件被用上了，清扫不再删它（2026-11-05 真删除） */
+  claim: z.boolean().default(false),
+});
+/** 内部：彻底删除这个人的这些文件（消息被删、群被解散时） */
+export const UploadDeleteBody = z.object({
+  ownerId: z.uuid(),
+  ids: z.array(z.uuid()).min(1).max(1000),
 });
 export const UploadLookupResult = z.object({ uploads: z.array(UploadBody) });
 
@@ -119,6 +126,8 @@ export const Annotation = z.object({
   /** 文档里引用的原文 */
   quote: z.string().trim().max(300).nullable(),
   shape: AnnotationShape.nullable(),
+  /** 运行中应用的批注画在哪张截图上（上传文件 id，ADR 0009 §18）；其他成果为 null */
+  frame: z.uuid().nullable().default(null),
 });
 export type Annotation = z.infer<typeof Annotation>;
 
@@ -182,27 +191,6 @@ export const ArtifactBody = z.object({
   createdAt: z.iso.datetime(),
 });
 export type ArtifactBody = z.infer<typeof ArtifactBody>;
-
-/** 内部：把一个任务交付的成果登记成修订任务的素材（ADR 0012 §3） */
-export const RevisionMaterialsBody = z.object({
-  ownerId: z.uuid(),
-  taskId: z.uuid(),
-  /** 还能放几份素材：上一版文件放得下（且不超过 10 个）就逐个交，否则打成一个 ZIP */
-  room: z.number().int().min(1).optional(),
-});
-export const RevisionMaterialsResult = z.object({
-  materials: z.array(Material),
-  /** 素材名和上一版文件的对照（写进修订说明）；approved：用户批准过，除非修改意见提到，否则原样保留 */
-  files: z.array(
-    z.object({
-      material: z.string(),
-      path: z.string(),
-      deliverable: z.string(),
-      approved: z.boolean().default(false),
-    }),
-  ),
-});
-export type RevisionMaterialsResult = z.infer<typeof RevisionMaterialsResult>;
 
 export const ArtifactList = z.object({ artifacts: z.array(ArtifactBody) });
 

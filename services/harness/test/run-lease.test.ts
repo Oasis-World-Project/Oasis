@@ -4,6 +4,75 @@ import { startRunLease } from '../src/service/run-lease.ts';
 
 afterEach(() => vi.useRealTimers());
 describe('运行租约', () => {
+  it.each([true, false])('有停止证据=%s 时区分真实运行时长与网络恢复等待', async (confirmed) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const paid: number[] = [];
+    const client = {
+      json: vi.fn(async (_method, path, options) => {
+        if (path.endsWith('/settle')) paid.push(options.body.elapsedMs);
+        return { callId: 'one' };
+      }),
+    } as unknown as ServiceClient;
+    const lease = await startRunLease({
+      client,
+      runId: 'run',
+      payerId: 'payer',
+      taskId: null,
+      nodeId: null,
+      keyId: 'key',
+      keyTtlSeconds: 60,
+      cores: 2,
+      windowMs: 1000,
+      onFailure: vi.fn(),
+    });
+    vi.setSystemTime(10000);
+    await lease.close(100, confirmed);
+    expect(paid).toEqual(confirmed ? [100] : []);
+    const count = vi.mocked(client.json).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(client.json).toHaveBeenCalledTimes(count);
+  });
+
+  it('收尾时正在冻结的新窗口也不能把停止后的等待算为运行', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let serial = 0;
+    let release!: () => void;
+    const paid: number[] = [];
+    const client = {
+      json: vi.fn(async (_method, path, options) => {
+        if (path.endsWith('/compute')) {
+          serial++;
+          if (serial === 2)
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+          return { callId: String(serial) };
+        }
+        if (path.endsWith('/settle')) paid.push(options.body.elapsedMs);
+        return {};
+      }),
+    } as unknown as ServiceClient;
+    const lease = await startRunLease({
+      client,
+      runId: 'run',
+      payerId: 'payer',
+      taskId: null,
+      nodeId: null,
+      keyId: 'key',
+      keyTtlSeconds: 60,
+      cores: 2,
+      windowMs: 1000,
+      onFailure: vi.fn(),
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const closing = lease.close(500);
+    vi.setSystemTime(5000);
+    release();
+    await closing;
+    expect(paid).toEqual([500, 0]);
+  });
   it('跨多个窗口持续运行，凭证续期、每段只结算一次，关闭后不再续租', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

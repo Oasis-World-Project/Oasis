@@ -16,6 +16,11 @@ import type { Logger } from './logger.ts';
 import type { ServiceResource } from './resource.ts';
 
 const SECOND_NS = 1_000_000_000;
+/**
+ * 事件在 stream 里最多留 7 天，过期由 JetStream 自己删：事件里带着用户内容的片段（标题、文件名），
+ * 删除是真删除，不能在消息队列里一直留着（ADR 0012 §15）。消费方都是在线消费，7 天足够追上。
+ */
+const STREAM_MAX_AGE_NS = 7 * 24 * 3600 * SECOND_NS;
 
 interface StreamSpec {
   readonly name: string;
@@ -26,18 +31,23 @@ export function createEnvelope(source: string, type: string, data: unknown): Eve
   return { id: randomUUID(), type, source, time: new Date().toISOString(), data };
 }
 
-/** 事件的所有者服务在启动时调用：没有就建，有就更新主题列表。 */
+/** 事件的所有者服务在启动时调用：没有就建，有就更新主题列表和保留时间。 */
 export async function ensureStream(connection: NatsConnection, stream: StreamSpec): Promise<void> {
   const jsm = await jetstreamManager(connection);
   const subjects = [...stream.subjects];
   try {
     await jsm.streams.info(stream.name);
-    await jsm.streams.update(stream.name, { subjects });
+    await jsm.streams.update(stream.name, { subjects, max_age: STREAM_MAX_AGE_NS });
   } catch (err) {
     if (!(err instanceof JetStreamApiError && err.code === JetStreamApiCodes.StreamNotFound))
       throw err;
     // 2 分钟内同一个事件 ID 只收一次：发件箱重复投递时由 JetStream 去重
-    await jsm.streams.add({ name: stream.name, subjects, duplicate_window: 120 * SECOND_NS });
+    await jsm.streams.add({
+      name: stream.name,
+      subjects,
+      duplicate_window: 120 * SECOND_NS,
+      max_age: STREAM_MAX_AGE_NS,
+    });
   }
 }
 

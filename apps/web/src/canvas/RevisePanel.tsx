@@ -1,5 +1,5 @@
 // 「发给 AI 修改」（ADR 0012）：写下修改意见、可附文件、选发给哪个 AI（默认做出这一版的那个），
-// 发出后在那个 AI 的私聊里出现修改意见和新的任务卡；新版交付后整体替换这一版。
+// 发出后原任务接着原会话改，私聊里出现修改意见和任务卡；改好后画布里的成果原地更新。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Paperclip, X } from 'lucide-react';
@@ -23,7 +23,7 @@ import { uploadFile } from '../api/upload.ts';
 import { PendingFiles } from '../chat/Attachments.tsx';
 import { useAttachments } from '../chat/use-attachments.ts';
 import { toRevisionNotes } from './annotations.ts';
-import { buildSnapshots } from './snapshots.ts';
+import { buildSnapshots, reviewName } from './snapshots.ts';
 
 /** 标注截图最多带几张（和自己附的文件合计不超过一条消息的上限） */
 const MAX_SNAPSHOTS = 8;
@@ -64,7 +64,9 @@ export function RevisePanel({
   const fileInput = useRef<HTMLInputElement>(null);
   // 这个任务的成果上的批注（ADR 0012 §9）：默认一起带上
   const { data: artifacts = [] } = useQuery(artifactsQuery(taskId));
-  const noted = artifacts.filter((a) => a.annotations.length > 0);
+  const noted = artifacts
+    .filter((a) => a.annotations.length > 0)
+    .map((a) => ({ ...a, name: reviewName(a) }));
   const noteCount = noted.reduce((n, a) => n + a.annotations.length, 0);
   const [withNotes, setWithNotes] = useState(true);
   const [stage, setStage] = useState<string | null>(null);
@@ -221,7 +223,7 @@ export function RevisePanel({
           </label>
           <p className="m-0 text-[12.5px] leading-relaxed text-ink-muted">
             AI
-            团队会在这一版的基础上做出新版，只改你提到的地方。新版交付后会替换这一版，旧版本不保留；没做成时这一版不受影响。
+            团队会接着原来的工作流改，只改你提到的地方。改好后画布里的成果直接更新成新版，旧版本不保留。
           </p>
           {send.isError && (
             <p role="alert" className="m-0 text-[13px] text-accent">

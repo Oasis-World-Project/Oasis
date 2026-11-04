@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '../src/repo/task-store.ts';
 import {
+  deliveryIntegrityChecks,
   deliveryManifest,
   filesForInspection,
   selectDeliverables,
@@ -77,5 +78,29 @@ describe('最终文件清单', () => {
       'site/oasis-app.json',
       'site/index.html',
     ]);
+  });
+});
+
+describe('交付说明核验的证据', () => {
+  it('说明文档和结构化数据文件都作为证据，代码与媒体不算', () => {
+    const outputs = [
+      'audit/验收报告.md',
+      'audit/oasis-test.json',
+      'audit/raw.jsonl',
+      'data/表.csv',
+      'cfg.yaml',
+      'site/index.html',
+      'site/app.js',
+      'cover.png',
+    ].map((path) => ({ path, size: 10 }));
+    const [check] = deliveryIntegrityChecks(outputs);
+    expect(typeof check === 'object' ? check.files : undefined).toEqual([
+      'audit/验收报告.md',
+      'audit/oasis-test.json',
+      'audit/raw.jsonl',
+      'data/表.csv',
+      'cfg.yaml',
+    ]);
+    expect(deliveryIntegrityChecks([{ path: 'site/index.html', size: 10 }])).toEqual([]);
   });
 });

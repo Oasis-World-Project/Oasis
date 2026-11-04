@@ -35,8 +35,47 @@ function upstreamError(status: number, detail: string): HttpError {
   return new HttpError(502, 'provider_error', '模型服务返回了错误，请稍后再试');
 }
 
-export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; logger: Logger }) {
+/** 连接还没建立就失败的错误码：请求根本没发出去，等网络恢复后原样重发不会重复扣费或重复执行 */
+const NOT_CONNECTED = new Set([
+  'UND_ERR_CONNECT_TIMEOUT',
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ENETDOWN',
+]);
+
+/** 这个错误是不是「连不上」（沿 cause 和多地址尝试的 errors 往下找） */
+export function notConnected(err: unknown, depth = 0): boolean {
+  if (!err || typeof err !== 'object' || depth > 6) return false;
+  const { code, name, cause, errors } = err as {
+    code?: unknown;
+    name?: unknown;
+    cause?: unknown;
+    errors?: unknown;
+  };
+  if (name === 'AbortError') return false;
+  if ((typeof code === 'string' && NOT_CONNECTED.has(code)) || name === 'ConnectTimeoutError')
+    return true;
+  if (Array.isArray(errors) && errors.some((e) => notConnected(e, depth + 1))) return true;
+  return notConnected(cause, depth + 1);
+}
+
+export function createMeter(deps: {
+  billing: ServiceClient;
+  repo: CallsRepo;
+  logger: Logger;
+  /**
+   * 网络短暂断开时最多等多久（2026-11-05 用户决定：任务只因用户停止或网络长时间连不上而停）。
+   * 只对请求没发出去的「连不上」生效；超过这么久仍连不上才报错，节点停下等用户点继续。
+   */
+  reconnectMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}) {
   const { billing, repo, logger } = deps;
+  const reconnectMs = deps.reconnectMs ?? 10 * 60_000;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
 
   async function release(call: MeteredCall, error: string): Promise<void> {
     await billing
@@ -114,14 +153,31 @@ export function createMeter(deps: { billing: ServiceClient; repo: CallsRepo; log
       };
     },
 
-    /** 调上游。还没产生费用就失败（连不上、被拒绝）时退回冻结，并抛出给调用方看的错误。 */
+    /**
+     * 调上游。网络短暂断开（请求没发出去）时等网络恢复后原样重发同一请求，调用方只是多等一会儿；
+     * 长时间连不上、或还没产生费用就被拒绝时退回冻结，并抛出给调用方看的错误。
+     */
     async callUpstream(call: MeteredCall, request: () => Promise<Response>): Promise<Response> {
       let response: Response;
-      try {
-        response = await request();
-      } catch (err) {
-        await release(call, `上游连接失败：${String(err)}`);
-        throw new HttpError(503, 'provider_unavailable', '模型服务暂时连不上', { cause: err });
+      const started = Date.now();
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          response = await request();
+          break;
+        } catch (err) {
+          const waitedMs = Date.now() - started;
+          if (notConnected(err) && waitedMs < reconnectMs) {
+            const delayMs = Math.min(30_000, 2_000 * 2 ** Math.min(attempt - 1, 4));
+            logger.warn(
+              { err, model: call.model, attempt, waitedMs, delayMs },
+              '连不上模型服务商：请求没发出去，等网络恢复后重发同一请求',
+            );
+            await sleep(delayMs);
+            continue;
+          }
+          await release(call, `上游连接失败：${String(err)}`);
+          throw new HttpError(503, 'provider_unavailable', '模型服务暂时连不上', { cause: err });
+        }
       }
       if (!response.ok) {
         const detail = (await response.text().catch(() => '')).slice(0, 500);

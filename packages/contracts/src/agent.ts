@@ -41,7 +41,14 @@ export const ModelRoute = z.object({
 });
 export type ModelRoute = z.infer<typeof ModelRoute>;
 
-/** 内部：规划员能挑的模型（只列已接入的），节点里用 providerModel */
+/**
+ * AI 团队的档位（2026-11-05 用户决定）：干活节点和规划员用旗舰/强力型号，
+ * 快速档（私聊用的省钱型号）只做机械的小事。
+ */
+export const ModelTier = z.enum(['flagship', 'strong', 'fast']);
+export type ModelTier = z.infer<typeof ModelTier>;
+
+/** 内部：规划员能挑的模型（只列已接入的），节点里用 providerModel；key 是品牌（头像用） */
 export const CatalogEntry = z.object({
   key: z.string(),
   name: z.string(),
@@ -49,6 +56,9 @@ export const CatalogEntry = z.object({
   category: ModelCategory,
   tags: z.array(z.string()),
   providerModel: z.string(),
+  tier: ModelTier.optional(),
+  /** 能直接读的输入：text、image、video、audio、file */
+  inputs: z.array(z.string()).optional(),
 });
 export type CatalogEntry = z.infer<typeof CatalogEntry>;
 export const Catalog = z.object({ models: z.array(CatalogEntry) });

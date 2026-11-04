@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { safeHtml } from '../src/canvas/safe-html.ts';
 import { PreviewBody } from '../src/chat/FilePreview.tsx';
@@ -94,19 +94,41 @@ describe('安全格式预览', () => {
     fireEvent.change(screen.getByLabelText('工作表'), { target: { value: '1' } });
     expect(screen.getByText('456')).toBeTruthy();
   });
-  it('HTML 通过 srcdoc 和空 sandbox，超大下载在读取时取消', async () => {
+  it('HTML 默认在隔离框里运行脚本；只看内容时走无脚本 srcdoc；超大下载在读取时取消', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response('<h1>报告</h1><script>alert(1)</script>')),
+      vi.fn(async () => new Response('<h1>报告</h1><script>draw()</script>')),
     );
     render(<PreviewBody file={file} />);
-    const frame = await screen.findByTitle('报告.html');
-    expect(frame.getAttribute('sandbox')).toBe('');
-    expect(frame.hasAttribute('src')).toBe(false);
+    const live = await screen.findByTitle('报告.html');
+    expect(live.getAttribute('sandbox')).toBe('allow-scripts allow-pointer-lock');
+    expect(live.hasAttribute('src')).toBe(false);
+    expect(live.getAttribute('srcdoc')).toMatch(/^<meta http-equiv="Content-Security-Policy"/);
+    expect(live.getAttribute('srcdoc')).toContain('<script>draw()</script>');
+    fireEvent.click(screen.getByRole('button', { name: '只看内容' }));
+    const frame = await waitFor(() => {
+      const el = screen.getByTitle('报告.html');
+      expect(el.getAttribute('sandbox')).toBe('');
+      return el;
+    });
     expect(frame.getAttribute('srcdoc')).not.toContain('<script');
     await expect(readPreviewFile(file.url, new AbortController().signal, 3)).rejects.toThrow(
       '上限',
     );
+  });
+  it('带看板数据的报告默认只看内容，仍可切换为运行', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            '<h1>周报</h1><script id="oasis-dashboard" type="application/json">{}</script>',
+          ),
+      ),
+    );
+    render(<PreviewBody file={file} />);
+    expect(await screen.findByRole('button', { name: '运行网页' })).toBeTruthy();
+    expect(screen.getByText('只看内容：不运行网页里的脚本。')).toBeTruthy();
   });
   it('PPT 仅匹配同一节点的配套 PDF，上传缺少 PDF 时可下载', async () => {
     vi.stubGlobal(

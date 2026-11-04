@@ -14,6 +14,8 @@ export interface LivePreview {
   frame(): { seq: number; jpegBase64: string } | undefined;
   audio(afterSeq: number): { seq: number; webmBase64: string }[];
   diagnostics(): string[];
+  /** 预览进程还在（进程退出或容器被回收后为 false） */
+  alive(): boolean;
   test(plan: BrowserTestPlan): Promise<BrowserTestResult>;
   input(value: PreviewInputBody): void;
   ready(): Promise<void>;
@@ -86,7 +88,9 @@ export function createPreviewExecutor(deps: {
         stderr.resume();
         let latest: { seq: number; jpegBase64: string } | undefined;
         const audio: { seq: number; webmBase64: string }[] = [];
-        const diagnostics: string[] = [];
+        // 页面诊断按内容去重并计数，不截断、不限条数
+        const diagnostics = new Map<string, number>();
+        let alive = true;
         let testResult:
           { accept(value: BrowserTestResult): void; reject(error: Error): void } | undefined;
         let screenshots: BrowserTestResult['screenshots'] = [];
@@ -138,7 +142,7 @@ export function createPreviewExecutor(deps: {
               );
             return;
           }
-          if (data.kind === 'test-screenshot' && testResult && screenshots.length < 20) {
+          if (data.kind === 'test-screenshot' && testResult) {
             const parsed = BrowserTestResult.shape.screenshots.element.safeParse(data);
             if (parsed.success) screenshots.push(parsed.data);
             return;
@@ -155,12 +159,11 @@ export function createPreviewExecutor(deps: {
           } else if (data.kind === 'error' && !resolved) {
             resolved = true;
             reject(new Error(data.message ?? '预览启动失败'));
-          } else if (
-            data.kind === 'diagnostic' &&
-            typeof data.message === 'string' &&
-            diagnostics.length < 20
-          )
-            diagnostics.push(data.message.slice(0, 300));
+          } else if (data.kind === 'error' && testResult) {
+            // 测试中途控制端报错：如实结束这次测试，不让它一直等下去
+            testResult.reject(new Error(data.message ?? '浏览器测试中断'));
+          } else if (data.kind === 'diagnostic' && typeof data.message === 'string')
+            diagnostics.set(data.message, (diagnostics.get(data.message) ?? 0) + 1);
           else if (
             data.kind === 'audio' &&
             Number.isInteger(data.seq) &&
@@ -178,6 +181,7 @@ export function createPreviewExecutor(deps: {
             latest = { seq: data.seq!, jpegBase64: data.jpegBase64 };
         });
         lines.on('close', () => {
+          alive = false;
           testResult?.reject(new Error('浏览器测试进程提前结束'));
           if (!resolved) {
             resolved = true;
@@ -189,24 +193,29 @@ export function createPreviewExecutor(deps: {
           id,
           frame: () => latest,
           audio: (afterSeq) => audio.filter((chunk) => chunk.seq > afterSeq).slice(0, 20),
-          diagnostics: () => [...diagnostics],
+          diagnostics: () =>
+            [...diagnostics].map(([message, times]) =>
+              times > 1 ? `${message}（共 ${times} 次）` : message,
+            ),
+          alive: () => alive,
           test: async (value) => {
             const plan = BrowserTestPlan.parse(value);
             if (testBroken) throw new Error('浏览器测试会话已失效，请重新启动');
             if (testResult) throw new Error('浏览器正在测试');
             screenshots = [];
-            let timeout: NodeJS.Timeout | undefined;
+            // 不设时限：测试由控制端按页面安定与否下结论；进程退出或用户停止（回收容器）才提前结束
             try {
               return await new Promise<BrowserTestResult>((accept, reject) => {
-                testResult = { accept, reject };
-                timeout = setTimeout(() => {
-                  testBroken = true;
-                  reject(new Error('浏览器测试超时'));
-                }, 30000);
+                testResult = {
+                  accept,
+                  reject: (error) => {
+                    testBroken = true;
+                    reject(error);
+                  },
+                };
                 connection.write(`${JSON.stringify({ kind: 'test', plan })}\n`);
               });
             } finally {
-              clearTimeout(timeout);
               testResult = undefined;
               screenshots = [];
             }
@@ -214,19 +223,8 @@ export function createPreviewExecutor(deps: {
           input: (value) => {
             connection.write(`${JSON.stringify(value)}\n`);
           },
-          ready: async () => {
-            let timeout: NodeJS.Timeout | undefined;
-            try {
-              await Promise.race([
-                ready,
-                new Promise<never>((_, no) => {
-                  timeout = setTimeout(() => no(new Error('预览启动超时')), 25_000);
-                }),
-              ]);
-            } finally {
-              clearTimeout(timeout);
-            }
-          },
+          // 不设时限：控制端报告就绪或出错、进程退出时结束
+          ready: () => ready,
           destroy,
         };
       } catch (error) {

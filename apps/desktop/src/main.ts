@@ -1,6 +1,6 @@
 // Oasis 桌面端主进程：一个加载 Web 外壳的窗口。
 // 安全默认值：渲染进程隔离 + 沙箱 + 不开放 Node；外部链接交给系统浏览器；默认拒绝摄像头等权限申请。
-// 给页面开放的能力只有 preload 里的几个：把成果同步到用户选的文件夹（ADR 0007 §10）。
+// 给页面开放的能力只有 preload 里的几个：把成果同步到用户选的文件夹（ADR 0007 §10）、截取窗口里的一块画面用于批注（ADR 0009 §18）。
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -14,6 +14,7 @@ import {
   shell,
   type IpcMainInvokeEvent,
 } from 'electron';
+import { captureRect } from './capture-rect.ts';
 import { createSyncFolder, freePath, type SyncFolder } from './sync-folder.ts';
 
 const envFile = path.join(import.meta.dirname, '..', '.env');
@@ -157,6 +158,21 @@ function registerSync(sync: SyncFolder): void {
   });
 }
 
+/** 运行中应用的批注截图（ADR 0009 §18）：只截发起请求的这个窗口、只接受本应用主页面的请求 */
+function registerCapture(): void {
+  ipcMain.handle(DESKTOP_CHANNELS.capture, async (event, rect: unknown) => {
+    fromApp(event);
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    if (!owner) throw new Error('找不到窗口');
+    const [width, height] = owner.getContentSize();
+    const image = await event.sender.capturePage(
+      captureRect(rect, { width: width!, height: height! }),
+    );
+    if (image.isEmpty()) throw new Error('没截到画面');
+    return image.toPNG();
+  });
+}
+
 /** 点下载：存进系统的「下载」文件夹（重名加序号），存好后在文件管理器里选中它，不用再去找 */
 function handleDownloads(): void {
   session.defaultSession.on('will-download', (_event, item) => {
@@ -176,6 +192,7 @@ app.whenReady().then(
     const sync = createSyncFolder(path.join(app.getPath('userData'), 'sync.json'));
     await sync.recover();
     registerSync(sync);
+    registerCapture();
     handleDownloads();
     await loadWithRetry(createWindow(), webUrl);
 

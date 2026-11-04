@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { uploads } from './schema.ts';
@@ -6,13 +6,17 @@ import { uploads } from './schema.ts';
 export type Upload = typeof uploads.$inferSelect;
 
 export interface UploadsRepo {
-  insert(upload: Omit<Upload, 'createdAt'>): Promise<Upload>;
+  insert(upload: Omit<Upload, 'createdAt' | 'claimedAt'>): Promise<Upload>;
   find(id: string): Promise<Upload | undefined>;
   /** 这个人的这些文件（不是他的、不存在的不返回） */
   findOwned(ownerId: string, ids: string[]): Promise<Upload[]>;
   complete(id: string, info: { size: number; sha256: string }): Promise<Upload>;
   remove(id: string): Promise<void>;
   stale(before: Date): Promise<Upload[]>;
+  /** 这些文件被消息、批注用上了（只记第一次） */
+  claim(ownerId: string, ids: string[]): Promise<void>;
+  /** 早于这个时间上传、一直没被用上的文件 */
+  unclaimed(before: Date): Promise<Upload[]>;
   /** 来自这个任务成果的修订素材（ADR 0012） */
   listBySourceTask(taskId: string): Promise<Upload[]>;
 }
@@ -53,5 +57,22 @@ export function createUploadsRepo(pool: pg.Pool): UploadsRepo {
         .where(and(eq(uploads.state, 'uploading'), lt(uploads.createdAt, before)))
         .limit(100),
     listBySourceTask: (taskId) => db.select().from(uploads).where(eq(uploads.sourceTaskId, taskId)),
+    async claim(ownerId, ids) {
+      if (!ids.length) return;
+      await db
+        .update(uploads)
+        .set({ claimedAt: new Date() })
+        .where(
+          and(eq(uploads.ownerId, ownerId), inArray(uploads.id, ids), isNull(uploads.claimedAt)),
+        );
+    },
+    unclaimed: (before) =>
+      db
+        .select()
+        .from(uploads)
+        .where(
+          and(eq(uploads.state, 'ready'), isNull(uploads.claimedAt), lt(uploads.createdAt, before)),
+        )
+        .limit(100),
   };
 }

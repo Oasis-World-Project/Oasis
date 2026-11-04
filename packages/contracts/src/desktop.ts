@@ -14,6 +14,7 @@ export interface OasisDesktop {
   chooseSyncFolder(): Promise<string | null>;
   /**
    * 把一个成果写进同步文件夹的 relativePath（相对路径，不能跳出文件夹）。
+   * artifactId：成果 id；同一个成果修改后原地换成新版时是「id@新摘要」，这样会再同步一次。
    * replacesSha256：修改出的新版要替换的旧文件摘要；那里的文件正是旧版（用户没改过）就覆盖，
    * 否则另存为「名字 (新版).扩展名」（ADR 0012）。
    */
@@ -29,6 +30,18 @@ export interface OasisDesktop {
   abortSyncedFile(token: string): Promise<void>;
   /** 在文件管理器里打开同步文件夹 */
   openSyncFolder(): Promise<void>;
+  /**
+   * 截取本窗口里这块区域（CSS 像素，相对窗口可视区）当前的真实画面，返回 PNG。
+   * 用于在运行中的应用上批注（ADR 0009 §18）：隔离框里的画面页面自己读不到，只有主进程能截。旧版桌面端没有这个能力。
+   */
+  capturePage?(rect: DesktopCaptureRect): Promise<Uint8Array>;
+}
+
+export interface DesktopCaptureRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /** 单个同步文件的大小上限（主进程也会检查） */
@@ -43,4 +56,5 @@ export const DESKTOP_CHANNELS = {
   finish: 'oasis:sync-finish',
   abort: 'oasis:sync-abort',
   open: 'oasis:sync-open',
+  capture: 'oasis:capture-page',
 } as const;

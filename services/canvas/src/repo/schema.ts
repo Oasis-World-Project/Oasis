@@ -15,6 +15,8 @@ export const uploads = pgTable('uploads', {
   /** 修订任务的素材来自哪个任务的成果（ADR 0012）；用户自己上传的为空 */
   sourceTaskId: uuid('source_task_id'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  /** 被消息、批注用上的时间；一直为空的上传 24 小时后由清扫删除（2026-11-05 真删除） */
+  claimedAt: timestamp('claimed_at', { withTimezone: true, mode: 'date' }),
 });
 
 export const artifacts = pgTable('artifacts', {

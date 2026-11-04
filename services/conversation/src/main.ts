@@ -77,8 +77,6 @@ await startService({
     const revisions = createRevisionService({
       repo,
       task: createServiceClient('task', config.TASK_URL, { timeoutMs: 10_000 }),
-      // 上一版文件多时要打成 ZIP，可能要一会儿
-      canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 120_000 }),
       logger,
     });
     const dms = createDmService({

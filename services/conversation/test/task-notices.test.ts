@@ -132,25 +132,21 @@ describe('任务的结果回到私聊', () => {
     expect(rows[0]!.content).toContain('没完全满足的地方：\n- 不超过 80 字');
   });
 
-  it('需要处理：发提醒，带上原因；运行中、已取消等不发', async () => {
-    await notices.onStatusChanged(
-      EVENT,
-      event('needs_attention', {
-        attention: { reason: 'over_budget', nodeId: null, message: '已经花了 $0.03' },
-      }),
-    );
-    expect(rows[0]).toMatchObject({
-      kind: 'notice',
-      content: '「小木屋首页」需要你处理：已经花了 $0.03',
-      data: { status: 'needs_attention' },
-    });
-    for (const status of ['running', 'cancelled', 'accepting'] as const) {
-      await notices.onStatusChanged(
-        `00000000-0000-4000-8000-00000000000${rows.length}`,
-        event(status),
-      );
+  it('过程异常与检查状态只留工作流，不创建私聊提醒，重复事件也不发', async () => {
+    for (const status of [
+      'needs_attention',
+      'failed',
+      'running',
+      'cancelled',
+      'accepting',
+    ] as const) {
+      const data = event(status, {
+        attention: { reason: 'checks_incomplete', nodeId: NODE, message: '证据不足' },
+      });
+      await notices.onStatusChanged(EVENT, data);
+      await notices.onStatusChanged(EVENT, data);
     }
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(0);
   });
 
   it('不是从私聊来的任务、或会话不属于这个人：不发', async () => {
@@ -161,14 +157,14 @@ describe('任务的结果回到私聊', () => {
 });
 
 describe('任务被删除（ADR 0012）', () => {
-  it('它的卡片标成已替换；不是这个人的会话、没有会话的不动', async () => {
-    const marked: { conversationId: string; taskId: string; removed: unknown }[] = [];
+  it('任务删除时它的卡片、交付消息、提醒一起删掉；不是这个人的会话、没有会话的不动', async () => {
+    const removed: { conversationId: string; taskId: string }[] = [];
     const notices = createTaskNotices({
       repo: {
         findOwned: async (id: string, owner: string) =>
           id === CONV && owner === OWNER ? { id: CONV, modelKey: 'claude' } : undefined,
-        markTaskRemoved: async (conversationId: string, taskId: string, removed: unknown) => {
-          marked.push({ conversationId, taskId, removed });
+        removeTaskMessages: async (conversationId: string, taskId: string) => {
+          removed.push({ conversationId, taskId });
           return 2;
         },
       } as unknown as ConversationRepo,
@@ -179,6 +175,6 @@ describe('任务被删除（ADR 0012）', () => {
     await notices.onDeleted({ ...base, conversationId: CONV, replacedBy: NODE });
     await notices.onDeleted({ ...base, conversationId: null, replacedBy: null });
     await notices.onDeleted({ ...base, ownerId: NODE, conversationId: CONV, replacedBy: null });
-    expect(marked).toEqual([{ conversationId: CONV, taskId: TASK, removed: { replacedBy: NODE } }]);
+    expect(removed).toEqual([{ conversationId: CONV, taskId: TASK }]);
   });
 });

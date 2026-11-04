@@ -1,4 +1,4 @@
-// 预览窗和画布共享格式预览；网页使用清洗后的无脚本 srcdoc。
+// 预览窗和画布共享格式预览；网页在隔离框里真正运行（可切回清洗后的无脚本内容）。
 import { Download, X } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { formatBytes } from '../ui/format.ts';
@@ -8,6 +8,9 @@ export type { PreviewFile } from './files.ts';
 import { Markdown } from './Markdown.tsx';
 const DocumentPreview = lazy(() =>
   import('../canvas/DocumentPreview.tsx').then((module) => ({ default: module.DocumentPreview })),
+);
+const LivePreview = lazy(() =>
+  import('../canvas/LivePreview.tsx').then((module) => ({ default: module.LivePreview })),
 );
 const ModelPreview = lazy(() =>
   import('../canvas/ModelPreview.tsx').then((module) => ({ default: module.ModelPreview })),
@@ -135,7 +138,14 @@ export function PreviewBody({ file }: { file: PreviewFile }) {
     case 'page':
       return (
         <Suspense fallback={<p className="p-6 text-sm text-ink-muted">正在打开…</p>}>
-          <DocumentPreview key={file.url} url={file.url} name={name} html />
+          <LivePreview
+            key={file.url}
+            file={file}
+            name={name}
+            root={file.root ?? file.path.split('/').slice(0, -1).join('/')}
+            {...(file.assets ? { assets: file.assets } : {})}
+            allowStatic
+          />
         </Suspense>
       );
     case 'document':

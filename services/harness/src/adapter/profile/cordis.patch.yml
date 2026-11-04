@@ -28,6 +28,12 @@
     provider: openrouter
     model: !!js process.env.OASIS_MODEL
 
+# 原生图片对象和请求变体必须与会话一起持久化/归档，不能留在容器临时层。
+# attachment-local 只用此 home 定位附件，原生日志的目录保持不变。
+- id: attachment-local
+  config:
+    dshHome: /home/node/.dsh/sessions
+
 # ---- 关掉：DeepSeek 自家账号、模型和网页搜索（模型和联网都走 Oasis） ----
 - id: deepseek-account
   disabled: true

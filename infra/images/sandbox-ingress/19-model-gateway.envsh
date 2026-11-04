@@ -1,0 +1,17 @@
+#!/bin/sh
+# Keep the configured URL as the source; nginx's upstream server accepts an authority only.
+set -eu
+
+case "${MODEL_GATEWAY_UPSTREAM:-}" in
+  http://*|https://*) ;;
+  *) echo 'MODEL_GATEWAY_UPSTREAM must be an HTTP(S) origin' >&2; exit 1 ;;
+esac
+MODEL_GATEWAY_PROTOCOL=${MODEL_GATEWAY_UPSTREAM%%://*}
+MODEL_GATEWAY_ADDRESS=${MODEL_GATEWAY_UPSTREAM#*://}
+MODEL_GATEWAY_ADDRESS=${MODEL_GATEWAY_ADDRESS%/}
+if [ "$(printf '%s' "$MODEL_GATEWAY_ADDRESS" | wc -l)" -ne 0 ] ||
+   ! printf '%s' "$MODEL_GATEWAY_ADDRESS" | grep -Eq '^([A-Za-z0-9._:-]+|\[[0-9A-Fa-f:]+\]:[0-9]+)$'; then
+  echo 'MODEL_GATEWAY_UPSTREAM must contain only a host and optional port' >&2
+  exit 1
+fi
+export MODEL_GATEWAY_PROTOCOL MODEL_GATEWAY_ADDRESS

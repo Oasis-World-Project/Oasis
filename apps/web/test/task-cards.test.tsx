@@ -306,36 +306,35 @@ describe('任务卡', () => {
     );
   });
 
-  it('节点失败时可以再试、跳过继续或取消；取消要再确认一次', async () => {
-    let current = task({
-      status: 'needs_attention',
-      attention: { reason: 'node_failed', nodeId: NODE_B, message: '「出效果图」没能完成' },
-    });
-    const { api } = fakeChat([message('task', { taskId: TASK })], {
-      task: () => current,
-      extra: (method, path) => {
-        if (method === 'POST' && path === `/task/v1/tasks/${TASK}/decision`) {
-          current = task({ status: 'running' });
-          return new Response(null, { status: 204 });
-        }
-        return undefined;
+  it('需要处理仅保留简短状态和工作流入口，历史重复提醒不再刷屏', async () => {
+    const details = '店内 13 类陈设的原始预览证据不足。';
+    const { api } = fakeChat(
+      [
+        message('task', { taskId: TASK }),
+        message('notice', { taskId: TASK, status: 'needs_attention', message: details }),
+        message('notice', { taskId: TASK, status: 'needs_attention', message: details }),
+      ],
+      {
+        task: () =>
+          task({
+            status: 'needs_attention',
+            attention: { reason: 'checks_incomplete', nodeId: NODE_B, message: details },
+          }),
       },
-    });
+    );
     await openChat();
     const card = await screen.findByRole('region', { name: `任务：${SHEET.title}` });
-    expect(await within(card).findByText('「出效果图」没能完成')).toBeTruthy();
-    expect(within(card).getByRole('button', { name: '跳过它继续' })).toBeTruthy();
-
-    fireEvent.click(within(card).getByRole('button', { name: '取消任务' }));
-    expect(within(card).getByRole('group', { name: '取消后不能恢复，确定吗？' })).toBeTruthy();
-    fireEvent.click(within(card).getByRole('button', { name: '算了' }));
-
-    fireEvent.click(within(card).getByRole('button', { name: '再试一次' }));
-    expect(await within(card).findByText('进行中')).toBeTruthy();
-    expect(api.bodies.find((b) => b.path.endsWith('/decision'))?.body).toEqual({ choice: 'retry' });
+    expect(await within(card).findByText('有待处理项，请到工作流查看对应节点。')).toBeTruthy();
+    expect(within(card).getByRole('link', { name: '看工作流' }).getAttribute('href')).toBe(
+      `/canvas/tasks/${TASK}`,
+    );
+    expect(screen.queryByText(details)).toBeNull();
+    expect(screen.queryByRole('region', { name: '任务提醒' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '继续' })).toBeNull();
+    expect(api.requests.some((r) => r.startsWith('POST'))).toBe(false);
   });
 
-  it('规划失败只能重新规划或取消', async () => {
+  it('规划失败也可从原任务卡进入工作流处理', async () => {
     fakeChat([message('task', { taskId: TASK })], {
       task: () =>
         task({
@@ -346,8 +345,9 @@ describe('任务卡', () => {
     });
     await openChat();
     const card = await screen.findByRole('region', { name: `任务：${SHEET.title}` });
-    expect(await within(card).findByRole('button', { name: '重新规划' })).toBeTruthy();
-    expect(within(card).queryByRole('button', { name: '跳过它继续' })).toBeNull();
+    expect(await within(card).findByRole('link', { name: '看工作流' })).toBeTruthy();
+    expect(screen.queryByText('工作流没排好')).toBeNull();
+    expect(screen.queryByRole('button', { name: '重新规划' })).toBeNull();
   });
 });
 
@@ -385,8 +385,8 @@ describe('私聊文字操作', () => {
     await openChat();
     expect(await screen.findByText('任务 · 已锁定')).toBeTruthy();
     expect(screen.queryByText(/正文末尾/)).toBeNull();
-    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '删除' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '编辑消息' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '删除消息' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /查看全文/ }));
     const dialog = screen.getByRole('dialog', { hidden: true });
     expect(within(dialog).getByText(text)).toBeTruthy();
@@ -422,7 +422,7 @@ describe('私聊文字操作', () => {
       },
     });
     await openChat();
-    fireEvent.click(await screen.findByRole('button', { name: '编辑' }));
+    fireEvent.click(await screen.findByRole('button', { name: '编辑消息' }));
     const dialog = screen.getByRole('dialog', { hidden: true });
     fireEvent.change(within(dialog).getByLabelText('修改消息内容'), {
       target: { value: '新问题' },
@@ -431,13 +431,35 @@ describe('私聊文字操作', () => {
     expect(await screen.findByText('编辑后的回复')).toBeTruthy();
     expect(screen.queryByText('旧问题')).toBeNull();
     expect(screen.queryByText('旧回复')).toBeNull();
-    fireEvent.click(await screen.findByRole('button', { name: '重新生成' }));
+    // 重新生成和删除先问一句：取消不执行，确认才执行
+    fireEvent.click(await screen.findByRole('button', { name: '重新生成回复' }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: '重新生成回复？' })).getByRole('button', {
+        name: '取消',
+      }),
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(api.bodies.filter((b) => b.path.endsWith('/reply'))).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: '重新生成回复' }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: '重新生成' }),
+    );
     expect(await screen.findByText('重生成的回复')).toBeTruthy();
     expect(api.bodies.filter((b) => b.path.endsWith('/reply')).map((b) => b.body)).toEqual([
       { content: '新问题' },
       {},
     ]);
-    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    fireEvent.click(screen.getByRole('button', { name: '删除消息' }));
+    // 点外面收起，不删
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByText('新问题')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '删除消息' }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: '删除这条消息？' })).getByRole('button', {
+        name: '删除',
+      }),
+    );
     await screen.findByText(/打个招呼/);
     expect(screen.queryByText('新问题')).toBeNull();
     expect(screen.queryByText('重生成的回复')).toBeNull();

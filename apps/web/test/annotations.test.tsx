@@ -1,4 +1,4 @@
-// 批注与批准（ADR 0012 §9）：编号和位置的说法、成果页上标注并保存、文档意见带原文、批准记号。
+// 批注（ADR 0012 §9、0009 §18）：编号和位置的说法、顶栏批注图标进入标注并保存、文档意见带原文、运行中应用截图批注。
 import type { Annotation, ArtifactBody } from '@oasis/contracts/canvas';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -7,6 +7,7 @@ import { createApp } from '../src/app.tsx';
 import {
   formatTime,
   frameKey,
+  frameOrder,
   nextNumber,
   surfaceOf,
   toRevisionNotes,
@@ -23,6 +24,7 @@ const note = (number: number, extra: Partial<Annotation> = {}): Annotation => ({
   time: null,
   quote: null,
   shape: null,
+  frame: null,
   ...extra,
 });
 
@@ -42,6 +44,17 @@ describe('批注的编号和位置', () => {
     expect(surfaceOf('presentation', true)).toBe('pdf');
     expect(surfaceOf('presentation', false)).toBe('text');
     expect(surfaceOf('document', false)).toBe('text');
+    // 运行中应用的截图：按第一次出现的编号排第几张，位置说成「截图 N 画面…」
+    const A = '40000000-0000-4000-8000-00000000000a';
+    const B = '40000000-0000-4000-8000-00000000000b';
+    const shots = [
+      note(3, { frame: A, shape: { kind: 'pin', x: 0.1, y: 0.9 } }),
+      note(1, { frame: B, shape: { kind: 'pin', x: 0.5, y: 0.5 } }),
+      note(2, { frame: A }),
+    ];
+    expect(frameOrder(shots)).toEqual([B, A]);
+    expect(whereOf(shots[0]!, frameOrder(shots))).toBe('截图 2 画面左下');
+    expect(frameKey(shots[0]!)).toBe(`f${A}`);
   });
 
   it('发给 AI 的批注按编号排好，带上原文和截图名', () => {
@@ -139,7 +152,7 @@ describe('成果页上标注', () => {
     const image = artifact('00000000-0000-4000-8000-000000000901', 'hero.png');
     const { api, state } = fakeReview(image);
     await open(image.id);
-    fireEvent.click(await screen.findByRole('button', { name: /^标注$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '批注' }));
     fireEvent.click(screen.getByRole('button', { name: /点/ }));
     const surface = screen.getByLabelText('在画面上标注');
     vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({
@@ -176,13 +189,13 @@ describe('成果页上标注', () => {
     await waitFor(() => expect(state.item.annotations).toHaveLength(0));
   });
 
-  it('文档：加一条意见可以带原文；批准是个开关', async () => {
+  it('文档：加一条意见可以带原文；顶栏只有返回、批注、下载，没有批准', async () => {
     const doc = artifact('00000000-0000-4000-8000-000000000902', '首页.md', {
       contentType: 'text/markdown',
     });
     const { state } = fakeReview(doc);
     await open(doc.id);
-    fireEvent.click(await screen.findByRole('button', { name: /^标注$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '批注' }));
     fireEvent.click(screen.getByRole('button', { name: /加一条意见/ }));
     const panel = screen.getByRole('complementary', { name: '批注' });
     fireEvent.change(within(panel).getByLabelText('这里要怎么改'), {
@@ -196,11 +209,13 @@ describe('成果页上标注', () => {
       expect(state.item.annotations[0]).toMatchObject({ quote: '山里的小木屋', shape: null }),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /^批准$/ }));
-    await waitFor(() => expect(state.item.approvedAt).not.toBeNull());
-    expect(await screen.findByRole('button', { name: /已批准/ })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /已批准/ }));
-    await waitFor(() => expect(state.item.approvedAt).toBeNull());
+    expect(screen.queryByRole('button', { name: /批准/ })).toBeNull();
+    for (const gone of ['工作流', '回到私聊', '上一个', '下一个', '打包下载'])
+      expect(screen.queryByRole('link', { name: gone })).toBeNull();
+    expect(screen.getByRole('link', { name: '回到画布' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '下载' }).getAttribute('href')).toBe(
+      `/api/canvas/v1/artifacts/${doc.id}/content?download=1`,
+    );
   });
 });
 
@@ -239,6 +254,7 @@ describe('发给 AI 修改时带上批注', () => {
       },
     });
     await open(image.id);
+    fireEvent.click(await screen.findByRole('button', { name: '批注' }));
     fireEvent.click(await screen.findByRole('button', { name: /发给 AI 修改/ }));
     const dialog = await screen.findByLabelText('修改「民宿首页」');
     const box = await within(dialog).findByRole('checkbox', {
@@ -255,5 +271,142 @@ describe('发给 AI 修改时带上批注', () => {
       parameters: [],
       attachments: [],
     });
+  });
+});
+
+describe('运行中的应用上批注（桌面版）', () => {
+  const FRAME = '50000000-0000-4000-8000-000000000001';
+  class FakeXhr {
+    static sent: string[] = [];
+    upload = { onprogress: null };
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    withCredentials = false;
+    status = 0;
+    responseText = '';
+    private url = '';
+    open(_method: string, url: string) {
+      this.url = url;
+    }
+    setRequestHeader() {}
+    send() {
+      FakeXhr.sent.push(this.url);
+      this.status = 201;
+      this.responseText = JSON.stringify({
+        id: FRAME,
+        name: '批注截图.png',
+        size: 4,
+        contentType: 'image/png',
+        createdAt: '2026-11-04T15:00:00.000Z',
+      });
+      queueMicrotask(() => this.onload?.());
+    }
+  }
+  afterEach(() => {
+    delete (globalThis as { oasisDesktop?: unknown }).oasisDesktop;
+    FakeXhr.sent = [];
+  });
+
+  it('点批注先截下运行框的画面再弹出侧栏；在截图上点一下写意见，批注记住是哪张截图；能回到操作', async () => {
+    const app = artifact('00000000-0000-4000-8000-000000000910', 'site/oasis-app.json', {
+      contentType: 'application/json',
+      application: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
+    });
+    const entry = artifact('00000000-0000-4000-8000-000000000911', 'site/index.html', {
+      contentType: 'text/html',
+    });
+    const state = { item: app };
+    const capturePage = vi.fn(async () => new Uint8Array([137, 80, 78, 71]));
+    (globalThis as { oasisDesktop?: unknown }).oasisDesktop = { capturePage };
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    installFakeApi({
+      signedIn: true,
+      extra: (method, path, body) => {
+        const base = `/canvas/v1/artifacts/${app.id}`;
+        if (method === 'GET' && path === base) return json(200, state.item);
+        if (method === 'GET' && path.startsWith('/canvas/v1/artifacts?'))
+          return json(200, { artifacts: [state.item, entry] });
+        if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
+        if (method === 'GET' && path === `/canvas/v1/artifacts/${entry.id}/content`)
+          return new Response('<!doctype html><canvas></canvas><script>spin()</script>');
+        if (method === 'PUT' && path === `${base}/annotations`) {
+          state.item = { ...state.item, ...(body as { annotations: Annotation[] }) };
+          return json(200, state.item);
+        }
+        return undefined;
+      },
+    });
+    await open(app.id);
+    const frame = await screen.findByTitle('site');
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-pointer-lock');
+    vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue({
+      left: 40,
+      top: 120,
+      width: 900,
+      height: 600,
+      right: 940,
+      bottom: 720,
+      x: 40,
+      y: 120,
+      toJSON: () => ({}),
+    });
+    fireEvent.click(screen.getByRole('button', { name: '批注' }));
+    // 截的是运行框那一块，截好、存好之后才出侧栏
+    await waitFor(() =>
+      expect(capturePage).toHaveBeenCalledWith({ x: 40, y: 120, width: 900, height: 600 }),
+    );
+    const shot = await screen.findByAltText('批注截图');
+    expect(shot.getAttribute('src')).toBe(`/api/canvas/v1/uploads/${FRAME}`);
+    expect(FakeXhr.sent[0]).toContain('/api/canvas/v1/uploads?name=');
+    const panel = await screen.findByRole('complementary', { name: '批注' });
+    // 应用没被卸载，只是被截图盖住
+    expect(document.querySelector('iframe[title="site"]')).toBe(frame);
+    fireEvent.click(screen.getByRole('button', { name: /点/ }));
+    const surface = screen.getByLabelText('在画面上标注');
+    vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 100,
+      right: 200,
+      bottom: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    fireEvent.pointerDown(surface, { clientX: 50, clientY: 80, pointerId: 1 });
+    expect(within(panel).getByText(/第 1 条 · 截图 1 画面左下/)).toBeTruthy();
+    fireEvent.change(within(panel).getByLabelText('这里要怎么改'), {
+      target: { value: '车轮换成金色' },
+    });
+    fireEvent.click(within(panel).getByRole('button', { name: '加上' }));
+    await waitFor(() =>
+      expect(state.item.annotations[0]).toMatchObject({
+        note: '车轮换成金色',
+        frame: FRAME,
+        shape: { kind: 'pin', x: 0.25, y: 0.8 },
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '回到操作' }));
+    expect(screen.queryByAltText('批注截图')).toBeNull();
+    expect(screen.getByRole('button', { name: '截取当前画面' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: '批注' })).toBeTruthy();
+    expect(within(panel).getByRole('button', { name: /发给 AI 修改/ })).toBeTruthy();
+    // 应用的下载是整个应用
+    expect(screen.getByRole('link', { name: '下载' }).getAttribute('href')).toBe(
+      `/api/canvas/v1/tasks/${TASK}/archive`,
+    );
+  });
+
+  it('浏览器里没有桌面端截图：应用照常运行，批注只能写意见', async () => {
+    const page = artifact('00000000-0000-4000-8000-000000000920', 'site/index.html', {
+      contentType: 'text/html',
+    });
+    fakeReview(page);
+    await open(page.id);
+    fireEvent.click(await screen.findByRole('button', { name: '批注' }));
+    expect(await screen.findByRole('button', { name: /加一条意见/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '截取当前画面' })).toBeNull();
   });
 });

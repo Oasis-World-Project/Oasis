@@ -20,7 +20,9 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_UR
           connectionString: process.env.TEST_DATABASE_URL,
           options: `-c search_path=${schema}`,
         });
-        const directory = await mkdtemp(join(tmpdir(), 'oasis-recovery-'));
+        const directory = await mkdtemp(
+          join(process.env.OASIS_RECOVERY_TEST_DIR ?? tmpdir(), 'oasis-recovery-'),
+        );
         const runId = randomUUID(),
           payerId = randomUUID(),
           taskId = randomUUID();

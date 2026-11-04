@@ -1,6 +1,6 @@
 // 任务的工作流（照原型 ⑬）：节点图 + 单个节点的详情。可以整体运行或停止、单独运行或停止一个节点，
 // 加节点、删节点、接线、改节点；节点详情里看运行过程、追问、补要求（ADR 0007 §6）。
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useRouter } from '@tanstack/react-router';
 import { ReactFlowProvider } from '@xyflow/react';
 import { ArrowLeft, Plus } from 'lucide-react';
@@ -10,35 +10,26 @@ import {
   addNode,
   cancelTask,
   deleteEdge,
+  deleteTask,
   runTask,
   stopTask,
   taskQuery,
   updateEdge,
   updateNode,
 } from '../api/queries.ts';
+import { ApiError } from '../api/client.ts';
 import { ConfirmButton } from '../chat/parts.tsx';
 import { TaskDecisions } from '../chat/TaskCard.tsx';
 import { ChatActionsContext } from '../chat/use-chat-actions.ts';
 import { formatCost } from '../ui/format.ts';
 import { NodeEditor, type EditorResult } from '../workflow/NodeEditor.tsx';
 import { NodePanel } from '../workflow/NodePanel.tsx';
-import { canEditWorkflow } from '../workflow/rules.ts';
+import { canEditWorkflow, checkSummary, TASK_STATUS } from '../workflow/rules.ts';
 import { useSpeakers } from '../workflow/use-speakers.ts';
 import { useWorkflowActions } from '../workflow/use-workflow-actions.ts';
 import { WorkflowGraph, type GraphHandlers } from '../workflow/WorkflowGraph.tsx';
 
 const route = getRouteApi('/shell/canvas/tasks/$taskId');
-
-const TASK_STATUS: Record<string, string> = {
-  planning: '正在搭建工作流',
-  running: '进行中',
-  accepting: '正在验收',
-  stopped: '已停止',
-  needs_attention: '需要你处理',
-  succeeded: '已完成',
-  failed: '没能完成',
-  cancelled: '已取消',
-};
 
 const pill =
   'inline-flex h-10 items-center gap-1.5 rounded-full border-0 px-4 text-[13.5px] font-medium disabled:cursor-not-allowed disabled:opacity-45';
@@ -49,7 +40,20 @@ export function WorkflowPage() {
   const { data: task, isPending, isError } = useQuery(taskQuery(taskId));
   const speakers = useSpeakers();
   const actions = useWorkflowActions(taskId);
-  const [selected, setSelected] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  // 删除任务：还在做的会先停下；删完回画布，不再拉这个任务
+  const remove = useMutation({
+    mutationFn: () => deleteTask(taskId),
+    onSuccess: async () => {
+      queryClient.removeQueries({ queryKey: taskQuery(taskId).queryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['tasks'] }),
+        queryClient.invalidateQueries({ queryKey: ['artifacts'] }),
+      ]);
+      await router.navigate({ to: '/canvas' });
+    },
+  });
+  const [selected, setSelected] = useState<string | null | undefined>(undefined);
   const [editing, setEditing] = useState<'new' | string | null>(null);
 
   const handlers = useMemo<GraphHandlers>(
@@ -84,7 +88,15 @@ export function WorkflowPage() {
     );
   }
 
-  const node = task.nodes.find((n) => n.id === selected);
+  const selectedId = selected === undefined ? (task.attention?.nodeId ?? null) : selected;
+  const node = task.nodes.find((n) => n.id === selectedId);
+  const issues = task.nodes.filter(
+    (n) =>
+      (n.status !== 'succeeded' && n.gateChecks?.some((c) => c.status !== 'passed')) ||
+      n.status === 'failed' ||
+      n.status === 'stopped' ||
+      task.attention?.nodeId === n.id,
+  );
   const editingNode =
     editing && editing !== 'new' ? task.nodes.find((n) => n.id === editing) : undefined;
   const done = task.nodes.filter((n) => n.status === 'succeeded').length;
@@ -138,7 +150,7 @@ export function WorkflowPage() {
           <ReactFlowProvider>
             <WorkflowGraph
               task={task}
-              selected={selected}
+              selected={selectedId}
               speakers={speakers}
               handlers={handlers}
             />
@@ -156,7 +168,9 @@ export function WorkflowPage() {
             <ArrowLeft size={16} aria-hidden="true" />
           </button>
           <h1 className="m-0 min-w-0 truncate text-[15px] font-medium">{task.title} 的工作流</h1>
-          <span className="shrink-0 text-[12.5px] text-ink-muted">{TASK_STATUS[task.status]}</span>
+          <span className="shrink-0 text-[12.5px] text-ink-muted">
+            {TASK_STATUS[task.status].label}
+          </span>
         </div>
 
         {/* 右上：进度、花费、整体运行 / 停止、加节点、取消 */}
@@ -220,11 +234,32 @@ export function WorkflowPage() {
               />
             </>
           )}
+          <ConfirmButton
+            label="删除任务"
+            question={
+              ['succeeded', 'failed', 'cancelled'].includes(task.status)
+                ? '连同工作流和成果一起删，不能恢复？'
+                : '会先停下，再连同工作流删掉，不能恢复？'
+            }
+            confirmLabel="删除"
+            disabled={busy || remove.isPending}
+            onConfirm={() => remove.mutate()}
+          />
+          {remove.isError && (
+            <p
+              role="alert"
+              className="m-0 basis-full rounded-item bg-glass-active px-4 py-2.5 text-right text-[13px] text-accent shadow-edge-strong"
+            >
+              {remove.error instanceof ApiError ? remove.error.message : '没删掉，请重试'}
+            </p>
+          )}
         </div>
 
         {/* 需要处理 / 出错提示 */}
-        {(task.status === 'needs_attention' || (actions.error && editing === null)) && (
-          <div className="absolute left-1/2 top-20 z-10 w-[min(480px,calc(100%-32px))] -translate-x-1/2">
+        {(issues.length > 0 ||
+          task.status === 'needs_attention' ||
+          (actions.error && editing === null)) && (
+          <div className="absolute left-4 top-20 z-10 max-h-[calc(100%-112px)] w-[min(280px,calc(100%-32px))] overflow-y-auto overscroll-contain">
             {actions.error && editing === null && (
               <p
                 role="alert"
@@ -233,7 +268,42 @@ export function WorkflowPage() {
                 {actions.error}
               </p>
             )}
-            <TaskDecisions task={task} />
+            {issues.length > 0 && (
+              <section
+                aria-label="待查看的节点"
+                className="mb-2 flex flex-col gap-2 rounded-item bg-glass-active p-3 shadow-edge-strong"
+              >
+                <h2 className="m-0 text-[13px] font-medium">
+                  {task.status === 'cancelled' ? '取消前的检查记录' : '需要查看的节点'}
+                </h2>
+                {issues.map((n) => (
+                  <button
+                    key={n.id}
+                    type="button"
+                    aria-label={`查看节点记录：${n.title}`}
+                    onClick={() => setSelected(n.id)}
+                    className="flex flex-col gap-1 rounded-item border-0 bg-track px-3 py-2 text-left text-[12px] text-ink"
+                  >
+                    <span className="line-clamp-2">{n.title}</span>
+                    <span className="text-ink-muted">
+                      {checkSummary(n) ??
+                        (n.status === 'failed'
+                          ? '执行失败 · 查看运行记录'
+                          : n.status === 'stopped'
+                            ? '执行已停止 · 查看运行记录'
+                            : '检查停下了 · 查看原因')}
+                    </span>
+                  </button>
+                ))}
+                <p className="m-0 text-[12px] text-ink-muted">
+                  {task.status === 'cancelled'
+                    ? '任务已取消，检查记录仍可查看。'
+                    : '后续节点需等待上游完成，并非每个节点都检查失败。'}
+                </p>
+              </section>
+            )}
+            {/* 节点上的事在节点里处理：点开停下的节点才有「继续」（2026-11-05 用户要求） */}
+            {!task.attention?.nodeId && <TaskDecisions task={task} compact />}
           </div>
         )}
 
@@ -243,6 +313,7 @@ export function WorkflowPage() {
             node={node}
             speakers={speakers}
             actions={actions}
+            onPick={setSelected}
             onEdit={() => setEditing(node.id)}
             onClose={() => setSelected(null)}
           />

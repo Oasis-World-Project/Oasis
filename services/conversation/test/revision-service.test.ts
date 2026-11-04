@@ -1,139 +1,44 @@
-// 修改成果（ADR 0012）：修改意见并进任务单和说明，带上一版文件新建修订任务。
+// 修改成果（ADR 0012，2026-11-05 改为在原任务里接着做）：修改意见交给原任务，私聊里出现意见和同一个任务的卡片。
 import { createServiceClient } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { TaskSheet } from '@oasis/contracts/task';
 import type { Conversation, ConversationRepo, Message } from '../src/repo/conversation-repo.ts';
-import {
-  createRevisionService,
-  revisedSheet,
-  revisionBrief,
-  revisionCriterion,
-  revisionText,
-} from '../src/service/revision-service.ts';
+import { createRevisionService, revisionText } from '../src/service/revision-service.ts';
 
 const OWNER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 const CONV = '3f2e1d0c-9b8a-4765-8432-10fedcba9876';
-const OLD = '5e5e5e5e-5e5e-4e5e-8e5e-5e5e5e5e5e5e';
-const NEW = '6e6e6e6e-6e6e-4e6e-8e6e-6e6e6e6e6e6e';
-const KEPT = 'aaaaaaaa-0000-4000-8000-000000000001';
-const GONE = 'aaaaaaaa-0000-4000-8000-000000000002';
-const PREV = 'bbbbbbbb-0000-4000-8000-000000000001';
+const TASK = '5e5e5e5e-5e5e-4e5e-8e5e-5e5e5e5e5e5e';
 const ATTACHED = 'cccccccc-0000-4000-8000-000000000001';
 
-const sheet: TaskSheet = {
-  title: '小木屋首页',
-  deliverables: [{ name: '首页文案', form: 'Markdown' }],
-  criteria: ['不超过 80 字'],
-  style: ['温馨'],
-  budgetMicro: null,
-  assumptions: [],
-  materials: ['民宿照片.jpg'],
-  requirements: [
-    { id: 'r1', text: '不超过 80 字', sources: [{ kind: 'request', quote: '不超过 80 字' }] },
-  ],
-};
-
-describe('任务单与说明', () => {
-  it('修改意见成为有来源的要求和验收点，加上「其余保持一致」；再改一次编号递增', () => {
-    const first = revisedSheet({ title: 't', sheet, deliverables: [] }, '标题改成「山居」', [
-      { uploadId: PREV, name: '上一版-首页文案.md', size: 1 },
-    ]);
-    expect(first.requirements?.at(-1)).toEqual({
-      id: 'revision-1',
-      text: '标题改成「山居」',
-      sources: [{ kind: 'revision', quote: '标题改成「山居」' }],
-    });
-    expect(first.requirements?.[0]?.id).toBe('r1');
-    expect(first.criteria).toEqual(['不超过 80 字', '修改意见已落实：标题改成「山居」']);
-    expect(first.style).toContain('只改修改意见涉及的地方，其余与上一版保持一致');
-    expect(first.materials).toEqual(['上一版-首页文案.md']);
-    const second = revisedSheet({ title: 't', sheet: first, deliverables: [] }, '再短一点', []);
-    expect(second.requirements?.at(-1)?.id).toBe('revision-2');
-    expect(second.style.filter((s) => s.startsWith('只改'))).toHaveLength(1);
-  });
-
-  it('直接给方案建的任务没有任务单：按交付物补一张', () => {
-    const built = revisedSheet(
-      { title: '海报', sheet: null, deliverables: [{ name: '海报', form: 'PNG', nodeId: null }] },
-      '换成蓝色',
-      [],
-    );
-    expect(built).toMatchObject({ title: '海报', deliverables: [{ name: '海报', form: 'PNG' }] });
-  });
-
-  it('说明附上文件对照和原话；超长时保留上一版说明的开头和完整的修改部分', () => {
-    const files = [
-      {
-        material: '上一版-首页文案.md',
-        path: '首页文案.md',
-        deliverable: '首页文案',
-        approved: false,
-      },
-    ];
-    const brief = revisionBrief('最初的需求', '标题改成「山居」', files, [{ name: '参考.png' }]);
-    expect(brief).toContain('最初的需求');
-    expect(brief).toContain('- 上一版-首页文案.md：上一版的 首页文案.md（交付物「首页文案」）');
-    expect(brief).toContain('- 参考.png');
-    // 「保持一致」不等于像素不变：生成的画面优先参考上一版改（实测：要求像素不变时节点手工合成到超时）
-    expect(brief).toContain('不要求像素完全相同');
-    const long = revisionBrief(`开头${'x'.repeat(30_000)}`, '改', files, []);
-    expect(long.length).toBeLessThanOrEqual(20_000);
-    expect(long.startsWith('开头')).toBe(true);
-    expect(long).toContain('### 修改意见（用户原话）\n改');
-  });
-});
-
-/** 假 task 和 canvas */
-let previousStatus = 'succeeded';
-let previousMaterials: { uploadId: string; name: string; size: number }[] = [];
-const created: Record<string, unknown>[] = [];
-const roomAsked: (number | undefined)[] = [];
+/** 假 task：记下收到的修改，已交付的才能改 */
+let delivered = true;
+const asked: { taskId: string; body: Record<string, unknown> }[] = [];
 const server = Fastify();
-server.get('/internal/tasks/:id', async () => ({
-  id: OLD,
-  title: '小木屋首页',
-  brief: '最初的需求',
-  status: previousStatus,
-  attention: null,
-  estimateMicro: null,
-  spentMicro: 0,
-  budgetLimitMicro: null,
-  sheet,
-  acceptance: null,
-  materials: previousMaterials,
-  deliverables: [{ name: '首页文案', form: 'Markdown', nodeId: null }],
-  nodes: [],
-  edges: [],
-  createdAt: new Date().toISOString(),
-  finishedAt: null,
-}));
-server.post('/internal/tasks', async (request, reply) => {
-  created.push(request.body as Record<string, unknown>);
-  return reply.code(201).send({ id: NEW });
-});
-server.post('/internal/uploads/lookup', async (request) => {
-  const { ids, partial } = request.body as { ids: string[]; partial: boolean };
-  expect(partial).toBe(true);
+server.post('/internal/tasks/:id/revise', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  asked.push({ taskId: id, body: request.body as Record<string, unknown> });
+  if (!delivered)
+    return reply.code(409).send({
+      error: { code: 'task_not_delivered', message: '这个任务还没交付或正在修改', requestId: 'r' },
+    });
   return {
-    uploads: ids
-      .filter((id) => id === KEPT)
-      .map((id) => ({
-        id,
-        name: '民宿照片.jpg',
-        size: 10,
-        contentType: 'image/jpeg',
-        createdAt: new Date().toISOString(),
-      })),
-  };
-});
-server.post('/internal/revisions/materials', async (request) => {
-  const { room } = request.body as { room: number };
-  roomAsked.push(room);
-  return {
-    materials: [{ uploadId: PREV, name: '上一版-首页文案.md', size: 20 }],
-    files: [{ material: '上一版-首页文案.md', path: '首页文案.md', deliverable: '首页文案' }],
+    id,
+    title: '小木屋首页',
+    brief: '最初的需求',
+    status: 'running',
+    attention: null,
+    estimateMicro: null,
+    spentMicro: 0,
+    budgetLimitMicro: null,
+    sheet: null,
+    acceptance: null,
+    materials: [],
+    deliverables: [],
+    nodes: [],
+    edges: [],
+    createdAt: new Date().toISOString(),
+    finishedAt: null,
   };
 });
 let url = '';
@@ -154,22 +59,20 @@ const repo = {
 const conversation = { id: CONV, modelKey: 'claude' } as Conversation;
 let service: ReturnType<typeof createRevisionService>;
 beforeEach(() => {
-  previousStatus = 'succeeded';
-  previousMaterials = [
-    { uploadId: KEPT, name: '民宿照片.jpg', size: 10 },
-    { uploadId: GONE, name: '上一版-旧文案.md', size: 5 },
-  ];
-  created.length = 0;
-  roomAsked.length = 0;
+  delivered = true;
+  asked.length = 0;
   rows.length = 0;
   service = createRevisionService({
     repo,
     task: createServiceClient('task', url),
-    canvas: createServiceClient('canvas', url),
     logger: pino({ level: 'silent' }),
   });
 });
 type Notes = Parameters<ReturnType<typeof createRevisionService>['revise']>[0]['annotations'];
+const notes: Notes = [
+  { file: 'hero.png', number: 2, where: '画面右下', note: '换成夜景', snapshot: '批注-hero.png' },
+  { file: '首页文案.md', number: 1, where: '', note: '这句太长', quote: '山里的小木屋欢迎你' },
+];
 const revise = (
   attachments = [] as { id: string; name: string; size: number; contentType: string }[],
   annotations: Notes = [],
@@ -178,7 +81,7 @@ const revise = (
   service.revise({
     conversation,
     ownerId: OWNER,
-    taskId: OLD,
+    taskId: TASK,
     request,
     annotations,
     attachments,
@@ -186,71 +89,41 @@ const revise = (
   });
 
 describe('发起修改', () => {
-  it('带上还在的原素材、上一版文件和新附件建修订任务；私聊里出现修改意见和任务卡', async () => {
-    const messages = await revise([
-      { id: ATTACHED, name: '参考.png', size: 3, contentType: 'image/png' },
+  it('交给原任务接着改，不新建任务；附件成为素材；私聊里出现修改意见和同一个任务的卡片', async () => {
+    const messages = await revise(
+      [{ id: ATTACHED, name: '批注-hero.png', size: 3, contentType: 'image/png' }],
+      notes,
+      '整体再温馨一点',
+    );
+    const text = revisionText('整体再温馨一点', notes);
+    expect(asked).toEqual([
+      {
+        taskId: TASK,
+        body: {
+          ownerId: OWNER,
+          request: text,
+          materials: [{ uploadId: ATTACHED, name: '批注-hero.png', size: 3 }],
+        },
+      },
     ]);
-    expect(roomAsked).toEqual([undefined]);
-    expect(created).toHaveLength(1);
-    const body = created[0] as {
-      revisionOf: string;
-      conversationId: string;
-      materials: { uploadId: string }[];
-      sheet: TaskSheet;
-      brief: string;
-    };
-    expect(body.revisionOf).toBe(OLD);
-    expect(body.conversationId).toBe(CONV);
-    expect(body.materials.map((m) => m.uploadId)).toEqual([KEPT, PREV, ATTACHED]);
-    expect(body.sheet.materials).toEqual(['民宿照片.jpg', '上一版-首页文案.md', '参考.png']);
-    expect(body.sheet.requirements?.at(-1)?.sources[0]).toEqual({
-      kind: 'revision',
-      quote: '标题改成「山居」',
-    });
-    expect(body.brief).toContain('## 本次是修改');
     expect(messages.map((m) => m.kind)).toEqual(['text', 'task']);
     expect(messages[0]).toMatchObject({
       authorKind: 'user',
-      content: '修改「小木屋首页」：标题改成「山居」',
+      content: `修改「小木屋首页」：${text}`,
       data: { attachments: [expect.objectContaining({ id: ATTACHED })] },
     });
-    expect(messages[1]?.data).toEqual({ taskId: NEW, revisionOf: OLD });
+    expect(messages[1]?.data).toEqual({ taskId: TASK, revisionOf: TASK });
   });
 
-  it('还没交付的不能改；修订素材不再被旧的 20 个数量限额拒绝', async () => {
-    previousStatus = 'running';
+  it('还没交付或正在修改的不能再改，私聊里不留消息', async () => {
+    delivered = false;
     await expect(revise()).rejects.toMatchObject({ code: 'task_not_delivered' });
-    previousStatus = 'succeeded';
-    previousMaterials = Array.from({ length: 20 }, () => ({
-      uploadId: KEPT,
-      name: 'x',
-      size: 1,
-    }));
-    // 旧素材、19 个附件和上一版成果都应保留。
-    const many = Array.from({ length: 19 }, (_, i) => ({
-      id: `dddddddd-0000-4000-8000-${String(i).padStart(12, '0')}`,
-      name: `${i}.png`,
-      size: 1,
-      contentType: 'image/png',
-    }));
-    await revise(many);
-    expect(created).toHaveLength(1);
+    expect(rows).toHaveLength(0);
   });
 });
 
-describe('批注与批准（ADR 0012 §9）', () => {
-  const notes = [
-    {
-      file: 'hero.png',
-      number: 2,
-      where: '画面右下',
-      note: '换成夜景',
-      snapshot: '批注-hero.png',
-    },
-    { file: '首页文案.md', number: 1, where: '', note: '这句太长', quote: '山里的小木屋欢迎你' },
-  ];
-
-  it('每条批注一行：文件、位置、意见、引用原文、见哪张截图', () => {
+describe('修改意见的文字', () => {
+  it('每条批注一行：文件、位置、意见、引用原文、见哪张截图；参数单独列出', () => {
     expect(revisionText('整体再温馨一点', notes)).toBe(
       [
         '整体再温馨一点',
@@ -262,58 +135,8 @@ describe('批注与批准（ADR 0012 §9）', () => {
     expect(revisionText('', notes.slice(1))).toBe(
       '批注：\n1.「首页文案.md」：这句太长（原文「山里的小木屋欢迎你」）',
     );
-  });
-
-  it('说明里列出用户已批准的文件', () => {
-    const brief = revisionBrief(
-      'b',
-      '改',
-      [
-        { material: '上一版-hero.png', path: 'hero.png', deliverable: '图', approved: true },
-        { material: '上一版-a.md', path: 'a.md', deliverable: '文', approved: false },
-      ],
-      [],
+    expect(revisionText('', [], [{ file: 'a.mp4', name: '字幕字号', value: '大' }])).toBe(
+      '参数：\n「a.mp4」字幕字号：大',
     );
-    expect(brief).toContain(
-      '### 用户已批准的文件（除非修改意见或批注提到，否则原样保留）\n- 上一版-hero.png',
-    );
-    expect(brief).not.toContain('- 上一版-a.md\n');
-  });
-
-  it('只带批注、不写意见也能发起：任务单、说明和私聊消息用同一段文字', async () => {
-    const messages = await revise([], notes, '');
-    const body = created[0] as { sheet: TaskSheet; brief: string };
-    const text = revisionText('', notes);
-    expect(body.sheet.requirements?.at(-1)?.text).toBe(text);
-    // 验收点是一句短话，批注全文只在要求原话和说明里
-    expect(body.sheet.criteria.at(-1)).toBe('2 条批注都已落实（见修改意见）');
-    expect(body.brief).toContain(`### 修改意见（用户原话）\n${text}`);
-    expect(messages[0]?.content).toBe(`修改「小木屋首页」：${text}`);
-  });
-});
-
-describe('修订任务单的验收点', () => {
-  it('一句短话：只有意见时带开头，有批注时只说条数', () => {
-    expect(revisionCriterion('标题改成「山居」', 0)).toBe('修改意见已落实：标题改成「山居」');
-    expect(revisionCriterion('长'.repeat(100), 0)).toBe(`修改意见已落实：${'长'.repeat(60)}…`);
-    expect(revisionCriterion('', 3)).toBe('3 条批注都已落实（见修改意见）');
-    expect(revisionCriterion('整体暖一点', 2)).toBe('修改意见和 2 条批注都已落实（见修改意见）');
-    expect(revisionCriterion('', 0, 3)).toBe('3 项参数都已落实（见修改意见）');
-    expect(revisionCriterion('暖一点', 1, 2)).toBe(
-      '修改意见、1 条批注和 2 项参数都已落实（见修改意见）',
-    );
-  });
-
-  it('参数作为单独一节，每项一行「文件」名称：新值', () => {
-    expect(
-      revisionText(
-        '',
-        [],
-        [
-          { file: '宣传短片.mp4', name: '字幕字号', value: '大' },
-          { file: '宣传短片.mp4', name: '背景音乐音量', value: '-6 dB' },
-        ],
-      ),
-    ).toBe('参数：\n「宣传短片.mp4」字幕字号：大\n「宣传短片.mp4」背景音乐音量：-6 dB');
   });
 });

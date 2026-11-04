@@ -3,8 +3,8 @@ import { MAX_ANNOTATIONS, type Annotation, type AnnotationShape } from '@oasis/c
 import type { RevisionNote } from '@oasis/contracts/conversation';
 import type { PreviewKind } from '../chat/files.ts';
 
-/** 能在画面上圈画的类型；其余只能写意见（可带引用原文） */
-export type Surface = 'image' | 'pdf' | 'video' | 'audio' | 'text';
+/** 能在画面上圈画的类型；其余只能写意见（可带引用原文）。app：运行中的网页或应用，截下当前画面再圈画（只有桌面版能截） */
+export type Surface = 'image' | 'pdf' | 'video' | 'audio' | 'text' | 'app';
 
 export function surfaceOf(kind: PreviewKind, hasPdf: boolean): Surface {
   if (kind === 'image' || kind === 'video' || kind === 'audio') return kind;
@@ -46,9 +46,11 @@ function regionOf(shape: AnnotationShape): string {
   return `画面${col + row || '中间'}`;
 }
 
-/** 给人和 AI 看的位置：第几页、几分几秒、画面哪一块 */
-export function whereOf(a: Annotation): string {
+/** 给人和 AI 看的位置：第几页、几分几秒、第几张截图、画面哪一块（frames 是 frameOrder 的结果） */
+export function whereOf(a: Annotation, frames: string[] = []): string {
+  const shot = a.frame ? frames.indexOf(a.frame) : -1;
   return [
+    shot >= 0 ? `截图 ${shot + 1}` : '',
     a.page !== null ? `第 ${a.page} 页` : '',
     a.time !== null ? formatTime(a.time) : '',
     a.shape ? regionOf(a.shape) : '',
@@ -57,9 +59,28 @@ export function whereOf(a: Annotation): string {
     .join(' ');
 }
 
-/** 同一张画面（同一页、同一时刻）上的批注合成一张截图 */
+/** 网页、应用：桌面版能截图时在截图上圈画，否则只能写意见 */
+export function liveSurface(canCapture: boolean): Surface {
+  return canCapture ? 'app' : 'text';
+}
+
+/** 同一张画面（同一页、同一时刻、同一张截图）上的批注合成一张截图 */
 export const frameKey = (a: Annotation) =>
-  a.page !== null ? `p${a.page}` : a.time !== null ? `t${a.time.toFixed(2)}` : 'image';
+  a.frame
+    ? `f${a.frame}`
+    : a.page !== null
+      ? `p${a.page}`
+      : a.time !== null
+        ? `t${a.time.toFixed(2)}`
+        : 'image';
+
+/** 截图按第一次出现的编号排序：第 1 张、第 2 张… */
+export function frameOrder(list: Annotation[]): string[] {
+  const order: string[] = [];
+  for (const a of [...list].sort((x, y) => x.number - y.number))
+    if (a.frame && !order.includes(a.frame)) order.push(a.frame);
+  return order;
+}
 
 /** 发给 AI 的批注：按文件、编号排好 */
 export function toRevisionNotes(
@@ -74,7 +95,7 @@ export function toRevisionNotes(
         return {
           file: file.name,
           number: a.number,
-          where: whereOf(a),
+          where: whereOf(a, frameOrder(file.annotations)),
           note: a.note,
           ...(a.quote ? { quote: a.quote } : {}),
           ...(snapshot ? { snapshot } : {}),

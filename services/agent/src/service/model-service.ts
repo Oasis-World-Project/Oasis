@@ -2,6 +2,7 @@
 import type { CatalogEntry, ModelEntry, ModelRoute } from '@oasis/contracts/agent';
 import { HttpError } from '@oasis/service-kit';
 import type { ModelRepo, ModelRow } from '../repo/model-repo.ts';
+import { TEAM_MODELS } from './team-models.ts';
 
 function toEntry(row: ModelRow): ModelEntry {
   return {
@@ -32,22 +33,28 @@ export function createModelService(repo: ModelRepo) {
       return (await repo.list()).map(toEntry);
     },
 
-    /** 规划员能挑的模型：只列已接入的 */
+    /**
+     * 规划员能挑的模型：AI 团队的旗舰和强力型号，加上私聊用的省钱型号（快速档，只做机械的小事；
+     * 旧任务的节点也还认得出是谁）。
+     */
     async catalog(): Promise<CatalogEntry[]> {
-      return (await repo.list()).flatMap((row) =>
-        row.providerModel
+      const team = new Set(TEAM_MODELS.map((m) => m.providerModel));
+      const fast = (await repo.list()).flatMap((row): CatalogEntry[] =>
+        row.providerModel && !team.has(row.providerModel)
           ? [
               {
                 key: row.key,
-                name: row.name,
+                name: row.versionLabel ?? row.name,
                 vendor: row.vendor,
                 category: row.category,
                 tags: row.tags,
                 providerModel: row.providerModel,
+                tier: 'fast',
               },
             ]
           : [],
       );
+      return [...TEAM_MODELS.map((m) => ({ ...m, category: 'llm' as const })), ...fast];
     },
 
     async route(key: string): Promise<ModelRoute> {

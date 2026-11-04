@@ -2,7 +2,7 @@
 import {
   AnnotationList,
   ArtifactQuery,
-  RevisionMaterialsBody,
+  UploadDeleteBody,
   UploadLookupBody,
   UploadQuery,
 } from '@oasis/contracts/canvas';
@@ -292,17 +292,14 @@ export function registerRoutes(
   });
 
   app.post('/internal/uploads/lookup', async (request) => {
-    const { ownerId, ids, partial } = parseWith(UploadLookupBody, request.body);
-    return { uploads: await uploads.lookup(ownerId, ids, partial) };
+    const { ownerId, ids, partial, claim } = parseWith(UploadLookupBody, request.body);
+    return { uploads: await uploads.lookup(ownerId, ids, partial, claim) };
   });
 
-  /** 把一个任务交付的成果登记成修订任务的素材（conversation 发起修改时调用，ADR 0012） */
-  app.post('/internal/revisions/materials', async (request) => {
-    const { ownerId, taskId, room } = parseWith(RevisionMaterialsBody, request.body);
-    return artifacts.revisionMaterials(ownerId, taskId, room, {
-      maxBytes: options.maxBytes,
-      archive: options.archive ?? { bytes: 100 * 1024 * 1024, files: 1000 },
-    });
+  /** 彻底删除文件：对象和记录都删（消息被删、群被解散时 conversation 调用，2026-11-05 真删除） */
+  app.post('/internal/uploads/delete', async (request) => {
+    const { ownerId, ids } = parseWith(UploadDeleteBody, request.body);
+    return { deleted: await uploads.remove(ownerId, ids) };
   });
 
   app.get('/internal/uploads/:id/content', async (request, reply) => {

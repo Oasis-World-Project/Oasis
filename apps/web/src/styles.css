@@ -26,6 +26,18 @@
   }
 }
 
+/* 小弹出卡片（确认重新生成、删除）：轻轻放大淡入 */
+@keyframes oasis-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* 工作流图：进行中节点的进度条来回走（不知道具体进度） */
 @keyframes oasis-slide {
   0% {

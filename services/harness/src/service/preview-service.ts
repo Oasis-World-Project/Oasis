@@ -16,6 +16,16 @@ import type { RunService } from './run-service.ts';
 type Access = { artifactId: string; ownerId: string; taskId: string };
 type Quote = { maxMicro: number; maxMs: number; idleMs: number };
 
+/** 浏览器检查没过时说清楚哪一步、为什么，以及页面自己报的错（交给节点修复，也给用户看） */
+function failureReason(report: BrowserTestResult['report']): string {
+  const failed = report.steps.filter((step) => step.status === 'failed');
+  const parts = [
+    ...failed.map((step) => step.error ?? `第 ${step.index + 1} 步 ${step.action} 未通过`),
+    ...report.diagnostics.map((message) => `页面诊断：${message}`),
+  ];
+  return parts.length ? parts.join('；') : '浏览器交互断言或页面诊断未通过';
+}
+
 export function createPreviewService(deps: {
   repo: PreviewRepo;
   executor: PreviewExecutor;
@@ -33,6 +43,10 @@ export function createPreviewService(deps: {
   const lastTouch = new Map<string, number>();
   const inputBudget = new Map<string, { tokens: number; at: number }>();
   const closing = new Map<string, Promise<PreviewRow>>();
+  /** 正在做关卡浏览器检查的预览：不按截止时间或无操作回收，只随检查结束、停止或取消结束 */
+  const checking = new Set<string>();
+  /** 检查跨过多个算力冻结窗口时，前面窗口已结算的金额 */
+  const settledBefore = new Map<string, number>();
 
   const body = (row: PreviewRow): PreviewSessionBody => ({
     id: row.id,
@@ -95,8 +109,9 @@ export function createPreviewService(deps: {
         );
         if (settled.status !== 'succeeded' || settled.chargedMicro === null)
           throw new Error('预览算力尚未完成结算');
-        spentMicro = settled.chargedMicro;
+        spentMicro = settled.chargedMicro + (settledBefore.get(row.id) ?? 0);
       }
+      settledBefore.delete(row.id);
       await deps.repo.update(row.id, {
         status,
         spentMicro,
@@ -106,6 +121,7 @@ export function createPreviewService(deps: {
       });
       lastTouch.delete(row.id);
       inputBudget.delete(row.id);
+      checking.delete(row.id);
       return (await deps.repo.latest(row.artifactId, row.ownerId))!;
     })();
     closing.set(row.id, work);
@@ -114,6 +130,43 @@ export function createPreviewService(deps: {
     } finally {
       closing.delete(row.id);
     }
+  }
+
+  /** 关卡检查持续超过一个算力冻结窗口：结清已经用掉的这一段，再冻结下一段 */
+  async function renewCheckCompute(access: Access): Promise<void> {
+    const row = await owned(access);
+    if (!row?.computeCallId || !row.startedAt || row.status !== 'running') return;
+    const now = new Date();
+    await deps.modelGateway.json('POST', `/internal/v1/compute/${row.computeCallId}/settle`, {
+      body: { cores: deps.cpus, elapsedMs: Math.max(0, now.getTime() - row.startedAt.getTime()) },
+      requestId: row.id,
+    });
+    const settled = await deps.modelGateway.json(
+      'GET',
+      `/internal/v1/compute/${row.computeCallId}`,
+      { schema: ComputeOutcome },
+    );
+    settledBefore.set(row.id, (settledBefore.get(row.id) ?? 0) + (settled.chargedMicro ?? 0));
+    const hold = await deps.modelGateway.json('POST', '/internal/v1/compute', {
+      body: {
+        runId: row.id,
+        payerId: row.ownerId,
+        taskId: row.taskId,
+        nodeId: null,
+        cores: deps.cpus,
+        maxMs: deps.maxMs,
+        purpose: 'application-check',
+      },
+      requestId: row.id,
+      schema: ComputeHold,
+    });
+    await deps.repo.update(row.id, {
+      computeCallId: hold.callId,
+      heldMicro: hold.heldMicro,
+      startedAt: now,
+      deadlineAt: new Date(now.getTime() + deps.maxMs),
+      lastInputAt: now,
+    });
   }
 
   async function current(access: Access) {
@@ -140,6 +193,7 @@ export function createPreviewService(deps: {
   const timer = setInterval(() => {
     void (async () => {
       for (const row of await deps.repo.unfinished()) {
+        if (checking.has(row.id)) continue;
         if (row.status === 'stopping') {
           await stopRow(row).catch((err: unknown) =>
             deps.logger.warn({ err, previewId: row.id }, '重试停止预览失败'),
@@ -189,8 +243,11 @@ export function createPreviewService(deps: {
       }
       await deps.executor.check();
       const id = randomUUID();
+      // 检查用的会话从一开始就不受截止/无操作回收：启动多慢都等
+      if (purpose === 'application-check') checking.add(id);
       const deadlineAt = new Date(Date.now() + limitMs);
       if (!(await deps.repo.insert({ id, ...access, deadlineAt }))) {
+        checking.delete(id);
         const again = await deps.repo.active(access.ownerId);
         if (again?.artifactId === access.artifactId) return body(again);
         throw new HttpError(409, 'preview_limit', '请先停止已有预览');
@@ -240,6 +297,7 @@ export function createPreviewService(deps: {
         await deps.repo.update(id, { status: 'running' });
         return body((await deps.repo.latest(access.artifactId, access.ownerId))!);
       } catch (err) {
+        checking.delete(id);
         const row = await deps.repo.latest(access.artifactId, access.ownerId);
         if (row?.id === id) {
           await stopRow(row, 'failed', err instanceof Error ? err.message : String(err)).catch(
@@ -267,7 +325,7 @@ export function createPreviewService(deps: {
             spec: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
             files: [{ path: 'index.html', contentBase64: 'IA==' }],
           },
-          60000,
+          deps.maxMs,
           'application-check',
           input.url,
         );
@@ -287,6 +345,8 @@ export function createPreviewService(deps: {
     async stopTask(taskId: string): Promise<void> {
       for (const row of (await deps.repo.unfinished()).filter((r) => r.taskId === taskId))
         await stopRow(row);
+      // 删除是真删除：结束了的预览记录（已结算）一起删掉
+      await deps.repo.removeFinished(taskId);
     },
     async stop(access: Access): Promise<PreviewSessionBody> {
       const row = await owned(access);
@@ -294,7 +354,13 @@ export function createPreviewService(deps: {
       return body(['stopped', 'expired', 'failed'].includes(row.status) ? row : await stopRow(row));
     },
     /** 节点关卡使用同一隔离浏览器真正打开本次运行包；测试会话同样有冻结、审计与回收。 */
-    async checkRun(input: { runId: string; payerId: string; taskId: string }) {
+    async checkRun(input: {
+      runId: string;
+      payerId: string;
+      taskId: string;
+      /** 用户停止/取消节点时 task 断开请求：立即回收浏览器，不再等结果 */
+      signal?: AbortSignal;
+    }) {
       if (!deps.runs) throw new HttpError(503, 'check_unavailable', '浏览器检查暂不可用');
       const run = await deps.runs.get(input.runId);
       if (
@@ -359,7 +425,6 @@ export function createPreviewService(deps: {
       let plan: BrowserTestPlan | undefined;
       if (testFile) {
         try {
-          if (testFile.size > 64000) throw new Error('测试文件过大');
           plan = BrowserTestPlan.parse(
             JSON.parse((await deps.runs.file(input.runId, testFile.path)).content.toString('utf8')),
           );
@@ -375,54 +440,88 @@ export function createPreviewService(deps: {
         ...(plan ? { plan } : {}),
         network: 'none' as const,
       };
+      // 不设时限（2026-11-04 用户决定）：页面多慢都等，由控制端按页面是否安定下结论；
+      // 只有检查得出结果、浏览器进程退出，或用户停止/取消节点时才结束。
+      const stopOnAbort = () => void this.stop(access).catch(() => undefined);
+      input.signal?.addEventListener('abort', stopOnAbort, { once: true });
+      let renewal: NodeJS.Timeout | undefined;
+      let previewId: string | undefined;
       try {
-        await this.start(access, bundle.data, 60_000, 'application-check');
-        const waitUntil = Date.now() + 8_000;
-        while (Date.now() < waitUntil) {
+        input.signal?.throwIfAborted();
+        const session = await this.start(access, bundle.data, deps.maxMs, 'application-check');
+        previewId = session.id;
+        checking.add(session.id);
+        // 算力按窗口冻结；检查超过一个窗口就结清上一段、再冻结下一段（不是时限）
+        renewal = setInterval(
+          () =>
+            void renewCheckCompute(access).catch((err: unknown) =>
+              deps.logger.warn({ err, previewId }, '浏览器检查的算力续冻失败，下次再试'),
+            ),
+          Math.max(60_000, Math.floor(deps.maxMs / 2)),
+        );
+        const box = live.get(session.id)!;
+        let opening: { jpegBase64: string } | undefined;
+        for (;;) {
+          input.signal?.throwIfAborted();
+          // 检查程序自己的浏览器没了：这是检查未完成，不是成品失败
+          if (!box.alive())
+            throw new HttpError(
+              503,
+              'check_incomplete',
+              '检查用的浏览器进程提前结束，没有生成画面',
+            );
           try {
-            await this.frame(access);
-            await new Promise((resolve) => setTimeout(resolve, 600));
-            const box = live.get((await owned(access))!.id)!;
-            const result: BrowserTestResult = plan
-              ? await box.test(plan)
-              : {
-                  report: {
-                    version: 1,
-                    target: 'application',
-                    passed: true,
-                    steps: [],
-                    diagnostics: [],
-                    unchecked: ['未提供 oasis-test.json，仅完成启动检查，业务交互未检查'],
-                  },
-                  screenshots: [],
-                };
-            result.report.diagnostics = box.diagnostics();
-            if (result.report.diagnostics.length) result.report.passed = false;
-            if (deps.store)
-              await deps.store.put(
-                `runs/${input.runId}/application-check.json`,
-                Buffer.from(JSON.stringify({ ...result, application, inputSha256 })),
-                'application/json',
-              );
-            return {
-              passed: result.report.passed,
-              reason: result.report.passed ? null : '浏览器交互断言或页面诊断未通过',
-              frameCaptured: true,
-              report: result.report,
-              application,
-              inputSha256,
-            };
+            opening = await this.frame(access);
+            break;
           } catch (err) {
             if (!(err instanceof HttpError && err.statusCode === 503)) throw err;
           }
           await new Promise((resolve) => setTimeout(resolve, 200));
         }
-        return { passed: false, reason: '浏览器没有生成可见画面', frameCaptured: false };
+        const result: BrowserTestResult = plan
+          ? await box.test(plan)
+          : {
+              report: {
+                version: 1,
+                target: 'application',
+                passed: true,
+                steps: [],
+                diagnostics: [],
+                unchecked: ['未提供 oasis-test.json，仅完成启动检查，业务交互未检查'],
+              },
+              screenshots: [],
+            };
+        result.report.diagnostics = box.diagnostics();
+        if (result.report.diagnostics.length) result.report.passed = false;
+        if (deps.store)
+          await deps.store.put(
+            `runs/${input.runId}/application-check.json`,
+            Buffer.from(
+              JSON.stringify({ ...result, application, inputSha256, opening: opening?.jpegBase64 }),
+            ),
+            'application/json',
+          );
+        return {
+          passed: result.report.passed,
+          reason: result.report.passed ? null : failureReason(result.report),
+          frameCaptured: true,
+          report: result.report,
+          application,
+          inputSha256,
+          screenshots: [
+            ...(opening ? [{ name: 'opening.jpg', base64: opening.jpegBase64 }] : []),
+            ...result.screenshots,
+          ],
+        };
       } catch (err) {
+        if (input.signal?.aborted) throw new HttpError(499, 'check_aborted', '检查已被停止');
         if (err instanceof Error && /应用没有在回环地址|首页返回|net::ERR_/.test(err.message))
           return { passed: false, reason: err.message, frameCaptured: false };
         throw err;
       } finally {
+        clearInterval(renewal);
+        input.signal?.removeEventListener('abort', stopOnAbort);
+        if (previewId) checking.delete(previewId);
         await this.stop(access).catch((err: unknown) =>
           deps.logger.warn({ err, runId: input.runId }, '浏览器检查结束后回收失败'),
         );

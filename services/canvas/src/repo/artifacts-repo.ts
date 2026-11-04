@@ -35,6 +35,11 @@ export interface ArtifactsRepo {
     id: string,
     patch: Partial<Pick<Artifact, 'annotations' | 'approvedAt'>>,
   ): Promise<Artifact | undefined>;
+  /** 同一任务修改后再次交付（ADR 0012）：内容换成新版，批注和批准清掉，登记时间更新；id、同步路径不变 */
+  replaceContent(
+    id: string,
+    patch: Pick<Artifact, 'size' | 'sha256' | 'contentType' | 'models' | 'replacesSha256'>,
+  ): Promise<void>;
 }
 
 export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
@@ -108,6 +113,12 @@ export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
     async setReview(id, patch) {
       const [row] = await db.update(artifacts).set(patch).where(eq(artifacts.id, id)).returning();
       return row;
+    },
+    async replaceContent(id, patch) {
+      await db
+        .update(artifacts)
+        .set({ ...patch, annotations: [], approvedAt: null, createdAt: new Date() })
+        .where(eq(artifacts.id, id));
     },
   };
 }

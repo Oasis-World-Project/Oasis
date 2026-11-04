@@ -4,7 +4,7 @@ import type { EventEnvelope } from '@oasis/contracts/events';
 import { createServiceClient, HttpError } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Executor, Sandbox, SandboxSpec } from '../src/executor/executor.ts';
 import { extractFiles, packFiles } from '../src/executor/tar.ts';
 import { checkedParts, type ObjectStore } from '@oasis/service-kit';
@@ -211,6 +211,16 @@ const repo: RunsRepo = {
   control: async (runId) =>
     events.filter((e) => e.runId === runId && e.data.status === 'control_requested').at(-1)?.data
       .how as 'stop' | 'cancel' | undefined,
+  suspension: async (runId) => {
+    const event = events.filter((e) => e.runId === runId && e.data.status === 'suspended').at(-1);
+    return event
+      ? {
+          endedAt: String(event.data.endedAt),
+          cores: Number(event.data.cores),
+          keyId: String(event.data.keyId),
+        }
+      : undefined;
+  },
   get: async (id) => rows.get(id),
   hasRootPrompt: async (runId) =>
     events.some((e) => e.runId === runId && e.kind === 'user_message' && !e.data.parentSessionId),
@@ -272,19 +282,33 @@ const store: ObjectStore = {
 /** 假 model-gateway：签发和作废临时 Key */
 const issued: Record<string, unknown>[] = [];
 const revoked: string[] = [];
+let gatewayOffline = false;
+let renewStatus = 0;
 const modelGateway = Fastify();
-modelGateway.get('/internal/v1/models/execution', async () => ({
-  models: [
-    {
-      id: 'deepseek/deepseek-v4.1-flash',
-      name: 'DeepSeek',
-      contextWindow: 1000000,
-      maxTokens: 131072,
-      input: ['text', 'image'],
-      reasoning: true,
-    },
-  ],
-}));
+modelGateway.get('/internal/v1/models/execution', async (_request, reply) =>
+  gatewayOffline
+    ? reply.code(503).send({ error: { code: 'unavailable', message: '临时断开' } })
+    : {
+        models: [
+          {
+            id: 'deepseek/deepseek-v4.1-flash',
+            name: 'DeepSeek',
+            contextWindow: 1000000,
+            maxTokens: 131072,
+            input: ['text', 'image'],
+            reasoning: true,
+          },
+        ],
+      },
+);
+modelGateway.post('/internal/run-keys/:id/renew', async (_request, reply) => {
+  const status = gatewayOffline ? 503 : renewStatus;
+  return status
+    ? reply
+        .code(status)
+        .send({ error: { code: 'renew_failed', message: '续租失败', requestId: 'lease' } })
+    : reply.code(204).send();
+});
 modelGateway.post('/internal/run-keys', async (request, reply) => {
   issued.push(request.body as Record<string, unknown>);
   return reply.code(201).send({
@@ -304,13 +328,16 @@ modelGateway.post('/internal/v1/compute/:id/settle', async (request, reply) => {
   compute.push({ path: 'settle', body: request.body as Record<string, unknown> });
   return reply.code(204).send();
 });
-modelGateway.post('/internal/v1/compute/runs/:id/recover', async (_request, reply) =>
-  reply.code(204).send(),
-);
+modelGateway.post('/internal/v1/compute/runs/:id/recover', async (request, reply) => {
+  compute.push({ path: 'recover', body: request.body as Record<string, unknown> });
+  return reply.code(204).send();
+});
 modelGateway.post('/internal/v1/tools/runs/:id/cancel', async (_request, reply) =>
   reply.code(204).send(),
 );
 modelGateway.post('/internal/run-keys/:id/revoke', async (request, reply) => {
+  if (gatewayOffline)
+    return reply.code(503).send({ error: { code: 'unavailable', message: '临时断开' } });
   revoked.push((request.params as { id: string }).id);
   return reply.code(204).send();
 });
@@ -371,7 +398,10 @@ beforeAll(async () => {
   url = await modelGateway.listen({ port: 0, host: '127.0.0.1' });
 });
 afterAll(() => modelGateway.close());
+afterEach(() => service.stopAll());
 beforeEach(() => {
+  gatewayOffline = false;
+  renewStatus = 0;
   service = buildService();
   workspaces.clear();
   noNativeSession = false;
@@ -402,6 +432,73 @@ const finished = (id: string) =>
       ? row
       : undefined;
   });
+
+describe('依赖中断后的原运行接管', () => {
+  it('租约 503 挂起原身份，保留撤销失败的 Key，依赖恢复后接管，不发布中间失败', async () => {
+    service = buildService({ leaseMs: 200 });
+    const run = await service.start({ ...base, prompt: 'SLOW 恢复' });
+    await until(() => rows.get(run.id)?.status === 'running' || undefined);
+    gatewayOffline = true;
+    await until(() => rows.get(run.id)?.status === 'queued' || undefined);
+    expect(rows.get(run.id)?.runKeyId).toBeTruthy();
+    expect(rows.get(run.id)?.sessionKey).toBeTruthy();
+    expect(outbox).toHaveLength(0);
+    const checkpoint = await repo.suspension!(run.id);
+    const replacement = buildService({ executor: { ...executor, suspend: async () => undefined } });
+    await replacement.recover();
+    expect(started).toHaveLength(1);
+    expect(rows.get(run.id)?.status).toBe('queued');
+    gatewayOffline = false;
+    await replacement.recover();
+    expect(compute.filter((entry) => entry.path === 'recover').at(-1)?.body.endedAt).toBe(
+      checkpoint?.endedAt,
+    );
+    await until(() => rows.get(run.id)?.status === 'succeeded' || undefined, 8000);
+    expect(rows.size).toBe(1);
+    expect(started.map((box) => box.runId)).toEqual([run.id, run.id]);
+    expect(rows.get(run.id)?.sessionId).toBe(run.id);
+    expect(methods).toContain('session/resume');
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]?.data).toMatchObject({ status: 'succeeded' });
+    expect(new Set(events.map((event) => event.seq)).size).toBe(events.length);
+    await replacement.stopAll();
+  }, 15000);
+
+  it.each(['stop', 'cancel'] as const)(
+    '挂起后 %s 的持久意图在进程重启后优先，不再派发模型执行',
+    async (how) => {
+      service = buildService({ leaseMs: 200 });
+      const run = await service.start({ ...base, prompt: 'SLOW 停止优先' });
+      await until(() => rows.get(run.id)?.status === 'running' || undefined);
+      gatewayOffline = true;
+      await until(() => rows.get(run.id)?.status === 'queued' || undefined);
+      await service[how](run.id);
+      expect(await repo.control(run.id)).toBe(how);
+      await service.stopAll();
+      gatewayOffline = false;
+      const replacement = buildService();
+      await replacement.recover();
+      await until(
+        () => rows.get(run.id)?.status === (how === 'stop' ? 'stopped' : 'cancelled') || undefined,
+      );
+      expect(started).toHaveLength(1);
+      expect(issued).toHaveLength(1);
+      expect(outbox).toHaveLength(1);
+      await replacement.stopAll();
+    },
+  );
+
+  it('明确的 402 不作为临时断网无限自动接管', async () => {
+    service = buildService({ leaseMs: 200 });
+    const run = await service.start({ ...base, prompt: 'SLOW 额度不足' });
+    await until(() => rows.get(run.id)?.status === 'running' || undefined);
+    renewStatus = 402;
+    await finished(run.id);
+    expect(rows.get(run.id)?.status).toBe('stopped');
+    await service.recover();
+    expect(started).toHaveLength(1);
+  });
+});
 
 const base = {
   payerId: PAYER,

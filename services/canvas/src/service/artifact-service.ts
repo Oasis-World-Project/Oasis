@@ -8,7 +8,6 @@ import {
   type Annotation,
   type ArtifactBody,
   type ArtifactCategory,
-  type RevisionMaterialsResult,
 } from '@oasis/contracts/canvas';
 import type { TaskDeletedData, TaskStatusChangedData } from '@oasis/contracts/events';
 import { TaskBody } from '@oasis/contracts/task';
@@ -55,6 +54,8 @@ interface DeliveredFile {
   nodeId: string;
   path: string;
   models: string[];
+  /** task 清单里记的内容摘要（旧任务没有） */
+  sha256?: string;
 }
 
 /** 负责交付物的节点交出的文件，和交付消息列的是同一批；同一个文件只算一次（记在第一样交付物下） */
@@ -94,9 +95,7 @@ function deliveredFiles(task: TaskBody): DeliveredFile[] {
 const LIST_LIMIT = 1000;
 const APP_MAX_FILES = 1000;
 const APP_MAX_BYTES = 100 * 1024 * 1024;
-/** 修订素材：上一版文件不超过这么多个才逐个交，否则打成一个 ZIP（ADR 0012 §3） */
-const REVISION_MAX_FILES = 10;
-/** 打包出来的修订素材有自己的对象；逐个登记的沿用成果的对象，随成果删除 */
+/** 旧式修订任务的素材（ADR 0012 旧流程）：打包出来的有自己的对象；逐个登记的沿用成果的对象，随成果删除 */
 const packed = (upload: Upload) => upload.objectKey.startsWith('uploads/');
 
 function safeApplicationMember(path: string): boolean {
@@ -117,6 +116,19 @@ export function createArtifactService(deps: {
   transferTimeoutMs?: number;
 }) {
   const { repo, uploads, store, task, logger } = deps;
+
+  /** 运行中应用的批注截图（ADR 0009 §18）：只被批注引用 */
+  const framesOf = (rows: { annotations: { frame?: string | null }[] }[]) => [
+    ...new Set(rows.flatMap((row) => row.annotations.flatMap((a) => (a.frame ? [a.frame] : [])))),
+  ];
+  /** 批注删掉、成果被新版替换或删除时，截图一起删；重投时已经删掉的找不到，不重复删 */
+  async function dropFrames(ownerId: string, ids: string[]) {
+    if (!ids.length) return;
+    for (const row of await uploads.findOwned(ownerId, ids)) {
+      await store.delete(row.objectKey);
+      await uploads.remove(row.id);
+    }
+  }
 
   /** 这个任务在同步文件夹里用哪个目录：已经登记过的沿用，没有就用任务名，和别的任务重名就加序号 */
   async function taskDir(event: TaskStatusChangedData, existing: Artifact[]): Promise<string> {
@@ -207,6 +219,7 @@ export function createArtifactService(deps: {
     for (const row of previous) await store.delete(row.objectKey);
     for (const source of sources.filter(packed)) await store.delete(source.objectKey);
     await repo.replaceTask(oldTaskId, rows);
+    await dropFrames(event.ownerId, framesOf(previous));
     logger.info(
       { taskId: event.taskId, oldTaskId, files: rows.length },
       '新版已登记进画布，替换了上一版',
@@ -291,10 +304,34 @@ export function createArtifactService(deps: {
         if (err instanceof HttpError && err.statusCode === 404) return; // 已经被删除了
         throw err;
       }
+      // 旧式修订任务（2026-11-05 之前新建的）：交付后整体替换上一版
       if (detail.revisionOf) return replace(event, detail, detail.revisionOf);
       const existing = await repo.listByTask(event.taskId);
-      const done = new Set(existing.map((a) => `${a.nodeId}/${a.path}`));
-      const files = deliveredFiles(detail).filter((f) => !done.has(`${f.nodeId}/${f.path}`));
+      const byKey = new Map(existing.map((a) => [`${a.nodeId}/${a.path}`, a]));
+      const delivered = deliveredFiles(detail);
+      // 同一任务修改后再次交付（ADR 0012，2026-11-05）：内容变了的原地换成新版，链接和同步路径不变；
+      // 批注已经交给 AI 处理过，连同截图一起清掉。摘要相同的不再复制（事件重投时什么也不做）。
+      // 只看在这一版登记之后才又交付的任务（修改过）；同一次交付的事件重投不再复制
+      const finished = detail.finishedAt ? new Date(detail.finishedAt) : null;
+      for (const file of delivered) {
+        const old = byKey.get(`${file.nodeId}/${file.path}`);
+        if (!old || !finished || finished <= old.createdAt) continue;
+        if (file.sha256 && file.sha256 === old.sha256) continue;
+        const row = await copyFile(event, file);
+        if (row.sha256 && row.sha256 === old.sha256) continue;
+        const frames = framesOf([old]);
+        await repo.replaceContent(old.id, {
+          size: row.size,
+          sha256: row.sha256,
+          contentType: row.contentType,
+          models: row.models,
+          replacesSha256: old.sha256,
+        });
+        await dropFrames(event.ownerId, frames);
+        logger.info({ taskId: event.taskId, path: file.path }, '成果已换成修改后的新版');
+      }
+      const done = new Set(byKey.keys());
+      const files = delivered.filter((f) => !done.has(`${f.nodeId}/${f.path}`));
       const dir = files.length ? await taskDir(event, existing) : '';
       const takenInDir = new Set(
         existing.map((a) => a.syncPath.slice(dir.length + 1).toLowerCase()),
@@ -326,80 +363,9 @@ export function createArtifactService(deps: {
         rows.map((r) => r.id),
         sources.map((s) => s.id),
       );
+      await dropFrames(event.ownerId, framesOf(rows));
       if (rows.length || sources.length)
         logger.info({ taskId: event.taskId, files: rows.length }, '任务已删除，成果一并清理');
-    },
-
-    /**
-     * 把一个任务交付的成果登记成修订任务的素材（ADR 0012 §3）：
-     * 放得下（且不超过 10 个）就逐个登记、对象沿用成果的；否则打成一个 ZIP。
-     */
-    async revisionMaterials(
-      ownerId: string,
-      taskId: string,
-      room: number | undefined,
-      limits: { maxBytes: number; archive: { bytes: number; files: number } },
-    ): Promise<RevisionMaterialsResult> {
-      const rows = (await repo.listByTask(taskId))
-        .filter((r) => r.ownerId === ownerId)
-        .sort((a, b) => a.syncPath.localeCompare(b.syncPath));
-      if (rows.length === 0)
-        throw new HttpError(409, 'no_artifacts', '这个任务在画布里没有成果，不能修改');
-      const relative = (row: Artifact) => row.syncPath.split('/').slice(1).join('/');
-      if (rows.length <= REVISION_MAX_FILES && (room === undefined || rows.length <= room)) {
-        const taken = new Set<string>();
-        const result: RevisionMaterialsResult = { materials: [], files: [] };
-        for (const row of rows) {
-          const name = uniqueName(`上一版-${row.name}`, taken, true);
-          taken.add(name.toLowerCase());
-          const id = randomUUID();
-          await uploads.insert({
-            id,
-            ownerId,
-            state: 'ready',
-            name,
-            size: row.size,
-            sha256: row.sha256,
-            contentType: row.contentType,
-            objectKey: row.objectKey,
-            sourceTaskId: taskId,
-          });
-          result.materials.push({ uploadId: id, name, size: row.size });
-          result.files.push({
-            material: name,
-            path: relative(row),
-            deliverable: row.deliverable,
-            approved: row.approvedAt !== null,
-          });
-        }
-        return result;
-      }
-      const { content } = await service.archive(ownerId, taskId, limits.archive);
-      const id = randomUUID();
-      const objectKey = `uploads/${ownerId}/${id}`;
-      const name = '上一版成果.zip';
-      const saved = await store.putStream(objectKey, content, 'application/zip', {
-        maxBytes: limits.maxBytes,
-      });
-      await uploads.insert({
-        id,
-        ownerId,
-        state: 'ready',
-        name,
-        ...saved,
-        contentType: 'application/zip',
-        objectKey,
-        sourceTaskId: taskId,
-      });
-      return {
-        materials: [{ uploadId: id, name, size: saved.size }],
-        files: rows.map((row) => ({
-          material: name,
-          path: row.syncPath,
-          deliverable: row.deliverable,
-          approved: row.approvedAt !== null,
-        })),
-      };
     },
 
     async list(
@@ -415,10 +381,25 @@ export function createArtifactService(deps: {
       return row;
     },
 
-    /** 批注整份替换（ADR 0012 §9）：编号不能重复，最多 50 条（契约已校验） */
+    /**
+     * 批注整份替换（ADR 0012 §9）：编号不能重复，最多 50 条（契约已校验）。
+     * 新引用的截图必须是这个人自己上传的；不再被引用的截图随之删除（ADR 0009 §18）。
+     */
     async setAnnotations(ownerId: string, id: string, annotations: Annotation[]) {
-      await service.get(ownerId, id);
-      return toBody((await repo.setReview(id, { annotations }))!);
+      const current = await service.get(ownerId, id);
+      const before = framesOf([current]);
+      const after = framesOf([{ annotations }]);
+      const added = after.filter((frame) => !before.includes(frame));
+      if (added.length && (await uploads.findOwned(ownerId, added)).length !== added.length)
+        throw new HttpError(422, 'annotation_frame', '批注截图不存在，请重新截图');
+      const saved = toBody((await repo.setReview(id, { annotations }))!);
+      // 截图被批注用上了，清扫不再删它
+      await uploads.claim(ownerId, added);
+      await dropFrames(
+        ownerId,
+        before.filter((frame) => !after.includes(frame)),
+      );
+      return saved;
     },
 
     /** 批准 / 取消批准：只是记号，不挡修改 */

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, notInArray } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { previewSessions } from './schema.ts';
@@ -15,6 +15,8 @@ export interface PreviewRepo {
   active(ownerId: string): Promise<PreviewRow | undefined>;
   update(id: string, patch: Patch): Promise<void>;
   unfinished(): Promise<PreviewRow[]>;
+  /** 任务删除时真删除它已经结束的预览记录 */
+  removeFinished(taskId: string): Promise<void>;
 }
 
 export function createPreviewRepo(pool: pg.Pool): PreviewRepo {
@@ -57,5 +59,12 @@ export function createPreviewRepo(pool: pg.Pool): PreviewRepo {
         .select()
         .from(previewSessions)
         .where(inArray(previewSessions.status, [...ACTIVE])),
+    removeFinished: async (taskId) => {
+      await db
+        .delete(previewSessions)
+        .where(
+          and(eq(previewSessions.taskId, taskId), notInArray(previewSessions.status, [...ACTIVE])),
+        );
+    },
   };
 }

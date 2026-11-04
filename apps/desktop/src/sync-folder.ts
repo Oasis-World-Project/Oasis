@@ -187,7 +187,8 @@ export function createSyncFolder(recordFile: string) {
       serial(async () => {
         const record = await load();
         if (!record.folder) throw new Error('还没选同步文件夹');
-        if (!/^[0-9a-f-]{36}$/i.test(artifactId)) throw new Error('成果 id 不合格');
+        // 「id」或修改后原地换成新版的「id@新摘要」（ADR 0012）
+        if (!/^[0-9a-f-]{36}(@[a-f0-9]{64})?$/i.test(artifactId)) throw new Error('成果 id 不合格');
         if (!Number.isSafeInteger(size) || size < 0 || size > DESKTOP_SYNC_MAX_BYTES)
           throw new Error('文件太大，没有同步');
         if (sha256 != null && !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('校验和不合格');

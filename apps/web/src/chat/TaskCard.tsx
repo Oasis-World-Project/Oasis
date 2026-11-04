@@ -1,5 +1,5 @@
-// 任务卡：正在搭建工作流 → 进度（完成几个节点）、每个节点的状态、花费 → 需要处理时给出选择 → 完成。
-// 任务还在动时每 2.5 秒刷新；状态一变就顺带刷新消息，交付消息和提醒能马上出现。
+// 私聊保留一张任务状态卡与工作流入口；具体检查与处理选择在工作流。
+// 任务还在动时每 2.5 秒刷新；状态一变就刷新消息以读取最终交付。
 import type { RemovedMark } from '@oasis/contracts/conversation';
 import type { Attention, NodeStatus, TaskBody, TaskStatus } from '@oasis/contracts/task';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -16,6 +16,7 @@ import {
   taskQuery,
 } from '../api/queries.ts';
 import { formatCost } from '../ui/format.ts';
+import { TASK_STATUS } from '../workflow/rules.ts';
 import {
   CardActions,
   CardButton,
@@ -26,17 +27,6 @@ import {
   type Speaker,
 } from './parts.tsx';
 import { useChatActions } from './use-chat-actions.ts';
-
-const TASK_STATUS: Record<TaskStatus, { label: string; tone: 'muted' | 'accent' | 'solid' }> = {
-  planning: { label: '正在搭建工作流', tone: 'muted' },
-  running: { label: '进行中', tone: 'muted' },
-  accepting: { label: '正在验收', tone: 'muted' },
-  stopped: { label: '已停止', tone: 'muted' },
-  needs_attention: { label: '需要你处理', tone: 'accent' },
-  succeeded: { label: '已完成', tone: 'solid' },
-  failed: { label: '没能完成', tone: 'accent' },
-  cancelled: { label: '已取消', tone: 'muted' },
-};
 
 const NODE_STATUS: Record<NodeStatus, string> = {
   draft: '新建',
@@ -131,27 +121,64 @@ const DECISIONS: Record<
   { choice: Exclude<Choice, 'cancel'>; label: string }[]
 > = {
   node_failed: [
-    { choice: 'retry', label: '再试一次' },
-    { choice: 'continue', label: '跳过它继续' },
+    // 节点中途断了（多半是网络）：从断的地方接着做（2026-11-05 用户要求中断了就叫「继续」）
+    { choice: 'retry', label: '继续' },
+    { choice: 'continue', label: '跳过这个节点' },
   ],
   over_budget: [{ choice: 'continue', label: '解除预算继续' }],
   over_estimate: [{ choice: 'continue', label: '解除预算继续' }],
   plan_failed: [{ choice: 'retry', label: '重新规划' }],
   workflow_broken: [],
-  checks_incomplete: [{ choice: 'retry', label: '重新检查' }],
+  // 检查中途停下：「继续」从停下的地方接着检查，「跳过检查」不再检查直接往下（2026-11-05 用户要求）
+  checks_incomplete: [
+    { choice: 'retry', label: '继续' },
+    { choice: 'continue', label: '跳过检查' },
+  ],
 };
 
-/** 需要处理时的说明和选择；任务卡和提醒消息都用它 */
-export function TaskDecisions({ task }: { task: TaskBody }) {
+/** 处理卡片上直接显示的原因最多这么多字，再长折叠起来 */
+const BRIEF_CHARS = 120;
+
+/** 工作流需要处理时的说明和选择。 */
+export function TaskDecisions({
+  task,
+  compact = false,
+  showReason = true,
+}: {
+  task: TaskBody;
+  compact?: boolean;
+  showReason?: boolean;
+}) {
   const actions = useChatActions();
   const { attention } = task;
   if (task.status !== 'needs_attention' || !attention) return null;
+  const first = attention.message.split('\n')[0]!;
+  const long = attention.message.includes('\n') || first.length > BRIEF_CHARS;
+  const brief = first.length > BRIEF_CHARS ? `${first.slice(0, BRIEF_CHARS)}…` : first;
   const busy = actions.busy !== null;
   return (
     <div className="flex flex-col gap-2.5 rounded-item bg-glass-active px-4 py-3 shadow-edge-strong">
-      <p role="status" className="m-0 text-[14px] leading-relaxed">
-        {attention.message}
-      </p>
+      {compact ? (
+        <>
+          <p role="status" className="m-0 text-[14px] font-medium leading-relaxed">
+            {attention.reason === 'checks_incomplete' ? '检查停下了' : '任务需要处理'}
+          </p>
+          {/* 原因的第一句直接显示；很长或有多行时，完整原因折叠在下面 */}
+          <p className="m-0 text-[13px] leading-relaxed text-ink-muted">{brief}</p>
+          {showReason && long && (
+            <details key={attention.message}>
+              <summary className="cursor-pointer text-[13px] text-ink-muted">查看详细原因</summary>
+              <p className="m-0 mt-2 max-h-[32vh] overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-[13px] leading-relaxed">
+                {attention.message}
+              </p>
+            </details>
+          )}
+        </>
+      ) : (
+        <p role="status" className="m-0 text-[14px] leading-relaxed">
+          {attention.message}
+        </p>
+      )}
       {attention.reason === 'workflow_broken' && (
         <p className="m-0 text-[12.5px] text-ink-muted">工作流里有连线断开了，接好之后再运行。</p>
       )}
@@ -238,7 +265,13 @@ function Progress({ task }: { task: TaskBody }) {
               : `${total} 个步骤，完成了 ${done} 个`}
         </span>
         <span className="text-[12.5px] text-ink-muted">
-          {planning ? 'AI 团队在排分工和顺序，需要一点时间' : 'AI 团队按分工在做'}
+          {planning
+            ? 'AI 团队在排分工和顺序，需要一点时间'
+            : task.status === 'needs_attention'
+              ? '有待处理项，请到工作流查看'
+              : task.status === 'stopped'
+                ? '已停止，可到工作流查看进度'
+                : 'AI 团队按分工在做'}
         </span>
       </div>
     </div>
@@ -259,14 +292,11 @@ export function RemovedNote({ removed }: { removed: RemovedMark }) {
 export function TaskCard({
   taskId,
   speaker,
-  decisions = true,
   revision = false,
   removed,
 }: {
   taskId: string;
   speaker: Speaker;
-  /** 需要处理时在这里给出选择 */
-  decisions?: boolean;
   /** 这是对某个成果的修改 */
   revision?: boolean;
   /** 任务已被删除或替换：不再查询，只留一句话 */
@@ -324,55 +354,46 @@ export function TaskCard({
           ))}
         </ul>
       )}
-      {decisions ? (
-        <TaskDecisions task={task} />
-      ) : (
-        task.status === 'needs_attention' &&
-        task.attention && (
-          <p className="m-0 text-[13.5px] text-ink-muted">
-            {task.attention.message}（在下面选怎么处理）
-          </p>
-        )
+      {task.status === 'needs_attention' && (
+        <p className="m-0 text-[13.5px] text-ink-muted">有待处理项，请到工作流查看对应节点。</p>
       )}
       <Spend task={task} />
-      {task.status !== 'planning' && (
-        <CardActions>
-          <Link
-            to="/canvas/tasks/$taskId"
-            params={{ taskId: task.id }}
-            className="inline-flex h-10 items-center gap-1.5 rounded-full bg-solid px-4 text-[13.5px] font-medium text-on-solid no-underline"
+      <CardActions>
+        <Link
+          to="/canvas/tasks/$taskId"
+          params={{ taskId: task.id }}
+          className="inline-flex h-10 items-center gap-1.5 rounded-full bg-solid px-4 text-[13.5px] font-medium text-on-solid no-underline"
+        >
+          <Workflow size={15} aria-hidden="true" />
+          看工作流
+        </Link>
+        {task.status === 'running' && (
+          <CardButton
+            onClick={() => void actions.run('stop', () => stopTask(task.id))}
+            disabled={busy}
           >
-            <Workflow size={15} aria-hidden="true" />
-            看工作流
-          </Link>
-          {task.status === 'running' && (
-            <CardButton
-              onClick={() => void actions.run('stop', () => stopTask(task.id))}
-              disabled={busy}
-            >
-              停止
-            </CardButton>
-          )}
-          {task.status === 'stopped' && (
-            <CardButton
-              tone="accent"
-              onClick={() => void actions.run('run', () => runTask(task.id))}
-              disabled={busy}
-            >
-              继续
-            </CardButton>
-          )}
-          {(task.status === 'running' || task.status === 'stopped') && (
-            <ConfirmButton
-              label="取消任务"
-              question="取消后不能恢复，确定吗？"
-              confirmLabel="取消任务"
-              onConfirm={() => void actions.run('cancel-task', () => cancelTask(task.id))}
-              disabled={busy}
-            />
-          )}
-        </CardActions>
-      )}
+            停止
+          </CardButton>
+        )}
+        {task.status === 'stopped' && (
+          <CardButton
+            tone="accent"
+            onClick={() => void actions.run('run', () => runTask(task.id))}
+            disabled={busy}
+          >
+            继续
+          </CardButton>
+        )}
+        {(task.status === 'running' || task.status === 'stopped') && (
+          <ConfirmButton
+            label="取消任务"
+            question="取消后不能恢复，确定吗？"
+            confirmLabel="取消任务"
+            onConfirm={() => void actions.run('cancel-task', () => cancelTask(task.id))}
+            disabled={busy}
+          />
+        )}
+      </CardActions>
     </CardFrame>
   );
 }

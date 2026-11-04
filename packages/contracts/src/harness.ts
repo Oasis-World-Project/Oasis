@@ -251,6 +251,13 @@ export const MaterialInspection = z.object({
   text: z.string(),
   status: z.enum(['complete', 'partial', 'unsupported', 'failed']),
   reason: z.string().optional(),
+  /** 图片素材（如批注截图）没有正文，原图交给关卡的看图检查（2026-11-05） */
+  image: z
+    .object({
+      mediaType: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+      base64: z.string(),
+    })
+    .optional(),
 });
 export const MaterialInspectResult = z.object({ files: z.array(MaterialInspection).max(20) });
 export type MaterialInspectResult = z.infer<typeof MaterialInspectResult>;
@@ -327,4 +334,6 @@ export const ApplicationCheckResult = z.object({
     .string()
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
+  /** 平台截取的画面（打开后的首屏 opening.jpg 与测试步骤截图）：交给视觉检查，不是节点自述 */
+  screenshots: z.array(z.object({ name: z.string().max(100), base64: z.string() })).optional(),
 });

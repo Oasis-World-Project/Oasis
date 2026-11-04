@@ -476,8 +476,8 @@ export const TOOLS: ToolDef[] = [
     usage:
       'oasis-tool image.generate --prompt "描述" [--ref materials/主图.png,materials/风格.jpg] [--aspect_ratio 16:9] [--resolution 2K] [--n 1] --out out/图片.png',
     unit: '张',
-    estimateMicro: 40_000,
-    holdMicro: (args) => 200_000 * (Number(args.n) || 1),
+    estimateMicro: 150_000,
+    holdMicro: (args) => 500_000 * (Number(args.n) || 1),
     long: false,
     provider: 'openrouter',
     models: (config) => config.imageModels,
@@ -823,8 +823,8 @@ export const TOOLS: ToolDef[] = [
     usage:
       'oasis-tool video.generate --prompt "画面描述" [--first_frame materials/首帧.png] [--duration 5] [--resolution 720p] [--aspect_ratio 16:9] --out out/视频.mp4（没等到就按提示运行 oasis-tool wait <任务号>；首帧内联输入仍需当前供应商实际验证）',
     unit: '段（约 5 秒）',
-    estimateMicro: 500_000,
-    holdMicro: (args) => (Number(args.duration) || 5) * 250_000,
+    estimateMicro: 2_000_000,
+    holdMicro: (args) => (Number(args.duration) || 5) * 700_000,
     long: true,
     provider: 'openrouter',
     models: (config) => config.videoModels,

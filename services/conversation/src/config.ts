@@ -14,7 +14,7 @@ export const conversationEnv = {
   /** 每次回复带上最近多少条消息作为上下文 */
   HISTORY_LIMIT: z.coerce.number().int().min(1).max(200).default(20),
   /** 一次回复最多多少 token */
-  REPLY_MAX_TOKENS: z.coerce.number().int().min(64).max(32_000).default(1024),
+  REPLY_MAX_TOKENS: z.coerce.number().int().min(64).max(32_000).default(8192),
   /** 用户确认任务单后交给 task 建任务 */
   TASK_URL: z.url(),
   /** 核对用户随消息发的文件 */
@@ -26,9 +26,10 @@ export const conversationEnv = {
   TASK_DETECT_HIGH: z.coerce.number().min(0).max(1).default(0.7),
   /** 概率不低于它就在回复下面附「当成任务来做」 */
   TASK_DETECT_LOW: z.coerce.number().min(0).max(1).default(0.4),
-  /** 私聊的 AI 写不出合格的任务单 JSON 时换它来做（供应商型号，默认 DeepSeek） */
+  /** 私聊的 AI 在当前网络地区用不了时，接需求事先改用它（供应商型号，默认 DeepSeek） */
   INTAKE_FALLBACK_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
   /** 最多问几轮（用户定：3） */
   INTAKE_MAX_ROUNDS: z.coerce.number().int().min(1).max(5).default(3),
-  INTAKE_MAX_TOKENS: z.coerce.number().int().min(256).max(8000).default(4096),
+  /** 接需求一步的输出上限：留足余量，截断不重来（ADR 0005 §2026-11-04） */
+  INTAKE_MAX_TOKENS: z.coerce.number().int().min(256).max(32000).default(16000),
 };

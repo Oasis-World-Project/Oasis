@@ -110,13 +110,14 @@ export function registerRoutes(
   app.post('/v1/conversations/:id/messages/:messageId/reply', async (request, reply) => {
     const { id, messageId } = parseWith(MessageParams, request.params);
     const ownerId = requireUserId(request);
-    const { content } = parseWith(ReplaceReplyBody, request.body);
+    const { content, continue: continuing } = parseWith(ReplaceReplyBody, request.body);
     await dms.assertOwned(id, ownerId);
     await eventStream(request, reply, (emit) =>
       dms.replaceReply({
         ownerId,
         conversationId: id,
         messageId,
+        ...(continuing ? { continue: true } : {}),
         ...(content === undefined ? {} : { content }),
         requestId: request.id,
         emit,

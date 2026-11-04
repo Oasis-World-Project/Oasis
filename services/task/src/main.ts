@@ -53,6 +53,7 @@ await startService({
         harness,
         modelGateway,
         model: config.GATE_MODEL,
+        evidenceModel: config.GATE_EVIDENCE_MODEL,
         threshold: config.GATE_THRESHOLD,
         textMaxChars: config.GATE_TEXT_MAX_CHARS,
         visionMaxImages: config.GATE_VISION_MAX_IMAGES,

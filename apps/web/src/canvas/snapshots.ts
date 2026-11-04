@@ -1,9 +1,14 @@
-// 发给 AI 修改时的标注截图（ADR 0012 §9）：把画面（图片、PDF 页、视频帧）和圈画、编号合成一张 PNG。
+// 发给 AI 修改时的标注截图（ADR 0012 §9）：把画面（图片、PDF 页、视频帧、运行中应用的截图）和圈画、编号合成一张 PNG。
 // 画面只有浏览器里有，所以在这里合成；同一张画面上的批注合成一张，总数有上限，合成失败的那张就不带。
 import type { Annotation, ArtifactBody } from '@oasis/contracts/canvas';
 import { artifactContentUrl } from '../api/queries.ts';
+import { uploadUrl } from '../api/upload.ts';
 import { previewKindOf } from '../chat/files.ts';
-import { drawAnnotations, frameKey, surfaceOf } from './annotations.ts';
+import { drawAnnotations, frameKey, frameOrder, surfaceOf } from './annotations.ts';
+
+/** 发给 AI 时怎么称呼这个成果：应用用它的目录名，不用内部的 oasis-app.json */
+export const reviewName = (artifact: Pick<ArtifactBody, 'name' | 'application'>) =>
+  artifact.application ? artifact.application.root : artifact.name;
 
 const MAX_SIDE = 1600;
 
@@ -108,8 +113,11 @@ export async function buildSnapshots(
   const taken = new Set<string>();
   for (const artifact of artifacts) {
     const pdf = pdfCompanion(artifact, siblings);
-    const surface = surfaceOf(previewKindOf(artifact.path), !!pdf);
-    const drawn = artifact.annotations.filter((a) => a.shape);
+    // 运行中的网页和应用：画在截图上的批注按截图合成
+    const live = !!artifact.application || previewKindOf(artifact.path) === 'page';
+    const surface = live ? 'app' : surfaceOf(previewKindOf(artifact.path), !!pdf);
+    const drawn = artifact.annotations.filter((a) => a.shape && (!live || a.frame));
+    const order = frameOrder(artifact.annotations);
     if (!drawn.length || surface === 'text' || surface === 'audio') continue;
     const stem = artifact.name.replace(/\.[^.]+$/, '');
     const groups = new Map<string, Annotation[]>();
@@ -118,8 +126,9 @@ export async function buildSnapshots(
     for (const list of groups.values()) {
       if (files.length + planned.length >= limit) break;
       const first = list[0]!;
-      const suffix =
-        first.page !== null
+      const suffix = first.frame
+        ? `-截图${order.indexOf(first.frame) + 1}`
+        : first.page !== null
           ? `-第${first.page}页`
           : first.time !== null
             ? `-${Math.round(first.time)}秒`
@@ -134,12 +143,18 @@ export async function buildSnapshots(
     try {
       const url = artifactContentUrl((pdf ?? artifact).id);
       const [, imageList, imageName] = planned[0]!;
-      const made =
-        surface === 'image'
-          ? [[imageName, await imageFrame(url, imageList, imageName)] as [string, File]]
-          : surface === 'video'
-            ? await videoFrames(url, planned)
-            : await pdfPages(url, planned);
+      const made: [string, File][] = [];
+      if (surface === 'app')
+        for (const [, list, name] of planned)
+          made.push([name, await imageFrame(uploadUrl(list[0]!.frame!), list, name)]);
+      else
+        made.push(
+          ...(surface === 'image'
+            ? [[imageName, await imageFrame(url, imageList, imageName)] as [string, File]]
+            : surface === 'video'
+              ? await videoFrames(url, planned)
+              : await pdfPages(url, planned)),
+        );
       files.push(...made.map(([, file]) => file));
     } catch {
       // 合成失败：这些批注照样带上，只是没有截图

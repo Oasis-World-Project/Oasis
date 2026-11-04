@@ -1,6 +1,6 @@
 // 私聊的输入框：「＋」里作为任务发布、添加文件；文件也可以粘贴进来（拖进对话区由页面处理）。
 // 有文件还在上传或上传失败时不能发送。
-import { ArrowUp, ListChecks, Paperclip, Plus, Square, X } from 'lucide-react';
+import { ArrowUp, ListChecks, Paperclip, Plus, Play, Square, X } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { PendingFiles } from './Attachments.tsx';
 import type { useAttachments } from './use-attachments.ts';
@@ -86,6 +86,7 @@ export function Composer({
   textOnly = false,
   onStop,
   stopping = false,
+  onContinue,
 }: {
   locked: boolean;
   sending: boolean;
@@ -99,11 +100,19 @@ export function Composer({
   textOnly?: boolean;
   onStop?: (() => void) | undefined;
   stopping?: boolean;
+  onContinue?: (() => void) | undefined;
 }) {
   const [draft, setDraft] = useState('');
   const [asTask, setAsTask] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const blocked = attachments.uploading || attachments.failed;
+  const canContinue =
+    Boolean(onContinue) &&
+    !locked &&
+    !blocked &&
+    !draft.trim() &&
+    attachments.files.length === 0 &&
+    !asTask;
   const canSend = !locked && !blocked && draft.trim() !== '';
 
   async function send() {
@@ -201,13 +210,25 @@ export function Composer({
         </div>
         <button
           type="button"
-          onClick={() => (onStop ? onStop() : void send())}
-          disabled={onStop ? stopping : !canSend}
-          aria-label={onStop ? (stopping ? '正在停止' : '停止回复') : asTask ? '发布任务' : '发送'}
+          onClick={() => (onStop ? onStop() : canContinue ? onContinue?.() : void send())}
+          disabled={onStop ? stopping : !canSend && !canContinue}
+          aria-label={
+            onStop
+              ? stopping
+                ? '正在停止'
+                : '停止回复'
+              : canContinue
+                ? '继续回复'
+                : asTask
+                  ? '发布任务'
+                  : '发送'
+          }
           className="flex size-11 shrink-0 items-center justify-center rounded-full border-0 bg-accent text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
         >
           {onStop ? (
             <Square size={15} fill="currentColor" aria-hidden="true" />
+          ) : canContinue ? (
+            <Play size={18} aria-hidden="true" />
           ) : (
             <ArrowUp size={18} strokeWidth={2.2} aria-hidden="true" />
           )}

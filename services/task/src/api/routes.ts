@@ -5,6 +5,7 @@ import {
   DecisionBody,
   NodeMessageBody,
   PlanNode,
+  ReviseTaskBody,
   UpdateEdgeBody,
   UpdateNodeBody,
 } from '@oasis/contracts/task';
@@ -47,7 +48,13 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService): voi
     return workflows.getInternal(taskId);
   });
 
-  /** 新版已交付，删除被它替换的上一版（canvas 换好成果后调用，ADR 0012） */
+  /** 修改成果：在原任务里接着原会话改（conversation 发起修改时调用，ADR 0012） */
+  app.post('/internal/tasks/:taskId/revise', async (request) => {
+    const { taskId } = parseWith(TaskParams, request.params);
+    return workflows.revise(taskId, parseWith(ReviseTaskBody, request.body));
+  });
+
+  /** 旧式修订任务交付后删除被替换的上一版（canvas 换好成果后调用，ADR 0012；新的修改不再新建任务） */
   app.post('/internal/tasks/:taskId/retire', async (request, reply) => {
     const { taskId } = parseWith(TaskParams, request.params);
     const { replacedBy } = parseWith(RetireBody, request.body);

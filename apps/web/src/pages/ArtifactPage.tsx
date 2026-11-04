@@ -1,44 +1,33 @@
-// 画布里打开一个成果（外观照原型 ⑨⑩）：点阵底，左上返回 / 任务名 / 文件名，右上工作流、回到私聊、下载，
-// 中间预览（图片、视频、音频、PDF、Markdown、文字、静态网页；其他格式提示下载）。
-// 「发给 AI 修改」做出新版整体替换这一版，「删除」连同工作流一起删；底部「标注」圈画写批注，「批准」打记号（ADR 0012）。
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
-import {
-  ArrowLeft,
-  BadgeCheck,
-  Download,
-  MessageCircle,
-  PencilLine,
-  SlidersHorizontal,
-  Workflow,
-} from 'lucide-react';
+// 画布里打开一个成果（外观照原型 ⑨⑩）：点阵底；顶栏只有返回、批注、下载三个图标（2026-11-04 精简）。
+// 中间预览（图片、视频、音频、PDF、Markdown、文字、网页；其他格式提示下载）。网页和静态应用在本机隔离框里直接运行（ADR 0009 §17），
+// 带后端的应用走平台容器预览。批注面板里「发给 AI 修改」，新版整体替换这一版（ADR 0012）。
+import { useQuery } from '@tanstack/react-query';
+import { getRouteApi, Link } from '@tanstack/react-router';
+import { ArrowLeft, Download, LoaderCircle, PencilLine, SlidersHorizontal } from 'lucide-react';
 import { useState } from 'react';
-import { ApiError } from '../api/client.ts';
 import {
   artifactContentUrl,
   artifactQuery,
   artifactsQuery,
-  deleteTask,
-  setApproval,
   SETTLED_STATUSES,
   taskArchiveUrl,
   tasksQuery,
 } from '../api/queries.ts';
 import type { RevisionParameter } from '@oasis/contracts/conversation';
-import { ConfirmButton } from '../chat/parts.tsx';
 import { ArtifactReview } from '../canvas/ArtifactReview.tsx';
 import { AvatarPreview } from '../canvas/AvatarPreview.tsx';
 import { ParameterPanel } from '../canvas/ParameterPanel.tsx';
 import { AVATAR_FIELDS, type Values } from '../canvas/parameters.ts';
+import { LivePreview } from '../canvas/LivePreview.tsx';
 import { PreviewPlayer } from '../canvas/PreviewPlayer.tsx';
 import { RevisePanel } from '../canvas/RevisePanel.tsx';
 import { pdfCompanion } from '../canvas/snapshots.ts';
-import { formatBytes } from '../ui/format.ts';
 
 const route = getRouteApi('/shell/canvas/artifacts/$artifactId');
 
-const pill =
-  'inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full px-4 text-[13.5px] font-medium no-underline';
+/** 顶栏的圆形图标按钮：不带字，悬停时显示说明 */
+const icon =
+  'flex size-10 items-center justify-center rounded-full bg-glass-active text-ink no-underline shadow-edge-strong';
 
 export function ArtifactPage() {
   const { artifactId } = route.useParams();
@@ -48,9 +37,11 @@ export function ArtifactPage() {
     enabled: !!artifact,
   });
   const { data: tasks = [] } = useQuery(tasksQuery);
-  // 这份成果正在修改：新版没结束之前不能再改、不能删
+  // 这份成果正在修改：原任务又跑起来了（ADR 0012，在原任务里接着改），或旧式修订任务还没结束；改完之前不能再改
+  const ownTask = artifact ? tasks.find((t) => t.id === artifact.taskId) : undefined;
   const revising = artifact
-    ? tasks.find((t) => t.revisionOf === artifact.taskId && !SETTLED_STATUSES.has(t.status))
+    ? (tasks.find((t) => t.revisionOf === artifact.taskId && !SETTLED_STATUSES.has(t.status)) ??
+      (ownTask && !SETTLED_STATUSES.has(ownTask.status) ? ownTask : undefined))
     : undefined;
   const [reviseOpen, setReviseOpen] = useState(false);
   /** 从参数面板来的修改：参数随对话框一起发 */
@@ -58,27 +49,16 @@ export function ArtifactPage() {
   // 数字人的参数面板（ADR 0013）
   const [avatarParams, setAvatarParams] = useState(false);
   const [avatarValues, setAvatarValues] = useState<Values>({});
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const remove = useMutation({
-    mutationFn: (taskId: string) => deleteTask(taskId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['artifacts'] }),
-        queryClient.invalidateQueries({ queryKey: tasksQuery.queryKey }),
-      ]);
-      await navigate({ to: '/canvas' });
-    },
-  });
-  const position = siblings.findIndex((item) => item.id === artifactId);
+  /** 静态应用在本机框里加载不全时，用户可改用平台容器预览 */
+  const [containerFor, setContainerFor] = useState<string | null>(null);
+  const container = containerFor === artifactId;
   const pdf = artifact ? pdfCompanion(artifact, siblings) : undefined;
-  const approve = useMutation({
-    mutationFn: (approved: boolean) => setApproval(artifactId, approved),
-    onSuccess: (body) => {
-      queryClient.setQueryData(artifactQuery(artifactId).queryKey, body);
-      void queryClient.invalidateQueries({ queryKey: ['artifacts'] });
-    },
-  });
+  /** 顶栏的批注开关；换一个成果时自动关掉 */
+  const [annotatingFor, setAnnotatingFor] = useState<string | null>(null);
+  const annotating = annotatingFor === artifactId;
+  const setAnnotating = (on: boolean) => setAnnotatingFor(on ? artifactId : null);
+  // 数字人是实时对话，不批注；其余成果（含运行中的网页和应用）都能批注
+  const canAnnotate = !!artifact && !artifact.avatar;
   const appFiles = artifact?.application
     ? siblings.filter(
         (item) =>
@@ -89,139 +69,82 @@ export function ArtifactPage() {
       )
     : [];
 
+  // 同一节点交出的文件：网页按相对地址引用它们（图片、脚本、样式等）
+  const nodeFiles = artifact
+    ? siblings.filter((item) => item.taskId === artifact.taskId && item.nodeId === artifact.nodeId)
+    : [];
+  const assets = nodeFiles.map((item) => ({ path: item.path, url: artifactContentUrl(item.id) }));
+  const staticApp = artifact?.application?.kind === 'static' ? artifact.application : undefined;
+  const appEntry = staticApp
+    ? nodeFiles.find((item) => item.path === `${staticApp.root}/${staticApp.entry}`)
+    : undefined;
+  // 单独打开静态应用里的网页时，以 / 开头的地址仍按应用根目录算
+  const pageRoot = nodeFiles.find(
+    (item) =>
+      item.application?.kind === 'static' && artifact?.path.startsWith(`${item.application.root}/`),
+  )?.application?.root;
+
   return (
     <section
       aria-label="成果"
       className="oasis-dots relative flex h-[calc(100vh-44px)] min-h-[560px] flex-col overflow-hidden rounded-panel bg-glass-strong shadow-[var(--oasis-glass-edge),var(--oasis-shadow-panel)]"
     >
-      <div className="flex flex-wrap items-center gap-2 p-4">
+      <div className="flex items-center gap-2 p-4">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
-          <span className="flex min-w-0 items-center gap-2.5 rounded-full bg-glass-active py-1.5 pl-1.5 pr-4 shadow-edge-strong backdrop-blur-xl">
-            <Link
-              to="/canvas"
-              aria-label="回到画布"
-              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-track text-ink"
-            >
-              <ArrowLeft size={16} aria-hidden="true" />
-            </Link>
-            {artifact && (
-              <>
-                <Link
-                  to="/canvas"
-                  search={{ task: artifact.taskId }}
-                  className="min-w-0 truncate text-[13.5px] text-ink-muted no-underline hover:text-ink"
-                >
-                  {artifact.taskTitle}
-                </Link>
-                <span aria-hidden="true" className="text-ink-muted">
-                  /
-                </span>
-                <h1 className="m-0 min-w-0 truncate text-[15px] font-medium">
-                  {artifact.application ? artifact.application.root : artifact.name}
-                </h1>
-                <span className="shrink-0 text-[12px] text-ink-muted">
-                  {formatBytes(artifact.size)}
-                </span>
-              </>
-            )}
-          </span>
+          <Link to="/canvas" aria-label="回到画布" title="回到画布" className={`${icon} shrink-0`}>
+            <ArrowLeft size={17} aria-hidden="true" />
+          </Link>
+          {artifact && (
+            <h1 className="m-0 min-w-0 truncate text-[15px] font-medium">
+              {artifact.taskTitle}
+              <span className="ml-2 text-[13px] font-normal text-ink-muted">
+                {artifact.application ? artifact.application.root : artifact.name}
+              </span>
+            </h1>
+          )}
         </div>
         {artifact && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {[-1, 1].map((offset) => {
-              const sibling = position >= 0 ? siblings[position + offset] : undefined;
-              return sibling ? (
-                <Link
-                  key={offset}
-                  to="/canvas/artifacts/$artifactId"
-                  params={{ artifactId: sibling.id }}
-                  className={`${pill} bg-glass-active text-ink shadow-edge-strong`}
-                >
-                  {offset < 0 ? '上一个' : '下一个'}
-                </Link>
-              ) : null;
-            })}
-            <a
-              href={taskArchiveUrl(artifact.taskId)}
-              download
-              className={`${pill} bg-glass-active text-ink shadow-edge-strong`}
-            >
-              打包下载
-            </a>
-            <Link
-              to="/canvas/tasks/$taskId"
-              params={{ taskId: artifact.taskId }}
-              className={`${pill} bg-glass-active text-ink shadow-edge-strong`}
-            >
-              <Workflow size={15} aria-hidden="true" />
-              工作流
-            </Link>
-            {artifact.conversationId && (
-              <Link
-                to="/dms/$conversationId"
-                params={{ conversationId: artifact.conversationId }}
-                className={`${pill} bg-glass-active text-ink shadow-edge-strong`}
-              >
-                <MessageCircle size={15} aria-hidden="true" />
-                回到私聊
-              </Link>
-            )}
-            <button
-              type="button"
-              aria-pressed={artifact.approvedAt !== null}
-              onClick={() => approve.mutate(artifact.approvedAt === null)}
-              disabled={approve.isPending}
-              className={`${pill} border-0 ${artifact.approvedAt ? 'bg-solid text-on-solid' : 'bg-glass-active text-ink shadow-edge-strong'}`}
-            >
-              <BadgeCheck size={15} aria-hidden="true" />
-              {artifact.approvedAt ? '已批准' : '批准'}
-            </button>
-            <a
-              href={artifactContentUrl(artifact.id, true)}
-              download={artifact.name}
-              className={`${pill} bg-solid text-on-solid`}
-            >
-              <Download size={15} aria-hidden="true" />
-              下载
-            </a>
+          <div className="flex shrink-0 items-center gap-2">
             {revising ? (
               <Link
                 to="/canvas/tasks/$taskId"
                 params={{ taskId: revising.id }}
-                className={`${pill} bg-glass-active text-ink shadow-edge-strong`}
+                aria-label="正在修改，看进度"
+                title="正在修改，点开看进度"
+                className={icon}
               >
-                正在修改中…
+                <LoaderCircle size={17} aria-hidden="true" className="animate-spin" />
               </Link>
             ) : (
-              <>
+              canAnnotate && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setParameters([]);
-                    setReviseOpen(true);
-                  }}
-                  className={`${pill} border-0 bg-accent text-on-accent`}
+                  aria-label="批注"
+                  title="批注"
+                  aria-pressed={annotating}
+                  onClick={() => setAnnotating(!annotating)}
+                  className={`${icon} border-0 ${annotating ? 'bg-accent text-on-accent' : ''}`}
                 >
-                  <PencilLine size={15} aria-hidden="true" />
-                  发给 AI 修改
+                  <PencilLine size={17} aria-hidden="true" />
                 </button>
-                <ConfirmButton
-                  label="删除"
-                  question="连同工作流一起删，不能恢复，确定吗？"
-                  confirmLabel="删除"
-                  onConfirm={() => remove.mutate(artifact.taskId)}
-                  disabled={remove.isPending}
-                />
-              </>
+              )
             )}
+            <a
+              href={
+                artifact.application
+                  ? taskArchiveUrl(artifact.taskId)
+                  : artifactContentUrl(artifact.id, true)
+              }
+              download={artifact.application ? true : artifact.name}
+              aria-label="下载"
+              title={artifact.application ? '下载整个应用' : '下载'}
+              className={`${icon} bg-solid text-on-solid`}
+            >
+              <Download size={17} aria-hidden="true" />
+            </a>
           </div>
         )}
       </div>
-      {remove.isError && (
-        <p role="alert" className="m-0 px-5 pb-2 text-[13px] text-accent">
-          {remove.error instanceof ApiError ? remove.error.message : '没删掉，请重试'}
-        </p>
-      )}
       {artifact && reviseOpen && (
         <RevisePanel
           taskId={artifact.taskId}
@@ -267,14 +190,29 @@ export function ArtifactPage() {
                 />
               )}
             </div>
-          ) : artifact.application ? (
-            <div className="min-h-0 flex-1 overflow-auto rounded-card bg-glass-active shadow-edge-strong">
-              <PreviewPlayer artifactId={artifact.id} />
-            </div>
           ) : (
             <ArtifactReview
               key={artifact.id}
               artifact={artifact}
+              annotating={annotating && !revising}
+              onAnnotating={setAnnotating}
+              {...(artifact.application
+                ? {
+                    live:
+                      appEntry && staticApp && !container ? (
+                        <LivePreview
+                          key={appEntry.id}
+                          file={{ path: appEntry.path, url: artifactContentUrl(appEntry.id) }}
+                          name={staticApp.root}
+                          root={staticApp.root}
+                          assets={assets}
+                          onFallback={() => setContainerFor(artifactId)}
+                        />
+                      ) : (
+                        <PreviewPlayer artifactId={artifact.id} />
+                      ),
+                  }
+                : {})}
               // 正在修改时不能再发起修改，参数面板也就不给
               {...(revising
                 ? {}
@@ -291,6 +229,8 @@ export function ArtifactPage() {
                 downloadUrl: artifactContentUrl(artifact.id, true),
                 modelPreview: !!artifact.modelPreview,
                 ...(pdf ? { pdfUrl: artifactContentUrl(pdf.id) } : {}),
+                assets,
+                ...(pageRoot ? { root: pageRoot } : {}),
               }}
             />
           ))}

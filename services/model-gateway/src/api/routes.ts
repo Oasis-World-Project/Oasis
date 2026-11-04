@@ -96,6 +96,7 @@ function createCompletions(chat: ChatService) {
 export function registerRoutes(
   app: ServiceApp,
   services: {
+    modelRequestMaxBytes: number;
     chat: ChatService;
     decisions: DecisionService;
     runKeys: RunKeyService;
@@ -109,6 +110,7 @@ export function registerRoutes(
 ): void {
   const { chat, decisions, runKeys, tools, avatars } = services;
   const completions = createCompletions(chat);
+  const modelBody = { bodyLimit: services.modelRequestMaxBytes };
 
   async function useTool(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
     const { key } = parseWith(ToolParams, request.params);
@@ -136,10 +138,10 @@ export function registerRoutes(
 
   // ---- 内部服务用（gateway 不转发 /internal）：付费人放在 x-oasis-payer-id 头里；
   // 替任务调用时（如 task 的关卡）再带上 x-oasis-task-id / x-oasis-node-id，花费计入任务 ----
-  app.post('/internal/v1/chat/completions', (request, reply) =>
+  app.post('/internal/v1/chat/completions', modelBody, (request, reply) =>
     completions(internalCaller(request), request, reply),
   );
-  app.post('/internal/v1/decisions', (request, reply) =>
+  app.post('/internal/v1/decisions', modelBody, (request, reply) =>
     decide(internalCaller(request), request, reply),
   );
 
@@ -251,10 +253,10 @@ export function registerRoutes(
 
   // ---- 沙箱里的 agent 用：只认 Bearer 临时 Key，付费人和归属由 Key 决定 ----
   // 沙箱经入口代理只能访问这几条路径（见 infra/images/sandbox-ingress）。
-  app.post('/run/v1/chat/completions', async (request, reply) =>
+  app.post('/run/v1/chat/completions', modelBody, async (request, reply) =>
     completions(await runKeys.authenticate(request.headers.authorization), request, reply),
   );
-  app.post('/run/v1/decisions', async (request, reply) =>
+  app.post('/run/v1/decisions', modelBody, async (request, reply) =>
     decide(await runKeys.authenticate(request.headers.authorization), request, reply),
   );
   // 沙箱里的 oasis-tool：看有哪些工具、调用工具

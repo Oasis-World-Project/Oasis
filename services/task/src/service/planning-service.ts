@@ -76,7 +76,12 @@ export function createPlanning(deps: {
         logger.warn({ err }, '查不到哪些模型用不了，不排除');
         return new Set<string>();
       });
-    return models.filter((m) => usable.has(m.providerModel) && !blocked.has(m.providerModel));
+    // 地区限制按厂商生效（同一家的型号要么都能用要么都不能用）：一个型号被拒，这家的其他型号也排除
+    const vendorOf = (model: string) => model.split('/')[0];
+    const blockedVendors = new Set([...blocked].map(vendorOf));
+    return models.filter(
+      (m) => usable.has(m.providerModel) && !blockedVendors.has(vendorOf(m.providerModel)),
+    );
   }
 
   /** 目录不可读时等待恢复，不能把未知当成没有工具而编造替代方案。 */

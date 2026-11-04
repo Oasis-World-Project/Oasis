@@ -7,6 +7,15 @@ import type { ServiceClient } from '@oasis/service-kit';
 import { readLimited } from '../executor/tar.ts';
 import { inspectFiles, type InspectionLimits } from './file-inspection.ts';
 
+/** 交给看图检查的图片素材类型和单张上限（和关卡视觉检查的上限一致） */
+const IMAGE_TYPES: Record<string, 'image/png' | 'image/jpeg' | 'image/webp'> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+};
+const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+
 export function createMaterialInspector(canvas: ServiceClient, limits: InspectionLimits) {
   return async (input: MaterialInspectBody): Promise<MaterialInspectResult> => {
     if (!input.ids.length) return { files: [] };
@@ -45,6 +54,18 @@ export function createMaterialInspector(canvas: ServiceClient, limits: Inspectio
         const sha256 = createHash('sha256').update(bytes).digest('hex');
         if (bytes.length !== upload.size || (upload.sha256 && sha256 !== upload.sha256))
           throw new Error('素材大小或摘要不符');
+        // 图片素材（如批注截图）没有正文可读：原图交给关卡的看图检查，不算没读完
+        const mediaType = IMAGE_TYPES[upload.name.split('.').at(-1)?.toLowerCase() ?? ''];
+        if (mediaType && bytes.length <= IMAGE_MAX_BYTES) {
+          files.push({
+            ...base,
+            sha256,
+            status: 'complete',
+            reason: '图片素材，交给看图检查',
+            image: { mediaType, base64: bytes.toString('base64') },
+          });
+          continue;
+        }
         const report = await inspectFiles([{ path: upload.name, content: bytes }], remaining, {
           ...limits,
           totalMs: Math.max(1, limits.totalMs - (Date.now() - started)),

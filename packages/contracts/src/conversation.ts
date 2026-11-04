@@ -143,6 +143,7 @@ export const MessageBody = z.discriminatedUnion('kind', [
       /** 普通聊天回复对应的用户消息。 */
       replyTo: z.uuid().optional(),
       stopped: z.boolean().optional(),
+      resumable: z.boolean().optional(),
     }),
   }),
   z.object({ ...MessageBase, kind: z.literal('questions'), data: QuestionsCard }),
@@ -175,9 +176,12 @@ export const IntakeAnswersBody = z.object({
 export const StartIntakeBody = z.object({ messageId: z.uuid() });
 
 /** 不传 content 为重生成；传入则修改本轮用户消息并替换回复。 */
-export const ReplaceReplyBody = z.object({
-  content: z.string().trim().min(1).max(8000).optional(),
-});
+export const ReplaceReplyBody = z
+  .object({
+    content: z.string().trim().min(1).max(8000).optional(),
+    continue: z.boolean().optional(),
+  })
+  .refine((body) => !body.continue || body.content === undefined, '继续回复不能同时修改原消息');
 
 /** 修改时带上的一条批注（ADR 0012 §9）：在哪个文件、哪里、什么意见，见哪张标注截图 */
 export const RevisionNote = z.object({

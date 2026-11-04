@@ -84,13 +84,18 @@ export function registerRoutes(
       );
       return reply.type('application/json').send(await previews.report({ runId, payerId, taskId }));
     });
-    app.post('/internal/runs/:runId/application-check', async (request) => {
+    app.post('/internal/runs/:runId/application-check', async (request, reply) => {
       const { runId } = parseWith(RunParams, request.params);
       const { payerId, taskId } = parseWith(
         z.object({ payerId: z.uuid(), taskId: z.uuid() }),
         request.body,
       );
-      return previews.checkRun({ runId, payerId, taskId });
+      // 检查不设时限：task 在用户停止/取消节点时断开请求，这里随之回收浏览器
+      const abort = new AbortController();
+      reply.raw.on('close', () => {
+        if (!reply.raw.writableEnded) abort.abort();
+      });
+      return previews.checkRun({ runId, payerId, taskId, signal: abort.signal });
     });
     app.post('/internal/previews/quote', async () => previews.quote());
     app.post('/internal/previews', async (request) =>

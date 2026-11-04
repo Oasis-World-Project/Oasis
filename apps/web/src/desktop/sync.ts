@@ -31,11 +31,20 @@ export const syncProgress = {
   },
 };
 
-/** 还没同步过的成果，先登记的先下 */
+/**
+ * 同步记录里这份成果的标识：第一次同步记 id；同一个成果修改后原地换成新版（ADR 0012）时记「id@新摘要」，
+ * 这样电脑上的旧版也会被换掉。
+ */
+const syncKeyOf = (artifact: ArtifactBody, synced: ReadonlySet<string>) =>
+  synced.has(artifact.id) && artifact.replacesSha256 && artifact.sha256
+    ? `${artifact.id}@${artifact.sha256}`
+    : artifact.id;
+
+/** 还没同步过的成果（包括原地换成新版、电脑上还是旧版的），先登记的先下 */
 export const pendingOf = (artifacts: ArtifactBody[], status: DesktopSyncStatus) => {
   const synced = new Set(status.synced);
   return artifacts
-    .filter((a) => !synced.has(a.id))
+    .filter((a) => !synced.has(syncKeyOf(a, synced)))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 };
 
@@ -47,6 +56,7 @@ export async function syncOnce(
 ): Promise<void> {
   if (progress.running || !status.folder) return;
   const pending = pendingOf(artifacts, status);
+  const synced = new Set(status.synced);
   if (pending.length === 0) {
     update({ total: 0, done: 0, error: null });
     return;
@@ -58,7 +68,7 @@ export async function syncOnce(
       if (!response.ok) throw new Error(`下载「${artifact.name}」失败（${response.status}）`);
       if (!response.body) throw new Error('下载内容为空');
       const token = await bridge.beginSyncedFile(
-        artifact.id,
+        syncKeyOf(artifact, synced),
         artifact.syncPath,
         artifact.size,
         artifact.sha256,

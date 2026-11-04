@@ -30,11 +30,19 @@ export function createUploadService(deps: {
   const { repo, store } = deps;
 
   let timer: ReturnType<typeof setInterval> | undefined;
+  /** 删掉一个上传：自己的对象一起删（旧式修订素材指向成果对象，那个随成果删） */
+  const purge = async (row: Upload) => {
+    if (row.objectKey.startsWith('uploads/')) await store.delete(row.objectKey);
+    await repo.remove(row.id);
+  };
+  // 清扫（每小时）：没传完的、传完 24 小时一直没被消息或批注用上的，都彻底删掉（2026-11-05 真删除）
   const cleanup = async () => {
-    for (const row of await repo.stale(new Date(Date.now() - 24 * 3600_000))) {
+    const before = new Date(Date.now() - 24 * 3600_000);
+    for (const row of await repo.stale(before)) {
       await store.delete(row.objectKey);
       await repo.remove(row.id);
     }
+    for (const row of await repo.unclaimed(before)) await purge(row);
   };
   return {
     start() {
@@ -96,15 +104,36 @@ export function createUploadService(deps: {
      * 内部：查这些文件，必须都存在且都是这个人的。
      * partial：只返回还在的（再改新版时筛掉已随上一版删除的修订素材，ADR 0012）
      */
-    async lookup(ownerId: string, ids: string[], partial = false): Promise<UploadBody[]> {
+    async lookup(
+      ownerId: string,
+      ids: string[],
+      partial = false,
+      claim = false,
+    ): Promise<UploadBody[]> {
       const unique = [...new Set(ids)];
       const rows = await repo.findOwned(ownerId, unique);
       if (!partial && rows.length !== unique.length) throw notFound();
+      // 随消息发出：文件被用上了，清扫不再删它
+      if (claim)
+        await repo.claim(
+          ownerId,
+          rows.map((row) => row.id),
+        );
       const byId = new Map(rows.map((row) => [row.id, row]));
       return unique.flatMap((id) => {
         const row = byId.get(id);
         return row ? [toUploadBody(row)] : [];
       });
+    },
+
+    /**
+     * 内部：彻底删除这个人的这些文件（消息被删、群被解散时 conversation 调用，2026-11-05 真删除）。
+     * 不是他的、已经删过的跳过；幂等。
+     */
+    async remove(ownerId: string, ids: string[]): Promise<number> {
+      const rows = await repo.findOwned(ownerId, [...new Set(ids)]);
+      for (const row of rows) await purge(row);
+      return rows.length;
     },
 
     /** 内部：取文件内容（harness 放进沙箱）；是不是付费人的文件，conversation 收附件时已核对 */

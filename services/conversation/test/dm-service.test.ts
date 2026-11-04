@@ -11,7 +11,13 @@ import type {
 } from '../src/repo/conversation-repo.ts';
 import { createDmService, toMessageBody } from '../src/service/dm-service.ts';
 import { createIntakeService } from '../src/service/intake-service.ts';
-import { taskBrief, intakeMessages, validateSheetSources } from '../src/service/intake.ts';
+import {
+  FALLBACK_SHEET_INTRO,
+  groundRequirements,
+  intakeMessages,
+  readIntakeReply,
+  taskBrief,
+} from '../src/service/intake.ts';
 import { TaskSheet } from '@oasis/contracts/task';
 import type { IntakeTurn } from '../src/repo/schema.ts';
 
@@ -72,7 +78,7 @@ describe('任务单来源与默认答案', () => {
       ),
     ).toContain('采用当轮默认项：中文为主');
   });
-  it('不能引用未选中的选项、伪造附件摘要或引文', () => {
+  it('引文按原文核对：对不上的来源去掉，原话和明确选择缺了就补上，不抛错', () => {
     const sheet = TaskSheet.parse({
       title: '测试',
       deliverables: [{ name: '表', form: 'XLSX' }],
@@ -87,15 +93,85 @@ describe('任务单来源与默认答案', () => {
         },
       ],
     });
-    expect(() => validateSheetSources(sheet, '按报价计算', turns)).not.toThrow();
-    sheet.requirements![0]!.sources = [
-      { kind: 'answer', round: 1, questionId: 'q1', optionId: 'a', quote: '全中文' },
+    expect(groundRequirements(sheet, '按报价计算', turns).requirements).toEqual([
+      { id: 'r1', text: '按报价计算', sources: [{ kind: 'request', quote: '按报价计算' }] },
+      { ...sheet.requirements![0]!, id: 'r2' },
+    ]);
+    sheet.requirements = [
+      {
+        id: 'x',
+        text: '全中文',
+        sources: [{ kind: 'answer', round: 1, questionId: 'q1', optionId: 'a', quote: '全中文' }],
+      },
+      {
+        id: 'x',
+        text: '按市场估价',
+        sources: [
+          { kind: 'material', uploadId: OWNER, sha256: 'a'.repeat(64), quote: '市场估价' },
+          { kind: 'request', quote: '报价' },
+        ],
+      },
     ];
-    expect(() => validateSheetSources(sheet, '按报价计算', turns)).toThrow('来源或引文不符');
-    sheet.requirements![0]!.sources = [
-      { kind: 'material', uploadId: OWNER, sha256: 'a'.repeat(64), quote: '市场估价' },
-    ];
-    expect(() => validateSheetSources(sheet, '按报价计算', turns)).toThrow('来源或引文不符');
+    expect(groundRequirements(sheet, '按报价计算', turns).requirements).toEqual([
+      { id: 'r1', text: '按市场估价', sources: [{ kind: 'request', quote: '报价' }] },
+      {
+        id: 'r2',
+        text: '语言？：中文为主，保留专名',
+        sources: [
+          {
+            kind: 'answer',
+            round: 1,
+            questionId: 'q1',
+            optionId: 'b',
+            quote: '中文为主，保留专名',
+          },
+        ],
+      },
+    ]);
+  });
+  it('回答里的小毛病就地整理；用不了时给出原因而不是抛错', () => {
+    const read = readIntakeReply(
+      JSON.stringify({
+        type: 'sheet',
+        intro: '',
+        questions: [
+          {
+            id: 'q1',
+            text: '问',
+            options: [
+              { id: 'a', label: '一' },
+              { id: 'b', label: '二' },
+            ],
+            default: 'z',
+          },
+        ],
+        sheet: null,
+      }),
+      false,
+    );
+    expect(read.reply).toMatchObject({ type: 'questions', questions: [{ default: 'a' }] });
+    const long = readIntakeReply(
+      JSON.stringify({
+        type: 'sheet',
+        intro: '',
+        sheet: {
+          title: '长'.repeat(80),
+          deliverables: [{ name: '表', form: 'XLSX' }],
+          criteria: ['好'],
+          style: [],
+          budgetMicro: null,
+          assumptions: [],
+          requirements: [],
+        },
+      }),
+      true,
+    );
+    expect(long.reply?.type === 'sheet' && long.reply.sheet.title).toHaveLength(60);
+    expect(readIntakeReply('好的', false)).toEqual({
+      reply: null,
+      problem: '回答里没有 JSON 对象',
+    });
+    expect(readIntakeReply(questions(), true).reply).toBeNull();
   });
 });
 
@@ -239,14 +315,14 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
         rows.find((r) => r.id === id)!,
         { data },
       ),
-    async markTaskRemoved(conversationId, taskId, removed) {
+    async removeTaskMessages(conversationId, taskId) {
       const hits = rows.filter(
         (r) =>
           r.conversationId === conversationId &&
           ['task', 'delivery', 'notice'].includes(r.kind) &&
           r.data.taskId === taskId,
       );
-      for (const r of hits) r.data = { ...r.data, removed };
+      for (const r of hits) rows.splice(rows.indexOf(r), 1);
       return hits.length;
     },
     async createIntake(intake) {
@@ -297,30 +373,23 @@ type ChatBody = { model: string; stream?: boolean; messages: { role: string; con
 const seenRequests: { payer: unknown; body: ChatBody }[] = [];
 const intakeRequests: ChatBody[] = [];
 let decisionCalls = 0;
-let preserveProbability = 0.9;
-let selectionFailures = 0;
+/** 接需求的非流式调用本身失败（网络/额度）时返回的状态码 */
+let intakeStatus = 0;
+let blocked: string[] = [];
 const modelGateway = Fastify();
-modelGateway.post('/internal/v1/decisions', async (request) => {
+modelGateway.get('/internal/v1/models/unavailable', async () => ({ models: blocked }));
+modelGateway.post('/internal/v1/decisions', async () => {
   decisionCalls += 1;
-  const questions = (request.body as { questions: Record<string, unknown> }).questions;
-  const selections = Object.keys(questions).filter((key) => key.startsWith('answer_'));
-  return {
-    answers: {
-      ...Object.fromEntries(
-        selections.map((key) => [
-          key,
-          { noul: key === 'answer_1_q1' && selectionFailures-- > 0 ? 0.1 : 0.9 },
-        ]),
-      ),
-      is_task: { type: 'noul', noul: taskProbability },
-      preserved: { noul: preserveProbability },
-    },
-  };
+  return { answers: { is_task: { type: 'noul', noul: taskProbability } } };
 });
 modelGateway.post('/internal/v1/chat/completions', async (request, reply) => {
   const body = request.body as ChatBody;
   if (body.stream === false) {
     intakeRequests.push(body);
+    if (intakeStatus)
+      return reply
+        .code(intakeStatus)
+        .send({ error: { code: 'provider_unavailable', message: '连不上', requestId: 'r' } });
     return {
       choices: [
         {
@@ -363,9 +432,17 @@ modelGateway.post('/internal/v1/chat/completions', async (request, reply) => {
 
 /** 假 task：记下建任务的请求 */
 const createdTasks: Record<string, unknown>[] = [];
+/** 建任务的请求到了 task，但回给 conversation 的是失败（超时、断线） */
+let taskFailsOnce = false;
 const task = Fastify();
 task.post('/internal/tasks', async (request, reply) => {
   createdTasks.push(request.body as Record<string, unknown>);
+  if (taskFailsOnce) {
+    taskFailsOnce = false;
+    return reply
+      .code(503)
+      .send({ error: { code: 'unavailable', message: 'task 暂时不可用', requestId: 'r' } });
+  }
   return reply.code(201).send({
     id: TASK_ID,
     title: '小木屋首页',
@@ -396,8 +473,20 @@ const LOGO = {
   contentType: 'image/png',
 };
 const canvas = Fastify();
+/** 真删除：conversation 让 canvas 删掉的文件；认领过的文件 */
+const deletedUploads: { ownerId: string; ids: string[] }[] = [];
+const claimedUploads: string[] = [];
+canvas.post('/internal/uploads/delete', async (request) => {
+  deletedUploads.push(request.body as { ownerId: string; ids: string[] });
+  return { deleted: (request.body as { ids: string[] }).ids.length };
+});
 canvas.post('/internal/uploads/lookup', async (request, reply) => {
-  const { ownerId, ids } = request.body as { ownerId: string; ids: string[] };
+  const { ownerId, ids, claim } = request.body as {
+    ownerId: string;
+    ids: string[];
+    claim?: boolean;
+  };
+  if (claim) claimedUploads.push(...ids);
   const files = [PHOTO, LOGO].filter((f) => ids.includes(f.id));
   if (ownerId !== OWNER || files.length !== ids.length)
     return reply
@@ -431,9 +520,10 @@ beforeEach(() => {
   seenRequests.length = 0;
   intakeRequests.length = 0;
   createdTasks.length = 0;
+  taskFailsOnce = false;
   decisionCalls = 0;
-  preserveProbability = 0.9;
-  selectionFailures = 0;
+  intakeStatus = 0;
+  blocked = [];
   finishReasons = [];
   repo = memoryRepo();
   const logger = pino({ level: 'silent' });
@@ -612,6 +702,111 @@ describe('普通聊天的替换、删除和停止', () => {
       expect(repo.rows[1]?.content).toBe('你好，我在。');
     },
   );
+
+  it('长度上限单独说明，手打继续沿原回复追加，不再识别任务或增加消息', async () => {
+    gatewayMode = 'length';
+    const events = await send('原问题');
+    expect(events.at(-1)).toMatchObject({ type: 'error', code: 'reply_length' });
+    const reply = repo.rows[1]!;
+    const prefix = reply.content;
+    expect(reply.data.resumable).toBe(true);
+    const decisions = decisionCalls;
+    gatewayMode = 'ok';
+    await send('继续');
+    expect(repo.rows).toHaveLength(2);
+    expect(decisionCalls).toBe(decisions);
+    expect(reply.content).toBe(prefix + '你好，我在。');
+    expect(reply).toMatchObject({
+      status: 'complete',
+      error: null,
+      data: { resumable: false, stopped: false },
+    });
+    expect(seenRequests.at(-1)!.body.messages.map((m) => m.content)).toEqual([
+      '你是 Claude',
+      '原问题',
+      prefix,
+      '从上次中断处继续，保留原要求，不重复已经输出的内容。',
+    ]);
+    await expect(
+      service.replaceReply({
+        ownerId: OWNER,
+        conversationId: CONV,
+        messageId: repo.rows[0]!.id,
+        continue: true,
+        requestId: 'dup',
+        emit: () => {},
+      }),
+    ).rejects.toMatchObject({ code: 'reply_not_paused' });
+  });
+
+  it('识别前暂停后继续，保留原需求和附件，重新走任务识别而非识别继续二字', async () => {
+    const attachment = { id: OWNER, name: '参考图.png', size: 300, contentType: 'image/png' };
+    const user = await repo.insertMessage({
+      conversationId: CONV,
+      authorKind: 'user',
+      authorId: OWNER,
+      content: '制作马车',
+      status: 'complete',
+      data: { intent: 'chat', stopRequested: true, attachments: [attachment] },
+    });
+    await repo.insertMessage({
+      conversationId: CONV,
+      authorKind: 'ai',
+      authorId: 'claude',
+      content: '',
+      status: 'complete',
+      data: { replyTo: user.id, stopped: true },
+    });
+    taskProbability = 0.95;
+    intakeReplies = [questions()];
+    await send('继续');
+    expect(repo.rows.filter((m) => m.authorKind === 'user')).toHaveLength(1);
+    expect(repo.rows.some((m) => m.kind === 'questions')).toBe(true);
+    expect(user.data.intent).toBe('task');
+    const open = await repo.findOpenIntake(CONV);
+    expect(open?.request).toBe('制作马车');
+    expect(open?.materials).toEqual([{ uploadId: OWNER, name: '参考图.png', size: 300 }]);
+    expect(seenRequests).toHaveLength(0);
+  });
+
+  it('继续中再次暂停保留前缀和新片段，并拒绝同时重入', async () => {
+    gatewayMode = 'length';
+    await send('原问题');
+    const user = repo.rows[0]!,
+      reply = repo.rows[1]!,
+      prefix = reply.content;
+    gatewayMode = 'slow';
+    let received!: () => void;
+    const delta = new Promise<void>((resolve) => {
+      received = resolve;
+    });
+    const running = service.replaceReply({
+      ownerId: OWNER,
+      conversationId: CONV,
+      messageId: user.id,
+      continue: true,
+      requestId: 'resume',
+      emit: (e) => {
+        if (e.type === 'delta' && e.text === '收到的部分') received();
+      },
+    });
+    await delta;
+    await expect(
+      service.replaceReply({
+        ownerId: OWNER,
+        conversationId: CONV,
+        messageId: user.id,
+        continue: true,
+        requestId: 'dup',
+        emit: () => {},
+      }),
+    ).rejects.toMatchObject({ code: 'conversation_busy' });
+    await service.stopReply(OWNER, CONV, user.id);
+    await running;
+    expect(reply.content).toBe(prefix + '收到的部分');
+    expect(reply.data.stopped).toBe(true);
+    expect(repo.rows).toHaveLength(2);
+  });
 
   it.each(['length', 'no-done'] as const)('普通回复 %s 也不能伪装正常完成', async (mode) => {
     gatewayMode = mode;
@@ -796,7 +991,7 @@ describe('认出任务', () => {
 });
 
 describe('接需求', () => {
-  it('真实接需求链读取材料并核对来源；语义审查失败时有限重试，不确认漂移任务单', async () => {
+  it('真实接需求链读取材料并核对来源；一次生成即给出任务单，不做会打回的语义审查', async () => {
     const request = '按材料报价做费用表，中文为主';
     const evidence = '按报价计算，小计另加10%';
     const generated = {
@@ -859,22 +1054,18 @@ describe('接需求', () => {
     expect(messages.at(-1)?.kind).toBe('sheet');
     expect(repo.intakes[0]?.sheet?.materials).toEqual([PHOTO.name]);
     expect(intakeRequests.at(-1)?.messages[1]?.content).toContain(evidence);
-    expect(repo.intakes[0]?.sheet?.requirements?.[0]?.sources[0]).toMatchObject({
-      sha256: 'a'.repeat(64),
-    });
-    await prepared.cancel(conversation);
-    preserveProbability = 0.1;
-    intakeReplies = Array.from({ length: 3 }, () => JSON.stringify(generated));
-    await expect(
-      prepared.start({
-        conversation,
-        ownerId: OWNER,
-        request,
-        attachments: [PHOTO],
-        history: [],
-        requestId: 'r2',
-      }),
-    ).rejects.toMatchObject({ code: 'intake_failed' });
+    expect(repo.intakes[0]?.sheet?.requirements).toEqual([
+      { id: 'r1', text: request, sources: [{ kind: 'request', quote: request }] },
+      {
+        id: 'r2',
+        text: '按原报价小计加10%',
+        sources: [
+          { kind: 'material', uploadId: PHOTO.id, sha256: 'a'.repeat(64), quote: evidence },
+        ],
+      },
+    ]);
+    expect(intakeRequests).toHaveLength(1);
+    expect(decisionCalls).toBe(0);
     expect(createdTasks).toHaveLength(0);
   });
   it('任务说明保留用户补充、链接和问题卡答案，超长不会静默截断', () => {
@@ -936,9 +1127,9 @@ describe('接需求', () => {
     expect((err as HttpError).statusCode).toBe(400);
   });
 
-  it('直接开始：告诉 AI 不能再问；它还是给了问题就算不合格，带着原因重来', async () => {
+  it('直接开始：告诉 AI 不能再问；它还是给了问题也不重来，按原话和选择列出任务单', async () => {
     await begin();
-    intakeReplies = [questions(2), sheet()];
+    intakeReplies = [questions(2)];
     const [message] = await intake.answer({
       conversation: await conversation(),
       ownerId: OWNER,
@@ -948,59 +1139,59 @@ describe('接需求', () => {
     });
     expect(message!.kind).toBe('sheet');
     expect(intakeRequests[1]!.messages[1]!.content).toContain('用户点了「直接开始」');
-    expect(intakeRequests[2]!.messages.at(-1)!.content).toContain('现在不能再问了，必须给出任务单');
-  });
-
-  it('写不出合格的 JSON：再要一次，还不行就换默认模型', async () => {
-    taskProbability = 0.9;
-    intakeReplies = ['好的我来问几个问题', '{"type":"questions"}', questions()];
-    const events = await send('帮我写个官网首页开头');
-    expect(lastDone(events).kind).toBe('questions');
-    expect(intakeRequests.map((r) => r.model)).toEqual([
-      'anthropic/x',
-      'anthropic/x',
-      'deepseek/fallback',
+    expect(intakeRequests).toHaveLength(2);
+    expect(toMessageBody(message!).data).toMatchObject({ intro: FALLBACK_SHEET_INTRO });
+    expect(repo.intakes[0]!.sheet!.requirements!.map((r) => r.text)).toEqual([
+      '帮我写个官网首页开头',
+      '首页给谁看（第 1 轮）：想来度假的家庭',
+      '语气：温馨',
     ]);
   });
 
-  it('三个都不行：这条标记失败，给出能看懂的原因', async () => {
+  it('写不出 JSON 也只调用一次：直接按原话列出任务单，流程不中断', async () => {
     taskProbability = 0.9;
-    intakeReplies = ['x', 'y', 'z'];
+    intakeReplies = ['好的我来问几个问题'];
     const events = await send('帮我写个官网首页开头');
-    expect(events.at(-1)).toEqual({
-      type: 'error',
-      code: 'intake_failed',
-      message: '任务单暂时未能生成，原话和已提交的回答已保存，请继续整理或稍后重试',
-    });
+    const done = lastDone(events);
+    expect(done.kind).toBe('sheet');
+    expect(done.content).toContain('帮我写个官网首页开头');
+    expect(intakeRequests.map((r) => r.model)).toEqual(['anthropic/x']);
   });
 
-  it('失败结果被带回修复；生成请求使用契约约束且不消耗额外推理输出', async () => {
+  it('私聊的 AI 在当前地区用不了：事先改用默认模型，不先失败再换', async () => {
+    taskProbability = 0.9;
+    blocked = ['anthropic/x'];
+    intakeReplies = [questions()];
+    expect(lastDone(await send('帮我写个官网首页开头')).kind).toBe('questions');
+    expect(intakeRequests.map((r) => r.model)).toEqual(['deepseek/fallback']);
+  });
+
+  it('字段不合格不重试；生成请求使用契约约束、留足输出上限且不消耗额外推理输出', async () => {
     await begin();
     const invalid = JSON.parse(sheet());
     invalid.sheet.criteria = ['要求8', 8];
-    intakeReplies = [JSON.stringify(invalid), sheet()];
-    await intake.answer({
+    intakeReplies = [JSON.stringify(invalid)];
+    const [message] = await intake.answer({
       conversation: await conversation(),
       ownerId: OWNER,
       answers: {},
       skip: true,
-      requestId: 'repair',
+      requestId: 'once',
     });
-    const retried = intakeRequests.at(-1)!;
-    expect(
-      retried.messages.some((m) => m.role === 'assistant' && m.content.includes('要求8')),
-    ).toBe(true);
-    expect(retried).toMatchObject({
+    expect(message?.kind).toBe('sheet');
+    expect(intakeRequests).toHaveLength(2);
+    expect(intakeRequests.at(-1)).toMatchObject({
+      max_tokens: 2000,
       response_format: { type: 'json_schema' },
       reasoning: { enabled: false },
       provider: { require_parameters: true },
     });
   });
 
-  it('回答后生成失败保留卡片；旧版空指针也能恢复，重试不覆盖已保存选择', async () => {
+  it('网络失败保留卡片；旧版空指针也能恢复，继续整理不覆盖已保存选择', async () => {
     await begin();
     const card = repo.rows.find((m) => m.kind === 'questions')!;
-    intakeReplies = ['x', 'y', 'z'];
+    intakeStatus = 503;
     await expect(
       intake.answer({
         conversation: await conversation(),
@@ -1009,11 +1200,13 @@ describe('接需求', () => {
         skip: true,
         requestId: 'fail',
       }),
-    ).rejects.toMatchObject({ code: 'intake_failed' });
+    ).rejects.toMatchObject({ code: 'provider_unavailable' });
+    expect(intakeRequests).toHaveLength(2);
+    intakeStatus = 0;
     expect(repo.intakes[0]!.cardMessageId).toBe(card.id);
     // 模拟修复前遗留的状态，答案已保存但卡片指针被提前清空。
     repo.intakes[0]!.cardMessageId = null;
-    intakeReplies = [questions(2), sheet()];
+    intakeReplies = [sheet()];
     const [resumed] = await intake.answer({
       conversation: await conversation(),
       ownerId: OWNER,
@@ -1027,20 +1220,36 @@ describe('接需求', () => {
     expect(repo.intakes[0]!.turns.filter((t) => t.kind === 'questions')).toHaveLength(1);
   });
 
-  it('即使返回可解析 JSON，length 结束也不能当成功；过期问题卡不能错答下一轮', async () => {
+  it('length 结束即使能解析也不当成功，也不重来：按原话和选择列出任务单', async () => {
     await begin();
-    finishReasons = ['length', 'stop'];
-    intakeReplies = [sheet('截断结果'), questions(2)];
+    finishReasons = ['length'];
+    intakeReplies = [sheet('截断结果')];
+    const [message] = await intake.answer({
+      conversation: await conversation(),
+      ownerId: OWNER,
+      answers: { q1: 'b' },
+      skip: false,
+      requestId: 'cut',
+    });
+    expect(message?.kind).toBe('sheet');
+    expect(repo.intakes[0]!.sheet!.title).toBe('帮我写个官网首页开头');
+    expect(repo.intakes[0]!.sheet!.requirements!.map((r) => r.text)).toContain(
+      '首页给谁看（第 1 轮）：情侣',
+    );
+    expect(intakeRequests).toHaveLength(2);
+  });
+
+  it('过期问题卡不能错答下一轮', async () => {
+    await begin();
+    intakeReplies = [questions(2)];
     await intake.answer({
       conversation: await conversation(),
       ownerId: OWNER,
       answers: {},
       skip: false,
-      requestId: 'cut',
+      requestId: 'next',
     });
-    expect(repo.intakes[0]!.status).toBe('asking');
     expect(repo.intakes[0]!.round).toBe(2);
-    expect(intakeRequests.at(-1)!.messages.at(-1)!.content).toContain('被截断');
     const calls = intakeRequests.length;
     await expect(
       intake.answer({
@@ -1055,41 +1264,31 @@ describe('接需求', () => {
     expect(intakeRequests).toHaveLength(calls);
   });
 
-  it('需求保持检查指明未确认的用户选择，修复不以降低验收门槛放行', async () => {
+  it('模型漏掉的用户选择由系统按原文补进要求，不调用语义审查也不重试', async () => {
     await begin();
     const generated = JSON.parse(sheet());
     generated.sheet.requirements = [
       { id: 'r1', text: '写官网', sources: [{ kind: 'request', quote: '官网' }] },
     ];
-    intakeReplies = [JSON.stringify(generated), JSON.stringify(generated)];
-    selectionFailures = 1;
-    const prepared = createIntakeService({
-      repo,
-      agent: createServiceClient('agent', urls.agent),
-      modelGateway: createServiceClient('model-gateway', urls.gateway),
-      task: createServiceClient('task', urls.task),
-      harness: createServiceClient('harness', urls.task),
-      config: {
-        detectModel: 'jev',
-        detectHigh: 0.7,
-        detectLow: 0.4,
-        fallbackModel: 'fallback',
-        maxRounds: 3,
-        maxTokens: 2000,
-      },
-      logger: pino({ level: 'silent' }),
-    });
-    await prepared.answer({
+    intakeReplies = [JSON.stringify(generated)];
+    const decisions = decisionCalls;
+    await intake.answer({
       conversation: await conversation(),
       ownerId: OWNER,
       answers: { q1: 'b' },
       skip: false,
       requestId: 'semantic',
     });
-    expect(intakeRequests.at(-1)!.messages.at(-1)!.content).toContain(
-      '第1轮「首页给谁看（第 1 轮）」选择「情侣」',
-    );
-    expect(intakeRequests).toHaveLength(3);
+    expect(repo.intakes[0]!.sheet!.requirements).toEqual([
+      { id: 'r1', text: '写官网', sources: [{ kind: 'request', quote: '官网' }] },
+      {
+        id: 'r2',
+        text: '首页给谁看（第 1 轮）：情侣',
+        sources: [{ kind: 'answer', round: 1, questionId: 'q1', optionId: 'b', quote: '情侣' }],
+      },
+    ]);
+    expect(intakeRequests).toHaveLength(2);
+    expect(decisionCalls).toBe(decisions);
     expect(createdTasks).toHaveLength(0);
   });
 
@@ -1175,6 +1374,49 @@ describe('接需求', () => {
     expect(lastDone(await send('谢谢')).kind).toBe('text');
   });
 
+  it('确认失败后再点：带同一个任务 ID 重交，task 不会建出第二个；改过的任务单换新 ID', async () => {
+    await begin();
+    intakeReplies = [sheet()];
+    await intake.answer({
+      conversation: await conversation(),
+      ownerId: OWNER,
+      answers: {},
+      skip: true,
+      requestId: 'r',
+    });
+    taskFailsOnce = true;
+    await expect(
+      intake.confirm({ conversation: await conversation(), ownerId: OWNER, requestId: 'r1' }),
+    ).rejects.toMatchObject({ statusCode: 503 });
+    expect(repo.intakes[0]!.status).toBe('sheet');
+    await intake.confirm({ conversation: await conversation(), ownerId: OWNER, requestId: 'r2' });
+    expect(createdTasks).toHaveLength(2);
+    expect(createdTasks[1]!.id).toBe(createdTasks[0]!.id);
+    expect(createdTasks[0]!.id).toEqual(expect.any(String));
+  });
+
+  it('确认失败后用户改了任务单：新单换新的任务 ID，不沿用旧单留下的', async () => {
+    await begin();
+    intakeReplies = [sheet()];
+    await intake.answer({
+      conversation: await conversation(),
+      ownerId: OWNER,
+      answers: {},
+      skip: true,
+      requestId: 'r',
+    });
+    taskFailsOnce = true;
+    await expect(
+      intake.confirm({ conversation: await conversation(), ownerId: OWNER, requestId: 'r1' }),
+    ).rejects.toMatchObject({ statusCode: 503 });
+    intakeReplies = [sheet('小木屋首页（活泼版）')];
+    await send('语气改活泼一点');
+    expect(repo.intakes[0]!.taskId).toBeNull();
+    await intake.confirm({ conversation: await conversation(), ownerId: OWNER, requestId: 'r2' });
+    expect(createdTasks[1]).toMatchObject({ title: '小木屋首页（活泼版）' });
+    expect(createdTasks[1]!.id).not.toBe(createdTasks[0]!.id);
+  });
+
   it('不做了：任务单作废，回一句话，回到普通聊天；没在接需求时取消是 409', async () => {
     await begin();
     const [message] = await intake.cancel(await conversation());
@@ -1193,12 +1435,19 @@ describe('接需求', () => {
 });
 
 describe('随消息发文件（ADR 0007 §4）', () => {
-  it('附件记在用户消息上；聊天时 AI 知道附了哪些文件', async () => {
+  it('附件记在用户消息上；聊天时 AI 知道附了哪些文件；删掉消息时文件在 canvas 里一起彻底删掉', async () => {
+    deletedUploads.length = 0;
+    claimedUploads.length = 0;
     const events = await send('看看这张照片', false, [PHOTO.id]);
     const accepted = events[0] as Extract<StreamEvent, { type: 'accepted' }>;
     expect(accepted.userMessage.data).toMatchObject({ attachments: [PHOTO], intent: 'chat' });
     const toModel = seenRequests[0]!.body.messages.at(-1)!.content;
     expect(toModel).toContain('随消息附了文件：民宿照片.jpg（2.3 MB）');
+    // 随消息发出就认领，canvas 的清扫不会删它
+    expect(claimedUploads).toEqual([PHOTO.id]);
+    await service.deleteMessage(OWNER, CONV, accepted.userMessage.id);
+    expect(deletedUploads).toEqual([{ ownerId: OWNER, ids: [PHOTO.id] }]);
+    expect(repo.rows).toHaveLength(0);
   });
 
   it('文件不存在或不是自己的：整条消息不收，400', async () => {

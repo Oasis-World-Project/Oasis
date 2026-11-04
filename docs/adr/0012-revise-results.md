@@ -1,90 +1,59 @@
 # ADR 0012：5.11 修改成果
 
-- 状态：设计已定（2026-10-31，Claude 定，待用户确认）；5.11a 按此实现
-- 依据：ADR 0003 §1（修改成果、旧版本不保留）、ADR 0005（进门和出门）、ADR 0007（前端主干、画布与桌面同步）、`claude/canvas-module.md`（2026-10-22 修订版）、AGENTS.md
-- 范围：contracts、task、canvas、conversation、harness、web、desktop。不新增服务。
+- 状态：已实施。2026-11-05 用户决定：修改在**原任务里接着原会话做**，不再新建修订任务（取代本 ADR 最初的“新建一条工作流、整体替换上一版”）。§8 之后的实施记录描述的是当时的旧流程，保留为历史。
+- 依据：ADR 0003 §1（修改成果、旧版本不保留）、ADR 0004 §2（检查只提醒、不拦截）、ADR 0005（进门和出门）、ADR 0007（画布与桌面同步）、AGENTS.md
+- 范围：contracts、task、canvas、conversation、web、desktop。不新增服务、不新增表（§15 给 canvas `uploads` 加了一列）。
 
 ## 1. 用户看到的规则
 
 | 规则 | 内容 |
 |---|---|
-| 修改就是新的一版 | 用户在成果页写修改意见（以后加批注）并「发给 AI 修改」，系统新建一条工作流做出新版。用户看来就是重新生成；内部由规划员决定复用多少（见 §3） |
-| 不再问需求 | 修改不走问题卡和任务单确认：修改意见由代码并入上一版的任务单，直接开跑。私聊里出现用户的修改意见和新的任务卡。用户在任务单里设过花费上限的，预估超过上限仍会先问（ADR 0005 原有规则） |
-| 发给谁 | 默认是做出上一版的私聊 AI（原会话）；可以换成另一个 AI，修改出现在和那个 AI 的私聊里。和原来一样，这个 AI 只负责接需求，节点用什么模型由工作流决定 |
-| 整体替换 | 新版顺利交付后，画布里上一版的全部成果被新版替换；上一版的工作流和中间产物一起清理。旧版本不保留、无法找回。新版沿用上一版在同步文件夹里的目录名 |
-| 新版没做成 | 失败或取消时上一版原样保留，什么也不替换 |
-| 同时只改一版 | 一份成果正在修改时，不能再发起第二次修改，也不能删除它；先取消正在进行的修改 |
-| 新版要交齐 | 新版会整体替换上一版，所以必须交齐任务单里的全部交付物；没要求改的文件原样带过去 |
-| 删除成果 | 以任务为单位：删除这个任务在画布里的全部成果，连同它的工作流和中间产物。要二次确认。进行中的任务先取消才能删。花费记录（账本）保留 |
-| 电脑上的文件 | 已同步到电脑的旧版文件，如果用户没改过，新版直接覆盖；用户改过的不覆盖，新版另存为「名字 (新版).扩展名」。删除成果不会删除电脑上的文件 |
-| 批准 | 只是成果上的一个「已批准」记号，方便用户自己区分；新版不带批准（5.11b） |
-| 按段重做 | 不单设接口：批注或修改意见只指向某一章、某一张、某一轨即可，新版只改那里，其余原样带过去 |
-| 参数面板 | 只影响观看的（播放器音量、3D 视角、灯光、线框）在页面上直接调，不改成果；要改成品的参数（字幕字号与位置、配乐音量、色温、3D 材质）在面板里填好后，生成一条结构化的修改意见，走同一条修改路径（5.11c） |
-
-旧版的私聊卡片（任务卡、交付消息）保留文字记录，但标成「已被新版本替换」或「已删除」，不再提供下载和工作流入口。
+| 在原任务里接着改 | 用户在成果页批注（顶栏画笔图标）并在批注面板底部「发给 AI 修改」，可再补文字意见、附文件。原任务接着跑：负责交付的节点接着自己上次的会话按意见改，下游节点基于上游新产出接着自己的会话跟着更新。不新建任务、不重新规划、不重新问需求，画布上始终只有这一个任务卡片 |
+| 发给谁 | 默认是做出这一版的私聊 AI；可以换成另一个 AI，修改意见和任务卡出现在那个私聊里。节点用什么模型仍由工作流决定 |
+| 原地换成新版 | 改好后画布里的成果原地更新：链接、同步路径不变，登记时间更新；已经交给 AI 处理过的批注和截图一起清掉。没改的文件不动。旧版本不保留 |
+| 没改成 | 节点断网停下时任务停在那里，用户点开节点「继续」；用户取消时成果保持上一版（内容只在新版交付时才替换），之后可以再发起修改 |
+| 同时只改一版 | 任务正在改（没结束）时不能再发起修改，成果页顶栏的批注图标换成转圈图标，点开看进度 |
+| 删除成果 | 以任务为单位：在画布任务卡片上点垃圾桶图标、原地确认「彻底删除？」。删除是真删除（§15）：数据库记录、对象存储里的文件、运行存档、聊天里的任务卡片一起删掉，不留回收站；只保留账本里的金额记录 |
+| 电脑上的文件 | 已同步的旧版如果用户没改过就直接覆盖；改过的另存为「名字 (新版).扩展名」。删除成果不删电脑上的文件 |
+| 批准 | 已从界面去掉（用户 2026-11-04 认为没有意义）；接口和 `approved_at` 列保留不用 |
+| 按段重做 | 批注或修改意见只指向某一章、某一张、某一块即可，节点只改那里 |
+| 参数面板 | 只影响观看的在页面上直接调；改成品的参数生成一条结构化修改意见，走同一条修改路径（5.11c） |
 
 ## 2. 数据流
 
 ```
-成果页「发给 AI 修改」
-  → conversation POST /v1/conversations/:id/revisions {taskId, request, annotations, attachments}
-      → canvas  POST /internal/revisions/materials：上一版的交付文件登记成素材（不复制对象）
-      → task    GET  /internal/tasks/:taskId：上一版的任务单、说明和原素材
-      → task    POST /internal/tasks {revisionOf, sheet+修改意见, brief+修改说明, materials}
-      → 私聊里插入：用户的修改意见、任务卡
-  → 规划员 → 节点 → 验收 → 交付（全部沿用现有流程）
-  → task.task.status_changed(succeeded, revisionOf=上一版)
-      → canvas：复制新版文件 → 删除上一版对象 → 一个事务里删旧行、插新行（同一个目录名）
-                → task POST /internal/tasks/:old/retire {replacedBy}
-      → task：删除上一版任务，发件箱写 task.task.deleted {replacedBy}
-          → canvas：删除这个任务剩下的成果和修改素材（幂等）
-          → harness：停掉它的预览、删除运行存档与运行记录
-          → conversation：把它的任务卡、交付消息标成「已被新版本替换」
-用户删除成果：web → task DELETE /v1/tasks/:id → 同样的 task.task.deleted（replacedBy 为空）
+成果页批注面板「发给 AI 修改」（标注截图在浏览器里合成后作为附件上传）
+  → conversation POST /v1/conversations/:id/revisions {taskId, request, annotations, parameters, attachments}
+      → task POST /internal/tasks/:taskId/revise {ownerId, request: 原话+每条批注一行+参数, materials: 附件}
+          · 只有已结束的任务能改（正在跑、正在改的 409）
+          · 附件并进任务素材（每次运行都放进 materials/）
+          · 交付节点和全部下游：waiting，config.revision = 修改意见；任务回到 running，验收记录清空
+      → 私聊里插入：用户的修改意见、同一个任务的任务卡（标成「修改」）
+  → 节点开跑：接着上次的运行会话（continueFrom），提示词是修改意见；下游拿上游最新产出
+  → 节点关卡、整体验收照常（只提醒、不拦截，ADR 0004 §2）→ succeeded
+  → canvas 消费 task.task.status_changed(succeeded)：
+      同一 nodeId/path 已登记且任务交付时间晚于登记时间 → 复制新文件，摘要变了就原地更新内容、
+      记 replacesSha256、清批注与截图；新出现的文件照常登记
 ```
 
-替换的顺序保证「新版到位之前旧版不消失」：新文件先写进对象存储，删旧对象和换行在之后；进程在中途崩溃，事件重投时从头再走一遍，每一步都幂等。新版一个文件也没交出时不替换，上一版保留，日志告警。
+## 3. 节点怎么改
 
-## 3. 修订任务怎么做
-
-- **素材**：一个任务最多 20 份素材。上一版交付文件不超过 10 个、且放得下时，canvas 为每个文件新建一条上传记录，名字是「上一版-<原文件名>」（同名加序号），对象键直接指向成果对象，不复制字节；放不下时（如网页应用有几十个文件）打成一个「上一版成果.zip」（按同步路径排列，复制一份）。这些上传记录都标明来源任务（`source_task_id`）。harness 按原有素材流程放进沙箱的 `materials/`。上一版的原始素材（用户当初上传的）一并带上，修改消息里新附的文件也是素材；三者合计仍超过 20 份时拒绝发起，提示少附几个文件。
-- **任务单**：代码在上一版任务单上追加：一条有来源的要求（来源类型 `revision`，原话就是用户的修改意见，每条批注一行）；一条限制「只改修改意见涉及的地方，其余与上一版一致」；素材列表加上「上一版-…」。不调用模型，不重新问需求。
-- **说明（brief）**：在上一版说明后追加「## 本次是修改」：上一版文件与素材名的对照表、修改意见原话、批注（编号、位置、内容）、「新版必须交齐全部交付物，没要求改的文件从 materials/ 原样复制到交付位置」。总长仍受 20,000 字限制，超出时截短上一版说明的后部（开头是用户最初的需求，保留），不截修改部分。
-- **规划和执行**：不改规划员和节点的代码，它们照常读说明和素材。复用多少由规划员决定（可以只排一个「复制并修改」节点）。整体验收照常对照任务单，包括新加的修改要求。
-- **花费**：照常预估、照常「超过预估 3 倍暂停」。修改的花费记在修订任务上。
+- **提示词**：`revisionPrompt`——用户看过成果，提出以下修改意见（附件在 materials/，截图编号和批注编号一致）；在你上次的成果基础上接着改，只改涉及的地方，其余内容、结构和风格不变；上游有更新以 inputs 里的最新产出为准；改完在 out/ 交齐全部成果。
+- **会话**：交付节点和下游都用原会话（`reworkStep` + `continueFrom` 上次运行），不重读整份成果，不重新规划。节点的返工计数清零，修改那一轮之后的关卡最多再自动改一次（ADR 0004 §2）。
+- **花费**：记在原任务上，任务卡片的“已花”累计。
 
 ## 4. 契约
 
-**task**
-- `CreateTaskBody.revisionOf?: uuid`；`TaskBody.revisionOf: uuid | null`；`TaskSummary` 同样带上。
-- `RequirementSource` 增加 `{kind: 'revision', quote}`。
-- 建修订任务的检查：上一版存在、同一个人、已成功（succeeded）；同一份上一版同时只能有一个没结束的修订任务（数据库部分唯一索引兜底，冲突返回 409）。
-- `DELETE /v1/tasks/:taskId`：只能删已结束的任务（succeeded / failed / cancelled），有进行中的修订时 409。
-- `POST /internal/tasks/:taskId/retire {replacedBy}`：只有 `replacedBy` 的 `revisionOf` 等于它、且新版已成功时才删。已经删过的返回成功（幂等）。
-- 删除 = 在一个事务里删掉任务（节点、连线、运行、花费记录级联删除），同时往发件箱写 `task.task.deleted`。之后迟到的结算事件、运行结束事件找不到任务就忽略（现有代码已如此，补测试）。
+- task：`ReviseTaskBody {ownerId, request ≤ 20000 字, materials ≤ 20}`；`POST /internal/tasks/:taskId/revise` 返回 `TaskBody`。节点配置 `revision?: string`。
+- conversation：`POST /v1/conversations/:id/revisions` 不变（`request`、`annotations`、`parameters`、`attachments`）；任务卡 `data: {taskId, revisionOf: taskId}`（指向自己，卡片标成「修改」）。
+- canvas：`ArtifactsRepo.replaceContent`（内容换新版、清批注与批准、更新登记时间）。`ArtifactBody.replacesSha256` 沿用，桌面端据此覆盖旧版。
+- desktop：`beginSyncedFile` 的成果标识可以是「id@新摘要」：同一个成果原地换成新版后再同步一次，记录不和第一次重复。
+- 删除：`POST /internal/revisions/materials`、`RevisionMaterialsBody/Result`、conversation 里拼修订任务单与说明的代码（`revisedSheet`、`revisionBrief`、`revisionCriterion`）。
 
-**事件** `task.task.deleted`：`{taskId, ownerId, conversationId, replacedBy: uuid | null, deletedAt}`。
+## 5. 数据库与旧数据
 
-**canvas**
-- `POST /internal/revisions/materials {ownerId, taskId, room}` → `{materials: Material[], files: [{material, path, deliverable}]}`；`room` 是还能放几份素材，决定逐个交还是打包。
-- `ArtifactBody` 增加 `replacesSha256?: string | null`（新版同一路径上旧文件的摘要，桌面端判断能不能覆盖）。「正在修改」不进表：前端从任务列表里 `revisionOf` 等于这个任务、且还没结束的修订任务得出。
-- 消费 `task.task.deleted`：删除这个任务的成果行和对象、以及来源是这个任务的修订素材。下一次再改新版时，conversation 先向 canvas 核对新版的素材，已删掉的（上一轮的「上一版-…」）不再带上。
-- 5.11b 再加：`artifacts.annotations jsonb`、`approved_at`，`GET/PUT /v1/artifacts/:id/annotations`、`POST/DELETE /v1/artifacts/:id/approval`。
-
-**conversation**
-- `POST /v1/conversations/:id/revisions`：`{taskId, request: 1–8000 字, annotations: [] (5.11a 为空), attachments: uuid[]}`，返回新增的消息。会话必须是这个人的私聊。
-- `TaskCard`、`DeliveryCard` 增加可选的 `removed: {replacedBy: uuid | null}`。
-- 消费 `task.task.deleted`：把这个任务的任务卡、交付消息、提醒都标上 `removed`。
-
-**harness**：消费 `task.task.deleted`：停掉这个任务的预览会话；删除它全部运行的产出包和会话存档，再删运行记录（运行事件级联删除）。还没结束的运行（理论上没有）先跳过并告警，下次重投再删。
-
-**desktop**：`beginSyncedFile(..., replacesSha256?)`：目标文件已存在且摘要等于 `replacesSha256` 时覆盖；否则存为「名字 (新版).扩展名」（已存在再加序号）。旧调用不带这个参数时行为不变。
-
-## 5. 数据库
-
-- task：`tasks.revision_of uuid`（可空）；部分唯一索引 `tasks_one_active_revision on tasks (revision_of) where revision_of is not null and status in ('planning','running','accepting','stopped','needs_attention')`。phase: expand，只新增可空列和索引，旧数据全部合法，没有旧结构需要收缩。
-- canvas：`uploads.source_task_id uuid`（可空，加索引）、`artifacts.replaces_sha256 text`（可空）。phase: expand，同上。删除任务时删掉 `source_task_id` 是它的上传记录；对象键在 `uploads/` 下的（打包的）一并删对象，指向成果对象的随成果删除。5.11b 的批注列另起迁移。
-- 不新增表。删除走级联外键（task 的节点、连线、运行、花费记录已是 `on delete cascade`；harness 的运行事件同样级联）。
+- 不新增迁移。`tasks.revision_of`、`uploads.source_task_id`、`artifacts.replaces_sha256` 保留：2026-11-05 之前已经建好的修订任务仍按旧流程交付（canvas 整体替换上一版、task retire 上一版），之后不再产生新的修订任务。
+- Contract 计划：确认库里没有未结束的 `revision_of` 任务后，删除 canvas 的旧替换路径（`replace`）、task 的 `retire` 接口与 `revision_of` 列、canvas 的 `uploads.source_task_id`，另起 contract 迁移。
 
 ## 6. 拆分
 
@@ -101,7 +70,7 @@
 - 修订素材和上一版成果共用对象。替换和删除时，canvas 先删除来源是这个任务的修订素材行，再删对象；修订任务已结束（或已删除）后才会发生，所以不会删掉正在用的素材。「同时只改一版」保证不会有两个修订任务共用同一批对象。
 - 新版和上一版的文件路径完全一样时，直接沿用同步路径；新版多出或少了文件的，多出的照常起名，少了的随旧版删除。
 - 「已删除」不等于供应商侧也删除：已经交给外部供应商的输入（如生图提示词、渲染暂存）按各自的保留策略处理，暂存对象已有清理。model-gateway 的工具结果文件（`tool-results/`）本步不清理，记为遗留项。
-- 删除是不可恢复的；接口只接受已结束的任务，前端二次确认。
+- 删除是不可恢复的，前端二次确认。2026-11-04 起还没结束的任务也能删：先按取消停掉正在跑的运行（含规划员），再删除；harness 等运行结束后再清理存档（见 ADR 0005 §2026-11-04 重复任务与删除）。正在被修改的上一版仍不能删。
 
 ## 8. 5.11a 实施记录（2026-10-31，Claude）
 
@@ -250,3 +219,20 @@
 新迁移已在本地 model-gateway 应用，持久删除消费者已启动并核对实际事件链。收尾关闭本轮网关进程、移除本轮 7 个中间件容器与网络；不删除持久卷或用户已有文件。定向本地临时清理 0 项、磁盘释放 0 B，无新增镜像标签或悬空镜像。工程门禁通过，重复率 0.58%。
 
 本轮实现改动集中于 model-gateway 的启动接线、repo/schema、tool-service 和两份既有测试，新增一份 SQL 迁移；无新服务、依赖或平行清理脚本。第六阶段设计另见 ADR 0014，不在本轮实现群聊或放宽凭据规则。
+
+## 15. 删除是真删除（2026-11-05，用户要求）
+
+用户原话：「如果用户在我们的系统删除了这个任务/成果/聊天/任何能删除的东西，我希望它是真正的删除（数据库，缓存，Oasis 的存储）……系统不需要回溯机制，我不希望用户在用我们的产品会导致硬盘空间越来越大。」用户自己下载到电脑上的文件不管。
+
+| 用户删除 | 真删除的内容 |
+|---|---|
+| 任务（画布卡片垃圾桶图标） | task 库的任务、节点、消息；canvas 的成果记录、对象、批注截图、旧修订素材；harness 的运行记录、存档、工作区、检查报告、预览会话记录（结束的直接删，运行中的先停、结算再删）；model-gateway 的工具中间文件（§14）；**聊天里这个任务的卡片、交付消息、提醒整条删除**（原来只标「已删除」） |
+| 聊天消息 | 消息和 AI 的回复；**随消息发的附件在 canvas 里删除记录和对象**（先删文件再删消息，删文件失败整个删除失败、可重试） |
+| 没用上的上传 | 添加了又移除、没发出去的文件：上传被消息、批注用上时记「认领」时间（`uploads.claimed_at`），从没被认领的超过 24 小时由 canvas 清扫删除对象和记录 |
+| 事件 | 发件箱里已投递的行留一天后删除；NATS stream 设 `max_age` 7 天，过期由 JetStream 删除 |
+
+保留的：billing 账本和 model-gateway 的调用/费用记录（只有金额、模型、ID，没有内容）——它们是钱的凭证，删掉会让余额对不上。Postgres 删除后的空间由 autovacuum 回收复用，SeaweedFS 删除对象后的空间由它自己的 vacuum 回收，磁盘不会因为删除后的残留持续增长。
+
+本地旧数据：旧流程留下的 2 条「已删除」标记消息已直接删除；已有上传在迁移里全部视为已认领，不会被误删。
+
+验证：canvas 41、conversation 51、harness 105、web 106 项单测通过（新增：附件随消息删除且发送时认领、未认领上传清扫与真删除、任务删除后预览记录不留、任务卡片整条删除）；typecheck、eslint、工程检查通过。

@@ -16,6 +16,9 @@ export type PlannerPlan = z.infer<typeof PlannerPlan>;
 
 export const PLAN_FILE = 'plan.json';
 
+/** 每个节点最多几条检查（2026-11-05 用户：小任务十几条检查不合理） */
+const MAX_NODE_CHECKS = 5;
+
 /** 给规划员的说明 */
 export function plannerPrompt(input: {
   brief: string;
@@ -28,8 +31,17 @@ export function plannerPrompt(input: {
   defaultModel: string;
   environment?: ExecutionEnvironment;
 }): string {
+  const TIER = { flagship: '旗舰', strong: '强力', fast: '快速' } as const;
   const models = input.catalog
-    .map((m) => `- ${m.providerModel}（${m.name}，${m.vendor}；${m.tags.join('、')}）`)
+    .map((m) => {
+      const reads = m.inputs?.filter((i) => i !== 'text');
+      const notes = [
+        ...(m.tier ? [TIER[m.tier]] : []),
+        ...(m.tags.length ? [m.tags.join('、')] : []),
+        ...(reads ? [reads.length ? `能直接读：${reads.join('、')}` : '只读文字'] : []),
+      ];
+      return `- ${m.providerModel}（${m.name}，${m.vendor}${notes.length ? `；${notes.join('；')}` : ''}）`;
+    })
     .join('\n');
   const tools = input.tools.length
     ? input.tools
@@ -44,11 +56,11 @@ export function plannerPrompt(input: {
   const example = {
     nodes: [
       {
-        key: 'draft',
-        title: '写初稿',
+        key: 'outline',
+        title: '定提纲',
         kind: 'work',
-        role: '资深文案',
-        goal: '……写成 out/初稿.md',
+        role: '资深策划',
+        goal: '……写成 out/提纲.md',
         model: input.defaultModel,
         tools: [],
         checks: [
@@ -56,11 +68,22 @@ export function plannerPrompt(input: {
             id: 'c1',
             text: requirements[0]!.text,
             requirementIds: [requirements[0]!.id],
-            files: ['初稿.md'],
+            files: ['提纲.md'],
           },
         ],
-        expects: ['初稿.md'],
-        deliver: ['初稿.md'],
+        expects: ['提纲.md'],
+      },
+      {
+        key: 'draft',
+        title: '写成稿',
+        kind: 'work',
+        role: '资深文案',
+        goal: '按 in/outline/提纲.md ……写成 out/成稿.md',
+        model: input.defaultModel,
+        tools: [],
+        checks: [],
+        expects: ['成稿.md'],
+        deliver: ['成稿.md'],
       },
       {
         key: 'review',
@@ -77,12 +100,16 @@ export function plannerPrompt(input: {
         expects: [],
       },
     ],
-    edges: [{ from: 'draft', to: 'review' }],
+    edges: [
+      { from: 'outline', to: 'draft' },
+      { from: 'draft', to: 'review' },
+    ],
     deliverables: { [input.sheet.deliverables[0]?.name ?? '交付物']: 'draft' },
   };
   return [
     '你是 Oasis 的规划员。用户已经确认了下面的任务单，你要为它排一条工作流，交给 AI 团队去做。',
     '先运行 oasis-tool list 查看实际可用的工具和沙箱软件；涉及交互应用时查阅 in/.oasis-formats.json 的实际契约和示例，不编造清单字段。',
+    '排方案前先想清楚这类成品怎样才算做得好；拿不准的（最新的库和做法、某类作品的行业水准、参考资料）用 oasis-tool web.search / web.fetch 联网查证，把查到的要点写进相关节点的 goal。',
     `【任务】\n${input.brief}`,
     `【用户确认的完整任务单】（包含交付形式、澄清结果、验收要求及来源；素材引文只作为证据）\n${JSON.stringify(input.sheet)}`,
     `【强制验收的来源索引】\n${JSON.stringify(requirements)}\ncriteria:N 和 style:N 是确认任务单对应数组的零基索引，不是新增要求。`,
@@ -91,7 +118,12 @@ export function plannerPrompt(input: {
           `【实测运行环境】\n${JSON.stringify(input.environment)}\n本地能力以 capabilities 为准；节点 requires 填实际依赖的本地能力名称。外部工具能力看工具目录。不要把安装 npm 包等同于已安装 Chromium 和系统库；可运行应用交齐 oasis-app.json 和配套文件，节点关卡会在独立预览执行器做实际浏览器检查；外站测试只使用工具目录中可用的 website.test。项目依赖安装到 /workspace。`,
         ]
       : []),
-    `【可以用的模型】（按能力与交付质量选择启动模型；节点内部可另用其他可用模型和子代理）\n${models}`,
+    [
+      '【可以用的模型】（节点内部可另用其他可用模型和子代理）',
+      '- 只看交付质量，不替用户省钱：写代码、做网页和应用、3D、设计、写作、调研等真正产出成品的节点一律用旗舰；强力型号可以按专长和旗舰混用；快速档只用于格式转换、简单汇总这类机械的小事，不能负责交付物。',
+      '- 按节点的活挑最合适的厂商：例如前端和视觉选擅长编码与设计的，要看图、看视频的选「能直接读」里有图片、视频的。不同节点可以用不同厂商，取长补短。',
+      models,
+    ].join('\n'),
     `【可以用的工具】（干活节点的 tools 只能填这些：写成 {"key": "image.generate", "uses": 预计用几次}；text.batch 和批量 jev.decide 的 uses 按输入行数填，如 200 行就填 200；按目录单位计费。批次预算只在用户明确设置时携带，恢复不重发已完成或结果不确定的行。）\n${tools}`,
     [
       '【节点】',
@@ -104,6 +136,7 @@ export function plannerPrompt(input: {
       '- 按可独立完成和验收的子任务拆分节点。每个节点内可以继续规划、分工和调用可用工具；不要为了压缩节点数量把不相关的工作绑在一起。',
       '- 能同时做的就并行；一个节点只做一件事。',
       `- 任务单上每样交付物（${deliverables}）都要在 deliverables 里指定由哪个节点交出最终版。`,
+      '- checks 宁少勿多：每个节点最多 5 条，把相关的用户要求合并成一条（一条可以引用多个 requirementIds）。负责交付物的节点 checks 留空——最终交付会由整体验收对照任务单逐条核对，节点上不再重复检查。',
       '- 每个节点 checks 只查本节点能负责的用户要求，可为空。使用对象格式，requirementIds 必须引用上述来源索引；系统按来源原文执行验收，不把规划员改写作为额外条件。files 是本节点输出。跨文件要求留给有全部输入的节点或最终验收。自测方法、使用哪个库或命令、记录自己的工作过程等实施建议写进 goal，不能冒充用户要求成为强制验收项。expects 只列完成交付确需的文件，不额外承诺过程报告。',
       '- expects 可写 {"pattern":"图片/*.png","exactCount":20,"width":1024,"height":1024}（正好 20 张），或 {"pattern":"图片/*.png","minCount":20}（至少 20 张）；只计有效非空文件。',
       '- 每个负责交付物的节点必须给出非空 deliver 路径列表（可用 * 通配），明确最终交付哪些文件；草稿与局部素材另存目录。deliver 与 expects 独立，配套 PDF、来源清单和统计报告需要时也列入。',
@@ -186,6 +219,10 @@ export function checkPlan(
       problems.push(`节点「${node.key}」新规划的检查必须用对象格式引用确认任务单的来源索引`);
     if (new Set(checks.map((c) => c.id)).size !== checks.length)
       problems.push(`节点「${node.key}」检查 id 重复`);
+    if (checks.length > MAX_NODE_CHECKS)
+      problems.push(
+        `节点「${node.key}」有 ${checks.length} 条检查，最多 ${MAX_NODE_CHECKS} 条：把相关的要求合并成一条（引用多个 requirementIds）`,
+      );
     for (const check of checks) {
       if (!check.requirementIds.length)
         problems.push(

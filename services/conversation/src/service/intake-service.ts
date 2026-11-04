@@ -16,19 +16,23 @@ import { z } from 'zod';
 import type { Conversation, ConversationRepo, Intake, Message } from '../repo/conversation-repo.ts';
 import { attachmentsOf, mergeMaterials, withAttachmentNote } from './attachments.ts';
 import {
+  FALLBACK_SHEET_INTRO,
+  fallbackSheet,
+  groundRequirements,
   intakeMessages,
   intakeResponseFormat,
-  parseIntakeReply,
   questionsText,
+  readIntakeReply,
   sheetText,
   taskBrief,
-  validateSheetSources,
   type IntakeReply,
 } from './intake.ts';
 
 const Decision = z.object({
   answers: z.record(z.string(), z.object({ noul: z.number().optional() }).loose()),
 });
+/** 当前网络地区用不了的模型 */
+const Unavailable = z.object({ models: z.array(z.string()) });
 /** 建任务的返回里只用得到任务 ID */
 const CreatedTask = z.object({ id: z.uuid() }).loose();
 const Completion = z.object({
@@ -49,10 +53,11 @@ export interface IntakeConfig {
   detectHigh: number;
   /** 概率不低于它就在回复下面附「当成任务来做」 */
   detectLow: number;
-  /** 私聊的 AI 写不出合格的 JSON 时换它来做（供应商型号） */
+  /** 私聊的 AI 在当前网络地区用不了时，接需求事先改用它（供应商型号） */
   fallbackModel: string;
   /** 最多问几轮（用户定：3） */
   maxRounds: number;
+  /** 接需求一步的输出上限；留足余量，不靠截断后重来 */
   maxTokens: number;
 }
 
@@ -132,9 +137,25 @@ function intakeActions(deps: {
     return result.choices[0]!;
   }
 
+  /** 读不到地区限制时按原模型来，不因此中断 */
+  async function blockedModels(requestId: string): Promise<string[]> {
+    try {
+      const { models } = await deps.modelGateway.json('GET', '/internal/v1/models/unavailable', {
+        requestId,
+        schema: Unavailable,
+      });
+      return models;
+    } catch (err) {
+      logger.warn({ err, requestId }, '读取地区不可用的模型失败，按原模型接需求');
+      return [];
+    }
+  }
+
   /**
-   * 让私聊里的 AI 走一步：问题、任务单或不做了。它的 JSON 不合格就带着原因再要一次，
-   * 还不行就换默认模型来做。
+   * 让私聊里的 AI 走一步：问题、任务单或不做了。每一步只调用一次模型，不重试（ADR 0005
+   * §2026-11-04）：输出受契约约束，小毛病就地整理；要求来源按原文确定性核对并补齐原话和选择；
+   * 回答实在用不了（截断、不是 JSON）就按原话和选择直接列出任务单。只有网络、额度这类调用本身
+   * 的错误会抛给调用方。
    */
   async function askModel(
     conversation: Conversation,
@@ -161,112 +182,33 @@ function intakeActions(deps: {
       resuming,
       materials: intake.materials,
     });
-    const attempts = [route.providerModel, route.providerModel, config.fallbackModel];
-    let feedback: string | undefined;
-    let previous: string | undefined;
-    for (const model of attempts) {
-      const prompt = feedback
-        ? [
-            ...messages,
-            ...(previous ? [{ role: 'assistant' as const, content: previous }] : []),
-            {
-              role: 'user',
-              content: `刚才的回答不合格：${feedback}。请修复上面的结果，保留所有有效要求，只输出一个合格的 JSON 对象。`,
-            },
-          ]
-        : messages;
-      try {
-        const completion = await complete(ownerId, model, prompt, requestId, mustSheet);
-        previous = completion.message.content ?? '';
-        if (completion.finish_reason === 'length')
-          throw new Error(
-            '输出达到 token 上限而被截断；请压缩表述与短引文、合并验收标准，不得删减有效要求',
-          );
-        if (completion.finish_reason && completion.finish_reason !== 'stop')
-          throw new Error(`生成未正常完成：${completion.finish_reason}`);
-        const reply = parseIntakeReply(previous, mustSheet);
-        if (reply.type === 'sheet') reply.sheet.materials = intake.materials.map((m) => m.name);
-        if (reply.type === 'sheet' && deps.harness) {
-          validateSheetSources(reply.sheet, intake.request, intake.turns);
-          const selections = intake.turns.flatMap((turn) =>
-            turn.kind === 'questions'
-              ? turn.questions.flatMap((q) => {
-                  const raw = turn.answers?.[q.id];
-                  const selected =
-                    raw === AUTO_ANSWER || (raw === undefined && turn.skipped) ? q.default : raw;
-                  const label = q.options.find((option) => option.id === selected)?.label;
-                  return label
-                    ? [
-                        {
-                          key: `answer_${turn.round}_${q.id}`,
-                          text: `第${turn.round}轮「${q.text}」选择「${label}」`,
-                        },
-                      ]
-                    : [];
-                })
-              : [],
-          );
-          const checked = await deps.modelGateway.json('POST', '/internal/v1/decisions', {
-            body: {
-              model: config.detectModel,
-              state: [messages[1]!.content, `待核对任务单：${JSON.stringify(reply.sheet)}`],
-              questions: {
-                ...Object.fromEntries(
-                  selections.map((selection) => [
-                    selection.key,
-                    {
-                      type: 'noul',
-                      instructions: `任务单是否遵守这个明确选择：${selection.text}？应检查整份任务单，不要求逐字复述；只有用户后续明确修改才可撤回。`,
-                      criteria: {
-                        true: '已保持，或用户后续明确修改了这一选择',
-                        false: '遗漏、矛盾、擅自扩大，或无法确认',
-                      },
-                    },
-                  ]),
-                ),
-                preserved: {
-                  type: 'noul',
-                  instructions:
-                    '任务单是否保持原话、附件已读正文和明确选择中的全部有效要求？只有用户明确修改可撤回旧要求；AI默认和假设不得改变费用口径、素材限制、语言范围或擅自扩充业务范围。引用真实不代表归纳完整。未读材料应保留未知。',
-                  criteria: {
-                    true: '全部保持，无擅自强化、遗漏或扩大',
-                    false: '有遗漏、强化、矛盾或扩大，或无法确认',
-                  },
-                },
-              },
-            },
-            headers: { [OASIS_HEADERS.payerId]: ownerId },
-            requestId,
-            schema: Decision,
-          });
-          const unresolved = selections.filter(
-            (selection) => (checked.answers[selection.key]?.noul ?? 0) < 0.5,
-          );
-          if ((checked.answers.preserved?.noul ?? 0) < 0.5 || unresolved.length)
-            throw new Error(
-              `尚未确认任务单完整保持原始要求${unresolved.length ? '；需逐项复核：' + unresolved.map((s) => s.text).join('；') : ''}。请对照上面的任务单与原话、材料、具体选择，补齐遗漏、撤销擅自强化或扩大；保留原费用口径，AI假设只补空白`,
-            );
-          reply.sheet.materialWarnings = intake.turns
-            .flatMap((t) => (t.kind === 'materials' ? t.files : []))
-            .filter((f) => f.status !== 'complete')
-            .map((f) => `${f.name}：${f.reason ?? '未取得完整正文，内容未知'}`);
-        }
-        return reply;
-      } catch (err) {
-        // 连接/供应商/审查服务失败不能伪装成 JSON 错误并重新付费生成；400 才可能是模型不支持结构化参数。
-        if (err instanceof HttpError && err.statusCode !== 400) throw err;
-        feedback = err instanceof Error ? err.message : String(err);
-        logger.warn(
-          { requestId, intakeId: intake.id, model, feedback },
-          '接需求的回答不合格，重试',
-        );
-      }
+    const model = (await blockedModels(requestId)).includes(route.providerModel)
+      ? config.fallbackModel
+      : route.providerModel;
+    const completion = await complete(ownerId, model, messages, requestId, mustSheet);
+    const read =
+      completion.finish_reason && completion.finish_reason !== 'stop'
+        ? { reply: null, problem: `生成未正常结束：${completion.finish_reason}` }
+        : readIntakeReply(completion.message.content ?? '', mustSheet);
+    if (!read.reply)
+      logger.warn(
+        { requestId, intakeId: intake.id, model, problem: read.problem },
+        '接需求这一步的回答用不了，按原话和选择列出任务单',
+      );
+    const reply: IntakeReply = read.reply ?? {
+      type: 'sheet',
+      intro: FALLBACK_SHEET_INTRO,
+      sheet: fallbackSheet(intake.request, intake.turns),
+    };
+    if (reply.type === 'sheet') {
+      reply.sheet = groundRequirements(reply.sheet, intake.request, intake.turns);
+      reply.sheet.materials = intake.materials.map((m) => m.name);
+      reply.sheet.materialWarnings = intake.turns
+        .flatMap((t) => (t.kind === 'materials' ? t.files : []))
+        .filter((f) => f.status !== 'complete')
+        .map((f) => `${f.name}：${f.reason ?? '未取得完整正文，内容未知'}`);
     }
-    throw new HttpError(
-      502,
-      'intake_failed',
-      '任务单暂时未能生成，原话和已提交的回答已保存，请继续整理或稍后重试',
-    );
+    return reply;
   }
 
   /** 走一步并把结果变成消息：问题卡、任务单卡，或一句「好的，不做了」 */
@@ -364,6 +306,8 @@ function intakeActions(deps: {
         {
           status: 'sheet',
           sheet: reply.sheet,
+          // 新的任务单换一个任务 ID：旧单确认失败时留下的 ID 不沿用到改过的单上
+          taskId: null,
           turns: [...intake.turns, { kind: 'sheet', sheet: reply.sheet }],
         },
       );
@@ -541,8 +485,12 @@ function intakeActions(deps: {
       const { cardMessageId, materials } = intake;
       // 任务单上的素材以用户实际发的文件为准（AI 看不到文件，不让它填）
       const sheet = { ...intake.sheet, materials: materials.map((m) => m.name) };
+      // 事先定好任务 ID 并记下：确认超时或断网后再点，task 按同一个 ID 返回已经建好的任务，不会建出第二个
+      const taskId = intake.taskId ?? randomUUID();
+      if (!intake.taskId) await repo.updateIntake(intake.id, { taskId });
       const task = await deps.task.json('POST', '/internal/tasks', {
         body: {
+          id: taskId,
           ownerId: input.ownerId,
           payerId: input.ownerId,
           conversationId: input.conversation.id,

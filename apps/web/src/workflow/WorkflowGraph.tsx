@@ -18,7 +18,7 @@ import { Minus, Plus, Scan } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
 import { NodeCard, StubCard, type FlowNode, type StubNode } from './NodeCard.tsx';
 import { layout, NODE_H, NODE_W } from './layout.ts';
-import { nodeActions } from './rules.ts';
+import { nodeActions, nodeState } from './rules.ts';
 import type { useSpeakers } from './use-speakers.ts';
 
 type FlowEdge = Edge<{ deletable: boolean; onDelete: (edgeId: string) => void }, 'flow'>;
@@ -132,6 +132,7 @@ export function WorkflowGraph({
         position: positions.get(node.id) ?? { x: 0, y: 0 },
         data: {
           node,
+          state: nodeState(task, node),
           speakers: speakers.speakersOf(node),
           toolName: speakers.toolName,
           selected: node.id === selected,

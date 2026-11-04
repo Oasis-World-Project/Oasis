@@ -15,6 +15,7 @@ import type {
   NodeBody,
   NodeRunBody,
   PlanNode,
+  ReviseTaskInput,
   TaskBody,
   TaskSummary,
   UpdateEdgeBody,
@@ -47,6 +48,7 @@ import {
 import { nodeRow, planToRows, validatePlan } from './plan.ts';
 import { createPlanning, dollars, type PlanningConfig } from './planning-service.ts';
 import { decide, incoming } from './schedule.ts';
+import { revisionCheck, revisionPrompt } from './prompt.ts';
 import { afterRound, firstStep, resumeStep, retryStep, reworkStep, type Step } from './steps.ts';
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
@@ -54,6 +56,11 @@ const iso = (d: Date | null) => d?.toISOString() ?? null;
 const FINAL = ['succeeded', 'failed', 'cancelled'];
 /** 运行已经结束的状态 */
 const RUN_FINAL = ['succeeded', 'failed', 'cancelled', 'stopped'];
+/**
+ * 检查明确没满足时最多自动改几次（ADR 0004 §2，2026-11-05 用户重申）：改过之后照常往下走、带提醒交付。
+ * 检查只提醒、不拦截——任务只会因为用户停止或网络长时间连不上而停下。
+ */
+const MAX_REWORKS = 1;
 /** 占着并发名额的节点状态 */
 const ACTIVE = ['running', 'checking'];
 
@@ -129,7 +136,13 @@ function toTaskBody({ task, nodes, edges }: Snapshot): TaskBody {
     sheet: task.sheet,
     materials: task.materials,
     revisionOf: task.revisionOf,
-    acceptance: task.acceptance,
+    // 验收返工次数、这轮的修改意见只给控制面用，不返回；修改还没验收时没有验收记录
+    acceptance:
+      task.acceptance &&
+      (({ repairs: _repairs, revision, ...rest }) =>
+        revision !== undefined && !rest.checks && !FINAL.includes(task.status) ? null : rest)(
+        task.acceptance,
+      ),
     deliverables: task.deliverables,
     ...(deliveryFiles === undefined ? {} : { deliveryFiles }),
     nodes: nodes.map(toNodeBody),
@@ -146,7 +159,7 @@ const UNAVAILABLE: Record<Attention['reason'], string> = {
   over_estimate: '预估超过你设的上限时只能照做或取消',
   plan_failed: '工作流没排好时只能重新规划或取消',
   workflow_broken: '工作流的连线断开了：先把线接好再点运行，或者取消任务',
-  checks_incomplete: '检查尚未完成，可以重新检查或取消',
+  checks_incomplete: '检查停下了，可以继续、跳过检查或取消',
 };
 
 const revising = () =>
@@ -263,13 +276,13 @@ export function createWorkflowService(deps: {
 
   /** 让一个节点开跑：新建 / 等待的从头做，停下的接着做，失败的重新算重做次数再做 */
   async function startNode(snapshot: Snapshot, w: Writer, node: Node, fx: Effects) {
-    if (node.config.repairChecks?.length) {
-      const { repairChecks, ...config } = node.config;
+    if (node.config.repairChecks?.length || node.config.revision) {
+      const { repairChecks = [], revision, ...config } = node.config;
       const clean = { ...node, config };
       const previous = node.currentRunId ? await store.findRun(node.currentRunId) : undefined;
       const canResume = previous && (previous.status === 'succeeded' || previous.meta.resumable);
       const step = canResume
-        ? reworkStep(clean, repairChecks)
+        ? reworkStep(clean, repairChecks, revision ? revisionPrompt(revision) : undefined)
         : previous
           ? retryStep(snapshot, clean, previous)
           : firstStep(snapshot, clean);
@@ -282,6 +295,17 @@ export function createWorkflowService(deps: {
       return;
     }
     if (node.status === 'stopped') {
+      const completed = node.currentRunId ? await store.findRun(node.currentRunId) : undefined;
+      if (
+        node.kind === 'work' &&
+        completed?.status === 'succeeded' &&
+        node.config.outputsRunId === completed.id &&
+        (node.config.notesSeen ?? 0) === node.userNotes.length
+      ) {
+        await w.setNode(node.id, { status: 'checking' });
+        fx.gate.push({ taskId: snapshot.task.id, nodeId: node.id, runId: completed.id });
+        return;
+      }
       await openStep(snapshot, w, node, resumeStep(snapshot, node), fx);
       return;
     }
@@ -347,6 +371,9 @@ export function createWorkflowService(deps: {
       }
       return [{ runId, summary: node.summary, outputs, label: d.name }];
     });
+    // 检查只提醒、不拦截（2026-11-05 用户决定）：没满足改一次、没检查到记在验收记录里，照常交付。
+    // 修改轮只查这次的修改意见（任务单第一轮已经核对过）
+    const revision = task.acceptance?.revision;
     const { unmet, unchecked, checks, notes } =
       runs.length > 0
         ? await gate.check({
@@ -356,19 +383,25 @@ export function createWorkflowService(deps: {
             nodeId: null,
             goal: task.brief,
             runs,
-            checks: [
-              ...sheet.criteria,
-              ...sheet.style,
-              ...deliveryIntegrityChecks(runs.flatMap((r) => r.outputs)),
-              ...(sheet.requirements ?? []).map((r) => ({
-                id: r.id,
-                text: r.text,
-                requirementIds: [r.id],
-                files: [],
-              })),
-            ],
+            checks:
+              revision !== undefined
+                ? [
+                    revisionCheck(revision),
+                    ...deliveryIntegrityChecks(runs.flatMap((r) => r.outputs)),
+                  ]
+                : [
+                    ...sheet.criteria,
+                    ...sheet.style,
+                    ...deliveryIntegrityChecks(runs.flatMap((r) => r.outputs)),
+                    ...(sheet.requirements ?? []).map((r) => ({
+                      id: r.id,
+                      text: r.text,
+                      requirementIds: [r.id],
+                      files: [],
+                    })),
+                  ],
             expects: [],
-            details: Boolean(sheet.requirements),
+            details: revision !== undefined || Boolean(sheet.requirements),
             deliveryPaths: runs.flatMap((r) => r.outputs.map((f) => f.path)),
             ownerId: task.ownerId,
             materials: task.materials,
@@ -392,16 +425,15 @@ export function createWorkflowService(deps: {
               },
             ];
       const problems = [...missing, ...unmet];
-      const unknown = [
-        ...(unchecked ?? []),
-        ...(checks ?? []).filter((c) => c.status === 'unchecked').map((c) => c.text),
-      ];
+      const repairs = fresh.task.acceptance?.repairs ?? 0;
       await w.setTask({
         acceptance: {
           unmet: [...missing, ...unmet, ...(overBudget ? ['任务调用费用超过用户上限'] : [])],
           ...(unchecked?.length ? { unchecked } : {}),
           ...(notes?.length ? { notes } : {}),
           ...(checks || budgetCheck.length ? { checks: [...(checks ?? []), ...budgetCheck] } : {}),
+          ...(repairs ? { repairs } : {}),
+          ...(revision !== undefined ? { revision } : {}),
         },
         deliverables,
         finishedAt: null,
@@ -415,50 +447,49 @@ export function createWorkflowService(deps: {
             message: '验收时系统计量已超过用户设置的调用预算',
           },
         });
-      } else if (problems.length) {
+      } else if (
+        problems.length &&
+        repairs < MAX_REWORKS &&
+        fresh.nodes.some((n) => deliverables.some((d) => d.nodeId === n.id) && n.currentRunId)
+      ) {
+        // 明确没满足：交付节点接着原会话改一次；改过之后照常交付，没满足的记在验收记录里
         const owners = new Set(deliverables.map((d) => d.nodeId));
         const targets = fresh.nodes.filter((n) => owners.has(n.id) && n.currentRunId);
-        if (!targets.length) {
-          await w.setTask({
-            status: 'needs_attention',
-            attention: {
-              reason: 'checks_incomplete',
-              nodeId: null,
-              message: '交付验收未通过且没有可恢复的交付节点：' + problems.join('；'),
-            },
-          });
-          return;
-        }
-        await w.setTask({ status: 'running', attention: null });
-        const affected = new Set(targets.map((n) => n.id));
-        for (;;) {
-          const size = affected.size;
-          for (const edge of fresh.edges)
-            if (edge.fromNodeId && affected.has(edge.fromNodeId) && edge.toNodeId)
-              affected.add(edge.toNodeId);
-          if (size === affected.size) break;
-        }
+        await w.setTask({
+          status: 'running',
+          attention: null,
+          acceptance: { ...fresh.task.acceptance!, repairs: repairs + 1 },
+        });
+        const affected = withDownstream(fresh, targets);
         for (const node of fresh.nodes.filter((n) => affected.has(n.id)))
           await w.setNode(node.id, {
             status: 'waiting',
             finishedAt: null,
             config: {
               ...node.config,
-              repairChecks: ['整体验收未通过，请按原始任务单核对全部交付物。', ...problems],
+              repairChecks: [
+                revision !== undefined
+                  ? '整体验收发现这次的修改还没改好，请按修改意见核对交付物。'
+                  : '整体验收未通过，请按原始任务单核对全部交付物。',
+                ...problems,
+              ],
             },
           });
         await schedule(fresh, w, fx);
-      } else if (unknown.length) {
-        await w.setTask({
-          status: 'needs_attention',
-          attention: {
-            reason: 'checks_incomplete',
-            nodeId: null,
-            message: '交付尚未完成检查：' + [...new Set(unknown)].join('；'),
-          },
-        });
       } else await w.setTask({ status: 'succeeded', attention: null, finishedAt: new Date() });
     });
+  }
+
+  /** 这些节点和它们所有的下游（交付节点改了，下游要基于新产出跟着更新） */
+  function withDownstream(snapshot: Snapshot, nodes: Node[]): Set<string> {
+    const affected = new Set(nodes.map((n) => n.id));
+    for (;;) {
+      const size = affected.size;
+      for (const edge of snapshot.edges)
+        if (edge.fromNodeId && affected.has(edge.fromNodeId) && edge.toNodeId)
+          affected.add(edge.toNodeId);
+      if (size === affected.size) return affected;
+    }
   }
 
   /**
@@ -495,6 +526,11 @@ export function createWorkflowService(deps: {
   ): Promise<void> {
     const fx = noEffects();
     await store.transact(taskId, (snapshot, w) => fn(snapshot, w, fx));
+    await runEffects(fx);
+  }
+
+  /** 事务提交后执行副作用（通知 harness、提交运行、规划、验收、关卡）；各自的失败等对账重试 */
+  async function runEffects(fx: Effects): Promise<void> {
     for (const intent of fx.abortChecks)
       for (const check of checksInFlight.values())
         if (check.taskId === intent.taskId && (!intent.nodeId || check.nodeId === intent.nodeId))
@@ -582,7 +618,20 @@ export function createWorkflowService(deps: {
       node.config.deliver === undefined
         ? undefined
         : selectedOutputFiles(node.outputs, node.config.deliver);
-    const { unmet, unchecked, checks, notes } = await gate.check({
+    // 检查要少而准（2026-11-05 用户决定）：修改轮只查修改意见；负责交付物的节点不重复查任务单，
+    // 由紧接着的整体验收逐条核对（没有任务单的旧任务没有整体验收，照旧在节点上查）
+    const revision = snapshot.task.acceptance?.revision;
+    const owner =
+      Boolean(snapshot.task.sheet) &&
+      selectDeliverables(snapshot.task.deliverables, snapshot.nodes).some(
+        (d) => d.nodeId === nodeId,
+      );
+    const requirementChecks =
+      revision !== undefined ? [revisionCheck(revision)] : owner ? [] : (node.config.checks ?? []);
+    // 检查只提醒、不拦截（2026-11-05 用户决定）：检查内部出错由关卡记成没检查到，这里照常往下走
+    const result = await gate.check({
+      stage: 'node',
+      nodeGoal: node.goal,
       signal,
       payerId: snapshot.task.payerId,
       taskId,
@@ -600,10 +649,7 @@ export function createWorkflowService(deps: {
           ),
         },
       ],
-      checks: [
-        ...(node.config.checks ?? []),
-        ...(delivery ? deliveryIntegrityChecks(delivery) : []),
-      ],
+      checks: [...requirementChecks, ...(delivery ? deliveryIntegrityChecks(delivery) : [])],
       expects: [...(node.config.expects ?? []), ...(node.config.deliver ?? [])],
       ...(delivery ? { deliveryPaths: delivery.map((f) => f.path) } : {}),
       ownerId: snapshot.task.ownerId,
@@ -630,33 +676,29 @@ export function createWorkflowService(deps: {
         ];
       }),
     });
+    const { unmet, unchecked, checks, notes } = result;
     await transact(taskId, async (fresh, w, fx) => {
       // 检查期间节点被停止、任务被取消：结果作废
       const current = fresh.nodes.find((n) => n.id === nodeId);
       if (current?.status !== 'checking' || current.currentRunId !== runId) return;
       if (checks) await w.setNode(nodeId, { config: { ...current.config, gateChecks: checks } });
-      if (unmet.length === 0 && unchecked?.length) {
-        await w.setNode(nodeId, { warning: '未完成的检查：' + unchecked.join('；') });
-        await w.setTask({
-          status: 'needs_attention',
-          attention: {
-            reason: 'checks_incomplete',
-            nodeId,
-            message: `「${current.title}」检查尚未完成：${unchecked.join('；')}`,
-          },
-        });
-        return;
-      }
-      if (unmet.length === 0) {
+      // 明确没满足：接着原会话改，最多 MAX_REWORKS 次；其余（改过仍没满足、没检查到）都记成提醒往下走
+      if (unmet.length && current.reworks < MAX_REWORKS) {
+        logger.info({ nodeId, unmet }, '关卡没过，接着原会话修改一次');
+        await w.setNode(nodeId, { reworks: current.reworks + 1 });
+        await openStep(fresh, w, current, reworkStep(current, unmet), fx);
+      } else {
+        // 只提醒用户需要知道的；关卡自己的过程说明（notes）只记日志，不做成提醒
+        if (notes?.length) logger.info({ nodeId, notes }, '关卡说明');
+        const reminders = [
+          ...(unmet.length ? [`改过一次仍可能没满足：${unmet.join('；')}`] : []),
+          ...(unchecked?.length ? [`没检查到：${unchecked.join('；')}`] : []),
+        ];
         await w.setNode(nodeId, {
           status: 'succeeded',
           finishedAt: new Date(),
-          warning: notes?.length ? notes.join('；') : null,
+          warning: reminders.length ? reminders.join('\n') : null,
         });
-      } else {
-        logger.info({ nodeId, unmet }, '关卡没过，接着原会话修复');
-        await w.setNode(nodeId, { reworks: current.reworks + 1 });
-        await openStep(fresh, w, current, reworkStep(current, unmet), fx);
       }
       await schedule(fresh, w, fx);
     });
@@ -811,6 +853,15 @@ export function createWorkflowService(deps: {
     return snapshot;
   }
 
+  /** 调用方给定 ID 的任务已经建过：同一个人的原样返回；ID 被别人的任务占着就拒绝 */
+  async function sameTask(body: CreateTaskInput): Promise<TaskBody | undefined> {
+    const snapshot = body.id ? await store.get(body.id) : undefined;
+    if (!snapshot) return undefined;
+    if (snapshot.task.ownerId !== body.ownerId)
+      throw new HttpError(409, 'task_id_taken', '这个任务 ID 已经被占用');
+    return toTaskBody(snapshot);
+  }
+
   /** 节点交出的一个文件：只能是它产出清单里有的（经 harness 读对象存储） */
   async function readFile(snapshot: Snapshot, nodeId: string, path: string) {
     const node = nodeOf(snapshot, nodeId);
@@ -956,7 +1007,10 @@ export function createWorkflowService(deps: {
      * 直接给方案的校验后立即开跑。
      */
     async create(body: CreateTaskInput): Promise<TaskBody> {
-      const id = randomUUID();
+      const id = body.id ?? randomUUID();
+      // 同一个 ID 已经建过（确认任务单超时后重试）：原样返回，不建第二个
+      const existing = body.id ? await sameTask(body) : undefined;
+      if (existing) return existing;
       if (body.revisionOf) await checkRevisable(body.ownerId, body.revisionOf);
       const base = {
         id,
@@ -982,11 +1036,22 @@ export function createWorkflowService(deps: {
             edges: [],
           });
         } catch (err) {
-          // 两个修改请求同时到达：数据库的部分唯一索引只放进一个
-          if ((err as { code?: string }).code === '23505' && body.revisionOf) throw revising();
+          if ((err as { code?: string }).code === '23505') {
+            // 同一个 ID 的两次请求同时到达：主键只放进一个，另一个返回它
+            const raced = body.id ? await sameTask(body) : undefined;
+            if (raced) return raced;
+            // 两个修改请求同时到达：数据库的部分唯一索引只放进一个
+            if (body.revisionOf) throw revising();
+          }
           throw err;
         }
-        await transact(id, (snapshot, w, fx) => planning.begin(snapshot, w, fx));
+        // 规划员的提交（挑经验手册要调一次模型）放到返回之后：建任务只等数据库，
+        // 确认任务单不会因为它超时；提交失败由对账重试。
+        const fx = noEffects();
+        await store.transact(id, (snapshot, w) => planning.begin(snapshot, w, fx));
+        void runEffects(fx).catch((err: unknown) =>
+          logger.error({ err, taskId: id }, '提交规划员失败，等对账重试'),
+        );
         return toTaskBody((await store.get(id)) as Snapshot);
       }
       const plan = body.plan as NonNullable<typeof body.plan>;
@@ -1035,11 +1100,13 @@ export function createWorkflowService(deps: {
      * 用户删除成果（ADR 0012）：连同工作流和中间产物一起删，不可恢复。
      * 只能删已经结束的任务；成果正在修改时先取消那次修改。
      */
+    /** 删除任务：还没结束的先取消（停掉正在跑的运行），再连同成果、工作流和中间产物一起删 */
     async remove(ownerId: string, taskId: string): Promise<void> {
-      const { task } = await owned(ownerId, taskId);
-      if (!FINAL.includes(task.status))
-        throw new HttpError(409, 'task_not_ended', '任务还在进行，先取消再删除');
+      await owned(ownerId, taskId);
       if (await store.findActiveRevision(taskId)) throw revising();
+      await transact(taskId, async (snapshot, w, fx) => {
+        if (!FINAL.includes(snapshot.task.status)) await cancelAll(snapshot, w, fx);
+      });
       await store.remove(taskId, null);
       logger.info({ taskId }, '用户删除了任务和它的成果');
     },
@@ -1048,6 +1115,55 @@ export function createWorkflowService(deps: {
      * 内部（canvas 换好新版后调用）：新版已交付，删除被它替换的上一版。
      * 已经删过的直接返回（事件重投时会再调一次）。
      */
+    /**
+     * 修改成果（ADR 0012，2026-11-05 用户决定在原任务里接着做）：不新建任务、不重新规划。
+     * 交付节点带着修改意见接着原会话改，下游基于新产出跟着更新；附件并进任务素材，每次运行都能看到。
+     * 新版交付后 canvas 原地更新成果，链接不变。
+     */
+    async revise(taskId: string, body: ReviseTaskInput): Promise<TaskBody> {
+      await transact(taskId, async (snapshot, w, fx) => {
+        const { task } = snapshot;
+        if (task.ownerId !== body.ownerId)
+          throw new HttpError(404, 'task_not_found', '没有这个任务');
+        // 已结束的任务都能接着改（修改中途取消后，成果还是上一版，可以再发起一次）
+        if (!FINAL.includes(task.status))
+          throw new HttpError(
+            409,
+            'task_not_delivered',
+            '这个任务还没交付或正在修改，等它结束后再改',
+          );
+        // 旧流程建的修订任务还没结束（2026-11-05 之前发起的）
+        if (await store.findActiveRevision(taskId)) throw revising();
+        const owners = new Set(
+          selectDeliverables(task.deliverables, snapshot.nodes).map((d) => d.nodeId),
+        );
+        const targets = snapshot.nodes.filter((n) => owners.has(n.id) && n.currentRunId);
+        if (!targets.length)
+          throw new HttpError(409, 'task_not_revisable', '这个任务没有可以接着改的交付节点');
+        const known = new Set(task.materials.map((m) => m.uploadId));
+        await w.setTask({
+          status: 'running',
+          attention: null,
+          finishedAt: null,
+          // 记下这轮的修改意见：节点和整体验收只查它（见 checkNode / checkDelivery）
+          acceptance: { unmet: [], revision: body.request },
+          materials: [...task.materials, ...body.materials.filter((m) => !known.has(m.uploadId))],
+        });
+        const affected = withDownstream(snapshot, targets);
+        for (const node of snapshot.nodes.filter((n) => affected.has(n.id)))
+          await w.setNode(node.id, {
+            status: 'waiting',
+            finishedAt: null,
+            reworks: 0,
+            warning: null,
+            config: { ...node.config, revision: body.request },
+          });
+        await schedule(snapshot, w, fx);
+      });
+      logger.info({ taskId }, '在原任务里接着改');
+      return toTaskBody(await owned(body.ownerId, taskId));
+    },
+
     async retire(taskId: string, replacedBy: string): Promise<void> {
       const next = await store.get(replacedBy);
       if (next?.task.revisionOf !== taskId || next.task.status !== 'succeeded')
@@ -1186,6 +1302,7 @@ export function createWorkflowService(deps: {
         }
         if (choice === 'cancel') return cancelAll(snapshot, w, fx);
         const { reason, nodeId } = task.attention;
+        // 「继续」：从停下的地方接着检查——记下的检查结果和已保存的浏览器报告接着用（2026-11-05 用户决定）
         if (reason === 'checks_incomplete' && choice === 'retry') {
           await w.setTask({ status: nodeId ? 'running' : 'accepting', attention: null });
           if (nodeId) {
@@ -1193,6 +1310,23 @@ export function createWorkflowService(deps: {
             if (node?.status === 'checking' && node.currentRunId)
               fx.gate.push({ taskId, nodeId, runId: node.currentRunId });
           } else fx.accept.push(taskId);
+          return;
+        }
+        if (reason === 'checks_incomplete' && choice === 'continue') {
+          // 用户看过没做完的检查，决定跳过检查（2026-11-04 用户决定，2026-11-05 改名「跳过检查」）：
+          // 未检查项原样留在节点提醒和验收记录里，不冒充通过。
+          if (nodeId) {
+            const node = snapshot.nodes.find((n) => n.id === nodeId);
+            if (node?.status === 'checking')
+              await w.setNode(node.id, {
+                status: 'succeeded',
+                finishedAt: new Date(),
+                warning: `你选择了跳过检查。${node.warning ?? task.attention.message}`,
+              });
+            await w.setTask({ status: 'running', attention: null });
+            return schedule(snapshot, w, fx);
+          }
+          await w.setTask({ status: 'succeeded', attention: null, finishedAt: new Date() });
           return;
         }
         if (reason === 'node_failed') {

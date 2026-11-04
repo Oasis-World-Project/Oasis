@@ -53,9 +53,15 @@ export function selectedOutputFiles(outputs: RunOutputFile[], deliver: string[])
   );
 }
 
-/** 不依赖媒体语义的说明/包内容核验可独立进行；未知媒体不应使它被整体跳过。 */
+/**
+ * 不依赖媒体语义的说明/包内容核验可独立进行；未知媒体不应使它被整体跳过。
+ * 结构化数据文件（JSON/CSV/YAML/XML）也作为证据：交付说明常常声称它们的内容
+ * （如“20 步验收脚本、结构合规”），看不到正文就既不能确认也不能否定。
+ */
 export function deliveryIntegrityChecks(outputs: RunOutputFile[]): TaskCheck[] {
-  const files = outputs.filter((f) => /\.(md|txt|docx|pdf|zip)$/i.test(f.path)).map((f) => f.path);
+  const files = outputs
+    .filter((f) => /\.(md|txt|docx|pdf|zip|jsonl?|csv|tsv|ya?ml|xml)$/i.test(f.path))
+    .map((f) => f.path);
   return files.length
     ? [
         {

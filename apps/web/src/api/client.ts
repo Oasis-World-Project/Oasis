@@ -25,6 +25,12 @@ interface RequestInit {
   method?: string;
   body?: unknown;
   signal?: AbortSignal;
+  /** 普通 JSON 读取的截止；长任务/流式接口不使用默认读取截止。 */
+  timeoutMs?: number;
+}
+
+export function isConnectionError(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 0 || error.status >= 500);
 }
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -45,9 +51,27 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   return response;
 }
 
-export async function api<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
-  const response = await apiFetch(path, init);
-  return schema.parse(await response.json());
+export async function api<T>(
+  path: string,
+  schema: z.ZodType<T>,
+  init: RequestInit = {},
+): Promise<T> {
+  const timeoutMs = init.timeoutMs ?? ((init.method ?? 'GET') === 'GET' ? 15_000 : undefined);
+  const deadline = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
+  const signal = deadline
+    ? AbortSignal.any(init.signal ? [init.signal, deadline] : [deadline])
+    : init.signal;
+  try {
+    const response = await apiFetch(path, { ...init, signal });
+    return schema.parse(await response.json());
+  } catch (error) {
+    if (init.signal?.aborted) throw init.signal.reason;
+    if (deadline?.aborted)
+      throw new ApiError(0, 'request_timeout', '读取超时，服务恢复后会重新连接');
+    if (error instanceof TypeError)
+      throw new ApiError(0, 'network_error', '读取连接中断，服务恢复后会重新连接');
+    throw error;
+  }
 }
 
 export async function apiVoid(path: string, init?: RequestInit): Promise<void> {

@@ -1,9 +1,11 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
 import process from 'node:process';
 import { zstdDecompressSync } from 'node:zlib';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 let rootCalls = 0;
 let childCalls = 0;
 let grandchildCalls = 0;
@@ -13,10 +15,23 @@ let spawned = false;
 let wrote = false;
 let cap;
 let reasoning;
+let overflowSent = false;
+let compactions = 0;
+let checkpointSeen = false;
 const mode = process.env.OASIS_NATIVE_MODE ?? 'fresh';
 const execution = JSON.parse(readFileSync('/workspace/in/.oasis-execution.json', 'utf8'));
 const sessionId = execution.sessionId;
 const persistent = mode === 'persistent';
+const attachmentTest = process.env.OASIS_NATIVE_FAULT === 'attachment';
+if (attachmentTest) {
+  const image = spawn('python3', [
+    '-c',
+    'from PIL import Image; Image.new("RGB", (8, 8), (100, 50, 200)).save("/workspace/attachment.png")',
+  ]);
+  await new Promise((resolve, reject) =>
+    image.once('exit', (code) => (code ? reject(new Error('image fixture failed')) : resolve())),
+  );
+}
 let verified = false;
 function nativeRecords() {
   const archive = readFileSync(
@@ -54,9 +69,30 @@ const server = createServer(async (request, reply) => {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
   const body = JSON.parse(Buffer.concat(chunks).toString());
+  const summarizing = JSON.stringify(body.messages.at(-1)).includes(
+    'Output only the checkpoint text',
+  );
+  if (summarizing) compactions++;
   const child = body.model.startsWith('test/');
-  if (body.model === 'test/tertiary') grandchildCalls++;
-  const n = child ? ++childCalls : ++rootCalls;
+  if (!summarizing && body.model === 'test/tertiary') grandchildCalls++;
+  const n = summarizing ? rootCalls : child ? ++childCalls : ++rootCalls;
+  if (!summarizing && !child && process.env.OASIS_NATIVE_FAULT === 'context-overflow') {
+    if (overflowSent && JSON.stringify(body.messages).includes('NATIVE_CONTEXT_CHECKPOINT'))
+      checkpointSeen = true;
+    if (n === 3 && !overflowSent) {
+      overflowSent = true;
+      reply.writeHead(400, { 'content-type': 'application/json' });
+      reply.end(
+        JSON.stringify({
+          error: {
+            code: 'context_length_exceeded',
+            message: 'This request exceeds the model maximum context length.',
+          },
+        }),
+      );
+      return;
+    }
+  }
   if (!child && n === 1 && process.env.OASIS_NATIVE_FAULT === 'disconnect') {
     reply.writeHead(200, { 'content-type': 'text/event-stream' });
     reply.write('data: {"choices":[{"delta":{"content":"incomplete network reply"}}]}\n\n');
@@ -80,9 +116,15 @@ const server = createServer(async (request, reply) => {
       throw new Error('Legacy session resumed without current child-model authorization');
   }
   let finish = 'stop';
-  let content = child ? 'Secondary task complete.' : 'Continue working.';
+  let content = summarizing
+    ? 'NATIVE_CONTEXT_CHECKPOINT: Continue the existing goal. Delegate to test/secondary, write out/proof.txt, and verify before completing.'
+    : child
+      ? 'Secondary task complete.'
+      : 'Continue working.';
   let call;
-  if (persistent && !execution.recovering && wrote && !child) {
+  if (summarizing) {
+    // 原生压缩器的辅助模型请求只返回摘要，不驱动第二套 Agent Loop。
+  } else if (persistent && !execution.recovering && wrote && !child) {
     writeFileSync('/workspace/project/provider-waiting', 'durable');
     return; // 故障注入：真实供应商长调用尚未返回时杀死宿主控制进程。
   }
@@ -110,6 +152,10 @@ const server = createServer(async (request, reply) => {
       },
     };
   } else if (!child && n === 1 && mode === 'fresh') finish = 'length';
+  else if (!child && n === 2 && attachmentTest)
+    call = { name: 'read_image', args: { file_path: '/workspace/attachment.png' } };
+  else if (!child && n === 2 && process.env.OASIS_NATIVE_FAULT === 'context-overflow')
+    content = `CANONICAL_NATIVE_HISTORY ${'Historical engineering detail. '.repeat(6000)}`;
   else if (!child && n >= 4 && !spawned) {
     if (!tools.has('subagent')) throw new Error('subagent missing');
     spawned = true;
@@ -207,7 +253,7 @@ server.listen(0, '127.0.0.1', () => {
   });
   child.stderr.pipe(process.stderr);
   process.stdin.pipe(child.stdin);
-  child.on('exit', (code) => {
+  child.on('exit', async (code) => {
     server.close();
     if (mode === 'refuse') {
       process.stderr.write(`NATIVE_REFUSED ${rootCalls}\n`);
@@ -220,6 +266,24 @@ server.listen(0, '127.0.0.1', () => {
       goal = records.filter((event) => event.type === 'goal/change').at(-1)?.data.goal;
     mkdirSync('/workspace/evidence', { recursive: true });
     writeFileSync('/workspace/evidence/session.jsonl.zstd', archive);
+    let attachmentRecovered = false;
+    if (attachmentTest) {
+      const require = createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
+      const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
+      const { LocalAttachmentStore } = await import(
+        pathToFileURL(require.resolve('@deepseek-ai/dsh-attachment-local')).href
+      );
+      cpSync('/home/node/.dsh/sessions', '/workspace/evidence/recovered', { recursive: true });
+      const ref = records
+        .flatMap((event) => event.data?.message?.content ?? [])
+        .find((block) => block.type === 'image')?.attachment;
+      if (!ref) throw new Error('Native read_image did not record an attachment reference');
+      const restored = new LocalAttachmentStore(new Context(), {
+        dshHome: '/workspace/evidence/recovered',
+      });
+      await restored.readImage(ref);
+      attachmentRecovered = true;
+    }
     const result = {
       code,
       rootCalls,
@@ -231,6 +295,13 @@ server.listen(0, '127.0.0.1', () => {
       maxGoalRounds: goal?.maxGoalRounds,
       proof,
       policyCount: policies.length,
+      compactions,
+      checkpointSeen,
+      attachmentRecovered,
+      compactionSummaries: records.filter((event) => event.type === 'compaction/summary').length,
+      failedCompactions: records.filter(
+        (event) => event.type === 'compaction/end' && event.data.error,
+      ).length,
       policyModels: policies[0]?.data.allowedModels.map((model) => model.model),
       ...(mode === 'resume'
         ? { historySeen, legacyOutput: readFileSync('/workspace/out/legacy.txt', 'utf8') }

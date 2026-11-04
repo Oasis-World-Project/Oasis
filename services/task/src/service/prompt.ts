@@ -1,7 +1,7 @@
 // 拼交给节点的说明（ADR 0004 §6）：任务 → 角色和目标 → 上游交来的东西 → 用户追加的要求 → 固定规则。
 // 讨论节点的发言、汇总，以及关卡退回后的修改，都在这一份上下文的基础上拼。
 import type { RunOutputFile } from '@oasis/contracts/harness';
-import type { TaskSheet } from '@oasis/contracts/task';
+import type { TaskCheck, TaskSheet } from '@oasis/contracts/task';
 
 interface UpstreamInput {
   key: string;
@@ -155,6 +155,34 @@ export function resumePrompt(newNotes: string[], interrupted = false): string {
 }
 
 /** 关卡没过：接着原会话改一次 */
+/**
+ * 用户看过成果后的修改（ADR 0012，2026-11-05 改为在原任务里接着原会话改）：
+ * 交付节点和它的下游都接着自己上次的会话，只改修改意见涉及的地方。
+ */
+export function revisionPrompt(request: string): string {
+  return [
+    '用户看过交付的成果，提出了下面的修改意见（批注截图等附件在 materials/ 下，截图上的编号和批注编号一致）：',
+    '',
+    request,
+    '',
+    '请在你上次的成果基础上接着改：',
+    '- 只改修改意见涉及的地方，其余内容、结构和风格保持不变（指内容不变，不要求逐字节相同）；',
+    '- 上游节点的产出如有更新，以这次 inputs 里的最新产出为准；和你无关的意见不用处理；',
+    '- 改完在 out/ 里交齐全部成果（没改的文件也要在），用一两句话说明改了什么。',
+    '- 自检一遍确认改好、没改坏别的就够了，随即把目标标为完成，不要把同样的检查再跑一遍。',
+  ].join('\n');
+}
+
+/** 修改轮的验收点：只查这次的修改意见改好没有（原任务单第一轮已经核对过） */
+export function revisionCheck(request: string): TaskCheck {
+  return {
+    id: 'revision',
+    text: `用户这次的修改意见已经改到交付物里，且没有改坏原有内容：\n${request}`,
+    requirementIds: [],
+    files: [],
+  };
+}
+
 export function reworkPrompt(unmet: string[]): string {
   return [
     '交付前的检查发现以下地方还没满足：',

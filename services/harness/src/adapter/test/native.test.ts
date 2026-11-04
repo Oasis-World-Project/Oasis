@@ -18,6 +18,8 @@ async function runNative(
     recovering?: boolean;
     bootstrap?: boolean;
     networkFault?: boolean;
+    contextOverflow?: boolean;
+    attachmentRoundTrip?: boolean;
   } = {},
 ) {
   const image = process.env.OASIS_NATIVE_IMAGE!;
@@ -72,7 +74,7 @@ async function runNative(
       '--env',
       `OASIS_NATIVE_GENERATION=${options.generation ?? 4}`,
       '--env',
-      `OASIS_NATIVE_FAULT=${options.networkFault ? 'disconnect' : ''}`,
+      `OASIS_NATIVE_FAULT=${options.networkFault ? 'disconnect' : options.contextOverflow ? 'context-overflow' : options.attachmentRoundTrip ? 'attachment' : ''}`,
       '--memory',
       '2g',
       '--pids-limit',
@@ -132,6 +134,13 @@ async function runNative(
     expect(nested).toBe(!options.recovering || Boolean(options.bootstrap));
     if (options.recovering && !options.bootstrap) expect(stderr).toContain('"rootCalls":0');
     expect(stderr).not.toContain('did not activate');
+    if (options.contextOverflow) {
+      expect(stderr).toContain('"checkpointSeen":true');
+      expect(stderr).toContain('"compactions":1');
+      expect(stderr).toContain('"compactionSummaries":1');
+      expect(stderr).toContain('"failedCompactions":0');
+    }
+    if (options.attachmentRoundTrip) expect(stderr).toContain('"attachmentRecovered":true');
     return await readFile(join(directory, 'evidence/session.jsonl.zstd'));
   } finally {
     clearTimeout(timer);
@@ -144,6 +153,16 @@ async function runNative(
 
 describe.skipIf(!process.env.OASIS_NATIVE_IMAGE)('精确版本 DSH 离线集成', () => {
   it('原生目标跨截断、多轮租约和跨模型子代理执行，实际写出文件才结束', () => runNative(), 120_000);
+  it(
+    'Oasis profile 保留原生自动压缩：上下文溢出后生成持久摘要，并在同一目标继续完成',
+    () => runNative({ contextOverflow: true }),
+    120_000,
+  );
+  it(
+    '原生 read_image 对象随 sessions 快照完整恢复，独立附件服务能按原引用读取',
+    () => runNative({ attachmentRoundTrip: true }),
+    120_000,
+  );
   it(
     '原生供应商读取到真实连接中断时，保留同一目标重试并完成',
     () => runNative({ networkFault: true }),

@@ -24,8 +24,8 @@ const FRIENDLY_ERRORS: Record<string, string> = {
   provider_region_unavailable: '这个 AI 在当前网络所在的地区用不了，换一个 AI 试试',
   provider_busy: '这个 AI 现在太忙了，过一会儿再试',
   model_unavailable: '这个 AI 还没有接入',
-  stream_interrupted: '回复中断了，已保留收到的部分',
-  intake_failed: '任务单暂时未能生成，原话和已提交的回答已保存，请继续整理或稍后重试',
+  stream_interrupted: '回复连接中断，已保留内容，可以继续回复',
+  reply_length: '本次回复达到长度上限，已保留内容，可以继续回复',
 };
 
 function toConversationBody(row: Conversation): ConversationBody {
@@ -162,6 +162,7 @@ export function createDmService(deps: {
     let text = '';
     let completed = false;
     let streamError: string | undefined;
+    let limited = false;
     const parser = createSseParser((data) => {
       if (data === '[DONE]') {
         completed = true;
@@ -173,7 +174,8 @@ export function createDmService(deps: {
       };
       if (chunk.error) streamError = chunk.error.message ?? '回复中断了';
       const finish = chunk.choices?.[0]?.finish_reason;
-      if (finish && finish !== 'stop') streamError = `回复未正常结束：${finish}`;
+      if (finish === 'length') limited = true;
+      else if (finish && finish !== 'stop') streamError = `回复未正常结束：${finish}`;
       const delta = chunk.choices?.[0]?.delta?.content;
       if (delta) {
         text += delta;
@@ -188,6 +190,7 @@ export function createDmService(deps: {
     input.signal.throwIfAborted();
     if (!completed) streamError ??= '回复未收到完成标记';
     if (streamError) throw new HttpError(502, 'stream_interrupted', streamError);
+    if (limited) throw new HttpError(502, 'reply_length', '回复达到长度上限');
     return text;
   }
 
@@ -235,6 +238,7 @@ export function createDmService(deps: {
       signal: AbortSignal;
       user: Message;
       placeholder?: Message;
+      prefix?: string;
     },
     suggestTask: boolean,
   ) {
@@ -248,7 +252,8 @@ export function createDmService(deps: {
         status: 'streaming',
         data: { suggestTask, replyTo: input.user.id },
       }));
-    let partial = '';
+    let partial = input.prefix ?? '';
+    if (partial) input.emit({ type: 'delta', text: partial });
     try {
       input.signal.throwIfAborted();
       const route = await routeFor(conversation.modelKey ?? '', input.requestId);
@@ -266,7 +271,14 @@ export function createDmService(deps: {
           content: withAttachmentNote(m.content, attachmentsOf(m)),
         })),
       ];
-      const text = await streamReply({
+      if (input.prefix) {
+        messages.push({ role: 'assistant', content: input.prefix });
+        messages.push({
+          role: 'user',
+          content: '从上次中断处继续，保留原要求，不重复已经输出的内容。',
+        });
+      }
+      await streamReply({
         ownerId: input.ownerId,
         providerModel: route.providerModel,
         messages,
@@ -278,12 +290,16 @@ export function createDmService(deps: {
         },
       });
       input.signal.throwIfAborted();
-      const done = await store.finishMessage(placeholder.id, { content: text, status: 'complete' });
+      await store.mergeMessageData(placeholder.id, { stopped: false, resumable: false });
+      const done = await store.finishMessage(placeholder.id, {
+        content: partial,
+        status: 'complete',
+      });
       await store.touchConversation(conversation.id);
       input.emit({ type: 'done', message: toMessageBody(done) });
     } catch (err) {
       if (input.signal.aborted) {
-        await store.mergeMessageData(placeholder.id, { stopped: true });
+        await store.mergeMessageData(placeholder.id, { stopped: true, resumable: true });
         const done = await store.finishMessage(placeholder.id, {
           content: partial,
           status: 'complete',
@@ -295,6 +311,9 @@ export function createDmService(deps: {
       if (!(err instanceof HttpError) || err.statusCode >= 500) {
         deps.logger.error({ err, conversationId: conversation.id }, 'AI 回复失败');
       }
+      await store.mergeMessageData(placeholder.id, {
+        resumable: code === 'reply_length' || code === 'stream_interrupted',
+      });
       await store.finishMessage(placeholder.id, {
         content: partial,
         status: 'failed',
@@ -303,6 +322,161 @@ export function createDmService(deps: {
       await store.touchConversation(conversation.id);
       input.emit({ type: 'error', code, message });
     }
+  }
+
+  type TurnInput = {
+    ownerId: string;
+    conversationId: string;
+    content: string;
+    asTask: boolean;
+    attachments: MessageAttachment[];
+    requestId: string;
+    emit: (event: StreamEvent) => void;
+  };
+  async function processTurn(
+    store: ConversationRepo,
+    conversation: Conversation,
+    userMessage: Message,
+    input: TurnInput,
+    placeholder?: Message,
+  ) {
+    await controlled(store, userMessage, async (signal) => {
+      input.emit({ type: 'accepted', userMessage: toMessageBody(userMessage) });
+
+      const history = await store.recentComplete(
+        conversation.id,
+        deps.historyLimit,
+        userMessage.id,
+      );
+      let suggestTask: boolean;
+      try {
+        const open = await deps.intake.findOpen(conversation.id);
+        if (open) {
+          signal.throwIfAborted();
+          active.get(userMessage.id)!.canStop = false;
+          if (
+            !(await store.mergeMessageData(
+              userMessage.id,
+              { intent: 'task', intakeId: open.id },
+              true,
+            ))
+          )
+            throw new DOMException('已停止', 'AbortError');
+          input.emit({ type: 'activity', phase: 'intake' });
+          return emitAll(
+            input.emit,
+            await deps.intake.userSaid({
+              conversation,
+              intake: open,
+              ownerId: input.ownerId,
+              text: input.content,
+              attachments: input.attachments,
+              requestId: input.requestId,
+            }),
+          );
+        }
+        const probability = input.asTask
+          ? 1
+          : await deps.intake.taskProbability({
+              ownerId: input.ownerId,
+              content: input.content,
+              history,
+              requestId: input.requestId,
+              signal,
+            });
+        signal.throwIfAborted();
+        if (input.asTask || probability >= deps.detect.high) {
+          active.get(userMessage.id)!.canStop = false;
+          if (!(await store.mergeMessageData(userMessage.id, { intent: 'task' }, true))) {
+            throw new DOMException('已停止', 'AbortError');
+          }
+          input.emit({ type: 'activity', phase: 'intake' });
+          return emitAll(
+            input.emit,
+            await deps.intake.start({
+              conversation,
+              ownerId: input.ownerId,
+              request: input.content,
+              sourceMessageId: userMessage.id,
+              attachments: input.attachments,
+              history,
+              requestId: input.requestId,
+            }),
+          );
+        }
+        suggestTask = probability >= deps.detect.low;
+      } catch (err) {
+        if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+          await chat(
+            store,
+            conversation,
+            {
+              ...input,
+              signal: AbortSignal.abort(),
+              user: userMessage,
+              ...(placeholder ? { placeholder } : {}),
+            },
+            false,
+          );
+          return;
+        }
+        return emitFailure(conversation, err, input.emit);
+      }
+      await store.mergeMessageData(userMessage.id, { replyPhase: 'chat' });
+      input.emit({ type: 'activity', phase: 'chat' });
+      await chat(
+        store,
+        conversation,
+        { ...input, signal, user: userMessage, ...(placeholder ? { placeholder } : {}) },
+        suggestTask,
+      );
+    });
+  }
+
+  async function continueTurn(
+    store: ConversationRepo,
+    conversation: Conversation,
+    messageId: string,
+    input: Pick<TurnInput, 'ownerId' | 'requestId' | 'emit'>,
+  ) {
+    const { user, replies } = await chatTurn(store, conversation.id, messageId);
+    const reply = replies.at(-1);
+    const rows = await store.listMessages(conversation.id, 10000);
+    if (rows.some((m) => m.authorKind === 'user' && m.seq > user.seq))
+      throw new HttpError(409, 'reply_not_latest', '只能继续最近一轮回复');
+    if (!reply || !(reply.data.stopped || reply.data.resumable || reply.status === 'failed'))
+      throw new HttpError(409, 'reply_not_paused', '这条回复不需要继续');
+    const updated = (await store.mergeMessageData(user.id, {
+      stopRequested: false,
+      replyPending: true,
+    }))!;
+    // 保留旧正文和附件；不删除消息，不把继续当成新需求。
+    if (!reply.content && user.data.replyPhase !== 'chat') {
+      await processTurn(
+        store,
+        conversation,
+        updated,
+        {
+          ...input,
+          conversationId: conversation.id,
+          content: user.content,
+          asTask: false,
+          attachments: attachmentsOf(user),
+        },
+        reply,
+      );
+      return;
+    }
+    await controlled(store, updated, async (signal) => {
+      input.emit({ type: 'accepted', userMessage: toMessageBody(updated) });
+      input.emit({ type: 'activity', phase: 'chat' });
+      await chat(
+        store,
+        conversation,
+        { ...input, signal, user: updated, placeholder: reply, prefix: reply.content },
+        Boolean(reply.data.suggestTask),
+      );
+    });
   }
 
   return {
@@ -334,6 +508,13 @@ export function createDmService(deps: {
       await repo.withMessageLock(conversationId, async (store) => {
         await store.withIntakeLock(conversationId, async (scoped) => {
           const { user, replies } = await chatTurn(scoped, conversationId, messageId);
+          // 真删除（2026-11-05）：先在 canvas 里把消息带的文件连对象一起删掉，再删消息；
+          // 删文件失败时消息也不删，用户重试即可（删文件是幂等的）
+          const attachments = [user, ...replies].flatMap((m) => attachmentsOf(m).map((a) => a.id));
+          if (attachments.length)
+            await deps.canvas.json('POST', '/internal/uploads/delete', {
+              body: { ownerId, ids: attachments },
+            });
           await scoped.mutateChat(conversationId, [user, ...replies]);
         });
         await store.touchConversation(conversationId);
@@ -361,11 +542,13 @@ export function createDmService(deps: {
       conversationId: string;
       messageId: string;
       content?: string;
+      continue?: boolean;
       requestId: string;
       emit: (event: StreamEvent) => void;
     }) {
       const conversation = await owned(input.conversationId, input.ownerId);
       await repo.withMessageLock(conversation.id, async (store) => {
+        if (input.continue) return continueTurn(store, conversation, input.messageId, input);
         const { user, reply } = await store.withIntakeLock(conversation.id, async (scoped) => {
           const { user, replies } = await chatTurn(scoped, conversation.id, input.messageId);
           const reply = replies[0];
@@ -378,6 +561,7 @@ export function createDmService(deps: {
         });
         const updated = (await store.mergeMessageData(user.id, {
           intent: 'chat',
+          replyPhase: 'chat',
           stopRequested: false,
           replyPending: true,
         }))!;
@@ -416,7 +600,8 @@ export function createDmService(deps: {
       if (ids.length === 0) return [];
       try {
         const { uploads } = await deps.canvas.json('POST', '/internal/uploads/lookup', {
-          body: { ownerId, ids },
+          // claim：文件随消息发出、被用上了，canvas 的清扫不再删它
+          body: { ownerId, ids, claim: true },
           requestId,
           schema: UploadLookupResult,
         });
@@ -441,6 +626,22 @@ export function createDmService(deps: {
     }): Promise<void> {
       const conversation = await owned(input.conversationId, input.ownerId);
       await repo.withMessageLock(conversation.id, async (store) => {
+        if (
+          !input.asTask &&
+          input.attachments.length === 0 &&
+          /^(继续|继续回复)[。！!]?$/u.test(input.content.trim()) &&
+          !(await deps.intake.findOpen(conversation.id))
+        ) {
+          const rows = await store.listMessages(conversation.id, 10000);
+          const last = rows.filter((m) => m.kind !== 'notice').at(-1);
+          if (
+            last?.authorKind === 'ai' &&
+            (last.data.stopped || last.data.resumable || last.status === 'failed') &&
+            typeof last.data.replyTo === 'string'
+          ) {
+            return continueTurn(store, conversation, last.data.replyTo, input);
+          }
+        }
         const userMessage = await store.insertMessage({
           conversationId: conversation.id,
           authorKind: 'user',
@@ -453,86 +654,7 @@ export function createDmService(deps: {
             replyPending: true,
           },
         });
-        await controlled(store, userMessage, async (signal) => {
-          input.emit({ type: 'accepted', userMessage: toMessageBody(userMessage) });
-
-          const history = await store.recentComplete(
-            conversation.id,
-            deps.historyLimit,
-            userMessage.id,
-          );
-          let suggestTask: boolean;
-          try {
-            const open = await deps.intake.findOpen(conversation.id);
-            if (open) {
-              signal.throwIfAborted();
-              active.get(userMessage.id)!.canStop = false;
-              if (
-                !(await store.mergeMessageData(
-                  userMessage.id,
-                  { intent: 'task', intakeId: open.id },
-                  true,
-                ))
-              )
-                throw new DOMException('已停止', 'AbortError');
-              input.emit({ type: 'activity', phase: 'intake' });
-              return emitAll(
-                input.emit,
-                await deps.intake.userSaid({
-                  conversation,
-                  intake: open,
-                  ownerId: input.ownerId,
-                  text: input.content,
-                  attachments: input.attachments,
-                  requestId: input.requestId,
-                }),
-              );
-            }
-            const probability = input.asTask
-              ? 1
-              : await deps.intake.taskProbability({
-                  ownerId: input.ownerId,
-                  content: input.content,
-                  history,
-                  requestId: input.requestId,
-                  signal,
-                });
-            signal.throwIfAborted();
-            if (input.asTask || probability >= deps.detect.high) {
-              active.get(userMessage.id)!.canStop = false;
-              if (!(await store.mergeMessageData(userMessage.id, { intent: 'task' }, true))) {
-                throw new DOMException('已停止', 'AbortError');
-              }
-              input.emit({ type: 'activity', phase: 'intake' });
-              return emitAll(
-                input.emit,
-                await deps.intake.start({
-                  conversation,
-                  ownerId: input.ownerId,
-                  request: input.content,
-                  sourceMessageId: userMessage.id,
-                  attachments: input.attachments,
-                  history,
-                  requestId: input.requestId,
-                }),
-              );
-            }
-            suggestTask = probability >= deps.detect.low;
-          } catch (err) {
-            if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
-              await chat(
-                store,
-                conversation,
-                { ...input, signal: AbortSignal.abort(), user: userMessage },
-                false,
-              );
-              return;
-            }
-            return emitFailure(conversation, err, input.emit);
-          }
-          input.emit({ type: 'activity', phase: 'chat' });
-          await chat(store, conversation, { ...input, signal, user: userMessage }, suggestTask);
-        });
+        await processTurn(store, conversation, userMessage, input);
       });
     },
   };

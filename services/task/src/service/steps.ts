@@ -185,14 +185,14 @@ export function retryStep(snapshot: Snapshot, node: Node, failed: NodeRun): Step
 }
 
 /** 关卡没过：接着刚交出产出的那次运行修复 */
-export function reworkStep(node: Node, unmet: string[]): Step {
+export function reworkStep(node: Node, unmet: string[], prompt = reworkPrompt(unmet)): Step {
   return {
     requests: [
       {
         purpose: 'rework',
         goal: true,
         model: node.model,
-        prompt: reworkPrompt(unmet),
+        prompt,
         inputsFrom: [],
         continueFrom: node.currentRunId ?? undefined,
         meta: {},

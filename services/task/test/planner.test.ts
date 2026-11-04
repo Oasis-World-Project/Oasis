@@ -94,6 +94,40 @@ describe('规划门', () => {
       problems: [expect.stringContaining('引用确认任务单')],
     });
   });
+  it('每个节点最多 5 条检查：多了退回规划员合并', () => {
+    const many = Array.from({ length: 6 }, (_, i) => ({
+      id: `c${i}`,
+      text: 'x',
+      requirementIds: ['criteria:0'],
+      files: [],
+    }));
+    const plan = JSON.stringify({
+      nodes: [{ ...node('home'), checks: many }],
+      edges: [],
+      deliverables: { 首页文案: 'home' },
+    });
+    expect(checkPlan(plan, sheet, catalog, tools)).toMatchObject({
+      problems: [expect.stringContaining('最多 5 条')],
+    });
+  });
+  it('规划员看到各型号的档位和能读什么，被要求核心产出用旗舰、拿不准时联网查', () => {
+    const prompt = plannerPrompt({
+      brief: 'b',
+      sheet,
+      catalog: [
+        { ...catalog[0]!, tier: 'flagship' as const, inputs: ['text', 'image'] },
+        { ...catalog[0]!, providerModel: 'deepseek/fast', tier: 'fast' as const, inputs: ['text'] },
+      ],
+      tools,
+      playbooks: [],
+      defaultModel: 'deepseek/x',
+    });
+    expect(prompt).toContain('deepseek/x（DeepSeek，v；旗舰；能直接读：image）');
+    expect(prompt).toContain('deepseek/fast（DeepSeek，v；快速；只读文字）');
+    expect(prompt).toContain('不替用户省钱');
+    expect(prompt).toContain('web.search');
+    expect(prompt).toContain('负责交付物的节点 checks 留空');
+  });
   it('节点所需能力必须来自实测环境，不能把包可安装当成浏览器已就绪', () => {
     const environment = {
       image: 'oasis/test:1',

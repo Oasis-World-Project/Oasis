@@ -5,11 +5,12 @@ import { Check } from 'lucide-react';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { NODE_H, NODE_W } from './layout.ts';
-import { NODE_STATUS } from './rules.ts';
+import { checkSummary, type nodeState } from './rules.ts';
 import type { Speaker } from './use-speakers.ts';
 
 type FlowNodeData = {
   node: NodeBody;
+  state: ReturnType<typeof nodeState>;
   speakers: Speaker[];
   /** 工具名 → 给人看的名字（如 image.generate → 生成图片） */
   toolName: (key: string) => string;
@@ -22,7 +23,9 @@ export type FlowNode = Node<FlowNodeData, 'step'>;
 
 /** 卡片下面那行说明：讨论几轮、用什么工具、花了多少、关卡提醒 */
 function metaOf(node: NodeBody, toolName: (key: string) => string): string {
-  if (node.warning) return node.warning;
+  const summary = checkSummary(node);
+  if (summary) return summary;
+  if (node.warning) return '有提醒，点开查看';
   if (node.discussion) {
     const { round, rounds } = node.discussion;
     return round > 0 ? `讨论第 ${round} / ${rounds} 轮` : `讨论 ${rounds} 轮`;
@@ -32,8 +35,13 @@ function metaOf(node: NodeBody, toolName: (key: string) => string): string {
   return node.role || node.goal;
 }
 
-function StatusMark({ node }: { node: NodeBody }) {
-  const { tone } = NODE_STATUS[node.status];
+function StatusMark({
+  node,
+  tone,
+}: {
+  node: NodeBody;
+  tone: ReturnType<typeof nodeState>['tone'];
+}) {
   if (node.status === 'succeeded')
     return <Check size={16} strokeWidth={2.4} aria-hidden="true" className="shrink-0" />;
   if (tone === 'active')
@@ -58,7 +66,8 @@ const handleClass =
 
 export function NodeCard({ data }: NodeProps<FlowNode>) {
   const { node, speakers, selected } = data;
-  const status = NODE_STATUS[node.status];
+  const status = data.state;
+  const trouble = node.status !== 'succeeded' && !!node.warning;
   const quiet = ['draft', 'waiting', 'blocked', 'cancelled'].includes(node.status);
   const ring = selected
     ? 'shadow-[0_0_0_2px_var(--oasis-accent)]'
@@ -96,11 +105,9 @@ export function NodeCard({ data }: NodeProps<FlowNode>) {
             <span className="h-[26px]" />
           </span>
           <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{node.title}</span>
-          <StatusMark node={node} />
+          <StatusMark node={node} tone={status.tone} />
         </span>
-        <span
-          className={`truncate text-[11.5px] ${node.warning ? 'text-accent' : 'text-ink-muted'}`}
-        >
+        <span className={`truncate text-[11.5px] ${trouble ? 'text-accent' : 'text-ink-muted'}`}>
           {metaOf(node, data.toolName)}
         </span>
         <span

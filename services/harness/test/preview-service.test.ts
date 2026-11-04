@@ -59,6 +59,11 @@ function fixture(files?: Record<string, string>) {
         ['starting', 'running', 'stopping'].includes(row.status),
       );
     },
+    async removeFinished(taskId) {
+      for (const [id, row] of rows)
+        if (row.taskId === taskId && !['starting', 'running', 'stopping'].includes(row.status))
+          rows.delete(id);
+    },
   };
   const destroy = vi.fn(async () => undefined);
   const test = vi.fn(async () => ({
@@ -66,18 +71,27 @@ function fixture(files?: Record<string, string>) {
       version: 1,
       target: 'application',
       passed: false,
-      steps: [{ index: 0, action: 'text', status: 'failed' }],
+      steps: [
+        {
+          index: 0,
+          action: 'text',
+          status: 'failed',
+          error: '第 1 步 text h1：等到页面安定后文字不含「expected」，实际为「actual」',
+        },
+      ],
       diagnostics: [],
       unchecked: [],
     },
     screenshots: [{ name: 'step-0.jpg', base64: '/9j/2Q==' }],
   }));
+  let alive = true;
   const start = vi.fn(async () => ({
     id: 'container-1',
     frame: () => ({ seq: 1, jpegBase64: 'AA==' }),
     input: vi.fn(),
     ready: async () => undefined,
-    diagnostics: () => [],
+    diagnostics: () => ['页面错误：boom（共 2 次）'],
+    alive: () => alive,
     test,
     destroy,
   }));
@@ -131,7 +145,18 @@ function fixture(files?: Record<string, string>) {
       get: async () => Buffer.from('{}'),
     } as unknown as ObjectStore,
   });
-  return { rows, service, start, destroy, modelGateway, executor, test };
+  return {
+    setAlive: (value: boolean) => {
+      alive = value;
+    },
+    rows,
+    service,
+    start,
+    destroy,
+    modelGateway,
+    executor,
+    test,
+  };
 }
 
 describe('私有预览生命周期', () => {
@@ -182,6 +207,10 @@ describe('私有预览生命周期', () => {
     try {
       const result = await service.checkRun(input);
       expect(result.passed).toBe(false);
+      // 失败原因说清楚哪一步、看到了什么，以及页面自己报的错
+      expect(result.reason).toBe(
+        '第 1 步 text h1：等到页面安定后文字不含「expected」，实际为「actual」；页面诊断：页面错误：boom（共 2 次）',
+      );
       expect(result.application).toMatchObject({
         manifestPath: 'site/oasis-app.json',
         spec: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
@@ -190,6 +219,11 @@ describe('私有预览生命周期', () => {
         network: 'none',
       });
       expect(result.inputSha256).toMatch(/^[a-f0-9]{64}$/);
+      // 首屏画面和步骤截图一起交给关卡做视觉检查
+      expect(result.screenshots).toEqual([
+        { name: 'opening.jpg', base64: 'AA==' },
+        { name: 'step-0.jpg', base64: '/9j/2Q==' },
+      ]);
       expect(test).toHaveBeenCalledTimes(1);
       expect(destroy).toHaveBeenCalledTimes(1);
       await expect(service.report({ ...input, payerId: access.taskId })).rejects.toThrow(
@@ -199,6 +233,56 @@ describe('私有预览生命周期', () => {
       await service.close();
     }
   });
+  it('检查不设时限：用户停止时断开即回收浏览器；检查用的浏览器自己退出记为未完成', async () => {
+    const manifest = {
+      'site/oasis-app.json': JSON.stringify({
+        version: 1,
+        kind: 'static',
+        root: 'site',
+        entry: 'index.html',
+      }),
+      'site/index.html': '<h1>actual</h1>',
+      'site/oasis-test.json': JSON.stringify({
+        version: 1,
+        steps: [{ action: 'visible', selector: 'h1' }],
+      }),
+    };
+    const { service, test, destroy } = fixture(manifest);
+    const input = { runId: access.artifactId, payerId: access.ownerId, taskId: access.taskId };
+    try {
+      let rejectTest!: (error: Error) => void;
+      test.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectTest = reject;
+          }),
+      );
+      destroy.mockImplementationOnce(async () => {
+        rejectTest(new Error('浏览器测试进程提前结束'));
+        return undefined;
+      });
+      const abort = new AbortController();
+      const checking = service.checkRun({ ...input, signal: abort.signal });
+      await vi.waitFor(() => expect(test).toHaveBeenCalledTimes(1));
+      abort.abort();
+      await expect(checking).rejects.toMatchObject({ statusCode: 499, code: 'check_aborted' });
+      expect(destroy).toHaveBeenCalled();
+    } finally {
+      await service.close();
+    }
+    const dead = fixture(manifest);
+    dead.setAlive(false);
+    try {
+      await expect(dead.service.checkRun(input)).rejects.toMatchObject({
+        statusCode: 503,
+        code: 'check_incomplete',
+      });
+      expect(dead.test).not.toHaveBeenCalled();
+    } finally {
+      await dead.service.close();
+    }
+  });
+
   it('不合法计划在启动和冻结前拒绝', async () => {
     const { service, start, modelGateway } = fixture({
       'site/oasis-app.json': JSON.stringify({
@@ -226,8 +310,8 @@ describe('私有预览生命周期', () => {
       await service.close();
     }
   });
-  it('重复启动同一会话，停止后结算一次并可重开', async () => {
-    const { service, start, destroy, modelGateway } = fixture();
+  it('重复启动同一会话，停止后结算一次并可重开；任务删除后记录不留', async () => {
+    const { service, start, destroy, modelGateway, rows } = fixture();
     try {
       const first = await service.start(access);
       expect(first.status).toBe('running');
@@ -247,6 +331,9 @@ describe('私有预览生命周期', () => {
           ),
       ).toHaveLength(1);
       expect((await service.start(access)).id).not.toBe(first.id);
+      // 任务删除：停掉、结算，再把记录真删除
+      await service.stopTask(access.taskId);
+      expect(rows.size).toBe(0);
     } finally {
       await service.close();
     }

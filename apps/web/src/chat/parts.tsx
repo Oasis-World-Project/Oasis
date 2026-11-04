@@ -137,7 +137,7 @@ export function ConfirmButton({
   }
   return (
     <span role="group" aria-label={question} className="inline-flex items-center gap-1.5">
-      <span className="text-[13px] text-ink-muted">{question}</span>
+      <span className="whitespace-nowrap text-[13px] text-ink-muted">{question}</span>
       <CardButton
         tone="accent"
         onClick={() => {

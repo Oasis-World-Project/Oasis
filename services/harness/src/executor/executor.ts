@@ -39,7 +39,7 @@ export interface Executor {
   /** 清理不在 keep 里的沙箱（harness 重启后遗留的），返回清理了几个 */
   removeOrphans(keep: ReadonlySet<string>): Promise<number>;
   /** 接管前停止旧进程，避免两份执行同时写同一目录。返回实际停止时间。 */
-  suspend?(runId: string): Promise<{ endedAt: Date; cores?: number }>;
+  suspend?(runId: string): Promise<{ endedAt: Date; cores?: number } | undefined>;
   workspaceExists?(sessionId: string): Promise<boolean>;
   purgeWorkspace?(sessionId: string): Promise<void>;
   environment?(): Promise<ExecutionEnvironment>;
@@ -315,9 +315,11 @@ export function createDockerExecutor(deps: {
 
     async suspend(runId) {
       const containers = await docker.listContainers(LABEL_COMPONENT);
+      const targets = containers.filter((c) => c.Labels[LABEL_RUN] === runId);
+      if (targets.length === 0) return undefined;
       let ended = new Date();
       let cores: number | undefined;
-      for (const container of containers.filter((c) => c.Labels[LABEL_RUN] === runId)) {
+      for (const container of targets) {
         await docker.stopContainer(container.Id);
         const { State, HostConfig } = await docker.inspectContainer(container.Id);
         if (HostConfig.NanoCpus) cores = HostConfig.NanoCpus / 1e9;

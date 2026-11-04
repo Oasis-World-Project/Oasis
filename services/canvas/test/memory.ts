@@ -73,6 +73,11 @@ export function memoryArtifacts(
       if (row) Object.assign(row, patch);
       return row;
     },
+    async replaceContent(id, patch) {
+      const row = rows.find((r) => r.id === id);
+      if (row)
+        Object.assign(row, patch, { annotations: [], approvedAt: null, createdAt: new Date() });
+    },
     find: async (id) => rows.find((r) => r.id === id),
     async setAvatar(id, spec) {
       const row = rows.find((r) => r.id === id);
@@ -129,7 +134,7 @@ export function memoryUploads(): UploadsRepo & { rows: Map<string, Upload> } {
     listBySourceTask: async (taskId) =>
       [...rows.values()].filter((row) => row.sourceTaskId === taskId),
     async insert(upload) {
-      const row = { ...upload, createdAt: new Date() };
+      const row = { claimedAt: null, ...upload, createdAt: new Date() };
       rows.set(row.id, row);
       return row;
     },
@@ -148,5 +153,15 @@ export function memoryUploads(): UploadsRepo & { rows: Map<string, Upload> } {
     },
     stale: async (before) =>
       [...rows.values()].filter((row) => row.state === 'uploading' && row.createdAt < before),
+    async claim(ownerId, ids) {
+      for (const id of ids) {
+        const row = rows.get(id);
+        if (row && row.ownerId === ownerId && !row.claimedAt) row.claimedAt = new Date();
+      }
+    },
+    unclaimed: async (before) =>
+      [...rows.values()].filter(
+        (row) => row.state === 'ready' && !row.claimedAt && row.createdAt < before,
+      ),
   };
 }

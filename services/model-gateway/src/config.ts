@@ -14,11 +14,24 @@ const list = (fallback: string) =>
     );
 
 export const modelGatewayEnv = {
+  /** 长会话和内嵌图片的模型请求；与沙箱入口代理的 50 MiB 边界一致。 */
+  MODEL_REQUEST_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(50 * 1024 ** 2)
+    .default(50 * 1024 ** 2),
   /** 专用决策模型地区不可用时，noul 证据判断经同一计费链路回退；留空关闭。 */
   DECISION_FALLBACK_MODEL: z
     .string()
     .default('deepseek/deepseek-v4.1-flash')
     .transform((value) => value || undefined),
+  /** 网络短暂断开（请求没发出去）时等多久再报错；超过才让节点停下等用户点继续（2026-11-05） */
+  UPSTREAM_RECONNECT_MS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(10 * 60_000),
   HARNESS_URL: z.url().default('http://127.0.0.1:4107'),
   BROWSERSTACK_USERNAME: z.string().optional(),
   BROWSERSTACK_ACCESS_KEY: z.string().optional(),
@@ -98,15 +111,19 @@ export const modelGatewayEnv = {
   TAVILY_BASE_URL: z.url().default('https://api.tavily.com'),
   /** Tavily 每个积分的价格（微美元；按量付费 $0.008） */
   TAVILY_CREDIT_MICRO: z.coerce.number().int().positive().default(8_000),
-  /** 各工具可以用的模型，逗号分隔，排在前面的是默认（地区用不了的会自动跳过） */
+  /**
+   * 各工具可以用的模型，逗号分隔，排在前面的是默认（地区用不了的会自动跳过）。
+   * 2026-11-05 用户决定：一律登记各家最强的型号，不替用户省钱（型号照 OpenRouter 目录核对）。
+   */
   TOOL_IMAGE_MODELS: list(
-    'bytedance-seed/seedream-4.5,black-forest-labs/flux.2-pro,google/gemini-2.5-flash-image,openai/gpt-image-2',
+    'bytedance-seed/seedream-5-0-pro,google/gemini-nano-banana-2.1,openai/gpt-image-2.5-sunburst,black-forest-labs/flux-3-image,qwen/qwen-image-3-pro,microsoft/mai-image-2.6,recraft/recraft-v4.1-pro,bytedance-seed/seedream-4.5,black-forest-labs/flux.2-pro',
   ),
   // 按顺序试：前一个被限流或地区用不了时换下一个（不同厂商分摊共享额度上的限流）
   TOOL_VISION_MODELS: list(
-    'qwen/qwen3-vl-8b-instruct,qwen/qwen3-vl-30b-a3b-instruct,z-ai/glm-4.6v,google/gemini-2.5-flash',
+    'qwen/qwen3.8-max-prime,moonshotai/kimi-k3.1-pro,google/gemini-4-argon,anthropic/claude-opus-5.5,qwen/qwen3-vl-235b-a22b-instruct,qwen/qwen3-vl-30b-a3b-instruct',
   ),
-  TOOL_VISION_MAX_TOKENS: z.coerce.number().int().min(1).max(8192).default(2048),
+  /** 看图的输出上限：前面几个是推理型号，推理也占这个额度，给小了会只想不答 */
+  TOOL_VISION_MAX_TOKENS: z.coerce.number().int().min(1).max(32_000).default(16_000),
   TOOL_FETCH_MAX_BYTES: z.coerce
     .number()
     .int()
@@ -117,8 +134,10 @@ export const modelGatewayEnv = {
     'bytedance-seed/seed-audio-1-0,fish-audio/s2.1-pro,openai/gpt-4o-mini-tts-2025-12-15',
   ),
   TOOL_TRANSCRIBE_MODELS: list('openai/whisper-large-v3,google/chirp-3'),
-  /** 都是每秒不超过 $0.20 的（冻结按每秒 $0.25 算）；换贵的模型要同时调冻结 */
-  TOOL_VIDEO_MODELS: list('alibaba/wan-3.0,minimax/hailuo-2.3,kwaivgi/kling-v3.0-std'),
+  /** 最贵的 Veo 3.1 4K 带声音每秒 $0.60（冻结按每秒 $0.70 算）；换更贵的模型要同时调冻结 */
+  TOOL_VIDEO_MODELS: list(
+    'google/veo-3.1,bytedance/seedance-2.5,kwaivgi/kling-v3.0-pro,alibaba/wan-3.0-prime,minimax/hailuo-3-max,runway/gen-4.5,alibaba/wan-3.0,kwaivgi/kling-v3.0-std',
+  ),
   /** 长任务（视频）最多等多久，超时就算失败、退回冻结 */
   TOOL_JOB_TIMEOUT_MS: z.coerce
     .number()

@@ -173,6 +173,7 @@ export function createRunService(deps: {
   const controlWrites = new Map<string, Promise<void>>();
   let closing = false;
   let recoveringRuns = false;
+  let recoveryDone: Promise<void> = Promise.resolve();
   const gate = createGate(deps.maxConcurrent);
 
   async function admit(model: string, requires: string[] = []) {
@@ -401,6 +402,9 @@ export function createRunService(deps: {
     const release = await gate.acquire();
     let sandbox: Sandbox | undefined;
     let keyId: string | undefined;
+    let keyRevoked = false;
+    let checkpointFailed = false;
+    let sandboxEndedAt: number | undefined;
     // 算力计费：开沙箱前冻结，销毁后按沙箱实际存在的时长结算（单价为 0 时没有 callId）
     let lease: Awaited<ReturnType<typeof startRunLease>> | undefined;
     const timer = deps.timeoutMs
@@ -422,6 +426,14 @@ export function createRunService(deps: {
       outputKey: null,
       sessionKey: null,
       summary: null,
+    };
+    const unavailable = (error: unknown) => error instanceof HttpError && error.statusCode >= 500;
+    const suspend = (error: unknown) => {
+      if (run.abort.signal.aborted) return;
+      run.suspended = true;
+      record(id, run, 'status', { status: 'recovery_wait', reason: '执行依赖暂不可用，等待接管' });
+      logger.warn({ err: error, runId: id }, '依赖中断，保存原会话等待接管');
+      run.abort.abort(new StopRun('stopped', '执行依赖暂不可用，进度保留待接管'));
     };
     try {
       const stopped = () => {
@@ -455,8 +467,11 @@ export function createRunService(deps: {
         keyTtlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
         cores: deps.cores,
         windowMs: deps.leaseMs ?? 5 * 60_000,
-        onFailure: (error) =>
-          run.abort.abort(new StopRun('stopped', '运行租约续期失败，已停止：' + String(error))),
+        onFailure: (error) => {
+          if (unavailable(error)) suspend(error);
+          else
+            run.abort.abort(new StopRun('stopped', '运行租约续期失败，已停止：' + String(error)));
+        },
       });
       stopped();
 
@@ -519,7 +534,10 @@ export function createRunService(deps: {
             run.saved = box
               .pause()
               .then(() => save(box, id))
-              .finally(() => box.destroy());
+              .finally(async () => {
+                await box.destroy();
+                sandboxEndedAt ??= Date.now();
+              });
           } else {
             void box.destroy();
           }
@@ -591,11 +609,13 @@ export function createRunService(deps: {
         ...savedOutcome(saved),
       });
     } catch (err) {
+      if (unavailable(err)) suspend(err);
       const stop = err instanceof StopRun ? err : run.abort.signal.reason;
       if (stop instanceof StopRun) {
         Object.assign(outcome, { status: stop.status, error: stop.message });
         if (run.saved) {
           const saved = await run.saved.catch((saveErr: unknown) => {
+            checkpointFailed = true;
             logger.warn({ err: saveErr, runId: id }, '停止时保存产出失败');
             outcome.error = '已停止，但进度保存失败，不能保证恢复';
             return {};
@@ -619,7 +639,21 @@ export function createRunService(deps: {
       outcome.summary = run.lastText ?? null;
       await sandbox
         ?.destroy()
+        .then(() => {
+          sandboxEndedAt ??= Date.now();
+        })
         .catch((err: unknown) => logger.warn({ err, runId: id }, '销毁沙箱失败'));
+      const endedAt = sandboxEndedAt ?? Date.now();
+      if (run.suspended && sandboxEndedAt !== undefined)
+        record(id, run, 'status', {
+          status: 'suspended',
+          endedAt: new Date(endedAt).toISOString(),
+          cores: deps.cores,
+          keyId: keyId ?? null,
+        });
+      const settlement = lease
+        ?.close(endedAt, !sandbox || sandboxEndedAt !== undefined)
+        .catch((err: unknown) => logger.warn({ err, runId: id }, '算力租约结算失败'));
       if (outcome.status !== 'succeeded' && !run.suspended) {
         await deps.modelGateway
           .json('POST', `/internal/v1/tools/runs/${id}/cancel`, {
@@ -637,19 +671,27 @@ export function createRunService(deps: {
       if (keyId) {
         await deps.modelGateway
           .json('POST', `/internal/run-keys/${keyId}/revoke`, { body: {}, requestId: id })
+          .then(() => {
+            keyRevoked = true;
+          })
           .catch((err: unknown) => logger.warn({ err, runId: id }, '作废临时 Key 失败，等它过期'));
       }
-      await lease
-        ?.close()
-        .catch((err: unknown) => logger.warn({ err, runId: id }, '算力租约结算失败'));
+      await settlement;
       release();
     }
     await run.writes;
+    const control = controlRequests.get(id);
+    if (control) {
+      run.suspended = false;
+      outcome.status = control === 'cancel' ? 'cancelled' : 'stopped';
+      if (!checkpointFailed) outcome.error = control === 'cancel' ? '已取消' : '已停止';
+    }
     if (run.suspended) {
       await repo.update(id, {
         status: 'queued',
         containerId: null,
-        runKeyId: null,
+        // 撤销失败时保留旧 Key 标识，接管须先真正作废它再发新凭证。
+        runKeyId: keyRevoked ? null : (keyId ?? row.runKeyId),
         outputs: outcome.outputs,
         outputKey: outcome.outputKey,
         sessionKey: outcome.sessionKey,
@@ -677,6 +719,7 @@ export function createRunService(deps: {
       finishedAt: finishedAt.toISOString(),
     });
     await repo.finish(row.id, { ...outcome, finishedAt }, event);
+    controlRequests.delete(row.id);
     logger.info({ runId: row.id, status, outputs: outcome.outputs.length }, '运行结束');
   }
 
@@ -688,15 +731,18 @@ export function createRunService(deps: {
 
   async function requestControl(id: string, how: 'stop' | 'cancel') {
     controlRequests.set(id, how);
-    const writing = (controlWrites.get(id) ?? Promise.resolve()).then(async () =>
+    const run = live.get(id);
+    const seq = run ? run.nextSeq++ : undefined;
+    const writing = (run?.writes ?? controlWrites.get(id) ?? Promise.resolve()).then(async () =>
       repo.appendEvents(id, [
         {
-          seq: await repo.nextSequence(id),
+          seq: seq ?? (await repo.nextSequence(id)),
           kind: 'status',
           data: { status: 'control_requested', how },
         },
       ]),
     );
+    if (run) run.writes = writing;
     controlWrites.set(id, writing);
     try {
       await writing;
@@ -1083,9 +1129,16 @@ export function createRunService(deps: {
     async stop(id: string): Promise<void> {
       const row = await owned(id);
       const run = live.get(id);
-      if (run && !run.closing) run.abort.abort(new StopRun('stopped', '已停止'));
-      else if (!run && ['queued', 'starting', 'running'].includes(row.status)) {
-        await requestControl(id, 'stop');
+      if (
+        !['queued', 'starting', 'running'].includes(row.status) ||
+        (run?.closing && !run.suspended)
+      )
+        return;
+      await requestControl(id, 'stop');
+      if (run) {
+        run.suspended = false;
+        run.abort.abort(new StopRun('stopped', '已停止'));
+      } else {
         void this.recover().catch((err: unknown) =>
           logger.warn({ err, runId: id }, '停止意图已保存，等待接管执行'),
         );
@@ -1096,9 +1149,12 @@ export function createRunService(deps: {
     async cancel(id: string): Promise<void> {
       const row = await owned(id);
       const run = live.get(id);
-      if (run) run.abort.abort(new StopRun('cancelled', '已取消'));
-      else if (['queued', 'starting', 'running'].includes(row.status)) {
-        await requestControl(id, 'cancel');
+      if (!['queued', 'starting', 'running'].includes(row.status)) return;
+      await requestControl(id, 'cancel');
+      if (run) {
+        run.suspended = false;
+        run.abort.abort(new StopRun('cancelled', '已取消'));
+      } else {
         void this.recover().catch((err: unknown) =>
           logger.warn({ err, runId: id }, '取消意图已保存，等待接管执行'),
         );
@@ -1107,14 +1163,25 @@ export function createRunService(deps: {
 
     /** 单实例启动接管：先停旧进程，再恢复原身份和原工作目录；不发布中间失败。 */
     async recover(): Promise<void> {
-      if (closing || recoveringRuns) return;
+      if (closing) return;
+      if (recoveringRuns) return recoveryDone;
       recoveringRuns = true;
+      let complete!: () => void;
+      recoveryDone = new Promise<void>((resolve) => {
+        complete = resolve;
+      });
       try {
         for (const row of await repo.listUnfinished()) {
           if (live.has(row.id) || sessions.has(row.sessionId ?? row.id)) continue;
           try {
             const suspended = await executor.suspend?.(row.id);
-            const endedAt = suspended?.endedAt ?? new Date();
+            const savedStop = !suspended ? await repo.suspension?.(row.id) : undefined;
+            const checkpoint =
+              savedStop && (row.status === 'queued' || savedStop.keyId === row.runKeyId)
+                ? savedStop
+                : undefined;
+            const endedAt =
+              suspended?.endedAt ?? (checkpoint ? new Date(checkpoint.endedAt) : new Date());
             if (row.runKeyId) {
               await deps.modelGateway.json('POST', `/internal/run-keys/${row.runKeyId}/revoke`, {
                 body: {},
@@ -1124,7 +1191,7 @@ export function createRunService(deps: {
             await deps.modelGateway.json('POST', `/internal/v1/compute/runs/${row.id}/recover`, {
               body: {
                 payerId: row.payerId,
-                cores: suspended?.cores ?? deps.cores,
+                cores: suspended?.cores ?? checkpoint?.cores ?? deps.cores,
                 endedAt: endedAt.toISOString(),
               },
               requestId: row.id,
@@ -1201,15 +1268,18 @@ export function createRunService(deps: {
         if (removed > 0) logger.info({ removed }, '清理了遗留的沙箱容器');
       } finally {
         recoveringRuns = false;
+        complete();
       }
     },
 
     /** 服务关闭：中止所有进行中的运行并等它们收尾。 */
     async stopAll(): Promise<void> {
       closing = true;
+      await recoveryDone;
       const runs = [...live.values()];
-      for (const run of runs) {
+      for (const [id, run] of live) {
         if (run.closing) continue;
+        if (controlRequests.has(id) || (run.abort.signal.aborted && !run.suspended)) continue;
         run.suspended = true;
         run.abort.abort(new StopRun('stopped', '执行服务关闭，进度保留待接管'));
       }

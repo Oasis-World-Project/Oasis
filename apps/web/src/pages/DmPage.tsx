@@ -57,6 +57,7 @@ export function DmPage() {
     content: string,
     asTask: boolean,
     replaceMessageId?: string,
+    continuing = false,
   ): Promise<boolean> {
     if (locked) return false;
     const key = messagesQuery(conversationId).queryKey;
@@ -123,6 +124,7 @@ export function DmPage() {
           } else if (event.type === 'error') setNotice(event.message);
         },
         replaceMessageId,
+        continuing,
       );
     } catch (err) {
       setNotice(err instanceof ApiError ? err.message : '发送失败了，请重试');
@@ -181,7 +183,14 @@ export function DmPage() {
     },
   };
 
-  const list = messages.data ?? [];
+  const list = (messages.data ?? []).filter((message) => message.kind !== 'notice');
+  const lastText = list.at(-1);
+  const resumeId =
+    lastText?.kind === 'text' &&
+    lastText.role === 'assistant' &&
+    (lastText.data.stopped || lastText.data.resumable || lastText.status === 'failed')
+      ? lastText.data.replyTo
+      : undefined;
   const streamingBubble =
     streaming !== null ? (
       <Bubble
@@ -194,7 +203,8 @@ export function DmPage() {
     <ChatActionsContext.Provider value={{ ...actions, busy: sending ? 'reply' : actions.busy }}>
       <section
         aria-label="私聊"
-        className={`glass relative flex h-[calc(100vh-44px)] min-h-[520px] flex-col rounded-panel ${
+        // overflow-hidden：面板固定一屏高，里面的东西不能把整个页面撑出第二根滚动条
+        className={`glass relative flex h-[calc(100vh-44px)] min-h-[520px] flex-col overflow-hidden rounded-panel ${
           dragging ? 'outline-2 -outline-offset-8 outline-dashed outline-accent' : ''
         }`}
         {...dropProps}
@@ -207,10 +217,35 @@ export function DmPage() {
           </div>
         </header>
 
-        <div ref={scroller} className="flex-1 overflow-y-auto px-6 py-5" aria-live="polite">
+        {/* relative：消息里视觉隐藏的单选框（sr-only 是绝对定位）以消息区为定位基准，跟着消息区裁剪和滚动；
+            否则它们按整个面板定位、溢出到页面外，撑出外层滚动条，点选时浏览器还会滚动整个页面去找它 */}
+        <div
+          ref={scroller}
+          className="relative flex-1 overflow-y-auto px-6 py-5"
+          aria-live="polite"
+        >
           <div ref={content} className="flex flex-col gap-4">
-            {messages.isPending && <p className="m-0 text-sm text-ink-muted">正在加载消息…</p>}
-            {list.length === 0 && !messages.isPending && streaming === null && (
+            {messages.isPending && messages.fetchStatus === 'fetching' && (
+              <p className="m-0 text-sm text-ink-muted">正在加载消息…</p>
+            )}
+            {messages.isPending && messages.fetchStatus !== 'fetching' && (
+              <p className="m-0 text-sm text-ink-muted">消息尚未加载，等待连接恢复。</p>
+            )}
+            {messages.isError && (
+              <div role="alert" className="flex items-center gap-3 text-sm text-ink-muted">
+                <span>
+                  {messages.error instanceof Error ? messages.error.message : '消息加载失败'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void messages.refetch()}
+                  className="rounded-full bg-glass-strong px-4 py-2 text-ink"
+                >
+                  重试加载消息
+                </button>
+              </div>
+            )}
+            {list.length === 0 && messages.isSuccess && streaming === null && (
               <p className="m-0 self-center pt-10 text-center text-sm text-ink-muted">
                 打个招呼，开始和 {conversation?.title ?? 'AI'} 聊天吧。
                 <br />
@@ -248,6 +283,7 @@ export function DmPage() {
             onSend={send}
             onStop={sending && replyTo ? () => void stop() : undefined}
             stopping={stopping}
+            onContinue={resumeId ? () => void send('', false, resumeId, true) : undefined}
           />
         </footer>
       </section>

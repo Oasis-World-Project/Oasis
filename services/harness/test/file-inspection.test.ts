@@ -108,6 +108,34 @@ describe('隔离文件解析', () => {
       text: '',
     });
   });
+  it('图片素材（如批注截图）原图交给看图检查，不记成没读完', async () => {
+    const id = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
+    const png = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: '#000' },
+    })
+      .png()
+      .toBuffer();
+    const canvas = {
+      json: async () => ({
+        uploads: [
+          {
+            id,
+            name: '批注-site-截图1.png',
+            size: png.length,
+            sha256: createHash('sha256').update(png).digest('hex'),
+          },
+        ],
+      }),
+      stream: async () => new Response(png),
+    } as unknown as ServiceClient;
+    const inspector = createMaterialInspector(canvas, defaultInspectionLimits);
+    const [image] = (await inspector({ ownerId: id, ids: [id], maxChars: 300 })).files;
+    expect(image).toMatchObject({
+      status: 'complete',
+      text: '',
+      image: { mediaType: 'image/png', base64: png.toString('base64') },
+    });
+  });
   it('HTML 内嵌库不耗正文额度，保留可见文字、来源和受校验看板数据', async () => {
     const chart = {
       title: '看板',

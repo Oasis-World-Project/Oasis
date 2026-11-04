@@ -11,7 +11,7 @@
     "dev": "turbo run dev",
     "desktop": "pnpm --filter @oasis/desktop start",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test",
+    "test": "node --test scripts/dev-service.test.mjs && turbo run test",
     "lint": "eslint --max-warnings=0 .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

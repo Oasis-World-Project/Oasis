@@ -1,10 +1,30 @@
 // 节点的状态怎么显示、现在能做什么（和 task 的规则一致，见 ADR 0004 §3–4），以及运行记录怎么写成普通话。
 import type { RunEventBody } from '@oasis/contracts/harness';
-import type { NodeBody, NodeRunBody, NodeStatus, TaskBody } from '@oasis/contracts/task';
+import type {
+  NodeBody,
+  NodeRunBody,
+  NodeStatus,
+  TaskBody,
+  TaskStatus,
+} from '@oasis/contracts/task';
 
-export type Tone = 'done' | 'active' | 'trouble' | 'idle';
+export const TASK_STATUS: Record<
+  TaskStatus,
+  { label: string; tone: 'muted' | 'accent' | 'solid' }
+> = {
+  planning: { label: '正在搭建工作流', tone: 'muted' },
+  running: { label: '进行中', tone: 'muted' },
+  accepting: { label: '正在验收', tone: 'muted' },
+  stopped: { label: '已停止', tone: 'muted' },
+  needs_attention: { label: '需要你处理', tone: 'accent' },
+  succeeded: { label: '已完成', tone: 'solid' },
+  failed: { label: '没能完成', tone: 'accent' },
+  cancelled: { label: '已取消', tone: 'muted' },
+};
 
-export const NODE_STATUS: Record<NodeStatus, { label: string; tone: Tone }> = {
+type Tone = 'done' | 'active' | 'trouble' | 'idle';
+
+const NODE_STATUS: Record<NodeStatus, { label: string; tone: Tone }> = {
   draft: { label: '新建，还没运行', tone: 'idle' },
   waiting: { label: '等上游', tone: 'idle' },
   running: { label: '进行中', tone: 'active' },
@@ -15,6 +35,38 @@ export const NODE_STATUS: Record<NodeStatus, { label: string; tone: Tone }> = {
   blocked: { label: '连线断开', tone: 'trouble' },
   cancelled: { label: '已取消', tone: 'idle' },
 };
+
+/** 持久检查结果优先于进程状态；等待用户重查时没有后台检查在跑。 */
+export function nodeState(task: TaskBody, node: NodeBody) {
+  if (
+    node.status === 'checking' &&
+    task.status === 'needs_attention' &&
+    task.attention?.reason === 'checks_incomplete' &&
+    task.attention.nodeId === node.id
+  )
+    return { label: '检查停下了', tone: 'trouble' as const };
+  return NODE_STATUS[node.status];
+}
+
+export function checkSummary(node: NodeBody): string | undefined {
+  const results = node.gateChecks;
+  if (!results?.length) return undefined;
+  const count = (status: 'passed' | 'unmet' | 'unchecked') =>
+    results.filter((c) => c.status === status).length;
+  return `通过 ${count('passed')} · 未通过 ${count('unmet')} · 未检查 ${count('unchecked')}`;
+}
+
+/** 只依据真实连线与节点状态解释等待，不把所有下游都说成检查失败。 */
+export function waitingOn(task: TaskBody, node: NodeBody): { id: string | null; title: string }[] {
+  return task.edges
+    .filter((e) => e.to === node.id)
+    .flatMap((e) => {
+      const upstream = task.nodes.find((n) => n.id === e.from);
+      return upstream?.status === 'succeeded'
+        ? []
+        : [{ id: upstream?.id ?? null, title: upstream?.title ?? '缺失的上游节点' }];
+    });
+}
 
 /** 还没开始的节点：可以改、删、往里接线 */
 const NOT_STARTED: NodeStatus[] = ['draft', 'waiting', 'blocked'];
