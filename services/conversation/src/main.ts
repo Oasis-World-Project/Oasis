@@ -17,7 +17,6 @@ import { createConversationRepo } from './repo/conversation-repo.ts';
 import { createDmService } from './service/dm-service.ts';
 import { createContext } from './service/context.ts';
 import { createIntakeService } from './service/intake-service.ts';
-import { createRevisionService } from './service/revision-service.ts';
 import { createTaskNotices } from './service/task-notices.ts';
 
 await startService({
@@ -64,12 +63,13 @@ await startService({
       summaryModel: config.CONTEXT_SUMMARY_MODEL,
       logger,
     });
+    const task = createServiceClient('task', config.TASK_URL, { timeoutMs: 10_000 });
     const intake = createIntakeService({
       repo,
       context,
       agent,
       modelGateway,
-      task: createServiceClient('task', config.TASK_URL, { timeoutMs: 10_000 }),
+      task,
       harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 45_000 }),
       config: {
         detectModel: config.TASK_DETECT_MODEL,
@@ -82,16 +82,12 @@ await startService({
       logger,
     });
     const canvas = createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 5_000 });
-    const revisions = createRevisionService({
-      repo,
-      task: createServiceClient('task', config.TASK_URL, { timeoutMs: 10_000 }),
-      logger,
-    });
     const dms = createDmService({
       repo,
       agent,
       modelGateway,
       canvas,
+      task,
       intake,
       context,
       replyMaxTokens: config.REPLY_MAX_TOKENS,
@@ -102,7 +98,7 @@ await startService({
       },
       logger,
     });
-    registerRoutes(app, dms, intake, revisions);
+    registerRoutes(app, dms, intake);
     registerGroupRoutes(
       app,
       createGroupService(

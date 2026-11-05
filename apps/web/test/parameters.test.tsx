@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
 import { fieldsFor, formatValue, mediaLook, toParameters } from '../src/canvas/parameters.ts';
-import { installFakeApi, json } from './fake-api.ts';
+import { installFakeApi, json, revisingTask } from './fake-api.ts';
 
 describe('成品参数', () => {
   it('每类成果有自己的参数；文档没有', () => {
@@ -88,9 +88,9 @@ describe('从参数面板发起修改', () => {
         if (method === 'GET' && path.startsWith('/canvas/v1/artifacts'))
           return json(200, { artifacts: [video] });
         if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
-        if (method === 'POST' && path === `/conversation/v1/conversations/${CONV}/revisions`) {
+        if (method === 'POST' && path === `/task/v1/tasks/${TASK}/revisions`) {
           sent.push(body);
-          return json(200, { messages: [] });
+          return json(200, revisingTask(TASK, '民宿短片'));
         }
         if (method === 'GET' && path === `/conversation/v1/conversations/${CONV}/messages`)
           return json(200, { messages: [] });
@@ -122,10 +122,9 @@ describe('从参数面板发起修改', () => {
     const list = within(dialog).getByRole('region', { name: '参数修改', hidden: true });
     expect(list.textContent).toContain('字幕字号：大');
     expect(list.textContent).toContain('亮度：+10%');
-    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 修改', hidden: true }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 团队修改', hidden: true }));
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toMatchObject({
-      taskId: TASK,
       request: '',
       parameters: [
         { file: '宣传短片.mp4', name: '字幕字号', value: '大' },

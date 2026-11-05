@@ -264,18 +264,46 @@ export const CreateTaskBody = z
   });
 export type CreateTaskBody = z.input<typeof CreateTaskBody>;
 
-/**
- * 修改成果（ADR 0012，2026-11-05 改为在原任务里接着做）：交付节点带着修改意见接着原会话改，
- * 下游跟着更新；附件（标注截图等）并进任务素材。只有已交付的任务能改。
- */
-export const ReviseTaskBody = z.object({
-  ownerId: z.uuid(),
-  /** 修改意见的完整文字：用户原话 + 每条批注一行 + 参数 */
-  request: z.string().trim().min(1).max(20_000),
-  materials: z.array(Material).max(20).default([]),
+/** 修改时带上的一条批注（ADR 0012 §9）：在哪个文件、哪里、什么意见，见哪张标注截图 */
+export const RevisionNote = z.object({
+  file: z.string().trim().min(1).max(200),
+  number: z.number().int().min(1).max(99),
+  /** 给人看的位置，如「第 2 页」「0:12」「画面左上」 */
+  where: z.string().trim().max(120).default(''),
+  note: z.string().trim().min(1).max(500),
+  quote: z.string().trim().max(300).optional(),
+  /** 随修改上传的标注截图的文件名 */
+  snapshot: z.string().trim().max(200).optional(),
 });
-export type ReviseTaskBody = z.input<typeof ReviseTaskBody>;
-export type ReviseTaskInput = z.infer<typeof ReviseTaskBody>;
+export type RevisionNote = z.infer<typeof RevisionNote>;
+
+/** 参数面板里改的一项成品参数（ADR 0012 §12），如「字幕字号：大」 */
+export const RevisionParameter = z.object({
+  file: z.string().trim().min(1).max(200),
+  name: z.string().trim().min(1).max(40),
+  value: z.string().trim().min(1).max(200),
+});
+export type RevisionParameter = z.infer<typeof RevisionParameter>;
+
+/**
+ * 修改成果（ADR 0012；2026-11-05 起直接交给 AI 团队）：在原任务里接着改，交付节点带着修改意见
+ * 接着原会话改、下游跟着更新；附件（参考图、标注截图）并进任务素材。不经过任何私聊，
+ * 私聊删了也照样能改。只有已结束的任务能改。
+ */
+export const TaskRevisionBody = z
+  .object({
+    /** 修改意见；带了批注或参数时可以不写 */
+    request: z.string().trim().max(8000).default(''),
+    annotations: z.array(RevisionNote).max(100).default([]),
+    parameters: z.array(RevisionParameter).max(40).default([]),
+    /** 先传到 canvas 的文件 id（参考图、标注截图）；和任务素材同一个上限 */
+    attachments: z.array(z.uuid()).max(20).default([]),
+  })
+  .refine(
+    (body) => body.request.length > 0 || body.annotations.length > 0 || body.parameters.length > 0,
+    { message: '写下修改意见，或者带上批注、参数' },
+  );
+export type TaskRevisionBody = z.input<typeof TaskRevisionBody>;
 /** 校验后（默认值已补上）的提交内容 */
 export type CreateTaskInput = z.infer<typeof CreateTaskBody>;
 
@@ -439,6 +467,8 @@ export const TaskSummary = z.object({
   spentMicro: z.number().int().nonnegative(),
   /** 修改成果：这是哪个任务的新版（前端据此知道某份成果正在修改） */
   revisionOf: z.uuid().nullable().default(null),
+  /** 正在按修改意见接着改（ADR 0012，在原任务里改） */
+  revising: z.boolean().default(false),
   createdAt: z.iso.datetime(),
 });
 export type TaskSummary = z.infer<typeof TaskSummary>;

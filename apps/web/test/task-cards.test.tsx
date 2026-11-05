@@ -616,6 +616,27 @@ describe('发任务', () => {
   });
 });
 
+describe('删除私聊', () => {
+  it('右上角删除：问一句再删，删完回到私聊列表；只删聊天，不碰任务', async () => {
+    const { api } = fakeChat([message('text', {}, 'user', '在吗')], {
+      extra: (method, path) =>
+        method === 'DELETE' && path === `/conversation/v1/conversations/${CONV}`
+          ? new Response(null, { status: 204 })
+          : undefined,
+    });
+    await openChat();
+    fireEvent.click(await screen.findByRole('button', { name: '删除私聊' }));
+    const ask = screen.getByRole('group', { name: '删除这段私聊？' });
+    expect(ask.textContent).toContain('任务和成果不受影响');
+    fireEvent.click(within(ask).getByRole('button', { name: '删除' }));
+    await waitFor(() =>
+      expect(api.requests).toContain(`DELETE /conversation/v1/conversations/${CONV}`),
+    );
+    await waitFor(() => expect(screen.queryByRole('region', { name: '私聊' })).toBeNull());
+    expect(api.requests.some((r) => r.startsWith('DELETE /task/'))).toBe(false);
+  });
+});
+
 describe('修改成果（ADR 0012）', () => {
   const delivery = (extra: object = {}) =>
     message('delivery', {
@@ -627,19 +648,13 @@ describe('修改成果（ADR 0012）', () => {
       ...extra,
     });
 
-  it('交付消息上「改一版」：写修改意见发给做出这一版的 AI，私聊里出现修改的任务卡', async () => {
-    const REVISION = '00000000-0000-4000-8000-0000000000f2';
+  it('交付消息上「改一版」：修改意见直接交给 AI 团队，不经过私聊、私聊里不多消息', async () => {
     const card = delivery();
-    const { chat, api } = fakeChat([card], {
+    const { api } = fakeChat([card], {
       task: () => task({ status: 'succeeded', finishedAt: NOW }),
       extra: (method, path) => {
-        if (method === 'POST' && path === `/conversation/v1/conversations/${CONV}/revisions`) {
-          const revised = message('task', { taskId: REVISION, revisionOf: TASK });
-          chat.messages = [card, message('text', {}, 'user', '修改：标题改成山居'), revised];
-          return json(200, { messages: chat.messages.slice(1) });
-        }
-        if (method === 'GET' && path === `/task/v1/tasks/${REVISION}`)
-          return json(200, task({ id: REVISION, status: 'planning', nodes: [] }));
+        if (method === 'POST' && path === `/task/v1/tasks/${TASK}/revisions`)
+          return json(200, task({ status: 'running' }));
         if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
         return undefined;
       },
@@ -649,23 +664,20 @@ describe('修改成果（ADR 0012）', () => {
     fireEvent.click(await within(region).findByRole('button', { name: /改一版/ }));
     // jsdom 里 <dialog> 没有 showModal，里面的元素按 aria-label、hidden 查
     const dialog = await screen.findByLabelText(`修改「${SHEET.title}」`);
-    expect(
-      await within(dialog).findByRole('option', { name: 'Claude（做出这一版的）', hidden: true }),
-    ).toBeTruthy();
+    // 不再选发给哪个 AI
+    expect(within(dialog).queryByRole('combobox', { hidden: true })).toBeNull();
     fireEvent.change(within(dialog).getByLabelText('要怎么改'), {
       target: { value: '标题改成山居' },
     });
-    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 修改', hidden: true }));
-    expect(await screen.findByRole('region', { name: `修改：${SHEET.title}` })).toBeTruthy();
-    expect(
-      api.bodies.find((b) => b.path.endsWith(`/conversations/${CONV}/revisions`))?.body,
-    ).toEqual({
-      taskId: TASK,
+    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 团队修改', hidden: true }));
+    await waitFor(() => expect(screen.queryByLabelText(`修改「${SHEET.title}」`)).toBeNull());
+    expect(api.bodies.find((b) => b.path.endsWith(`/tasks/${TASK}/revisions`))?.body).toEqual({
       request: '标题改成山居',
       annotations: [],
       parameters: [],
       attachments: [],
     });
+    expect(api.bodies.some((b) => b.path.includes('/conversation/'))).toBe(false);
   });
 
   it('被替换、被删除的任务：卡片只留一句话，不再查任务、不给下载', async () => {

@@ -97,3 +97,24 @@ export function installFakeApi(options: {
   vi.stubGlobal('fetch', handler);
   return state;
 }
+
+/** 修改成果的接口返回的任务（在原任务里接着改，状态回到运行中） */
+export function revisingTask(id: string, title: string) {
+  return {
+    id,
+    title,
+    brief: '',
+    status: 'running',
+    attention: null,
+    estimateMicro: null,
+    spentMicro: 0,
+    budgetLimitMicro: null,
+    sheet: null,
+    acceptance: null,
+    deliverables: [],
+    nodes: [],
+    edges: [],
+    createdAt: new Date().toISOString(),
+    finishedAt: null,
+  };
+}

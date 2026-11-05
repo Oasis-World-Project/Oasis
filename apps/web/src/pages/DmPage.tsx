@@ -1,11 +1,12 @@
 // 和一个 AI 私聊：历史消息 + 流式回复；在这里交代任务、回答问题卡、确认任务单、看进度、拿成果（ADR 0005）。
 // 回复期间输入框锁定；失败的回复会写明原因。
 import type { MessageBody } from '@oasis/contracts/conversation';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getRouteApi } from '@tanstack/react-router';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { getRouteApi, useNavigate } from '@tanstack/react-router';
+import { Trash2 } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { ApiError, apiVoid } from '../api/client.ts';
-import { dmsQuery, messagesQuery, walletQuery } from '../api/queries.ts';
+import { deleteDm, dmsQuery, messagesQuery, walletQuery } from '../api/queries.ts';
 import { sendMessage } from '../api/stream.ts';
 import { useModelMap } from '../api/use-model-map.ts';
 import { Composer } from '../chat/Composer.tsx';
@@ -215,6 +216,7 @@ export function DmPage() {
             <h1 className="m-0 text-[17px] font-medium">{conversation?.title ?? '私聊'}</h1>
             <span className="text-xs text-ink-muted">{model?.versionLabel ?? '系统默认设定'}</span>
           </div>
+          <DeleteDm conversationId={conversationId} />
         </header>
 
         {/* relative：消息里视觉隐藏的单选框（sr-only 是绝对定位）以消息区为定位基准，跟着消息区裁剪和滚动；
@@ -288,5 +290,70 @@ export function DmPage() {
         </footer>
       </section>
     </ChatActionsContext.Provider>
+  );
+}
+
+/**
+ * 删除私聊（2026-11-05）：右上角一个图标，点了在同一行问一句。聊天内容真删除，任务和成果不受影响；
+ * 再点开这个 AI 是全新的空白私聊。
+ */
+function DeleteDm({ conversationId }: { conversationId: string }) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [asking, setAsking] = useState(false);
+  const remove = useMutation({
+    mutationFn: () => deleteDm(conversationId),
+    onSuccess: async () => {
+      queryClient.removeQueries({ queryKey: messagesQuery(conversationId).queryKey });
+      await queryClient.invalidateQueries({ queryKey: dmsQuery.queryKey });
+      await navigate({ to: '/dms' });
+    },
+  });
+  return (
+    <div className="ml-auto flex items-center gap-1.5">
+      {remove.isError && (
+        <span role="alert" className="text-[12.5px] text-accent">
+          {remove.error instanceof ApiError ? remove.error.message : '没删掉，请重试'}
+        </span>
+      )}
+      {asking ? (
+        <span
+          role="group"
+          aria-label="删除这段私聊？"
+          className="flex items-center gap-1.5 whitespace-nowrap"
+        >
+          <span className="text-[12.5px] text-ink-muted">删除全部聊天？任务和成果不受影响</span>
+          <button
+            type="button"
+            disabled={remove.isPending}
+            onClick={() => {
+              setAsking(false);
+              remove.mutate();
+            }}
+            className="h-8 rounded-full border-0 bg-accent px-3.5 text-[12.5px] font-medium text-on-accent disabled:opacity-50"
+          >
+            删除
+          </button>
+          <button
+            type="button"
+            onClick={() => setAsking(false)}
+            className="h-8 rounded-full border-0 bg-transparent px-2 text-[12.5px] text-ink-muted"
+          >
+            取消
+          </button>
+        </span>
+      ) : (
+        <button
+          type="button"
+          aria-label="删除私聊"
+          title="删除私聊"
+          disabled={remove.isPending}
+          onClick={() => setAsking(true)}
+          className="flex size-9 items-center justify-center rounded-full border-0 bg-transparent text-ink-muted hover:bg-track hover:text-ink disabled:opacity-50"
+        >
+          <Trash2 size={16} aria-hidden="true" />
+        </button>
+      )}
+    </div>
   );
 }

@@ -236,3 +236,18 @@
 本地旧数据：旧流程留下的 2 条「已删除」标记消息已直接删除；已有上传在迁移里全部视为已认领，不会被误删。
 
 验证：canvas 41、conversation 51、harness 105、web 106 项单测通过（新增：附件随消息删除且发送时认领、未认领上传清扫与真删除、任务删除后预览记录不留、任务卡片整条删除）；typecheck、eslint、工程检查通过。
+
+## 16. 任务和私聊解耦（2026-11-05，用户要求）
+
+用户原话：「用户对成果进行批注后，发送给 AI 应该是发送给 AI 团队，只不过私聊里的 AI 可以帮你跟踪（当然其他 AI 也能跟踪这个修改的任务），前提是用户主动提起。」「给私聊加一个删除键……任务和成果不会被删，只有聊天被删，再次新建则会是干净的页面。」
+
+取代 §1「发给谁」一行和 §2、§4 里经过 conversation 的那段：
+
+| 规则 | 内容 |
+|---|---|
+| 修改直接交给 AI 团队 | 成果页批注面板和交付消息上的「发给 AI 团队修改」直接调 task `POST /v1/tasks/:taskId/revisions {request, annotations, parameters, attachments}`：task 在 canvas 核对附件并认领，把意见、每条批注、参数写成一段文字，在原任务里接着改。不再选「发给哪个 AI」，私聊里不插任何消息；做出这一版的私聊删了也照样能改 |
+| 跟踪进度 | 进度在画布任务卡片上看。任何一个私聊里的 AI 都能看到用户全部任务的状态（task `GET /internal/owners/:ownerId/tasks`，含「正在按修改意见改」），只在用户问起时才说 |
+| 交付消息 | 只在任务第一次交付时发到发起它的私聊；修改后再交付不再发（私聊已删除的也不发） |
+| 删除私聊 | 私聊右上角垃圾桶图标，原地确认「删除全部聊天？任务和成果不受影响」。conversation `DELETE /v1/conversations/:id`：消息带的附件中，task `POST /internal/materials/in-use` 认出的任务素材留着，其余在 canvas 真删除；然后删掉会话，消息、接需求记录、上下文摘要随之级联删除。再点开这个 AI 是新建的空白私聊 |
+
+契约：`RevisionNote`、`RevisionParameter` 移到 `contracts/task`，新增 `TaskRevisionBody`；删除 conversation 的 `RevisionBody`、`POST /v1/conversations/:id/revisions`、`revision-service`，删除 task 的 `ReviseTaskBody` 和 `POST /internal/tasks/:taskId/revise`。`TaskSummary` 加 `revising`。task 新增配置 `CANVAS_URL`（默认 `http://127.0.0.1:4106`）。不新增迁移。

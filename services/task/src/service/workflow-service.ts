@@ -5,6 +5,7 @@
 // 对外的调用（提交运行、关卡检查、通知停止或取消）在事务之外。
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
+import type { Material } from '@oasis/contracts/canvas';
 import type { CallSettledData, RunFinishedData } from '@oasis/contracts/events';
 import { RunBody, RunEventList } from '@oasis/contracts/harness';
 import type {
@@ -15,7 +16,6 @@ import type {
   NodeBody,
   NodeRunBody,
   PlanNode,
-  ReviseTaskInput,
   TaskBody,
   TaskSummary,
   UpdateEdgeBody,
@@ -1042,9 +1042,14 @@ export function createWorkflowService(deps: {
         nodesTotal: nodes.length,
         spentMicro: task.spentMicro,
         revisionOf: task.revisionOf,
+        revising: !FINAL.includes(task.status) && !!task.acceptance?.revision,
         createdAt: task.createdAt.toISOString(),
       }));
     },
+
+    /** 这些上传文件里，哪些是这个人某个任务的素材（conversation 删私聊时留着它们） */
+    materialsInUse: (ownerId: string, uploadIds: string[]) =>
+      store.materialsInUse(ownerId, uploadIds),
 
     get: async (ownerId: string, taskId: string) => toTaskBody(await owned(ownerId, taskId)),
 
@@ -1079,7 +1084,10 @@ export function createWorkflowService(deps: {
      * 交付节点带着修改意见接着原会话改，下游基于新产出跟着更新；附件并进任务素材，每次运行都能看到。
      * 新版交付后 canvas 原地更新成果，链接不变。
      */
-    async revise(taskId: string, body: ReviseTaskInput): Promise<TaskBody> {
+    async revise(
+      taskId: string,
+      body: { ownerId: string; request: string; materials: Material[] },
+    ): Promise<TaskBody> {
       await transact(taskId, async (snapshot, w, fx) => {
         const { task } = snapshot;
         if (task.ownerId !== body.ownerId)

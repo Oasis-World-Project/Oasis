@@ -165,6 +165,11 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
         const run = n.currentRunId ? runs.get(n.currentRunId) : undefined;
         return n.status === 'checking' && run?.finishedAt && run.finishedAt <= before;
       }),
+    materialsInUse: async (ownerId, uploadIds) =>
+      [...tasks.values()]
+        .filter((t) => t.ownerId === ownerId)
+        .flatMap((t) => t.materials.map((m) => m.uploadId))
+        .filter((id, i, all) => uploadIds.includes(id) && all.indexOf(id) === i),
     findActiveRevision: async (taskId) =>
       [...tasks.values()].find(
         (t) => t.revisionOf === taskId && !['succeeded', 'failed', 'cancelled'].includes(t.status),
@@ -1401,6 +1406,14 @@ describe('整体验收（从任务单来的任务）', () => {
     });
     expect(revised).toMatchObject({ id: task.id, status: 'running', finishedAt: null });
     expect(revised.materials).toEqual([{ uploadId: SHOT, name: '批注-home-截图1.png', size: 4 }]);
+    // 任务列表标出「正在改」（私聊里的 AI 被问起时据此回答）；修改附件算任务素材，删私聊时留着
+    expect((await service.list(OWNER))[0]).toMatchObject({ id: task.id, revising: true });
+    expect(
+      await service.materialsInUse(OWNER, [SHOT, '6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b']),
+    ).toEqual([SHOT]);
+    expect(await service.materialsInUse('8c8c8c8c-8c8c-4c8c-8c8c-8c8c8c8c8c8c', [SHOT])).toEqual(
+      [],
+    );
     // 交付节点接着原会话，按修改意见改
     const home = runOf('home', task) as unknown as {
       continueFrom: string;
@@ -1424,7 +1437,7 @@ describe('整体验收（从任务单来的任务）', () => {
       outputs: [{ path: 'poster.md', size: 10 }],
     });
     expect(await service.get(OWNER, task.id)).toMatchObject({ status: 'succeeded' });
-    expect((await service.list(OWNER)).map((t) => t.id)).toEqual([task.id]);
+    expect((await service.list(OWNER)).map((t) => [t.id, t.revising])).toEqual([[task.id, false]]);
     // 修改轮的节点检查和整体验收只查这次的修改意见，不再把原任务单重查一遍
     const revisionCalls = gateCalls.filter((c) =>
       [runOf('home', task).runId, runOf('poster', task).runId].includes(c.runId),

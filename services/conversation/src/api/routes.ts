@@ -3,7 +3,6 @@ import {
   CreateDmBody,
   IntakeAnswersBody,
   IntakeConfirmBody,
-  RevisionBody,
   ReplaceReplyBody,
   SendMessageBody,
   StartIntakeBody,
@@ -16,7 +15,6 @@ import { z } from 'zod';
 import type { Message } from '../repo/conversation-repo.ts';
 import { toMessageBody, type DmService } from '../service/dm-service.ts';
 import type { IntakeService } from '../service/intake-service.ts';
-import type { RevisionService } from '../service/revision-service.ts';
 
 const IdParams = z.object({ id: z.uuid() });
 const MessageParams = IdParams.extend({ messageId: z.uuid() });
@@ -55,12 +53,7 @@ async function eventStream(
 
 const result = (messages: Message[]): IntakeResult => ({ messages: messages.map(toMessageBody) });
 
-export function registerRoutes(
-  app: ServiceApp,
-  dms: DmService,
-  intake: IntakeService,
-  revisions: RevisionService,
-): void {
+export function registerRoutes(app: ServiceApp, dms: DmService, intake: IntakeService): void {
   app.get('/v1/dms', async (request) => ({
     conversations: await dms.listDms(requireUserId(request)),
   }));
@@ -68,6 +61,16 @@ export function registerRoutes(
   app.post('/v1/dms', async (request) => {
     const { modelKey } = parseWith(CreateDmBody, request.body);
     return dms.createDm(requireUserId(request), modelKey, request.id);
+  });
+
+  /**
+   * 删除私聊（2026-11-05）：这段私聊的消息、卡片、附件和摘要真删除；任务和成果不受影响，
+   * 再点开这个 AI 是一个全新的空白私聊。
+   */
+  app.delete('/v1/conversations/:id', async (request, reply) => {
+    const { id } = parseWith(IdParams, request.params);
+    await dms.deleteDm(requireUserId(request), id, request.id);
+    return reply.code(204).send();
   });
 
   app.get('/v1/conversations/:id/messages', async (request) => {
@@ -169,26 +172,5 @@ export function registerRoutes(
     const budget = parseWith(IntakeConfirmBody, request.body ?? {});
     const conversation = await dms.assertOwned(id, ownerId);
     return result(await intake.confirm({ conversation, ownerId, budget, requestId: request.id }));
-  });
-
-  /** 修改成果（ADR 0012）：发修改意见，新建一条工作流做出新版 */
-  app.post('/v1/conversations/:id/revisions', async (request) => {
-    const ownerId = requireUserId(request);
-    const { id } = parseWith(IdParams, request.params);
-    const body = parseWith(RevisionBody, request.body);
-    const conversation = await dms.assertOwned(id, ownerId);
-    const attachments = await dms.resolveAttachments(ownerId, body.attachments, request.id);
-    return result(
-      await revisions.revise({
-        conversation,
-        ownerId,
-        taskId: body.taskId,
-        request: body.request,
-        annotations: body.annotations,
-        parameters: body.parameters,
-        attachments,
-        requestId: request.id,
-      }),
-    );
   });
 }

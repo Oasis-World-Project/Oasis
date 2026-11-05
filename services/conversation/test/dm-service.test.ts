@@ -194,6 +194,7 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
   };
   let seq = 0;
   let messageLocked = false;
+  let deleted = false;
   const open = (i: Intake) => i.status === 'asking' || i.status === 'sheet';
   const repo: ConversationRepo & { rows: Message[]; intakes: Intake[] } = {
     rows,
@@ -273,7 +274,25 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
       ),
     upsertDm: async () => conversation,
     listDms: async () => [conversation],
-    findOwned: async (id, owner) => (id === CONV && owner === OWNER ? conversation : undefined),
+    findOwned: async (id, owner) =>
+      id === CONV && owner === OWNER && !deleted ? conversation : undefined,
+    attachmentIds: async (conversationId) => [
+      ...new Set(
+        rows
+          .filter((r) => r.conversationId === conversationId)
+          .flatMap((r) => ((r.data.attachments ?? []) as { id: string }[]).map((a) => a.id)),
+      ),
+    ],
+    deleteConversation: async () => {
+      deleted = true;
+      rows.length = 0;
+      intakes.length = 0;
+    },
+    hasDelivery: async (conversationId, taskId) =>
+      rows.some(
+        (r) =>
+          r.conversationId === conversationId && r.kind === 'delivery' && r.data.taskId === taskId,
+      ),
     insertMessage: async (m) => {
       const row: Message = {
         seq: seq + 1,
@@ -454,6 +473,13 @@ const task = Fastify();
 /** task 给任务单的报价；null 表示这次没报出来 */
 let quoteReply: unknown = null;
 const quoteRequests: Record<string, unknown>[] = [];
+/** 用户的任务（私聊里的 AI 被问起时回答进度）；哪些文件是任务素材 */
+let ownerTasks: unknown[] = [];
+let inUse: string[] = [];
+task.get('/internal/owners/:ownerId/tasks', async () => ({ tasks: ownerTasks }));
+task.post('/internal/materials/in-use', async (request) => ({
+  ids: (request.body as { ids: string[] }).ids.filter((id) => inUse.includes(id)),
+}));
 task.post('/internal/quotes', async (request) => {
   quoteRequests.push(request.body as Record<string, unknown>);
   return { quote: quoteReply };
@@ -550,6 +576,8 @@ beforeEach(() => {
   visionCalls = 0;
   quoteReply = null;
   quoteRequests.length = 0;
+  ownerTasks = [];
+  inUse = [];
   intakeStatus = 0;
   blocked = [];
   finishReasons = [];
@@ -584,6 +612,7 @@ beforeEach(() => {
     repo,
     ...clients,
     canvas: createServiceClient('canvas', urls.canvas),
+    task: createServiceClient('task', urls.task),
     intake,
     context,
     replyMaxTokens: 256,
@@ -901,6 +930,28 @@ describe('私聊发消息', () => {
       { role: 'system', content: '你是 Claude' },
       { role: 'user', content: '在吗' },
     ]);
+  });
+
+  it('任何一个私聊里的 AI 都能看到用户任务的进度（只在被问起时说）', async () => {
+    ownerTasks = [
+      {
+        id: TASK_ID,
+        title: '3D 马车',
+        status: 'running',
+        nodesDone: 2,
+        nodesTotal: 5,
+        spentMicro: 0,
+        revisionOf: null,
+        revising: true,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    await send('马车改得怎么样了');
+    const [system, tasks] = seenRequests[0]!.body.messages;
+    expect(system).toEqual({ role: 'system', content: '你是 Claude' });
+    expect(tasks!.role).toBe('system');
+    expect(tasks!.content).toContain('只有用户问起时才说');
+    expect(tasks!.content).toContain('- 「3D 马车」：AI 团队正在按修改意见改（2/5 步）');
   });
 
   it('第二轮带上前面的对话作为上下文', async () => {
@@ -1713,6 +1764,17 @@ describe('随消息发文件（ADR 0007 §4）', () => {
     await service.deleteMessage(OWNER, CONV, accepted.userMessage.id);
     expect(deletedUploads).toEqual([{ ownerId: OWNER, ids: [PHOTO.id] }]);
     expect(repo.rows).toHaveLength(0);
+  });
+
+  it('删除私聊：消息和附件真删除，任务素材留着；之后这个私聊不存在了', async () => {
+    deletedUploads.length = 0;
+    await send('看看这两张', false, [PHOTO.id, LOGO.id]);
+    inUse = [LOGO.id];
+    await service.deleteDm(OWNER, CONV, 'r');
+    expect(deletedUploads).toEqual([{ ownerId: OWNER, ids: [PHOTO.id] }]);
+    expect(repo.rows).toHaveLength(0);
+    const err = await service.listMessages(OWNER, CONV).catch((e: unknown) => e);
+    expect((err as HttpError).statusCode).toBe(404);
   });
 
   it('文件不存在或不是自己的：整条消息不收，400', async () => {

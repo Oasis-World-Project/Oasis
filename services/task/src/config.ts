@@ -26,6 +26,8 @@ export const taskEnv = {
   MAX_PARALLEL_NODES: z.coerce.number().int().positive().max(20).default(3),
   /** 规划员查模型目录 */
   AGENT_URL: z.url(),
+  /** 修改成果时核对用户附的文件（参考图、标注截图），并标成已用上 */
+  CANVAS_URL: z.url().default('http://127.0.0.1:4106'),
   /**
    * 规划员用的模型（ADR 0005 §4、ADR 0016）：标准和精细档用 DeepSeek 最强的型号（深度思考、可联网查资料），
    * 省钱档用快速型号。

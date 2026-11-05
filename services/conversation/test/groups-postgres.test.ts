@@ -401,6 +401,59 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     await pool.query('delete from conversations where id=$1', [conversation.id]);
   });
 
+  it('删除私聊：列出全部附件、认出已交付的任务，整段对话连消息和接需求记录一起真删除', async () => {
+    const store = createConversationRepo(pool);
+    const conversation = await store.upsertDm(owner, 'delete-dm-test', 'to delete');
+    const file = (id: string) => ({ id, name: `${id}.png`, size: 3, contentType: 'image/png' });
+    const [a, b] = [randomUUID(), randomUUID()];
+    await store.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'user',
+      authorId: owner,
+      content: '两张图',
+      status: 'complete',
+      data: { attachments: [file(a), file(b)] },
+    });
+    await store.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'user',
+      authorId: owner,
+      content: '又发一次',
+      status: 'failed',
+      data: { attachments: [file(a)] },
+    });
+    const taskId = randomUUID();
+    await store.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'ai',
+      authorId: 'test',
+      content: '交付了',
+      status: 'complete',
+      kind: 'delivery',
+      data: { taskId },
+    });
+    await store.createIntake({
+      id: randomUUID(),
+      conversationId: conversation.id,
+      request: '做个海报',
+      materials: [],
+    });
+    expect((await store.attachmentIds(conversation.id)).sort()).toEqual([a, b].sort());
+    expect(await store.hasDelivery(conversation.id, taskId)).toBe(true);
+    expect(await store.hasDelivery(conversation.id, randomUUID())).toBe(false);
+    await store.deleteConversation(conversation.id);
+    expect(await store.findOwned(conversation.id, owner)).toBeUndefined();
+    const left = await pool.query(
+      `select (select count(*)::int from messages where conversation_id=$1) messages,
+              (select count(*)::int from intakes where conversation_id=$1) intakes`,
+      [conversation.id],
+    );
+    expect(left.rows[0]).toEqual({ messages: 0, intakes: 0 });
+    // 再点开这个 AI 是全新的私聊
+    const fresh = await store.upsertDm(owner, 'delete-dm-test', 'to delete');
+    expect(fresh.id).not.toBe(conversation.id);
+    expect(await store.attachmentIds(fresh.id)).toEqual([]);
+  });
   it('Contract 与 Expand 可依次回滚重建，原有 DM 数据不丢', async () => {
     await pool.query("delete from conversations where kind='group'");
     const root = new URL('../migrations/', import.meta.url);

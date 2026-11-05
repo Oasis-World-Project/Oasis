@@ -23,6 +23,8 @@ const repo = {
     rows.push(m);
     return m;
   },
+  hasDelivery: async (_c: string, taskId: string) =>
+    rows.some((r) => r.kind === 'delivery' && (r.data as { taskId?: string }).taskId === taskId),
   touchConversation: async () => {},
 } as unknown as ConversationRepo;
 
@@ -130,6 +132,12 @@ describe('任务的结果回到私聊', () => {
     expect(rows[0]!.content).toContain('「小木屋首页」已交付，有未满足项。');
     expect(rows[0]!.content).toContain('首页文案：首页.md');
     expect(rows[0]!.content).toContain('没完全满足的地方：\n- 不超过 80 字');
+  });
+
+  it('修改后再次交付：不再发到私聊（进度在画布上看，私聊里的 AI 被问起时才说）', async () => {
+    await notices.onStatusChanged(EVENT, event('succeeded'));
+    await notices.onStatusChanged('8b8b8b8b-8b8b-4b8b-8b8b-8b8b8b8b8b8b', event('succeeded'));
+    expect(rows).toHaveLength(1);
   });
 
   it('过程异常与检查状态只留工作流，不创建私聊提醒，重复事件也不发', async () => {

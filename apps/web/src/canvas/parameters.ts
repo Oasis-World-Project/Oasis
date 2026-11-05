@@ -1,6 +1,6 @@
 // 参数面板（ADR 0012 §12）：各类成果能改哪些成品参数、怎么写进修改意见、哪些能在浏览器里近似预览。
 // 每项默认「不变」（不在 values 里）；改过的才会变成修改意见里的一行。
-import type { RevisionParameter } from '@oasis/contracts/conversation';
+import type { RevisionParameter } from '@oasis/contracts/task';
 import type { PreviewKind } from '../chat/files.ts';
 
 export type Field =

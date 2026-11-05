@@ -9,8 +9,6 @@ import {
   IntakeResult,
   MessageList,
   type IntakeConfirmBody,
-  type RevisionNote,
-  type RevisionParameter,
 } from '@oasis/contracts/conversation';
 import { MeBody, VerifyCodeResult } from '@oasis/contracts/identity';
 import { RunEventList, type RunEventBody } from '@oasis/contracts/harness';
@@ -21,6 +19,7 @@ import {
   WorkflowOptions,
   type DecisionBody,
   type PlanNode,
+  type TaskRevisionBody,
   type TaskStatus,
   type UpdateEdgeBody,
   type UpdateNodeBody,
@@ -111,6 +110,9 @@ export const logout = () => apiVoid('/identity/v1/auth/logout', { method: 'POST'
 
 export const createDm = (modelKey: string) =>
   api('/conversation/v1/dms', ConversationBody, { method: 'POST', body: { modelKey } });
+/** 删除私聊：聊天内容真删除，任务和成果不受影响；再点开这个 AI 是全新的私聊 */
+export const deleteDm = (conversationId: string) =>
+  apiVoid(`/conversation/v1/conversations/${conversationId}`, { method: 'DELETE' });
 
 // ---- 在私聊里接任务（ADR 0005）：接口都返回这次新增的消息 ----
 const intakePath = (conversationId: string, action: string) =>
@@ -137,21 +139,9 @@ export const cancelIntake = (conversationId: string) => intakeCall(conversationI
 export const confirmIntake = (conversationId: string, budget: IntakeConfirmBody) =>
   intakeCall(conversationId, 'confirm', budget);
 
-/** 修改成果（ADR 0012）：修改意见发到这个私聊，新建一条工作流做出新版；返回新增的消息 */
-export const reviseTask = (
-  conversationId: string,
-  body: {
-    taskId: string;
-    request: string;
-    annotations: RevisionNote[];
-    parameters?: RevisionParameter[];
-    attachments: string[];
-  },
-) =>
-  api(`/conversation/v1/conversations/${conversationId}/revisions`, IntakeResult, {
-    method: 'POST',
-    body,
-  });
+/** 修改成果（ADR 0012）：修改意见直接交给 AI 团队，在原任务里接着改；不经过私聊 */
+export const reviseTask = (taskId: string, body: TaskRevisionBody) =>
+  api(`/task/v1/tasks/${taskId}/revisions`, TaskBody, { method: 'POST', body });
 
 // ---- 任务 ----
 /** 任务和它下面的节点运行、运行过程都挂在 ['task', id] 下，改了任务一起刷新 */

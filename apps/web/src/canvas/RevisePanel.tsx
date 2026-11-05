@@ -1,24 +1,13 @@
-// 「发给 AI 修改」（ADR 0012）：写下修改意见、可附文件、选发给哪个 AI（默认做出这一版的那个），
-// 发出后原任务接着原会话改，私聊里出现修改意见和任务卡；改好后画布里的成果原地更新。
+// 「发给 AI 团队修改」（ADR 0012；2026-11-05 起不经过私聊）：写下修改意见、可附文件，直接交给这个任务的
+// AI 团队，在原任务里接着原会话改；改好后画布里的成果原地更新。做出这一版的私聊删了也照样能改；
+// 想知道进度，在任意私聊里问 AI 就行。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
 import { Paperclip, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import {
-  MAX_ATTACHMENTS,
-  type RevisionNote,
-  type RevisionParameter,
-} from '@oasis/contracts/conversation';
+import { MAX_ATTACHMENTS } from '@oasis/contracts/conversation';
+import type { RevisionNote, RevisionParameter } from '@oasis/contracts/task';
 import { ApiError } from '../api/client.ts';
-import {
-  artifactsQuery,
-  createDm,
-  dmsQuery,
-  messagesQuery,
-  modelsQuery,
-  reviseTask,
-  tasksQuery,
-} from '../api/queries.ts';
+import { artifactsQuery, reviseTask, taskQuery, tasksQuery } from '../api/queries.ts';
 import { uploadFile } from '../api/upload.ts';
 import { PendingFiles } from '../chat/Attachments.tsx';
 import { useAttachments } from '../chat/use-attachments.ts';
@@ -34,14 +23,11 @@ const field =
 export function RevisePanel({
   taskId,
   taskTitle,
-  conversationId,
   parameters = [],
   onClose,
 }: {
   taskId: string;
   taskTitle: string;
-  /** 做出这一版的私聊（默认发给它）；没有时用第一个能聊的 AI */
-  conversationId: string | null;
   /** 从参数面板来的成品参数（ADR 0012 §12） */
   parameters?: RevisionParameter[];
   onClose: () => void;
@@ -51,14 +37,7 @@ export function RevisePanel({
     const el = dialog.current;
     if (el && !el.open) el.showModal?.();
   }, []);
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { data: models = [] } = useQuery(modelsQuery);
-  const { data: dms = [] } = useQuery(dmsQuery);
-  const chattable = models.filter((m) => m.category === 'llm' && m.available);
-  const original = dms.find((d) => d.id === conversationId)?.modelKey ?? null;
-  const [picked, setPicked] = useState<string | null>(null);
-  const modelKey = picked ?? original ?? chattable[0]?.key ?? '';
   const [request, setRequest] = useState('');
   const files = useAttachments();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -73,10 +52,6 @@ export function RevisePanel({
 
   const send = useMutation({
     mutationFn: async () => {
-      const target =
-        modelKey === original && conversationId
-          ? conversationId
-          : (dms.find((d) => d.modelKey === modelKey)?.id ?? (await createDm(modelKey)).id);
       let annotations: RevisionNote[] = [];
       const shots: string[] = [];
       if (withNotes && noteCount > 0) {
@@ -91,31 +66,26 @@ export function RevisePanel({
         annotations = toRevisionNotes(noted, built.nameOf);
       }
       setStage(null);
-      await reviseTask(target, {
-        taskId,
+      await reviseTask(taskId, {
         request: request.trim(),
         annotations,
         parameters,
         attachments: [...files.ids, ...shots],
       });
-      return target;
     },
     onSettled: () => setStage(null),
-    onSuccess: async (target) => {
+    onSuccess: async () => {
       files.clear();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: tasksQuery.queryKey }),
-        queryClient.invalidateQueries({ queryKey: dmsQuery.queryKey }),
-        queryClient.invalidateQueries({ queryKey: messagesQuery(target).queryKey }),
+        queryClient.invalidateQueries({ queryKey: taskQuery(taskId).queryKey }),
       ]);
       onClose();
-      await navigate({ to: '/dms/$conversationId', params: { conversationId: target } });
     },
   });
 
   const ready =
     (request.trim().length > 0 || (withNotes && noteCount > 0) || parameters.length > 0) &&
-    !!modelKey &&
     !files.uploading &&
     !files.failed;
   function submit(event: FormEvent) {
@@ -210,20 +180,10 @@ export function RevisePanel({
               附上参考文件
             </button>
           </div>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[13px] font-medium">发给谁</span>
-            <select value={modelKey} onChange={(e) => setPicked(e.target.value)} className={field}>
-              {chattable.map((m) => (
-                <option key={m.key} value={m.key}>
-                  {m.name}
-                  {m.key === original ? '（做出这一版的）' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
           <p className="m-0 text-[12.5px] leading-relaxed text-ink-muted">
-            AI
-            团队会接着原来的工作流改，只改你提到的地方。改好后画布里的成果直接更新成新版，旧版本不保留。
+            直接交给这个任务的 AI
+            团队，接着原来的工作流改，只改你提到的地方。改好后画布里的成果直接更新成新版，旧版本不保留；想知道进度，在任意私聊里问
+            AI 就行。
           </p>
           {send.isError && (
             <p role="alert" className="m-0 text-[13px] text-accent">
@@ -246,7 +206,7 @@ export function RevisePanel({
           >
             {stage ??
               (send.isPending ? '正在发…' : null) ??
-              (files.uploading ? '文件还在上传…' : '发给 AI 修改')}
+              (files.uploading ? '文件还在上传…' : '发给 AI 团队修改')}
           </button>
         </footer>
       </form>

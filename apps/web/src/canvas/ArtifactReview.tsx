@@ -1,8 +1,8 @@
 // 成果页的预览加批注（ADR 0012 §9，外观照原型 ⑨⑩）：顶栏的批注图标打开批注模式——底部悬浮工具条（圈 / 画笔 / 点 / 完成），
-// 右侧批注列表（点一条翻到那一页、跳到那一刻；可以删），画好一处就在侧栏写意见，写好立即保存；列表底部「发给 AI 修改」。
+// 右侧批注列表（点一条翻到那一页、跳到那一刻；可以删），画好一处就在侧栏写意见，写好立即保存；列表底部「发给 AI 团队修改」。
 import type { Annotation, ArtifactBody } from '@oasis/contracts/canvas';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { RevisionParameter } from '@oasis/contracts/conversation';
+import type { RevisionParameter } from '@oasis/contracts/task';
 import {
   Camera,
   Circle,
@@ -58,7 +58,7 @@ export function ArtifactReview({
   /** 批注模式由顶栏的批注图标开关 */
   annotating: boolean;
   onAnnotating: (on: boolean) => void;
-  /** 「按这些参数改一版」：交给发给 AI 修改的对话框 */
+  /** 「按这些参数改一版」：交给修改对话框 */
   onRevise?: (parameters: RevisionParameter[]) => void;
 }) {
   const queryClient = useQueryClient();
@@ -437,7 +437,7 @@ export function ArtifactReview({
               className="mt-auto inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-full border-0 bg-accent px-4 text-[13.5px] font-medium text-on-accent"
             >
               <Send size={14} aria-hidden="true" />
-              发给 AI 修改
+              发给 AI 团队修改
             </button>
           )}
         </aside>

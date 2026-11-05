@@ -6,13 +6,14 @@ import {
   NodeMessageBody,
   PlanNode,
   QuoteBody,
-  ReviseTaskBody,
+  TaskRevisionBody,
   UpdateEdgeBody,
   UpdateNodeBody,
 } from '@oasis/contracts/task';
 import { fileResponseHeaders, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Quotes } from '../service/quote.ts';
+import type { Revisions } from '../service/revision.ts';
 import type { WorkflowService } from '../service/workflow-service.ts';
 
 const TaskParams = z.object({ taskId: z.uuid() });
@@ -25,8 +26,15 @@ const EventsQuery = z.object({
 });
 const FileQuery = z.object({ download: z.enum(['0', '1']).default('0') });
 const RetireBody = z.object({ replacedBy: z.uuid() });
+const OwnerParams = z.object({ ownerId: z.uuid() });
+const MaterialsInUseBody = z.object({ ownerId: z.uuid(), ids: z.array(z.uuid()) });
 
-export function registerRoutes(app: ServiceApp, workflows: WorkflowService, quotes: Quotes): void {
+export function registerRoutes(
+  app: ServiceApp,
+  workflows: WorkflowService,
+  quotes: Quotes,
+  revisions: Revisions,
+): void {
   /** 给任务单报价（ADR 0016 §4）：三档预算和用时；草案用不了时 quote 为 null */
   app.post('/internal/quotes', async (request) => {
     const body = parseWith(QuoteBody, request.body);
@@ -50,16 +58,29 @@ export function registerRoutes(app: ServiceApp, workflows: WorkflowService, quot
       .send(file.content);
   });
 
+  /** 一个人的任务列表（私聊里的 AI 在用户问起时据此回答进度） */
+  app.get('/internal/owners/:ownerId/tasks', async (request) => {
+    const { ownerId } = parseWith(OwnerParams, request.params);
+    return { tasks: await workflows.list(ownerId) };
+  });
+
+  /** 这些上传文件里哪些是任务素材（conversation 删私聊时留着它们，ADR 0012 §15） */
+  app.post('/internal/materials/in-use', async (request) => {
+    const { ownerId, ids } = parseWith(MaterialsInUseBody, request.body);
+    return { ids: await workflows.materialsInUse(ownerId, ids) };
+  });
+
   /** 任务详情（conversation 发交付消息用） */
   app.get('/internal/tasks/:taskId', async (request) => {
     const { taskId } = parseWith(TaskParams, request.params);
     return workflows.getInternal(taskId);
   });
 
-  /** 修改成果：在原任务里接着原会话改（conversation 发起修改时调用，ADR 0012） */
-  app.post('/internal/tasks/:taskId/revise', async (request) => {
+  /** 修改成果：画布上的修改意见直接交给 AI 团队，在原任务里接着改（ADR 0012，不经过私聊） */
+  app.post('/v1/tasks/:taskId/revisions', async (request) => {
     const { taskId } = parseWith(TaskParams, request.params);
-    return workflows.revise(taskId, parseWith(ReviseTaskBody, request.body));
+    const body = parseWith(TaskRevisionBody, request.body);
+    return revisions.revise(requireUserId(request), taskId, body, request.id);
   });
 
   /** 旧式修订任务交付后删除被替换的上一版（canvas 换好成果后调用，ADR 0012；新的修改不再新建任务） */

@@ -1,4 +1,4 @@
-// 消费 task.task.status_changed：完成时发交付，过程状态留在工作流。
+// 消费 task.task.status_changed：第一次完成时在发起它的私聊里发交付，过程状态留在工作流。
 // 同一个事件只发一条消息（事件可能重复到达）。
 import type { DeliveryCard } from '@oasis/contracts/conversation';
 import type { TaskDeletedData, TaskStatusChangedData } from '@oasis/contracts/events';
@@ -20,7 +20,9 @@ function deliveryText(card: DeliveryCard): string {
   if (card.warnings.length > 0) parts.push(`过程中的提醒：\n${list(card.warnings)}`);
   if (card.unchecked?.length) parts.push(`未完成的检查：\n${list(card.unchecked)}`);
   if (card.unmet.length > 0)
-    parts.push('需要改的话，点交付消息上的「改一版」写下修改意见，AI 团队会做出新版替换这一版。');
+    parts.push(
+      '需要改的话，在画布的成果上批注后点「发给 AI 团队修改」，AI 团队会接着改、原地更新成果。',
+    );
   return parts.join('\n\n');
 }
 
@@ -64,7 +66,9 @@ export function createTaskNotices(deps: {
       if (!data.conversationId) return;
       if (data.status !== 'succeeded') return; // 过程状态与检查原因只在工作流显示。
       const conversation = await repo.findOwned(data.conversationId, data.ownerId);
-      if (!conversation) return;
+      // 私聊删了就不发；修改后的新版不再发到私聊（2026-11-05：修改直接交给 AI 团队，进度在画布上看，
+      // 私聊里的 AI 只在用户问起时回答）
+      if (!conversation || (await repo.hasDelivery(conversation.id, data.taskId))) return;
       const base = {
         conversationId: conversation.id,
         authorKind: 'ai' as const,

@@ -20,7 +20,6 @@ import {
   type Speaker,
 } from './parts.tsx';
 import { RemovedNote } from './TaskCard.tsx';
-import { useChatActions } from './use-chat-actions.ts';
 
 type DeliveredFile = DeliveryData['files'][number];
 
@@ -77,7 +76,6 @@ function groupByDeliverable(files: DeliveredFile[]) {
 export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: Speaker }) {
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const [revising, setRevising] = useState(false);
-  const actions = useChatActions();
   const { data: task } = useQuery({ ...taskQuery(card.taskId), enabled: !card.removed });
   const groups = groupByDeliverable(card.files);
   if (card.removed) {
@@ -168,7 +166,6 @@ export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: S
         <RevisePanel
           taskId={card.taskId}
           taskTitle={card.title}
-          conversationId={actions.conversationId}
           onClose={() => setRevising(false)}
         />
       )}

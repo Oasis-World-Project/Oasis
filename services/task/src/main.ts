@@ -20,6 +20,7 @@ import {
 } from '@oasis/service-kit';
 import { registerRoutes } from './api/routes.ts';
 import { createQuotes, type Quotes } from './service/quote.ts';
+import { createRevisions, type Revisions } from './service/revision.ts';
 import { taskEnv } from './config.ts';
 import { createTaskStore } from './repo/task-store.ts';
 import { createGate } from './service/gate.ts';
@@ -27,6 +28,7 @@ import { createWorkflowService, type WorkflowService } from './service/workflow-
 
 let workflows: WorkflowService;
 let quotes: Quotes;
+let revisions: Revisions;
 
 await startService({
   name: 'task',
@@ -87,6 +89,10 @@ await startService({
       fallback,
       logger,
     });
+    revisions = createRevisions({
+      workflows,
+      canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 10_000 }),
+    });
     const runFinished = startEventConsumer({
       connection: eventBus.connection,
       stream: HARNESS_STREAM,
@@ -98,7 +104,7 @@ await startService({
         if (data.taskId) await workflows.onRunFinished(data);
       },
     });
-    // 属于任务的模型调用结算了：累加花费，超过上限时暂停任务
+    // 属于任务的模型调用结算了：累加花费（预算只是参考，不暂停，ADR 0016 §2）
     const callSettled = startEventConsumer({
       connection: eventBus.connection,
       stream: MODEL_GATEWAY_STREAM,
@@ -119,5 +125,5 @@ await startService({
     };
     return { postgres, eventBus, outbox, runFinished, callSettled, reconciler };
   },
-  routes: (app) => registerRoutes(app, workflows, quotes),
+  routes: (app) => registerRoutes(app, workflows, quotes, revisions),
 });

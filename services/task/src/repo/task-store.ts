@@ -161,6 +161,8 @@ export interface TaskStore {
   listCheckingNodes(before: Date): Promise<Node[]>;
   /** 正在修改这个任务成果、还没结束的修订任务（ADR 0012） */
   findActiveRevision(taskId: string): Promise<Task | undefined>;
+  /** 这些上传文件里，哪些是这个人某个任务的素材（删私聊时这些文件要留着） */
+  materialsInUse(ownerId: string, uploadIds: string[]): Promise<string[]>;
   /**
    * 删除任务（节点、连线、运行、花费记录级联删除），同一个事务里写 task.task.deleted。
    * 任务已经不在时返回 undefined。
@@ -359,6 +361,17 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
         .where(and(eq(tasks.revisionOf, taskId), notInArray(tasks.status, [...ENDED_STATUSES])))
         .limit(1);
       return row;
+    },
+
+    async materialsInUse(ownerId, uploadIds) {
+      if (!uploadIds.length) return [];
+      const { rows } = await pool.query<{ id: string }>(
+        `select distinct m->>'uploadId' as id
+           from tasks, jsonb_array_elements(tasks.materials) m
+          where tasks.owner_id = $1 and m->>'uploadId' = any($2::text[])`,
+        [ownerId, uploadIds],
+      );
+      return rows.map((r) => r.id);
     },
 
     remove(taskId, replacedBy) {

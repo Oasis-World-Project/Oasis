@@ -1,6 +1,6 @@
 // 画布里打开一个成果（外观照原型 ⑨⑩）：点阵底；顶栏只有返回、批注、下载三个图标（2026-11-04 精简）。
 // 中间预览（图片、视频、音频、PDF、Markdown、文字、网页；其他格式提示下载）。网页和静态应用在本机隔离框里直接运行（ADR 0009 §17），
-// 带后端的应用走平台容器预览。批注面板里「发给 AI 修改」，新版整体替换这一版（ADR 0012）。
+// 带后端的应用走平台容器预览。批注面板里「发给 AI 团队修改」，直接交给 AI 团队在原任务里接着改（ADR 0012）。
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ArrowLeft, Download, LoaderCircle, PencilLine, SlidersHorizontal } from 'lucide-react';
@@ -13,7 +13,7 @@ import {
   taskArchiveUrl,
   tasksQuery,
 } from '../api/queries.ts';
-import type { RevisionParameter } from '@oasis/contracts/conversation';
+import type { RevisionParameter } from '@oasis/contracts/task';
 import { ArtifactReview } from '../canvas/ArtifactReview.tsx';
 import { AvatarPreview } from '../canvas/AvatarPreview.tsx';
 import { ParameterPanel } from '../canvas/ParameterPanel.tsx';
@@ -149,7 +149,6 @@ export function ArtifactPage() {
         <RevisePanel
           taskId={artifact.taskId}
           taskTitle={artifact.taskTitle}
-          conversationId={artifact.conversationId}
           parameters={parameters}
           onClose={() => setReviseOpen(false)}
         />

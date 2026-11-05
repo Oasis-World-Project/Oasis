@@ -13,7 +13,7 @@ import {
   toRevisionNotes,
   whereOf,
 } from '../src/canvas/annotations.ts';
-import { installFakeApi, json } from './fake-api.ts';
+import { installFakeApi, json, revisingTask } from './fake-api.ts';
 
 const TASK = '00000000-0000-4000-8000-0000000000f1';
 const note = (number: number, extra: Partial<Annotation> = {}): Annotation => ({
@@ -219,7 +219,7 @@ describe('成果页上标注', () => {
   });
 });
 
-describe('发给 AI 修改时带上批注', () => {
+describe('发给 AI 团队修改时带上批注', () => {
   it('不写意见只带批注也能发；截图合成不了时批注照样带上，只是没有截图', async () => {
     const CONV = '00000000-0000-4000-8000-0000000000c1';
     const image = artifact('00000000-0000-4000-8000-000000000903', 'hero.png', {
@@ -244,9 +244,9 @@ describe('发给 AI 修改时带上批注', () => {
         if (method === 'GET' && path.startsWith('/canvas/v1/artifacts'))
           return json(200, { artifacts: [image] });
         if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
-        if (method === 'POST' && path === `/conversation/v1/conversations/${CONV}/revisions`) {
+        if (method === 'POST' && path === `/task/v1/tasks/${TASK}/revisions`) {
           sent.push(body);
-          return json(200, { messages: [] });
+          return json(200, revisingTask(TASK, '民宿首页'));
         }
         if (method === 'GET' && path === `/conversation/v1/conversations/${CONV}/messages`)
           return json(200, { messages: [] });
@@ -255,17 +255,16 @@ describe('发给 AI 修改时带上批注', () => {
     });
     await open(image.id);
     fireEvent.click(await screen.findByRole('button', { name: '批注' }));
-    fireEvent.click(await screen.findByRole('button', { name: /发给 AI 修改/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /发给 AI 团队修改/ }));
     const dialog = await screen.findByLabelText('修改「民宿首页」');
     const box = await within(dialog).findByRole('checkbox', {
       name: /带上画布上的 1 条批注/,
       hidden: true,
     });
     expect((box as HTMLInputElement).checked).toBe(true);
-    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 修改', hidden: true }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 团队修改', hidden: true }));
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toEqual({
-      taskId: TASK,
       request: '',
       annotations: [{ file: 'hero.png', number: 1, where: '画面右上', note: '换成夜景' }],
       parameters: [],
@@ -392,7 +391,7 @@ describe('运行中的应用上批注（桌面版）', () => {
     expect(screen.queryByAltText('批注截图')).toBeNull();
     expect(screen.getByRole('button', { name: '截取当前画面' })).toBeTruthy();
     expect(screen.getByRole('complementary', { name: '批注' })).toBeTruthy();
-    expect(within(panel).getByRole('button', { name: /发给 AI 修改/ })).toBeTruthy();
+    expect(within(panel).getByRole('button', { name: /发给 AI 团队修改/ })).toBeTruthy();
     // 应用的下载是整个应用
     expect(screen.getByRole('link', { name: '下载' }).getAttribute('href')).toBe(
       `/api/canvas/v1/tasks/${TASK}/archive`,

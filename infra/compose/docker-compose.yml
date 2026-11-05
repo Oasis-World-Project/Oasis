@@ -278,6 +278,7 @@ services:
       HARNESS_URL: http://harness:4107
       MODEL_GATEWAY_URL: http://model-gateway:4108
       AGENT_URL: http://agent:4103
+      CANVAS_URL: http://canvas:4106
     depends_on: *data-deps
 
   canvas:

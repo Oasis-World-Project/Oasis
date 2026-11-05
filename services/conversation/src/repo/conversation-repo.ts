@@ -71,6 +71,12 @@ export interface ConversationRepo {
     excludeId?: string,
     beforeSeq?: number,
   ): Promise<Message[]>;
+  /** 这段对话里所有消息带的附件 ID（删私聊时用） */
+  attachmentIds(conversationId: string): Promise<string[]>;
+  /** 删掉整段对话：消息、接需求记录随之级联删除 */
+  deleteConversation(id: string): Promise<void>;
+  /** 这段对话里是不是已经有这个任务的交付消息 */
+  hasDelivery(conversationId: string, taskId: string): Promise<boolean>;
   /** 存较早部分的摘要 */
   setContextSummary(id: string, summary: { throughSeq: number; text: string }): Promise<void>;
   listMessages(conversationId: string, limit: number): Promise<Message[]>;
@@ -345,6 +351,34 @@ export function createConversationRepo(
           ),
         )
         .orderBy(messages.seq);
+    },
+
+    async attachmentIds(conversationId) {
+      const rows = await db.execute<{ id: string }>(
+        sql`select distinct a->>'id' as id
+              from ${messages}, jsonb_array_elements(coalesce(${messages.data}->'attachments', '[]'::jsonb)) a
+             where ${messages.conversationId} = ${conversationId}`,
+      );
+      return rows.rows.map((r) => r.id).filter(Boolean);
+    },
+
+    async deleteConversation(id) {
+      await db.delete(conversations).where(eq(conversations.id, id));
+    },
+
+    async hasDelivery(conversationId, taskId) {
+      const [row] = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, conversationId),
+            eq(messages.kind, 'delivery'),
+            sql`${messages.data}->>'taskId' = ${taskId}`,
+          ),
+        )
+        .limit(1);
+      return !!row;
     },
 
     async setContextSummary(id, summary) {

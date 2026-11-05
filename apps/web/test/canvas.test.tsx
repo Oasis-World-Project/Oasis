@@ -88,6 +88,7 @@ describe('画布', () => {
         nodesTotal: 10,
         spentMicro: 7_634_465,
         revisionOf: null,
+        revising: false,
         createdAt: '2026-11-04T01:00:00.000Z',
       })),
     );
@@ -117,6 +118,7 @@ describe('画布', () => {
         nodesTotal: 0,
         spentMicro: 10_700,
         revisionOf: null,
+        revising: false,
         createdAt: '2026-11-04T10:24:47.000Z',
       },
     ];
@@ -217,7 +219,7 @@ describe('画布', () => {
     );
     for (const gone of ['工作流', '回到私聊'])
       expect(screen.queryByRole('link', { name: gone })).toBeNull();
-    expect(screen.queryByRole('button', { name: /发给 AI 修改|删除|批准/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /发给 AI 团队修改|删除|批准/ })).toBeNull();
   });
 });
 

@@ -10,7 +10,9 @@ import type {
   StreamEvent,
 } from '@oasis/contracts/conversation';
 import type { ChatMessage } from '@oasis/contracts/model-gateway';
+import { TaskList, type TaskSummary } from '@oasis/contracts/task';
 import { createSseParser, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
+import { z } from 'zod';
 import type { Conversation, ConversationRepo, Message } from '../repo/conversation-repo.ts';
 import { attachmentsOf } from './attachments.ts';
 import { rendered, tokensOf, type ContextService } from './context.ts';
@@ -40,6 +42,32 @@ function toConversationBody(row: Conversation): ConversationBody {
   };
 }
 
+/** 任务进度的一句话 */
+function taskState(t: TaskSummary): string {
+  const progress = t.nodesTotal ? `（${t.nodesDone}/${t.nodesTotal} 步）` : '';
+  if (t.revising) return `AI 团队正在按修改意见改${progress}`;
+  switch (t.status) {
+    case 'planning':
+      return 'AI 团队正在排工作流';
+    case 'running':
+    case 'accepting':
+      return `AI 团队正在做${progress}`;
+    case 'succeeded':
+      return '已交付';
+    case 'failed':
+      return '没做成';
+    case 'cancelled':
+      return '已取消';
+    case 'stopped':
+      return `用户停下了${progress}`;
+    default:
+      return `需要用户处理${progress}`;
+  }
+}
+
+/** 哪些文件是任务素材 */
+const InUse = z.object({ ids: z.array(z.string()) });
+
 export function toMessageBody(row: Message): MessageBody {
   return {
     id: row.id,
@@ -60,6 +88,8 @@ export function createDmService(deps: {
   modelGateway: ServiceClient;
   /** 核对用户随消息发的文件 */
   canvas: ServiceClient;
+  /** 查用户的任务（被问起时回答进度）、删私聊时问哪些文件是任务素材 */
+  task: ServiceClient;
   intake: IntakeService;
   /** 交给模型的历史：整段对话，快到窗口时压缩较早部分（ADR 0016 §8） */
   context: ContextService;
@@ -132,6 +162,29 @@ export function createDmService(deps: {
     const conversation = await repo.findOwned(conversationId, ownerId);
     if (!conversation) throw new HttpError(404, 'conversation_not_found', '没有这个会话');
     return conversation;
+  }
+
+  /**
+   * 用户的任务进度（2026-11-05：任务和私聊解耦，任何一个私聊里的 AI 都能在用户问起时回答）。
+   * 查不到时不带，照常聊天。
+   */
+  async function tasksNote(ownerId: string, requestId: string): Promise<string | null> {
+    let tasks: TaskSummary[];
+    try {
+      ({ tasks } = await deps.task.json('GET', `/internal/owners/${ownerId}/tasks`, {
+        requestId,
+        schema: TaskList,
+      }));
+    } catch (err) {
+      deps.logger.warn({ err, requestId }, '查不到用户的任务，这次聊天不带任务进度');
+      return null;
+    }
+    if (!tasks.length) return null;
+    const lines = tasks.map((t) => `- 「${t.title}」：${taskState(t)}`);
+    return [
+      '【用户交给 AI 团队的任务】（由 AI 团队在画布上做，你不负责执行。只有用户问起时才说；用户想改成果时，告诉他在画布的成果上批注后点「发给 AI 团队修改」）',
+      ...lines,
+    ].join('\n');
   }
 
   async function routeFor(modelKey: string, requestId: string) {
@@ -270,8 +323,11 @@ export function createDmService(deps: {
         requestId: input.requestId,
       });
       input.signal.throwIfAborted();
+      const tasks = await tasksNote(input.ownerId, input.requestId);
+      input.signal.throwIfAborted();
       const messages: ChatMessage[] = [
         { role: 'system', content: route.systemPrompt },
+        ...(tasks ? [{ role: 'system' as const, content: tasks }] : []),
         ...(history.summary
           ? [{ role: 'system' as const, content: `【较早对话的摘要】\n${history.summary}` }]
           : []),
@@ -537,6 +593,40 @@ export function createDmService(deps: {
       return (await repo.listMessages(conversationId, 500)).map((m) =>
         toMessageBody(taskIds.has(m.id) ? { ...m, data: { ...m.data, intent: 'task' } } : m),
       );
+    },
+
+    /**
+     * 删除私聊（2026-11-05）：消息、卡片、接需求记录和摘要真删除，消息带的文件在 canvas 里一起删；
+     * 已经成为任务素材的文件留着（任务还要用）。任务和成果不受影响；再点开这个 AI 是全新的私聊。
+     */
+    async deleteDm(ownerId: string, conversationId: string, requestId: string) {
+      const conversation = await owned(conversationId, ownerId);
+      if (conversation.kind !== 'dm')
+        throw new HttpError(404, 'conversation_not_found', '没有这个私聊');
+      // 正在生成的回复先停下
+      for (const turn of active.values())
+        if (turn.conversationId === conversationId) turn.controller.abort();
+      await repo.withMessageLock(conversationId, async (store) => {
+        await store.withIntakeLock(conversationId, async (scoped) => {
+          const ids = await scoped.attachmentIds(conversationId);
+          if (ids.length) {
+            const { ids: used } = await deps.task.json('POST', '/internal/materials/in-use', {
+              body: { ownerId, ids },
+              requestId,
+              schema: InUse,
+            });
+            const free = ids.filter((id) => !used.includes(id));
+            // 先删文件再删对话：删文件失败时对话还在，用户重试即可（删文件是幂等的）
+            if (free.length)
+              await deps.canvas.json('POST', '/internal/uploads/delete', {
+                body: { ownerId, ids: free },
+                requestId,
+              });
+          }
+          await scoped.deleteConversation(conversationId);
+        });
+      });
+      deps.logger.info({ conversationId }, '私聊已删除');
     },
 
     async deleteMessage(ownerId: string, conversationId: string, messageId: string) {
