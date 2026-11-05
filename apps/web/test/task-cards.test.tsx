@@ -2,7 +2,7 @@
 import type { MessageBody } from '@oasis/contracts/conversation';
 import type { TaskBody } from '@oasis/contracts/task';
 import { createMemoryHistory } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
 import { installFakeApi, json, type ExtraRoute } from './fake-api.ts';
@@ -261,6 +261,35 @@ describe('问题卡和任务单', () => {
     expect(
       within(screen.getByRole('region', { name: '任务单' })).getByText('已交给 AI 团队'),
     ).toBeTruthy();
+  });
+
+  it('选项都不合适时可以自己写；没写内容不能提交，写了按原话交给后端', async () => {
+    const questions = message('questions', QUESTIONS);
+    const { api } = fakeChat([message('text', {}, 'user', '写首页'), questions], {
+      extra: (method, path) =>
+        method === 'POST' && path.endsWith('/intake/answers')
+          ? json(200, { messages: [] })
+          : undefined,
+    });
+    await openChat();
+    const card = await screen.findByRole('region', { name: '问题卡' });
+    expect(within(card).getAllByRole('radio', { name: '自己写' })).toHaveLength(2);
+    fireEvent.click(within(card).getAllByRole('radio', { name: '自己写' })[0]!);
+    const submit = within(card).getByRole('button', { name: '好了，继续' });
+    expect(submit).toHaveProperty('disabled', true);
+    expect(within(card).getByText('选了「自己写」的题目还没写内容。')).toBeTruthy();
+    fireEvent.change(within(card).getByRole('textbox', { name: '给谁看？：自己写' }), {
+      target: { value: '  来出差的商务客  ' },
+    });
+    expect(submit).toHaveProperty('disabled', false);
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(api.bodies.find((b) => b.path.endsWith('/intake/answers'))?.body).toEqual({
+        messageId: questions.id,
+        answers: { q1: 'custom:来出差的商务客', q2: 'a' },
+        skip: false,
+      }),
+    );
   });
 
   it('「要改一下」把焦点交给输入框并提示怎么说；「不是任务」退出', async () => {

@@ -351,8 +351,19 @@ export function createDmService(deps: {
       let suggestTask: boolean;
       try {
         const open = await deps.intake.findOpen(conversation.id);
-        if (open) {
-          signal.throwIfAborted();
+        // 有任务还在整理时，先判断这句话是不是在说它；不是就照常聊天或开始新任务（2026-11-05）
+        const verdict = open
+          ? await deps.intake.duringIntake({
+              ownerId: input.ownerId,
+              content: input.content,
+              intake: open,
+              history,
+              requestId: input.requestId,
+              signal,
+            })
+          : null;
+        signal.throwIfAborted();
+        if (open && (!verdict || verdict.about >= 0.5)) {
           active.get(userMessage.id)!.canStop = false;
           if (
             !(await store.mergeMessageData(
@@ -377,13 +388,15 @@ export function createDmService(deps: {
         }
         const probability = input.asTask
           ? 1
-          : await deps.intake.taskProbability({
-              ownerId: input.ownerId,
-              content: input.content,
-              history,
-              requestId: input.requestId,
-              signal,
-            });
+          : verdict
+            ? verdict.task
+            : await deps.intake.taskProbability({
+                ownerId: input.ownerId,
+                content: input.content,
+                history,
+                requestId: input.requestId,
+                signal,
+              });
         signal.throwIfAborted();
         if (input.asTask || probability >= deps.detect.high) {
           active.get(userMessage.id)!.canStop = false;
@@ -391,9 +404,16 @@ export function createDmService(deps: {
             throw new DOMException('已停止', 'AbortError');
           }
           input.emit({ type: 'activity', phase: 'intake' });
-          return emitAll(
-            input.emit,
-            await deps.intake.start({
+          // 一个会话同时只整理一件任务：交代了另一件新任务，就把还没确认的那件收起来
+          const closed = open
+            ? await deps.intake.cancel(
+                conversation,
+                '上一件还没确认的任务先放下了，我按新的需求来整理。',
+              )
+            : [];
+          return emitAll(input.emit, [
+            ...closed,
+            ...(await deps.intake.start({
               conversation,
               ownerId: input.ownerId,
               request: input.content,
@@ -401,10 +421,11 @@ export function createDmService(deps: {
               attachments: input.attachments,
               history,
               requestId: input.requestId,
-            }),
-          );
+            })),
+          ]);
         }
-        suggestTask = probability >= deps.detect.low;
+        // 正在整理任务时说的别的事，不再提示「当成任务来做」，任务卡片留着可以接着点
+        suggestTask = !open && probability >= deps.detect.low;
       } catch (err) {
         if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
           await chat(

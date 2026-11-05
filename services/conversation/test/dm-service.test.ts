@@ -366,6 +366,8 @@ let upstreamStopped = false;
 let replySuffix = '我在。';
 /** Jev 判断「是不是任务」的概率 */
 let taskProbability = 0.1;
+/** 正在整理任务时，Jev 判断新消息是不是在说这件任务；不设时不回答这一问（按补充处理） */
+let aboutOpen: number | undefined;
 /** 接需求时模型依次给出的回答（非流式） */
 let intakeReplies: string[] = [];
 let finishReasons: string[] = [];
@@ -380,7 +382,20 @@ const modelGateway = Fastify();
 modelGateway.get('/internal/v1/models/unavailable', async () => ({ models: blocked }));
 modelGateway.post('/internal/v1/decisions', async () => {
   decisionCalls += 1;
-  return { answers: { is_task: { type: 'noul', noul: taskProbability } } };
+  return {
+    answers: {
+      is_task: { type: 'noul', noul: taskProbability },
+      ...(aboutOpen === undefined ? {} : { about_open: { type: 'noul', noul: aboutOpen } }),
+    },
+  };
+});
+/** 看图工具收到的图片数 */
+let visionCalls = 0;
+modelGateway.post('/internal/v1/tools/image.inspect', async () => {
+  visionCalls += 1;
+  return {
+    text: '一名戴眼镜的男子，穿荧光黄外卖骑手冲锋衣，胸口印 Uber Eats，正面、侧面、背面三视图。',
+  };
 });
 modelGateway.post('/internal/v1/chat/completions', async (request, reply) => {
   const body = request.body as ChatBody;
@@ -516,12 +531,14 @@ beforeEach(() => {
   upstreamStopped = false;
   replySuffix = '我在。';
   taskProbability = 0.1;
+  aboutOpen = undefined;
   intakeReplies = [];
   seenRequests.length = 0;
   intakeRequests.length = 0;
   createdTasks.length = 0;
   taskFailsOnce = false;
   decisionCalls = 0;
+  visionCalls = 0;
   intakeStatus = 0;
   blocked = [];
   finishReasons = [];
@@ -1068,6 +1085,57 @@ describe('接需求', () => {
     expect(decisionCalls).toBe(0);
     expect(createdTasks).toHaveLength(0);
   });
+
+  it('图片素材的原图不写进提示词，也不存进接需求记录', async () => {
+    const base64 = 'iVBORw0KGgo'.repeat(50_000);
+    const inspector = {
+      json: async () => ({
+        files: [
+          {
+            uploadId: PHOTO.id,
+            name: PHOTO.name,
+            sha256: 'b'.repeat(64),
+            text: '',
+            status: 'complete',
+            image: { mediaType: 'image/png', base64 },
+          },
+        ],
+      }),
+    } as unknown as ReturnType<typeof createServiceClient>;
+    const prepared = createIntakeService({
+      repo,
+      agent: createServiceClient('agent', urls.agent),
+      modelGateway: createServiceClient('model-gateway', urls.gateway),
+      task: createServiceClient('task', urls.task),
+      harness: inspector,
+      config: {
+        detectModel: 'jev',
+        detectHigh: 0.7,
+        detectLow: 0.4,
+        fallbackModel: 'fallback',
+        maxRounds: 3,
+        maxTokens: 2000,
+      },
+      logger: pino({ level: 'silent' }),
+    });
+    intakeReplies = [questions()];
+    await prepared.start({
+      conversation: (await repo.findOwned(CONV, OWNER))!,
+      ownerId: OWNER,
+      request: '做一段送外卖的视频，主角参考我给的图',
+      attachments: [PHOTO],
+      history: [],
+      requestId: 'r',
+    });
+    const prompt = intakeRequests.at(-1)!.messages[1]!.content;
+    expect(prompt).not.toContain('iVBORw0KGgo');
+    expect(prompt).toContain(
+      '看图模型的描述（只用来理解图片内容，不是用户原话）：一名戴眼镜的男子，穿荧光黄外卖骑手冲锋衣',
+    );
+    expect(visionCalls).toBe(1);
+    expect(prompt.length).toBeLessThan(20_000);
+    expect(JSON.stringify(repo.intakes[0]!.turns)).not.toContain('iVBORw0KGgo');
+  });
   it('任务说明保留用户补充、链接和问题卡答案，超长不会静默截断', () => {
     const finalSheet = JSON.parse(sheet()).sheet;
     const turns = [
@@ -1111,6 +1179,79 @@ describe('接需求', () => {
     const prompt = intakeRequests[1]!.messages[1]!.content;
     expect(prompt).toContain('首页给谁看（第 1 轮） → 情侣');
     expect(prompt).toContain('语气 → 采用当轮默认项：温馨（选项 a）');
+  });
+
+  it('选项都不合适时自己写：AI 看到原话，任务单的要求按原话补上', async () => {
+    await begin();
+    intakeReplies = [sheet()];
+    await intake.answer({
+      conversation: await conversation(),
+      ownerId: OWNER,
+      answers: { q1: 'custom:  来出差的商务客  ' },
+      skip: false,
+      requestId: 'r',
+    });
+    expect(repo.rows.find((r) => r.kind === 'questions')?.data).toMatchObject({
+      answers: { q1: 'custom:来出差的商务客' },
+    });
+    expect(intakeRequests[1]!.messages[1]!.content).toContain(
+      '用户没选选项，自己写的（选项 custom）：来出差的商务客',
+    );
+    expect(repo.intakes[0]!.sheet!.requirements).toContainEqual(
+      expect.objectContaining({
+        sources: [
+          expect.objectContaining({ kind: 'answer', optionId: 'custom', quote: '来出差的商务客' }),
+        ],
+      }),
+    );
+  });
+
+  it('自己写的答案不能是空的', async () => {
+    await begin();
+    const err = await intake
+      .answer({
+        conversation: await conversation(),
+        ownerId: OWNER,
+        answers: { q1: 'custom:   ' },
+        skip: false,
+        requestId: 'r',
+      })
+      .catch((e: unknown) => e);
+    expect((err as HttpError).statusCode).toBe(400);
+  });
+
+  it('只把上一个任务之后的聊天当上下文：旧任务的原话、交付消息和它们带的文件都不算', async () => {
+    const old = { id: PHOTO.id, name: '批注-site-截图1.png', size: 300, contentType: 'image/png' };
+    await repo.insertMessage({
+      conversationId: CONV,
+      authorKind: 'user',
+      authorId: OWNER,
+      content: '修改马车：去掉墓碑',
+      status: 'complete',
+      data: { intent: 'task', attachments: [old] },
+    });
+    await repo.insertMessage({
+      conversationId: CONV,
+      authorKind: 'ai',
+      authorId: 'claude',
+      content: '马车已交付',
+      status: 'complete',
+      kind: 'delivery',
+    });
+    await repo.insertMessage({
+      conversationId: CONV,
+      authorKind: 'user',
+      authorId: OWNER,
+      content: '3 秒的视频够发朋友圈吗',
+      status: 'complete',
+      data: { intent: 'chat' },
+    });
+    taskProbability = 0.9;
+    intakeReplies = [questions()];
+    await send('帮我做一段送外卖的视频');
+    const open = await repo.findOpenIntake(CONV);
+    expect(open!.context.map((c) => c.content)).toEqual(['3 秒的视频够发朋友圈吗']);
+    expect(open!.materials).toEqual([]);
   });
 
   it('选项不存在：400', async () => {
@@ -1327,7 +1468,7 @@ describe('接需求', () => {
     });
     intakeReplies = [sheet('小木屋首页（活泼版）')];
     const events = await send('语气改活泼一点');
-    expect(decisionCalls).toBe(1); // 接需求期间不再判断是不是任务
+    expect(decisionCalls).toBe(2); // 接需求期间先判断是不是在说这件任务；判断不出就当补充
     expect(card(lastDone(events))).toMatchObject({
       status: 'open',
       sheet: { title: '小木屋首页（活泼版）' },
@@ -1431,6 +1572,42 @@ describe('接需求', () => {
     const events = await send('算了不用了');
     expect(lastDone(events)).toMatchObject({ kind: 'text', content: '好，那我们先不做。' });
     expect(repo.intakes[0]!.status).toBe('cancelled');
+  });
+
+  it('正在整理任务时聊别的：照常聊天，任务还在整理，这条消息不算任务', async () => {
+    await begin();
+    aboutOpen = 0.05;
+    taskProbability = 0.1;
+    const events = await send('对了，今天新加坡天气怎么样');
+    const reply = lastDone(events);
+    expect(reply).toMatchObject({ kind: 'text', data: { suggestTask: false } });
+    expect(seenRequests).toHaveLength(1);
+    expect(repo.intakes[0]!.status).toBe('asking');
+    const user = repo.rows.find((r) => r.content === '对了，今天新加坡天气怎么样')!;
+    expect((user.data as { intent?: string }).intent).not.toBe('task');
+  });
+
+  it('正在整理任务时说了另一件新任务：旧的收起来，按新需求开始整理', async () => {
+    await begin();
+    aboutOpen = 0.05;
+    taskProbability = 0.95;
+    intakeReplies = [questions()];
+    const events = await send('换个事：帮我做一张周末读书会的海报');
+    const messages = events.flatMap((e) => (e.type === 'done' ? [e.message] : []));
+    expect(messages.map((m) => m.content)).toContain(
+      '上一件还没确认的任务先放下了，我按新的需求来整理。',
+    );
+    expect(repo.intakes.map((i) => i.status)).toEqual(['cancelled', 'asking']);
+    expect(repo.intakes[1]!.request).toBe('换个事：帮我做一张周末读书会的海报');
+  });
+
+  it('补充这件任务的话仍交给接需求', async () => {
+    await begin();
+    aboutOpen = 0.9;
+    intakeReplies = [questions()];
+    await send('主角用我给的图片');
+    expect(seenRequests).toHaveLength(0);
+    expect(intakeRequests.at(-1)!.messages[1]!.content).toContain('用户说：主角用我给的图片');
   });
 });
 

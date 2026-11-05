@@ -94,6 +94,41 @@ export function targetsFor(files: ToolFile[], out: string | undefined): string[]
 /** 命令的输出（AI 读的就是这些） */
 const say = (text: string) => process.stdout.write(`${text}\n`);
 
+const IMAGE_EXTS: Record<string, string> = {
+  '.png': 'png',
+  '.jpg': 'jpeg',
+  '.jpeg': 'jpeg',
+  '.webp': 'webp',
+  '.gif': 'gif',
+};
+
+/** 文件头对应的图片后缀；不是认得的图片返回 undefined */
+function imageExtOf(bytes: Buffer): string | undefined {
+  if (bytes.length >= 8 && bytes.readUInt32BE(0) === 0x89504e47) return '.png';
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return '.jpg';
+  if (
+    bytes.length >= 12 &&
+    bytes.toString('ascii', 0, 4) === 'RIFF' &&
+    bytes.toString('ascii', 8, 12) === 'WEBP'
+  )
+    return '.webp';
+  if (bytes.length >= 4 && bytes.toString('ascii', 0, 4) === 'GIF8') return '.gif';
+  return undefined;
+}
+
+/**
+ * 要存成图片、但内容是另一种图片格式时，按实际格式改后缀（2026-11-05：JPEG 存成 .png，
+ * 后面看图报签名无效、节点返工）。不是图片后缀或认不出内容时原样返回。
+ */
+export function matchImageExt(target: string, bytes: Buffer): string {
+  const ext = extname(target);
+  const actual = imageExtOf(bytes);
+  if (!actual || !(ext.toLowerCase() in IMAGE_EXTS)) return target;
+  if (IMAGE_EXTS[ext.toLowerCase()] === IMAGE_EXTS[actual]) return target;
+  return `${target.slice(0, -ext.length)}${actual}`;
+}
+
 async function openRequest(path: string, init: RequestInit = {}): Promise<Response> {
   const base = process.env.OASIS_MODEL_BASE_URL;
   // 在 dsh 的命令里只有 OASIS_TOOL_AUTH（OASIS_RUN_KEY 会被 dsh 去掉）
@@ -172,7 +207,17 @@ async function save(result: ToolResult, out: string | undefined): Promise<void> 
       } finally {
         await rm(partial, { force: true });
       }
-    } else await writeFile(target, Buffer.from(f.base64, 'base64'));
+    } else {
+      const bytes = Buffer.from(f.base64, 'base64');
+      const saved = matchImageExt(target, bytes);
+      await writeFile(saved, bytes);
+      if (saved !== target)
+        say(
+          `注意：返回的图片实际是 ${extname(saved).slice(1).toUpperCase()}，按实际格式存成了 ${saved}`,
+        );
+      say(`已保存：${saved}`);
+      continue;
+    }
     say(`已保存：${target}`);
   }
   say(`花费：$${(result.costMicro / 1_000_000).toFixed(4)}`);

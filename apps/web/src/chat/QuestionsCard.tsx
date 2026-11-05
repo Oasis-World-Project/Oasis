@@ -1,6 +1,11 @@
-// 问题卡：几道选择题，默认项已选好，每题都能选「你看着办」。
+// 问题卡：几道选择题，默认项已选好，每题都能选「你看着办」，选项都不合适时可以「自己写」。
 // 可以只答一部分（没答的按默认）、点「直接开始」，或者说这不是任务。答过的卡片只显示答案。
-import { AUTO_ANSWER, type QuestionsCard as QuestionsData } from '@oasis/contracts/conversation';
+import {
+  AUTO_ANSWER,
+  CUSTOM_ANSWER_MAX,
+  CUSTOM_ANSWER_PREFIX,
+  type QuestionsCard as QuestionsData,
+} from '@oasis/contracts/conversation';
 import { useState } from 'react';
 import { answerIntake, cancelIntake } from '../api/queries.ts';
 import {
@@ -14,11 +19,13 @@ import {
 import { useChatActions } from './use-chat-actions.ts';
 
 const AUTO_LABEL = '你看着办';
+const CUSTOM_LABEL = '自己写';
 
 function answerLabel(question: QuestionsData['questions'][number], answer: string | undefined) {
   if (answer === undefined)
     return `${question.options.find((o) => o.id === question.default)?.label ?? ''}（默认）`;
   if (answer === AUTO_ANSWER) return AUTO_LABEL;
+  if (answer.startsWith(CUSTOM_ANSWER_PREFIX)) return answer.slice(CUSTOM_ANSWER_PREFIX.length);
   return question.options.find((o) => o.id === answer)?.label ?? answer;
 }
 
@@ -86,12 +93,23 @@ export function QuestionsCard({
   const [picked, setPicked] = useState<Record<string, string>>(() =>
     Object.fromEntries(card.questions.map((q) => [q.id, q.default])),
   );
+  /** 选了「自己写」的题目和写的内容 */
+  const [custom, setCustom] = useState<Record<string, string>>({});
   const answered = card.answers !== null;
   const busy = actions.busy !== null;
+  const chosen = Object.fromEntries(
+    Object.entries(picked).map(([id, value]) =>
+      value === CUSTOM_ANSWER_PREFIX
+        ? [id, `${CUSTOM_ANSWER_PREFIX}${(custom[id] ?? '').trim()}`]
+        : [id, value],
+    ),
+  );
+  /** 选了「自己写」却还没写 */
+  const unwritten = Object.values(chosen).some((value) => value === CUSTOM_ANSWER_PREFIX);
 
   const submit = (skip: boolean) =>
     actions.run('answer', () =>
-      answerIntake(actions.conversationId, answered ? card.answers! : picked, skip, messageId),
+      answerIntake(actions.conversationId, answered ? card.answers! : chosen, skip, messageId),
     );
 
   if (answered || !active) {
@@ -150,16 +168,36 @@ export function QuestionsCard({
                   onChange={() => choose(AUTO_ANSWER)}
                   disabled={busy}
                 />
+                <Choice
+                  name={name}
+                  label={CUSTOM_LABEL}
+                  checked={picked[question.id] === CUSTOM_ANSWER_PREFIX}
+                  onChange={() => choose(CUSTOM_ANSWER_PREFIX)}
+                  disabled={busy}
+                />
               </div>
+              {picked[question.id] === CUSTOM_ANSWER_PREFIX && (
+                <input
+                  type="text"
+                  autoFocus
+                  aria-label={`${question.text}：自己写`}
+                  placeholder="写下你想要的"
+                  maxLength={CUSTOM_ANSWER_MAX}
+                  value={custom[question.id] ?? ''}
+                  onChange={(e) => setCustom((old) => ({ ...old, [question.id]: e.target.value }))}
+                  disabled={busy}
+                  className="min-h-9 rounded-full bg-glass-active px-3.5 text-[13.5px] text-ink shadow-edge-strong outline-none placeholder:text-ink-muted focus-visible:outline-2 focus-visible:outline-accent"
+                />
+              )}
             </fieldset>
           );
         })}
       </div>
       <CardActions>
-        <CardButton tone="accent" onClick={() => void submit(false)} disabled={busy}>
+        <CardButton tone="accent" onClick={() => void submit(false)} disabled={busy || unwritten}>
           {actions.busy === 'answer' ? '正在整理…' : '好了，继续'}
         </CardButton>
-        <CardButton onClick={() => void submit(true)} disabled={busy}>
+        <CardButton onClick={() => void submit(true)} disabled={busy || unwritten}>
           直接开始
         </CardButton>
         <CardButton
@@ -170,7 +208,11 @@ export function QuestionsCard({
           不是任务
         </CardButton>
       </CardActions>
-      <p className="m-0 text-[12px] text-ink-muted">「直接开始」：不再追问，按现在选的写任务单。</p>
+      <p className="m-0 text-[12px] text-ink-muted">
+        {unwritten
+          ? '选了「自己写」的题目还没写内容。'
+          : '「直接开始」：不再追问，按现在选的写任务单。'}
+      </p>
     </CardFrame>
   );
 }

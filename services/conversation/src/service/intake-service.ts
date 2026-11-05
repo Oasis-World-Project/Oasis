@@ -6,6 +6,8 @@ import { MaterialInspectResult } from '@oasis/contracts/harness';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import {
   AUTO_ANSWER,
+  CUSTOM_ANSWER_MAX,
+  CUSTOM_ANSWER_PREFIX,
   type IntakeQuestion,
   type MessageAttachment,
   type QuestionsCard,
@@ -25,6 +27,7 @@ import {
   readIntakeReply,
   sheetText,
   taskBrief,
+  withoutImage,
   type IntakeReply,
 } from './intake.ts';
 
@@ -61,6 +64,46 @@ export interface IntakeConfig {
   maxTokens: number;
 }
 
+const IS_TASK = {
+  type: 'noul',
+  instructions:
+    '用户刚说的这句话，是不是在交代 AI 去做一件要交付成果的事（写文档、做图、做网页、做视频、做研究报告等）？',
+  criteria: {
+    true: '是：要 AI 做出一个东西交给他',
+    false: '不是：闲聊、提问、讨论想法，或者只要一个简短的回答',
+  },
+} as const;
+
+const ABOUT_OPEN = {
+  type: 'noul',
+  instructions:
+    '现在有一件任务正在整理需求、还没确认。用户刚说的这句话，是不是在说这件任务：补充或修改要求、回答问题、让它继续、或者说不做了？',
+  criteria: {
+    true: '是：说的就是正在整理的这件任务',
+    false: '不是：在聊别的事，或者交代了另一件不相干的新任务',
+  },
+} as const;
+
+/** 正在整理任务时对新消息的判断：about = 说的是这件任务，task = 交代了一件要做的事 */
+interface DuringIntakeVerdict {
+  about: number;
+  task: number;
+}
+
+type InspectedFile = MaterialInspectResult['files'][number];
+
+const IMAGE_QUESTION =
+  '客观描述这张图：画面里是什么人或物、外观特征（衣着、颜色、标志和文字）、背景场景，有几个视角或几张拼图也说明。200 字以内，只写看得到的，不要猜图片以外的事。';
+
+/**
+ * 上一个任务之后的消息（2026-11-05）：上一个任务的原话、修改意见、卡片和交付消息，以及它们带的文件，
+ * 都不是这次的上下文，不然新任务会和旧任务搞混。
+ */
+function sinceLastTask(history: Message[]): Message[] {
+  const last = history.findLastIndex((m) => m.kind !== 'text' || m.data.intent === 'task');
+  return history.slice(last + 1);
+}
+
 function intakeActions(deps: {
   repo: ConversationRepo;
   agent: ServiceClient;
@@ -89,15 +132,7 @@ function intakeActions(deps: {
           model: config.detectModel,
           state: [...recent, `用户刚说：${input.content}`],
           questions: {
-            is_task: {
-              type: 'noul',
-              instructions:
-                '用户刚说的这句话，是不是在交代 AI 去做一件要交付成果的事（写文档、做图、做网页、做视频、做研究报告等）？',
-              criteria: {
-                true: '是：要 AI 做出一个东西交给他',
-                false: '不是：闲聊、提问、讨论想法，或者只要一个简短的回答',
-              },
-            },
+            is_task: IS_TASK,
           },
         },
         headers: { [OASIS_HEADERS.payerId]: input.ownerId },
@@ -135,6 +170,74 @@ function intakeActions(deps: {
       schema: Completion,
     });
     return result.choices[0]!;
+  }
+
+  /**
+   * 有一件任务还在整理时，判断新消息是不是在说它（2026-11-05 用户：上一条是任务，后面的话不能
+   * 一律算成任务）。Jev 一次回答两个问题；出错返回 null，调用方按原来的做法当作补充。
+   */
+  async function duringIntake(input: {
+    ownerId: string;
+    content: string;
+    intake: Intake;
+    history: Message[];
+    requestId: string;
+    signal?: AbortSignal;
+  }): Promise<DuringIntakeVerdict | null> {
+    const recent = input.history
+      .slice(-6)
+      .map((m) => `${m.authorKind === 'user' ? '用户' : 'AI'}：${m.content.slice(0, 500)}`);
+    try {
+      const { answers } = await deps.modelGateway.json('POST', '/internal/v1/decisions', {
+        body: {
+          model: config.detectModel,
+          state: [
+            `正在整理的任务，用户原话：${input.intake.request.slice(0, 1000)}`,
+            ...recent,
+            `用户刚说：${input.content}`,
+          ],
+          questions: { about_open: ABOUT_OPEN, is_task: IS_TASK },
+        },
+        headers: { [OASIS_HEADERS.payerId]: input.ownerId },
+        requestId: input.requestId,
+        schema: Decision,
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+      const about = answers.about_open?.noul;
+      if (about === undefined) return null;
+      return { about, task: answers.is_task?.noul ?? 0 };
+    } catch (err) {
+      input.signal?.throwIfAborted();
+      logger.warn({ err }, '判断是不是在说正在整理的任务失败，当作补充');
+      return null;
+    }
+  }
+
+  /**
+   * 问需求的 AI 看不了图，只能看到文件名（2026-11-05：外卖骑手的参考图被说成了马车）。
+   * 图片先交给看图工具描述一遍，描述写进素材说明；原图本身不进记录和提示词。看不了就照旧只说是图片。
+   */
+  async function describeImage(file: InspectedFile, ownerId: string, requestId: string) {
+    if (!file.image) return file;
+    const plain = withoutImage(file);
+    try {
+      const { text } = await deps.modelGateway.json('POST', '/internal/v1/tools/image.inspect', {
+        body: { args: { images: [file.image], question: IMAGE_QUESTION } },
+        headers: { [OASIS_HEADERS.payerId]: ownerId },
+        requestId,
+        schema: z.object({ text: z.string().min(1) }),
+      });
+      return {
+        ...plain,
+        reason: `图片素材。看图模型的描述（只用来理解图片内容，不是用户原话）：${text.trim().slice(0, 1000)}`,
+      };
+    } catch (err) {
+      logger.warn(
+        { err, requestId, uploadId: file.uploadId },
+        '接需求时看图失败，只告诉 AI 这是一张图',
+      );
+      return plain;
+    }
   }
 
   /** 读不到地区限制时按原模型来，不因此中断 */
@@ -236,9 +339,17 @@ function intakeActions(deps: {
           schema: MaterialInspectResult,
           requestId,
         });
+        const files = await Promise.all(
+          result.files.map((file) => describeImage(file, ownerId, requestId)),
+        );
         const turns = [
           ...intake.turns.filter((t) => t.kind !== 'materials'),
-          { kind: 'materials' as const, parser: 1, files: result.files },
+          // 原图不存进接需求记录：这里用不上，只会把记录和提示词撑大
+          {
+            kind: 'materials' as const,
+            parser: 1,
+            files,
+          },
         ];
         await repo.updateIntake(intake.id, { turns });
         intake = { ...intake, turns };
@@ -355,7 +466,9 @@ function intakeActions(deps: {
     history: Message[];
     requestId: string;
   }): Promise<Message[]> {
-    const context = input.history.filter((m) => m.kind === 'text').slice(-8);
+    const context = sinceLastTask(input.history)
+      .filter((m) => m.kind === 'text')
+      .slice(-8);
     const created = await repo.createIntake({
       id: randomUUID(),
       conversationId: input.conversation.id,
@@ -376,6 +489,7 @@ function intakeActions(deps: {
 
   return {
     taskProbability,
+    duringIntake,
     start,
     findOpen: (conversationId: string) => repo.findOpenIntake(conversationId),
 
@@ -464,12 +578,11 @@ function intakeActions(deps: {
     },
 
     /** 不是任务 / 不做了 */
-    async cancel(conversation: Conversation): Promise<Message[]> {
-      return cancelIntake(
-        conversation,
-        await openIntake(conversation),
-        '好的，这件事先不做了，我们接着聊。',
-      );
+    async cancel(
+      conversation: Conversation,
+      text = '好的，这件事先不做了，我们接着聊。',
+    ): Promise<Message[]> {
+      return cancelIntake(conversation, await openIntake(conversation), text);
     },
 
     /** 确认任务单：交给 task 建任务（之后由规划员排工作流），私聊里出现任务卡 */
@@ -532,6 +645,17 @@ function validAnswers(questions: IntakeQuestion[], answers: Record<string, strin
   for (const q of questions) {
     const answer = answers[q.id];
     if (answer === undefined) continue;
+    if (answer.startsWith(CUSTOM_ANSWER_PREFIX)) {
+      const text = answer.slice(CUSTOM_ANSWER_PREFIX.length).trim();
+      if (!text || text.length > CUSTOM_ANSWER_MAX)
+        throw new HttpError(
+          400,
+          'invalid_answer',
+          `「${q.text}」自己写的答案要在 1–${CUSTOM_ANSWER_MAX} 字之间`,
+        );
+      result[q.id] = `${CUSTOM_ANSWER_PREFIX}${text}`;
+      continue;
+    }
     if (answer !== AUTO_ANSWER && !q.options.some((o) => o.id === answer)) {
       throw new HttpError(400, 'invalid_answer', `「${q.text}」没有这个选项`);
     }
@@ -568,8 +692,8 @@ export function createIntakeService(deps: Parameters<typeof intakeActions>[0]) {
     answer: (input: Parameters<typeof service.answer>[0]) => locked(input, (s, i) => s.answer(i)),
     confirm: (input: Parameters<typeof service.confirm>[0]) =>
       locked(input, (s, i) => s.confirm(i)),
-    cancel: (conversation: Conversation) =>
-      locked({ conversation }, (s, i) => s.cancel(i.conversation)),
+    cancel: (conversation: Conversation, text?: string) =>
+      locked({ conversation }, (s, i) => s.cancel(i.conversation, text)),
   };
 }
 export type IntakeService = ReturnType<typeof createIntakeService>;

@@ -26,6 +26,10 @@ const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 const TASK = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
 const HOLD = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const PNG = Buffer.from('fake-png').toString('base64');
+/** 文件头是 JPEG 的假图片 */
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46]).toString(
+  'base64',
+);
 
 describe('Android 会话恢复', () => {
   const handle = JSON.stringify({
@@ -112,6 +116,8 @@ billing.post('/internal/holds/:id/release', async (_request, reply) => {
 /** 假的 OpenRouter（生图、配音、查花费、转写、决策）和 Tavily */
 const upstream: { path: string; body: Record<string, unknown> }[] = [];
 let imageStatus = 200;
+/** 接下来几次生图请求被供应商拒绝 */
+let imageRejections = 0;
 let visionStatus = 200;
 let referenceLimit = 4;
 let pageText = '# 正文';
@@ -147,6 +153,12 @@ fake.post('/api/v1/images', async (request, reply) => {
         message: 'requires at least 3,686,400 output pixels; omit resolution to use the default.',
       },
     });
+  if (imageRejections > 0) {
+    imageRejections -= 1;
+    return reply.code(400).send({ error: { message: 'content rejected' } });
+  }
+  if ((request.body as { prompt?: string }).prompt === '说是 PNG 其实是 JPEG')
+    return { data: [{ b64_json: JPEG, media_type: 'image/png' }], usage: { cost: 0.04 } };
   if (imageStatus === 403) {
     return reply
       .code(403)
@@ -595,6 +607,7 @@ beforeEach(() => {
   settled.length = 0;
   blocked = [];
   imageStatus = 200;
+  imageRejections = 0;
   visionStatus = 200;
   referenceLimit = 4;
   pageText = '# 正文';
@@ -1182,6 +1195,25 @@ describe('调用工具', () => {
     expect(upstream.map((u) => u.body.resolution)).toEqual(['1K', undefined]);
     expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'settle']);
   });
+  it('要几张就并行发几个单张请求，合计结算；部分失败时交出成功的那些', async () => {
+    const result = await call('image.generate', { prompt: '三张候选', n: '3' }, TASK);
+    expect(upstream.filter((u) => u.path === 'images').map((u) => u.body.n)).toEqual([1, 1, 1]);
+    expect(result).toMatchObject({ costMicro: 120_000 });
+    expect(result.files.map((f) => f.name)).toEqual(['image-1.png', 'image-2.png', 'image-3.png']);
+
+    upstream.length = 0;
+    imageRejections = 1;
+    const partial = await call('image.generate', { prompt: '三张候选', n: '3' }, TASK);
+    expect(partial.files).toHaveLength(2);
+    expect(partial.costMicro).toBe(80_000);
+    expect(partial.text).toContain('另有 1 张没生成出来');
+  });
+
+  it('供应商说是 PNG、实际是 JPEG：按文件头认成 JPEG', async () => {
+    const result = await call('image.generate', { prompt: '说是 PNG 其实是 JPEG' }, TASK);
+    expect(result.files[0]).toMatchObject({ name: 'image-1.jpg', mediaType: 'image/jpeg' });
+  });
+
   it('生图：冻结 → 调 OpenRouter → 按实际花费结算；交回图片文件；属于任务的发结算事件', async () => {
     const result = await call(
       'image.generate',

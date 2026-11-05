@@ -32,8 +32,11 @@ export const IntakeQuestion = z
   .refine((q) => q.options.some((o) => o.id === q.default), '默认项必须是选项之一');
 export type IntakeQuestion = z.infer<typeof IntakeQuestion>;
 
-/** 回答：选项 id，或 auto（你看着办） */
+/** 回答：选项 id，或 auto（你看着办），或 custom: 开头的用户自己写的答案（2026-11-05） */
 export const AUTO_ANSWER = 'auto';
+export const CUSTOM_ANSWER_PREFIX = 'custom:';
+/** 自己写的答案最多几个字 */
+export const CUSTOM_ANSWER_MAX = 300;
 
 /** 问题卡：第几轮、几道题，以及用户的回答（还没答时为 null） */
 export const QuestionsCard = z.object({

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { main, parseArgs, targetsFor } from '../sandbox/oasis-tool.ts';
+import { main, matchImageExt, parseArgs, targetsFor } from '../sandbox/oasis-tool.ts';
 
 describe('oasis-tool', () => {
   it('解析 --名字 值；列表参数按逗号拆或读 JSON；--out、--file 单独拿出来', () => {
@@ -52,6 +52,16 @@ describe('oasis-tool', () => {
       join('out', 'image-1.png'),
       join('out', 'image-2.png'),
     ]);
+  });
+
+  it('要存成图片但内容是另一种图片格式时按实际格式改后缀；同类或认不出的不动', () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(matchImageExt('out/首帧.png', jpeg)).toBe('out/首帧.jpg');
+    expect(matchImageExt('out/首帧.jpeg', jpeg)).toBe('out/首帧.jpeg');
+    expect(matchImageExt('out/首帧.png', png)).toBe('out/首帧.png');
+    expect(matchImageExt('out/说明.txt', jpeg)).toBe('out/说明.txt');
+    expect(matchImageExt('out/首帧.png', Buffer.from('hello'))).toBe('out/首帧.png');
   });
 });
 
