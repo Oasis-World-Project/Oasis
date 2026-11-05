@@ -19,6 +19,7 @@ import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Conversation, ConversationRepo, Intake, Message } from '../repo/conversation-repo.ts';
 import { attachmentsOf, mergeMaterials, withAttachmentNote } from './attachments.ts';
+import { line, tokensOf, type ContextService, type ConversationContext } from './context.ts';
 import {
   FALLBACK_SHEET_INTRO,
   fallbackSheet,
@@ -30,7 +31,9 @@ import {
   sheetText,
   taskBrief,
   withoutImage,
+  type IntakeFile,
   type IntakeReply,
+  type IntakeState,
 } from './intake.ts';
 
 const Decision = z.object({
@@ -97,17 +100,15 @@ type InspectedFile = MaterialInspectResult['files'][number];
 const IMAGE_QUESTION =
   '客观描述这张图：画面里是什么人或物、外观特征（衣着、颜色、标志和文字）、背景场景，有几个视角或几张拼图也说明。200 字以内，只写看得到的，不要猜图片以外的事。';
 
-/**
- * 上一个任务之后的消息（2026-11-05）：上一个任务的原话、修改意见、卡片和交付消息，以及它们带的文件，
- * 都不是这次的上下文，不然新任务会和旧任务搞混。
- */
-function sinceLastTask(history: Message[]): Message[] {
-  const last = history.findLastIndex((m) => m.kind !== 'text' || m.data.intent === 'task');
-  return history.slice(last + 1);
-}
+/** 交给 Jev 的历史：摘要加上之后的每条消息（别的任务的消息带任务标签） */
+const decisionState = (history: ConversationContext) => [
+  ...(history.summary ? [`较早对话的摘要：${history.summary}`] : []),
+  ...history.messages.map((m) => line(m, history.labels)),
+];
 
 function intakeActions(deps: {
   repo: ConversationRepo;
+  context: ContextService;
   agent: ServiceClient;
   modelGateway: ServiceClient;
   task: ServiceClient;
@@ -121,18 +122,15 @@ function intakeActions(deps: {
   async function taskProbability(input: {
     ownerId: string;
     content: string;
-    history: Message[];
+    history: ConversationContext;
     requestId: string;
     signal?: AbortSignal;
   }): Promise<number> {
-    const recent = input.history
-      .slice(-6)
-      .map((m) => `${m.authorKind === 'user' ? '用户' : 'AI'}：${m.content.slice(0, 500)}`);
     try {
       const { answers } = await deps.modelGateway.json('POST', '/internal/v1/decisions', {
         body: {
           model: config.detectModel,
-          state: [...recent, `用户刚说：${input.content}`],
+          state: [...decisionState(input.history), `用户刚说：${input.content}`],
           questions: {
             is_task: IS_TASK,
           },
@@ -182,20 +180,17 @@ function intakeActions(deps: {
     ownerId: string;
     content: string;
     intake: Intake;
-    history: Message[];
+    history: ConversationContext;
     requestId: string;
     signal?: AbortSignal;
   }): Promise<DuringIntakeVerdict | null> {
-    const recent = input.history
-      .slice(-6)
-      .map((m) => `${m.authorKind === 'user' ? '用户' : 'AI'}：${m.content.slice(0, 500)}`);
     try {
       const { answers } = await deps.modelGateway.json('POST', '/internal/v1/decisions', {
         body: {
           model: config.detectModel,
           state: [
-            `正在整理的任务，用户原话：${input.intake.request.slice(0, 1000)}`,
-            ...recent,
+            `正在整理的任务，用户原话：${input.intake.request}`,
+            ...decisionState(input.history),
             `用户刚说：${input.content}`,
           ],
           questions: { about_open: ABOUT_OPEN, is_task: IS_TASK },
@@ -292,7 +287,7 @@ function intakeActions(deps: {
     requestId: string,
     skipped: boolean,
     resuming = false,
-  ): Promise<IntakeReply> {
+  ): Promise<{ reply: IntakeReply; files: IntakeFile[] }> {
     const route = await deps.agent.json(
       'GET',
       `/internal/models/${encodeURIComponent(conversation.modelKey ?? '')}/route`,
@@ -300,19 +295,39 @@ function intakeActions(deps: {
     );
     const roundsLeft = config.maxRounds - intake.round;
     const mustSheet = skipped || resuming || roundsLeft <= 0;
-    const messages = intakeMessages({
+    const model = (await blockedModels(requestId)).includes(route.providerModel)
+      ? config.fallbackModel
+      : route.providerModel;
+    const base: IntakeState = {
       name: route.name,
       request: intake.request,
-      context: intake.context,
+      summary: null,
+      context: [],
+      files: [],
       turns: intake.turns,
       roundsLeft,
       skipped,
       resuming,
-      materials: intake.materials,
+    };
+    // 整段对话（快到窗口时较早部分换成摘要）；这次任务自己的消息已经在接需求记录里，不重复
+    const history = await deps.context.history({
+      conversation,
+      providerModels: [model],
+      reserveTokens: tokensOf(JSON.stringify(intakeMessages(base))) + config.maxTokens,
+      ownerId,
+      requestId,
     });
-    const model = (await blockedModels(requestId)).includes(route.providerModel)
-      ? config.fallbackModel
-      : route.providerModel;
+    const ownMessages = history.messages.filter(
+      (m) => (m.data as { intakeId?: string }).intakeId === intake.id,
+    );
+    const earlier = history.messages.filter((m) => !ownMessages.includes(m));
+    const files = filesOf(intake, ownMessages, earlier, history);
+    const messages = intakeMessages({
+      ...base,
+      summary: history.summary,
+      context: earlier.map((m) => line(m, history.labels, '你')),
+      files,
+    });
     const completion = await complete(ownerId, model, messages, requestId, mustSheet);
     const read =
       completion.finish_reason && completion.finish_reason !== 'stop'
@@ -328,15 +343,43 @@ function intakeActions(deps: {
       intro: FALLBACK_SHEET_INTRO,
       sheet: fallbackSheet(intake.request, intake.turns),
     };
-    if (reply.type === 'sheet') {
+    if (reply.type === 'sheet')
       reply.sheet = groundRequirements(reply.sheet, intake.request, intake.turns);
-      reply.sheet.materials = intake.materials.map((m) => m.name);
-      reply.sheet.materialWarnings = intake.turns
-        .flatMap((t) => (t.kind === 'materials' ? t.files : []))
-        .filter((f) => f.status !== 'complete')
-        .map((f) => `${f.name}：${f.reason ?? '未取得完整正文，内容未知'}`);
+    return { reply, files };
+  }
+
+  /**
+   * 会话里发过的文件，注明来自哪里（ADR 0016 §8）：这次的需求和接需求时补发的在前，之前的聊天和
+   * 别的任务在后。已经选为素材但消息不在了（如较早部分压进了摘要）的也列上，免得选择被悄悄丢掉。
+   */
+  function filesOf(
+    intake: Intake,
+    own: Message[],
+    earlier: Message[],
+    history: ConversationContext,
+  ): IntakeFile[] {
+    const chosen = new Set(intake.materials.map((m) => m.uploadId));
+    const files = new Map<string, IntakeFile>();
+    const add = (a: { id: string; name: string; size: number }, source: string) => {
+      if (!files.has(a.id))
+        files.set(a.id, {
+          uploadId: a.id,
+          name: a.name,
+          size: a.size,
+          source,
+          chosen: chosen.has(a.id),
+        });
+    };
+    for (const m of own)
+      for (const a of attachmentsOf(m))
+        add(a, m.content === intake.request ? '这次的需求' : '接需求时用户发的');
+    for (const m of intake.materials)
+      add({ id: m.uploadId, name: m.name, size: m.size }, '这次选过的素材');
+    for (const m of [...earlier].reverse()) {
+      const label = history.labels.get(m.id);
+      for (const a of attachmentsOf(m)) add(a, label ? label.text : '之前的聊天');
     }
-    return reply;
+    return [...files.values()];
   }
 
   /** 走一步并把结果变成消息：问题卡、任务单卡，或一句「好的，不做了」 */
@@ -347,6 +390,7 @@ function intakeActions(deps: {
     requestId: string,
     skipped = false,
     resuming = false,
+    reselected = false,
   ): Promise<Message[]> {
     if (deps.harness && intake.materials.length) {
       const cached = intake.turns
@@ -380,7 +424,46 @@ function intakeActions(deps: {
         intake = { ...intake, turns };
       }
     }
-    const reply = await askModel(conversation, intake, ownerId, requestId, skipped, resuming);
+    const { reply, files } = await askModel(
+      conversation,
+      intake,
+      ownerId,
+      requestId,
+      skipped,
+      resuming,
+    );
+    if (reply.type !== 'cancel' && reply.materialIds) {
+      // 素材由 AI 从会话里的文件中挑（ADR 0016 §8）；只认列出来的文件
+      const ids = new Set(reply.materialIds);
+      const materials = files
+        .filter((f) => ids.has(f.uploadId))
+        .map((f) => ({ uploadId: f.uploadId, name: f.name, size: f.size }));
+      const before = intake.materials.map((m) => m.uploadId).join();
+      if (materials.map((m) => m.uploadId).join() !== before) {
+        intake = await repo.updateIntake(intake.id, { materials });
+        // 新选的文件还没读过：直接给任务单时先读，再按读到的内容写一遍（只重来这一次）
+        const read = new Set(
+          intake.turns
+            .flatMap((t) => (t.kind === 'materials' ? t.files : []))
+            .map((f) => f.uploadId),
+        );
+        if (
+          reply.type === 'sheet' &&
+          !reselected &&
+          deps.harness &&
+          materials.some((m) => !read.has(m.uploadId))
+        )
+          return step(conversation, intake, ownerId, requestId, skipped, resuming, true);
+      }
+    }
+    if (reply.type === 'sheet') {
+      const chosen = new Set(intake.materials.map((m) => m.uploadId));
+      reply.sheet.materials = intake.materials.map((m) => m.name);
+      reply.sheet.materialWarnings = intake.turns
+        .flatMap((t) => (t.kind === 'materials' ? t.files : []))
+        .filter((f) => chosen.has(f.uploadId) && f.status !== 'complete')
+        .map((f) => `${f.name}：${f.reason ?? '未取得完整正文，内容未知'}`);
+    }
     const author = conversation.modelKey ?? 'unknown';
     if (reply.type === 'cancel') {
       return cancelIntake(
@@ -481,7 +564,7 @@ function intakeActions(deps: {
     return intake;
   }
 
-  /** 开始接需求：记下需求和开始前的几条聊天，然后走第一步 */
+  /** 开始接需求：记下需求和这条消息带的文件，然后走第一步（之前的对话每步从会话现取） */
   async function start(input: {
     conversation: Conversation;
     ownerId: string;
@@ -489,23 +572,14 @@ function intakeActions(deps: {
     sourceMessageId?: string;
     /** 需求那条消息带的文件 */
     attachments: MessageAttachment[];
-    history: Message[];
     requestId: string;
   }): Promise<Message[]> {
-    const context = sinceLastTask(input.history)
-      .filter((m) => m.kind === 'text')
-      .slice(-8);
     const created = await repo.createIntake({
       id: randomUUID(),
       conversationId: input.conversation.id,
       request: input.request,
-      context: context.map((m) => ({
-        messageId: m.id,
-        role: m.authorKind === 'user' ? ('user' as const) : ('assistant' as const),
-        content: withAttachmentNote(m.content.slice(0, 2000), attachmentsOf(m)),
-      })),
-      // 开始前几条聊天里发过的文件也算素材（常见：先发图，再说「用这些做个海报」）
-      materials: mergeMaterials([], [...context.flatMap(attachmentsOf), ...input.attachments]),
+      // 之前聊天里发过的文件不自动算素材，由 AI 按用户的话挑（常见：先发图，再说「用这些做个海报」）
+      materials: mergeMaterials([], input.attachments),
     });
     if (!created) throw new HttpError(409, 'intake_open', '已经有一件正在整理的任务了');
     if (input.sourceMessageId)
@@ -551,7 +625,6 @@ function intakeActions(deps: {
       }
       if ((await repo.taskSourceIds(input.conversation.id)).includes(message.id))
         throw new HttpError(409, 'task_message_locked', '这条消息已作为任务提交');
-      const history = await repo.recentComplete(input.conversation.id, 10, message.id);
       await repo.mergeMessageData(message.id, { intent: 'task', stopRequested: false });
       return start({
         conversation: input.conversation,
@@ -559,7 +632,6 @@ function intakeActions(deps: {
         request: message.content,
         sourceMessageId: message.id,
         attachments: attachmentsOf(message),
-        history: history.filter((m) => m.createdAt < message.createdAt),
         requestId: input.requestId,
       });
     },

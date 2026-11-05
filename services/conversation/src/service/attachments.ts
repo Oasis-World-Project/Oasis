@@ -9,7 +9,7 @@ export function attachmentsOf(message: Pick<Message, 'kind' | 'data'>): MessageA
   return Array.isArray(list) ? list : [];
 }
 
-const sizeText = (bytes: number) =>
+export const sizeText = (bytes: number) =>
   bytes >= 1024 * 1024
     ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
     : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -29,7 +29,3 @@ export function mergeMaterials(existing: Material[], more: MessageAttachment[]):
     .map((a) => ({ uploadId: a.id, name: a.name, size: a.size }));
   return [...existing, ...added];
 }
-
-/** 素材清单（给接需求的 AI 看） */
-export const materialsText = (materials: Material[]) =>
-  materials.map((m) => `- ${m.name}（${sizeText(m.size)}）`).join('\n');

@@ -378,6 +378,7 @@ export function createWorkflowService(deps: {
       runs.length > 0
         ? await gate.check({
             signal,
+            ...(task.sheet?.budget ? { tier: task.sheet.budget.tier } : {}),
             payerId: task.payerId,
             taskId,
             nodeId: null,
@@ -606,6 +607,7 @@ export function createWorkflowService(deps: {
       stage: 'node',
       nodeGoal: node.goal,
       signal,
+      ...(snapshot.task.sheet?.budget ? { tier: snapshot.task.sheet.budget.tier } : {}),
       payerId: snapshot.task.payerId,
       taskId,
       nodeId,

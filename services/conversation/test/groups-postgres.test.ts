@@ -300,7 +300,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       id: randomUUID(),
       conversationId: dm,
       request: 'test atomic save',
-      context: [],
       materials: [],
     });
     const initial = await repo.commitIntakeReply(
@@ -371,20 +370,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       id: randomUUID(),
       conversationId: conversation.id,
       request: '任务原话',
-      context: [user, reply].map((m) => ({
-        role: m.authorKind === 'user' ? 'user' : 'assistant',
-        content: m.content,
-        messageId: m.id,
-      })),
       materials: [],
     });
+    await store.setContextSummary(conversation.id, { throughSeq: reply.seq, text: '旧摘要' });
     await store.mutateChat(conversation.id, [user, reply], {
       id: user.id,
       content: '新聊天正文',
       replyId: reply.id,
     });
     expect((await store.findMessage(conversation.id, reply.id))?.content).toBe('');
-    expect((await store.findOpenIntake(conversation.id))?.context).toEqual([]);
+    // 改掉的消息已压进摘要：摘要作废
+    expect((await store.findOwned(conversation.id, owner))?.contextSummary).toBeNull();
     await store.updateIntake(draft!.id, { status: 'confirmed' });
     const source = await store.insertMessage({
       conversationId: conversation.id,

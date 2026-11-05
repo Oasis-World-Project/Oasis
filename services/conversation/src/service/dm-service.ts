@@ -12,7 +12,8 @@ import type {
 import type { ChatMessage } from '@oasis/contracts/model-gateway';
 import { createSseParser, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import type { Conversation, ConversationRepo, Message } from '../repo/conversation-repo.ts';
-import { attachmentsOf, withAttachmentNote } from './attachments.ts';
+import { attachmentsOf } from './attachments.ts';
+import { rendered, tokensOf, type ContextService } from './context.ts';
 import type { IntakeService } from './intake-service.ts';
 
 /** 给用户看的错误说明（上游的技术细节只进日志）。 */
@@ -60,10 +61,11 @@ export function createDmService(deps: {
   /** 核对用户随消息发的文件 */
   canvas: ServiceClient;
   intake: IntakeService;
-  historyLimit: number;
+  /** 交给模型的历史：整段对话，快到窗口时压缩较早部分（ADR 0016 §8） */
+  context: ContextService;
   replyMaxTokens: number;
-  /** 认出任务的两个阈值（ADR 0005 §2） */
-  detect: { high: number; low: number };
+  /** 认出任务的决策模型和两个阈值（ADR 0005 §2） */
+  detect: { model: string; high: number; low: number };
   logger: Logger;
 }) {
   const { repo } = deps;
@@ -258,17 +260,24 @@ export function createDmService(deps: {
       input.signal.throwIfAborted();
       const route = await routeFor(conversation.modelKey ?? '', input.requestId);
       input.signal.throwIfAborted();
-      const history = await store.recentComplete(
-        conversation.id,
-        deps.historyLimit,
-        placeholder.id,
-        input.user.seq,
-      );
+      const history = await deps.context.history({
+        conversation,
+        excludeId: placeholder.id,
+        beforeSeq: input.user.seq,
+        providerModels: [route.providerModel],
+        reserveTokens: tokensOf(route.systemPrompt) + deps.replyMaxTokens,
+        ownerId: input.ownerId,
+        requestId: input.requestId,
+      });
+      input.signal.throwIfAborted();
       const messages: ChatMessage[] = [
         { role: 'system', content: route.systemPrompt },
-        ...history.map((m): ChatMessage => ({
+        ...(history.summary
+          ? [{ role: 'system' as const, content: `【较早对话的摘要】\n${history.summary}` }]
+          : []),
+        ...history.messages.map((m): ChatMessage => ({
           role: m.authorKind === 'user' ? 'user' : 'assistant',
-          content: withAttachmentNote(m.content, attachmentsOf(m)),
+          content: rendered(m, history.labels),
         })),
       ];
       if (input.prefix) {
@@ -343,13 +352,20 @@ export function createDmService(deps: {
     await controlled(store, userMessage, async (signal) => {
       input.emit({ type: 'accepted', userMessage: toMessageBody(userMessage) });
 
-      const history = await store.recentComplete(
-        conversation.id,
-        deps.historyLimit,
-        userMessage.id,
-      );
       let suggestTask: boolean;
       try {
+        // Jev 和问需求的 AI 判断时看整段对话（别的任务的消息带标签），按两者中较小的窗口压缩
+        const route = await routeFor(conversation.modelKey ?? '', input.requestId);
+        const history = await deps.context.history({
+          conversation,
+          excludeId: userMessage.id,
+          beforeSeq: userMessage.seq,
+          providerModels: [route.providerModel, deps.detect.model],
+          reserveTokens: tokensOf(route.systemPrompt) + deps.replyMaxTokens,
+          ownerId: input.ownerId,
+          requestId: input.requestId,
+        });
+        signal.throwIfAborted();
         const open = await deps.intake.findOpen(conversation.id);
         // 有任务还在整理时，先判断这句话是不是在说它；不是就照常聊天或开始新任务（2026-11-05）
         const verdict = open
@@ -419,7 +435,6 @@ export function createDmService(deps: {
               request: input.content,
               sourceMessageId: userMessage.id,
               attachments: input.attachments,
-              history,
               requestId: input.requestId,
             })),
           ]);

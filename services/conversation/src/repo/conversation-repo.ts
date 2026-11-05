@@ -62,13 +62,17 @@ export interface ConversationRepo {
     update: { content: string; status: 'complete' | 'failed'; error?: string },
   ): Promise<Message>;
   touchConversation(id: string): Promise<void>;
-  /** 最近的已完成消息（不含 excludeId），按时间正序 */
-  recentComplete(
+  /**
+   * 已完成的消息（不含 excludeId），按时间正序：seq 不超过 beforeSeq，不限条数
+   * （ADR 0016 §8：上下文默认带整段对话，快到窗口时由摘要代替较早部分）。
+   */
+  completeMessages(
     conversationId: string,
-    limit: number,
-    excludeId: string,
+    excludeId?: string,
     beforeSeq?: number,
   ): Promise<Message[]>;
+  /** 存较早部分的摘要 */
+  setContextSummary(id: string, summary: { throughSeq: number; text: string }): Promise<void>;
   listMessages(conversationId: string, limit: number): Promise<Message[]>;
   findMessage(conversationId: string, id: string): Promise<Message | undefined>;
   setMessageData(id: string, data: Record<string, unknown>): Promise<Message>;
@@ -76,7 +80,7 @@ export interface ConversationRepo {
   removeTaskMessages(conversationId: string, taskId: string): Promise<number>;
   /** 开始接需求；这个会话已经有进行中的就返回 undefined */
   createIntake(
-    intake: Pick<Intake, 'id' | 'conversationId' | 'request' | 'context' | 'materials'>,
+    intake: Pick<Intake, 'id' | 'conversationId' | 'request' | 'materials'>,
   ): Promise<Intake | undefined>;
   /** 这个会话进行中的接需求（在问或等确认） */
   findOpenIntake(conversationId: string): Promise<Intake | undefined>;
@@ -199,28 +203,18 @@ export function createConversationRepo(
               data: { replyTo: edit.id, stopped: false },
             })
             .where(eq(messages.id, edit.replyId));
-        const drafts = await tx
-          .select()
-          .from(intakes)
-          .where(
-            and(
-              eq(intakes.conversationId, conversationId),
-              inArray(intakes.status, ['asking', 'sheet']),
-            ),
-          );
-        for (const draft of drafts) {
-          const context = draft.context.filter(
-            (c) =>
-              !obsolete.some((m) =>
-                c.messageId
-                  ? c.messageId === m.id
-                  : m.content.length > 0 &&
-                    c.role === (m.authorKind === 'user' ? 'user' : 'assistant') &&
-                    c.content.startsWith(m.content.slice(0, 2000)),
+        // 改掉或删掉的消息可能已经压进摘要：作废，下次需要时重新压缩（问需求的上下文每步现取，不用另改）
+        const firstSeq = Math.min(...obsolete.map((m) => m.seq));
+        if (obsolete.length)
+          await tx
+            .update(conversations)
+            .set({ contextSummary: null })
+            .where(
+              and(
+                eq(conversations.id, conversationId),
+                sql`(${conversations.contextSummary}->>'throughSeq')::bigint >= ${firstSeq}`,
               ),
-          );
-          await tx.update(intakes).set({ context }).where(eq(intakes.id, draft.id));
-        }
+            );
       });
     },
     saveIntakeAnswers: (id, cardId, turns, answers) =>
@@ -338,21 +332,26 @@ export function createConversationRepo(
         .where(eq(conversations.id, id));
     },
 
-    async recentComplete(conversationId, limit, excludeId, beforeSeq) {
-      const rows = await db
+    async completeMessages(conversationId, excludeId, beforeSeq) {
+      return db
         .select()
         .from(messages)
         .where(
           and(
             eq(messages.conversationId, conversationId),
             eq(messages.status, 'complete'),
-            ne(messages.id, excludeId),
+            excludeId === undefined ? undefined : ne(messages.id, excludeId),
             beforeSeq === undefined ? undefined : sql`${messages.seq} <= ${beforeSeq}`,
           ),
         )
-        .orderBy(desc(messages.seq))
-        .limit(limit);
-      return rows.reverse();
+        .orderBy(messages.seq);
+    },
+
+    async setContextSummary(id, summary) {
+      await db
+        .update(conversations)
+        .set({ contextSummary: summary })
+        .where(eq(conversations.id, id));
     },
 
     async findMessage(conversationId, id) {
@@ -379,6 +378,12 @@ export function createConversationRepo(
           ),
         )
         .returning({ id: messages.id });
+      // 真删除：摘要里可能还写着这个任务，作废，下次需要时重新压缩
+      if (rows.length)
+        await db
+          .update(conversations)
+          .set({ contextSummary: null })
+          .where(eq(conversations.id, conversationId));
       return rows.length;
     },
 

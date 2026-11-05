@@ -43,7 +43,7 @@
   - 客户端断开时取消上游请求；已生成的部分仍按实际花费结算。
 - conversation 的 `POST /v1/conversations/:id/messages` 返回 SSE。事件顺序是 `accepted` → 多个 `delta` → `done`；出错时最后一个事件是 `error`。
   - 浏览器断开后服务端继续生成并保存回复。失败的回复会存下原因和已生成的部分。
-  - 带最近 `HISTORY_LIMIT` 条消息作为上下文。
+  - 带最近 `HISTORY_LIMIT` 条消息作为上下文。（2026-11-05 起由 ADR 0016 §8 取代：带整段对话，快到窗口时压缩较早部分。）
 
 ### 事件可靠性
 

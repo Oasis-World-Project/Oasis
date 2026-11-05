@@ -14,9 +14,11 @@ import {
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
-import type { ExpectedFile, TaskCheck, CheckResult } from '@oasis/contracts/task';
+import type { ExpectedFile, TaskCheck, CheckResult, TaskSheet } from '@oasis/contracts/task';
 import type { Material } from '@oasis/contracts/canvas';
+import { ToolList } from '@oasis/contracts/model-gateway';
 import { patternRegExp } from './output-files.ts';
+import { tierToolRate } from './quote.ts';
 import { BrowserTestResult } from '@oasis/contracts/ui-test';
 import { createHash } from 'node:crypto';
 
@@ -133,6 +135,8 @@ interface GateRun {
 
 interface GateInput {
   stage?: 'node' | 'final';
+  /** 用户选的预算档（ADR 0016 §5）：看图按档选型号；旧任务没有 */
+  tier?: NonNullable<TaskSheet['budget']>['tier'];
   nodeGoal?: string;
   signal?: AbortSignal;
   payerId: string;
@@ -210,6 +214,32 @@ export function createGate(deps: {
       body,
       schema,
     });
+  }
+
+  const visionModels = new WeakMap<GateInput, Promise<{ model?: string }>>();
+  /**
+   * 看图用哪个型号（ADR 0016 §5）：精细档和旧任务用目录默认（最强），其余按单价挑；
+   * 一次检查只查一次目录，查不到就用默认。
+   */
+  function visionModel(input: GateInput): Promise<{ model?: string }> {
+    const tier = input.tier;
+    if (!tier || tier === 'premium') return Promise.resolve({});
+    let found = visionModels.get(input);
+    if (!found) {
+      found = modelGateway
+        .json('GET', '/internal/v1/tools', { schema: ToolList })
+        .then(({ tools }) => {
+          const tool = tools.find((t) => t.key === 'image.inspect');
+          const model = tool && tierToolRate(tool, tier === 'custom' ? 'standard' : tier).model;
+          return model ? { model } : {};
+        })
+        .catch((err: unknown) => {
+          logger.warn({ err, taskId: input.taskId }, '查不到看图型号，用默认');
+          return {};
+        });
+      visionModels.set(input, found);
+    }
+    return found;
   }
 
   function stageScope(input: GateInput) {
@@ -437,6 +467,7 @@ export function createGate(deps: {
           '/internal/v1/tools/image.inspect',
           {
             args: {
+              ...(await visionModel(input)),
               images: batch.map((shot) => ({ mediaType: 'image/jpeg', base64: shot.base64 })),
               question: visionQuestion(
                 input,
@@ -540,6 +571,7 @@ export function createGate(deps: {
               '/internal/v1/tools/image.inspect',
               {
                 args: {
+                  ...(await visionModel(input)),
                   images: batch.map((p) => p.image),
                   question: visionQuestion(
                     input,
@@ -734,6 +766,7 @@ export function createGate(deps: {
           '/internal/v1/tools/image.inspect',
           {
             args: {
+              ...(await visionModel(input)),
               images,
               question: visionQuestion(
                 input,

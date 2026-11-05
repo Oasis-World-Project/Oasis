@@ -10,6 +10,7 @@ import type {
   Message,
 } from '../src/repo/conversation-repo.ts';
 import { createDmService, toMessageBody } from '../src/service/dm-service.ts';
+import { createContext, type ContextService } from '../src/service/context.ts';
 import { createIntakeService } from '../src/service/intake-service.ts';
 import {
   FALLBACK_SHEET_INTRO,
@@ -48,11 +49,12 @@ describe('任务单来源与默认答案', () => {
     const messages = intakeMessages({
       name: 'AI',
       request: '按报价计算',
+      summary: null,
       context: [],
+      files: [],
       turns,
       roundsLeft: 1,
       skipped: false,
-      materials: [],
     });
     expect(messages[1]?.content).toContain('采用当轮默认项：中文为主，保留专名（选项 b）');
     const sheet = TaskSheet.parse({
@@ -188,6 +190,7 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
     title: 'Claude',
     createdAt: new Date(),
     lastMessageAt: null,
+    contextSummary: null,
   };
   let seq = 0;
   let messageLocked = false;
@@ -242,11 +245,7 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
             data: { replyTo: edit.id, stopped: false },
           },
         );
-      for (const draft of intakes.filter((i) => i.status === 'asking' || i.status === 'sheet'))
-        draft.context = draft.context.filter(
-          (c) =>
-            !obsolete.some((m) => (c.messageId ? c.messageId === m.id : c.content === m.content)),
-        );
+      if (obsolete.length) conversation.contextSummary = null;
     },
     saveIntakeAnswers: async (id, cardId, turns, answers) => {
       const card = rows.find((m) => m.id === cardId)!;
@@ -299,15 +298,16 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
       return row;
     },
     touchConversation: async () => {},
-    recentComplete: async (_c, limit, excludeId, beforeSeq) =>
-      rows
-        .filter(
-          (r) =>
-            r.status === 'complete' &&
-            r.id !== excludeId &&
-            (beforeSeq === undefined || r.seq <= beforeSeq),
-        )
-        .slice(-limit),
+    completeMessages: async (_c, excludeId, beforeSeq) =>
+      rows.filter(
+        (r) =>
+          r.status === 'complete' &&
+          r.id !== excludeId &&
+          (beforeSeq === undefined || r.seq <= beforeSeq),
+      ),
+    setContextSummary: async (_id, next) => {
+      conversation.contextSummary = next;
+    },
     listMessages: async () => rows,
     findMessage: async (_c, id) => rows.find((r) => r.id === id),
     setMessageData: async (id, data) =>
@@ -330,6 +330,7 @@ function memoryRepo(): ConversationRepo & { rows: Message[]; intakes: Intake[] }
         return undefined;
       const row: Intake = {
         ...intake,
+        context: [],
         status: 'asking',
         round: 0,
         turns: [],
@@ -520,6 +521,7 @@ canvas.post('/internal/uploads/lookup', async (request, reply) => {
 let repo: ReturnType<typeof memoryRepo>;
 let service: ReturnType<typeof createDmService>;
 let intake: ReturnType<typeof createIntakeService>;
+let context: ContextService;
 const urls = { agent: '', gateway: '', task: '', canvas: '' };
 beforeAll(async () => {
   urls.agent = await agent.listen({ port: 0, host: '127.0.0.1' });
@@ -557,8 +559,15 @@ beforeEach(() => {
     agent: createServiceClient('agent', urls.agent),
     modelGateway: createServiceClient('model-gateway', urls.gateway),
   };
+  context = createContext({
+    repo,
+    modelGateway: clients.modelGateway,
+    summaryModel: 'deepseek/summary',
+    logger,
+  });
   intake = createIntakeService({
     repo,
+    context,
     ...clients,
     task: createServiceClient('task', urls.task),
     config: {
@@ -576,9 +585,9 @@ beforeEach(() => {
     ...clients,
     canvas: createServiceClient('canvas', urls.canvas),
     intake,
-    historyLimit: 20,
+    context,
     replyMaxTokens: 256,
-    detect: { high: 0.7, low: 0.4 },
+    detect: { model: 'typesafe/jev-1.14', high: 0.7, low: 0.4 },
     logger,
   });
 });
@@ -852,7 +861,6 @@ describe('普通聊天的替换、删除和停止', () => {
       id: TASK_ID,
       conversationId: CONV,
       request: legacy.content,
-      context: [],
       materials: [],
     });
     expect((await service.listMessages(OWNER, CONV))[0]).toMatchObject({
@@ -1053,6 +1061,7 @@ describe('接需求', () => {
     } as unknown as ReturnType<typeof createServiceClient>;
     const prepared = createIntakeService({
       repo,
+      context,
       agent: createServiceClient('agent', urls.agent),
       modelGateway: createServiceClient('model-gateway', urls.gateway),
       task: createServiceClient('task', urls.task),
@@ -1074,7 +1083,6 @@ describe('接需求', () => {
       ownerId: OWNER,
       request,
       attachments: [PHOTO],
-      history: [],
       requestId: 'r',
     });
     expect(messages.at(-1)?.kind).toBe('sheet');
@@ -1113,6 +1121,7 @@ describe('接需求', () => {
     } as unknown as ReturnType<typeof createServiceClient>;
     const prepared = createIntakeService({
       repo,
+      context,
       agent: createServiceClient('agent', urls.agent),
       modelGateway: createServiceClient('model-gateway', urls.gateway),
       task: createServiceClient('task', urls.task),
@@ -1133,7 +1142,6 @@ describe('接需求', () => {
       ownerId: OWNER,
       request: '做一段送外卖的视频，主角参考我给的图',
       attachments: [PHOTO],
-      history: [],
       requestId: 'r',
     });
     const prompt = intakeRequests.at(-1)!.messages[1]!.content;
@@ -1229,15 +1237,32 @@ describe('接需求', () => {
     expect((err as HttpError).statusCode).toBe(400);
   });
 
-  it('只把上一个任务之后的聊天当上下文：旧任务的原话、交付消息和它们带的文件都不算', async () => {
+  it('之前的对话整段带上并按任务分段：旧任务的消息标成只作背景，它的文件列出来但不自动算素材', async () => {
     const old = { id: PHOTO.id, name: '批注-site-截图1.png', size: 300, contentType: 'image/png' };
+    const oldIntake = '0d0d0d0d-0000-4000-8000-000000000001';
     await repo.insertMessage({
       conversationId: CONV,
       authorKind: 'user',
       authorId: OWNER,
       content: '修改马车：去掉墓碑',
       status: 'complete',
-      data: { intent: 'task', attachments: [old] },
+      data: { intent: 'task', intakeId: oldIntake, attachments: [old] },
+    });
+    await repo.insertMessage({
+      conversationId: CONV,
+      authorKind: 'ai',
+      authorId: 'claude',
+      content: '任务：3D 马车',
+      status: 'complete',
+      kind: 'sheet',
+      data: {
+        intakeId: oldIntake,
+        intro: '',
+        sheet: { title: '3D 马车' },
+        quote: null,
+        status: 'confirmed',
+        taskId: TASK_ID,
+      },
     });
     await repo.insertMessage({
       conversationId: CONV,
@@ -1246,6 +1271,7 @@ describe('接需求', () => {
       content: '马车已交付',
       status: 'complete',
       kind: 'delivery',
+      data: { taskId: TASK_ID },
     });
     await repo.insertMessage({
       conversationId: CONV,
@@ -1258,9 +1284,15 @@ describe('接需求', () => {
     taskProbability = 0.9;
     intakeReplies = [questions()];
     await send('帮我做一段送外卖的视频');
-    const open = await repo.findOpenIntake(CONV);
-    expect(open!.context.map((c) => c.content)).toEqual(['3 秒的视频够发朋友圈吗']);
-    expect(open!.materials).toEqual([]);
+    const prompt = intakeRequests[0]!.messages[1]!.content as string;
+    expect(prompt).toContain('用户：【任务「3D 马车」·已交付，只作背景】修改马车：去掉墓碑');
+    expect(prompt).toContain('用户：3 秒的视频够发朋友圈吗');
+    expect(prompt).toContain(
+      `[${PHOTO.id}] 批注-site-截图1.png（1 KB）· 来自任务「3D 马车」·已交付`,
+    );
+    // 这次的原话不重复出现在之前的对话里
+    expect(prompt.split('帮我做一段送外卖的视频')).toHaveLength(2);
+    expect((await repo.findOpenIntake(CONV))!.materials).toEqual([]);
   });
 
   it('选项不存在：400', async () => {
@@ -1691,19 +1723,24 @@ describe('随消息发文件（ADR 0007 §4）', () => {
     expect(repo.rows).toHaveLength(0);
   });
 
-  it('开始前发的文件和接需求时补的文件都算素材；确认时交给 task，任务单的素材以实际文件为准', async () => {
+  it('素材由 AI 从会话里的文件中挑：开始前发的照片要它选上才算，补发的文件默认用上；确认时交给 task', async () => {
     taskProbability = 0.1;
     await send('先发你一张照片', false, [PHOTO.id]);
     taskProbability = 0.9;
-    intakeReplies = [questions()];
+    intakeReplies = [JSON.stringify({ ...JSON.parse(questions()), materialIds: [PHOTO.id] })];
     await send('用它做个官网首页');
-    expect(intakeRequests[0]!.messages[1]!.content).toContain('【用户给的素材】');
+    expect(intakeRequests[0]!.messages[1]!.content).toContain(
+      `[${PHOTO.id}] 民宿照片.jpg（2.3 MB）· 来自之前的聊天`,
+    );
     expect(repo.intakes[0]!.materials).toEqual([
       { uploadId: PHOTO.id, name: PHOTO.name, size: PHOTO.size },
     ]);
 
     intakeReplies = [sheet()];
     await send('还有这个 logo，也用上', false, [LOGO.id, PHOTO.id]);
+    expect(intakeRequests[1]!.messages[1]!.content).toContain(
+      '民宿照片.jpg（2.3 MB）· 来自接需求时用户发的 · 已选为素材',
+    );
     await intake.confirm({
       conversation: (await repo.findOwned(CONV, OWNER))!,
       ownerId: OWNER,
@@ -1716,5 +1753,18 @@ describe('随消息发文件（ADR 0007 §4）', () => {
       ],
       sheet: { materials: ['民宿照片.jpg', 'logo.png'] },
     });
+  });
+
+  it('用户说不用哪个文件，AI 去掉后任务单的素材跟着变；没列出来的 id 不认', async () => {
+    taskProbability = 0.9;
+    intakeReplies = [questions()];
+    await send('做个官网首页', false, [PHOTO.id, LOGO.id]);
+    expect(repo.intakes[0]!.materials.map((m) => m.uploadId)).toEqual([PHOTO.id, LOGO.id]);
+    intakeReplies = [
+      JSON.stringify({ ...JSON.parse(sheet()), materialIds: [LOGO.id, 'not-listed'] }),
+    ];
+    await send('照片别用了');
+    expect(repo.intakes[0]!.materials.map((m) => m.uploadId)).toEqual([LOGO.id]);
+    expect(repo.intakes[0]!.sheet?.materials).toEqual(['logo.png']);
   });
 });

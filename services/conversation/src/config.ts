@@ -11,8 +11,8 @@ export const conversationEnv = {
   MODEL_GATEWAY_URL: z.url(),
   /** 非流式模型生成需要覆盖正常推理时长，不沿用普通服务查询的短超时。 */
   MODEL_GATEWAY_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(180_000),
-  /** 每次回复带上最近多少条消息作为上下文 */
-  HISTORY_LIMIT: z.coerce.number().int().min(1).max(200).default(20),
+  /** 私聊快到模型上下文窗口时，压缩较早对话用的便宜模型（ADR 0016 §8） */
+  CONTEXT_SUMMARY_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
   /** 一次回复最多多少 token */
   REPLY_MAX_TOKENS: z.coerce.number().int().min(64).max(32_000).default(8192),
   /** 用户确认任务单后交给 task 建任务 */

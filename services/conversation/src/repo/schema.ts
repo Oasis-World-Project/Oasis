@@ -25,6 +25,8 @@ export const conversations = pgTable('conversations', {
   createdAt: at('created_at').notNull().defaultNow(),
   lastMessageAt: at('last_message_at'),
   nextMessageSeq: bigint('next_message_seq', { mode: 'number' }).notNull().default(0),
+  /** 较早部分的摘要（ADR 0016 §8）：seq ≤ throughSeq 的消息由它代替；没压缩过为 null */
+  contextSummary: jsonb('context_summary').$type<{ throughSeq: number; text: string }>(),
 });
 
 export const messages = pgTable('messages', {
@@ -84,6 +86,7 @@ export const intakes = pgTable('intakes', {
   status: text('status', { enum: ['asking', 'sheet', 'confirmed', 'cancelled'] }).notNull(),
   round: integer('round').notNull().default(0),
   request: text('request').notNull(),
+  /** 已停用（ADR 0016 §8：问需求的上下文每步从会话现取），不再写入；contract 计划删除该列 */
   context: jsonb('context')
     .$type<{ role: 'user' | 'assistant'; content: string; messageId?: string }[]>()
     .notNull()

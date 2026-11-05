@@ -15,6 +15,7 @@ import { createGroupService } from './service/group-service.ts';
 import { conversationEnv } from './config.ts';
 import { createConversationRepo } from './repo/conversation-repo.ts';
 import { createDmService } from './service/dm-service.ts';
+import { createContext } from './service/context.ts';
 import { createIntakeService } from './service/intake-service.ts';
 import { createRevisionService } from './service/revision-service.ts';
 import { createTaskNotices } from './service/task-notices.ts';
@@ -57,8 +58,15 @@ await startService({
     const modelGateway = createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
       timeoutMs: config.MODEL_GATEWAY_TIMEOUT_MS,
     });
+    const context = createContext({
+      repo,
+      modelGateway,
+      summaryModel: config.CONTEXT_SUMMARY_MODEL,
+      logger,
+    });
     const intake = createIntakeService({
       repo,
+      context,
       agent,
       modelGateway,
       task: createServiceClient('task', config.TASK_URL, { timeoutMs: 10_000 }),
@@ -85,9 +93,13 @@ await startService({
       modelGateway,
       canvas,
       intake,
-      historyLimit: config.HISTORY_LIMIT,
+      context,
       replyMaxTokens: config.REPLY_MAX_TOKENS,
-      detect: { high: config.TASK_DETECT_HIGH, low: config.TASK_DETECT_LOW },
+      detect: {
+        model: config.TASK_DETECT_MODEL,
+        high: config.TASK_DETECT_HIGH,
+        low: config.TASK_DETECT_LOW,
+      },
       logger,
     });
     registerRoutes(app, dms, intake, revisions);

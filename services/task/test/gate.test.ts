@@ -891,6 +891,27 @@ describe('关卡的验收点检查', () => {
     );
     let offline = true;
     const gateway = fakeClient((path, body) => {
+      if (path === '/internal/v1/tools')
+        return {
+          tools: [
+            {
+              key: 'image.inspect',
+              name: '查看图片',
+              description: 'd',
+              usage: 'u',
+              unit: '次',
+              estimateMicro: 2_000,
+              long: false,
+              available: true,
+              models: ['v/best', 'v/cheap'],
+              defaultModel: 'v/best',
+              rates: [
+                { model: 'v/best', costMicro: 80_000, seconds: 70, basis: 'history' },
+                { model: 'v/cheap', costMicro: 3_000, seconds: 8, basis: 'history' },
+              ],
+            },
+          ],
+        };
       if (path.includes('image.inspect')) {
         if (offline) throw new HttpError(503, 'provider_unavailable', '模型服务暂时连不上');
         return seen(body, '右上角一块墓碑被红圈圈出，标着 1');
@@ -925,6 +946,11 @@ describe('关卡的验收点检查', () => {
     expect(state).toContain('右上角一块墓碑被红圈圈出');
     // 原图不进文字证据
     expect(state).not.toContain('iVBORw==');
+    // 旧任务（没选预算档）用目录默认的看图型号；省钱档按单价挑最便宜的（ADR 0016 §5）
+    expect((inspect.body as { args: { model?: string } }).args.model).toBeUndefined();
+    await gate.check({ ...withMaterial, tier: 'economy' });
+    const cheap = gateway.calls.findLast((c) => c.path.includes('image.inspect'))!;
+    expect((cheap.body as { args: { model?: string } }).args.model).toBe('v/cheap');
   });
   it('确定损坏与解析资源不足区分：损坏退回，超限留未检查且不误报数量不足', async () => {
     const run = {
