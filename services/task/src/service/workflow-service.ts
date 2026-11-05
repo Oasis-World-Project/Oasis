@@ -46,7 +46,7 @@ import {
   deliveryIntegrityChecks,
 } from './output-files.ts';
 import { nodeRow, planToRows, validatePlan } from './plan.ts';
-import { createPlanning, dollars, type PlanningConfig } from './planning-service.ts';
+import { createPlanning, type PlanningConfig } from './planning-service.ts';
 import { decide, incoming } from './schedule.ts';
 import { revisionCheck, revisionPrompt } from './prompt.ts';
 import { afterRound, firstStep, resumeStep, retryStep, reworkStep, type Step } from './steps.ts';
@@ -405,49 +405,27 @@ export function createWorkflowService(deps: {
             deliveryPaths: runs.flatMap((r) => r.outputs.map((f) => f.path)),
             ownerId: task.ownerId,
             materials: task.materials,
-            execution: { spentMicro: task.spentMicro, budgetMicro: task.budgetLimitMicro },
+            execution: { spentMicro: task.spentMicro },
           })
         : { unmet: [], unchecked: undefined };
     await transact(taskId, async (fresh, w, fx) => {
       if (fresh.task.status !== 'accepting') return;
-      const currentBudget = fresh.task.budgetLimitMicro;
-      const overBudget = currentBudget !== null && fresh.task.spentMicro > currentBudget;
-      const budgetCheck =
-        currentBudget === null
-          ? []
-          : [
-              {
-                id: 'system-budget',
-                text: '任务调用费用不超过用户上限',
-                status: overBudget ? ('unmet' as const) : ('passed' as const),
-                reason: `系统计量 ${fresh.task.spentMicro} 微美元；当前上限 ${currentBudget} 微美元`,
-                evidence: ['task.spentMicro', 'task.budgetLimitMicro'],
-              },
-            ];
+      // 预算只是参考（ADR 0016 §2）：验收不查花费、不因花费暂停
       const problems = [...missing, ...unmet];
       const repairs = fresh.task.acceptance?.repairs ?? 0;
       await w.setTask({
         acceptance: {
-          unmet: [...missing, ...unmet, ...(overBudget ? ['任务调用费用超过用户上限'] : [])],
+          unmet: [...missing, ...unmet],
           ...(unchecked?.length ? { unchecked } : {}),
           ...(notes?.length ? { notes } : {}),
-          ...(checks || budgetCheck.length ? { checks: [...(checks ?? []), ...budgetCheck] } : {}),
+          ...(checks ? { checks } : {}),
           ...(repairs ? { repairs } : {}),
           ...(revision !== undefined ? { revision } : {}),
         },
         deliverables,
         finishedAt: null,
       });
-      if (overBudget) {
-        await w.setTask({
-          status: 'needs_attention',
-          attention: {
-            reason: 'over_budget',
-            nodeId: null,
-            message: '验收时系统计量已超过用户设置的调用预算',
-          },
-        });
-      } else if (
+      if (
         problems.length &&
         repairs < MAX_REWORKS &&
         fresh.nodes.some((n) => deliverables.some((d) => d.nodeId === n.id) && n.currentRunId)
@@ -500,11 +478,6 @@ export function createWorkflowService(deps: {
     const problems = graphProblems(snapshot);
     if (problems.length > 0) {
       throw new HttpError(409, 'workflow_invalid', `工作流有错误：${problems.join('；')}`);
-    }
-    const { task } = snapshot;
-    // 用户明确选择超出预算后继续：解除本次任务预算，不从估价制造新上限。
-    if (task.budgetLimitMicro !== null && task.spentMicro >= task.budgetLimitMicro) {
-      await w.setTask({ budgetLimitMicro: null });
     }
     await w.setTask({ status: 'running', attention: null, finishedAt: null });
     for (const node of snapshot.nodes) {
@@ -654,10 +627,7 @@ export function createWorkflowService(deps: {
       ...(delivery ? { deliveryPaths: delivery.map((f) => f.path) } : {}),
       ownerId: snapshot.task.ownerId,
       materials: snapshot.task.materials,
-      execution: {
-        spentMicro: snapshot.task.spentMicro,
-        budgetMicro: snapshot.task.budgetLimitMicro,
-      },
+      execution: { spentMicro: snapshot.task.spentMicro },
       references: incoming(node, snapshot.edges).flatMap((edge) => {
         const upstream = snapshot.nodes.find((n) => n.id === edge.fromNodeId);
         if (!upstream?.config.outputsRunId) return [];
@@ -974,7 +944,7 @@ export function createWorkflowService(deps: {
       // 成果预览在任务完成后单独付费；账单保留 taskId 关联，但不回写生成任务的花费。
       if (data.model === 'preview') return;
       if (!(await store.get(data.taskId))) return;
-      await transact(data.taskId, async (snapshot, w, fx) => {
+      await transact(data.taskId, async (snapshot, w) => {
         const node = data.nodeId ? snapshot.nodes.find((n) => n.id === data.nodeId) : undefined;
         const counted = await w.addSpend({
           callId: data.callId,
@@ -985,20 +955,7 @@ export function createWorkflowService(deps: {
         const { task } = snapshot;
         await w.setTask({ spentMicro: task.spentMicro + data.chargedMicro });
         if (node) await w.setNode(node.id, { spentMicro: node.spentMicro + data.chargedMicro });
-        const limit = task.budgetLimitMicro;
-        if (task.status !== 'running' || limit === null || task.spentMicro <= limit) return;
-        logger.info({ taskId: task.id, spent: task.spentMicro, limit }, '花费超过上限，暂停任务');
-        for (const n of snapshot.nodes.filter((x) => ACTIVE.includes(x.status))) {
-          await halt(snapshot, w, n, fx);
-        }
-        await w.setTask({
-          status: 'needs_attention',
-          attention: {
-            reason: 'over_budget',
-            nodeId: null,
-            message: `已经花了 ${dollars(task.spentMicro)}，达到你设置的预算 ${dollars(limit)}`,
-          },
-        });
+        // 预算只是参考，花完照样做（ADR 0016 §2）；只有账户余额用完时由 billing 拒绝冻结
       });
     },
 
@@ -1029,7 +986,7 @@ export function createWorkflowService(deps: {
               ...base,
               status: 'planning',
               estimateMicro: null,
-              budgetLimitMicro: body.sheet.budgetMicro,
+              budgetLimitMicro: null,
               sheet: body.sheet,
             },
             nodes: [],
@@ -1045,7 +1002,7 @@ export function createWorkflowService(deps: {
           }
           throw err;
         }
-        // 规划员的提交（挑经验手册要调一次模型）放到返回之后：建任务只等数据库，
+        // 规划员的提交（读经验手册、模型和工具目录）放到返回之后：建任务只等数据库，
         // 确认任务单不会因为它超时；提交失败由对账重试。
         const fx = noEffects();
         await store.transact(id, (snapshot, w) => planning.begin(snapshot, w, fx));
@@ -1203,6 +1160,8 @@ export function createWorkflowService(deps: {
 
     /** 编辑节点时能选的模型和工具 */
     options: () => planning.options(),
+    /** 报价用的单价：带单价的模型目录和工具目录（ADR 0016 §4） */
+    pricing: () => planning.pricing(),
 
     /**
      * 对节点追问 / 补充要求（ADR 0004 §7），只影响这一个节点：

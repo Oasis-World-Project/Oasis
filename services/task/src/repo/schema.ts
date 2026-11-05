@@ -23,8 +23,10 @@ export interface NodeConfig {
   gateChecks?: CheckResult[];
   expects?: ExpectedFile[];
   deliver?: string[];
-  /** 干活节点要用的外部工具 */
-  tools?: { key: string; uses: number }[];
+  /** 干活节点要用的外部工具（model：规划员按预算选的型号） */
+  tools?: { key: string; uses: number; model?: string }[];
+  /** 按用户预算分给这个节点的份额（微美元，ADR 0016 §5）；只是参考，旧节点没有 */
+  budgetMicro?: number;
   participants?: { name: string; model: string; stance: string }[];
   rounds?: number;
   round?: number;

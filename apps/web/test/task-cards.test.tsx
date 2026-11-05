@@ -292,6 +292,56 @@ describe('问题卡和任务单', () => {
     );
   });
 
+  it('任务单上选预算：三档带金额和用时，默认标准；自定义低于最低预算不能确认', async () => {
+    const quote = {
+      tiers: [
+        { tier: 'economy', micro: 400_000, minutes: 6 },
+        { tier: 'standard', micro: 1_200_000, minutes: 12 },
+        { tier: 'premium', micro: 3_000_000, minutes: 25 },
+      ],
+      minimumMicro: 400_000,
+      steps: ['写初稿'],
+      rough: false,
+    };
+    const sheet = message('sheet', {
+      intakeId: INTAKE,
+      sheet: SHEET,
+      quote,
+      status: 'open',
+      taskId: null,
+    });
+    const { api } = fakeChat([message('text', {}, 'user', '写首页'), sheet], {
+      extra: (method, path) =>
+        method === 'POST' && path.endsWith('/intake/confirm')
+          ? json(200, { messages: [] })
+          : undefined,
+    });
+    await openChat();
+    const card = await screen.findByRole('region', { name: '任务单' });
+    expect(within(card).getByRole('radio', { name: /标准 · \$1\.20 · 约 12 分钟/ })).toHaveProperty(
+      'checked',
+      true,
+    );
+    expect(within(card).getByText(/预算只是参考/)).toBeTruthy();
+    fireEvent.click(within(card).getByRole('radio', { name: '自定义' }));
+    const confirm = within(card).getByRole('button', { name: '确认，开始做' });
+    fireEvent.change(within(card).getByRole('spinbutton', { name: '自定义预算（美元）' }), {
+      target: { value: '0.2' },
+    });
+    expect(confirm).toHaveProperty('disabled', true);
+    expect(within(card).getByText('最低预算是 $0.40。')).toBeTruthy();
+    fireEvent.change(within(card).getByRole('spinbutton', { name: '自定义预算（美元）' }), {
+      target: { value: '2' },
+    });
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(api.bodies.find((b) => b.path.endsWith('/intake/confirm'))?.body).toEqual({
+        tier: 'custom',
+        customMicro: 2_000_000,
+      }),
+    );
+  });
+
   it('「要改一下」把焦点交给输入框并提示怎么说；「不是任务」退出', async () => {
     const sheet = message('sheet', {
       intakeId: INTAKE,

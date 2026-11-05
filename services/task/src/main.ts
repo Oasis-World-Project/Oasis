@@ -19,12 +19,14 @@ import {
   type ServiceResource,
 } from '@oasis/service-kit';
 import { registerRoutes } from './api/routes.ts';
+import { createQuotes, type Quotes } from './service/quote.ts';
 import { taskEnv } from './config.ts';
 import { createTaskStore } from './repo/task-store.ts';
 import { createGate } from './service/gate.ts';
 import { createWorkflowService, type WorkflowService } from './service/workflow-service.ts';
 
 let workflows: WorkflowService;
+let quotes: Quotes;
 
 await startService({
   name: 'task',
@@ -46,6 +48,17 @@ await startService({
     const modelGateway = createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
       timeoutMs: 60_000,
     });
+    const planners = {
+      economy: config.PLANNER_ECONOMY_MODEL,
+      standard: config.PLANNER_MODEL,
+      premium: config.PLANNER_MODEL,
+    };
+    const fallback = {
+      workRun: config.ESTIMATE_WORK_RUN_MICRO,
+      speechRun: config.ESTIMATE_SPEECH_RUN_MICRO,
+      computeRun: config.ESTIMATE_COMPUTE_RUN_MICRO,
+      nodeSeconds: config.ESTIMATE_NODE_SECONDS,
+    };
     workflows = createWorkflowService({
       store: createTaskStore(postgres.pool),
       harness,
@@ -63,16 +76,15 @@ await startService({
       maxParallel: config.MAX_PARALLEL_NODES,
       agent: createServiceClient('agent', config.AGENT_URL, { timeoutMs: 5_000 }),
       modelGateway,
-      planning: {
-        model: config.PLANNER_MODEL,
-        defaultModel: config.DEFAULT_NODE_MODEL,
-        decisionModel: config.GATE_MODEL,
-        rates: {
-          workRun: config.ESTIMATE_WORK_RUN_MICRO,
-          speechRun: config.ESTIMATE_SPEECH_RUN_MICRO,
-          computeRun: config.ESTIMATE_COMPUTE_RUN_MICRO,
-        },
-      },
+      planning: { planners, defaultModel: config.DEFAULT_NODE_MODEL, fallback },
+      logger,
+    });
+    quotes = createQuotes({
+      modelGateway,
+      pricing: () => workflows.pricing(),
+      model: config.QUOTE_MODEL,
+      planners,
+      fallback,
       logger,
     });
     const runFinished = startEventConsumer({
@@ -107,5 +119,5 @@ await startService({
     };
     return { postgres, eventBus, outbox, runFinished, callSettled, reconciler };
   },
-  routes: (app) => registerRoutes(app, workflows),
+  routes: (app) => registerRoutes(app, workflows, quotes),
 });

@@ -42,6 +42,7 @@ export function createAvatarCatalog(client: LiveAvatarClient, now: () => number 
         available: client.configured,
         models: [],
         defaultModel: null,
+        rates: [],
       };
     },
 

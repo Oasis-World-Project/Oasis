@@ -1,7 +1,7 @@
 // conversation 的对外接口：私聊和在私聊里接任务（ADR 0005；群聊在后续阶段）。
 import { z } from 'zod';
 import { UploadBody } from './canvas.ts';
-import { TaskSheet } from './task.ts';
+import { BudgetQuote, TaskSheet } from './task.ts';
 
 export const ConversationBody = z.object({
   id: z.uuid(),
@@ -55,6 +55,8 @@ export const SheetCard = z.object({
   /** AI 在卡片上方说的一句话（旧消息没有） */
   intro: z.string().default(''),
   sheet: TaskSheet,
+  /** 三档预算和用时（ADR 0016）；报价没拿到时为 null，确认时按标准档的默认方式做 */
+  quote: BudgetQuote.nullable().default(null),
   status: z.enum(['open', 'confirmed', 'superseded', 'cancelled']),
   taskId: z.uuid().nullable(),
 });
@@ -174,6 +176,20 @@ export const IntakeAnswersBody = z.object({
   answers: z.record(z.string(), z.string()).default({}),
   skip: z.boolean().default(false),
 });
+
+/**
+ * 确认任务单时选的预算（ADR 0016）：三档之一，或自定义金额（不能低于报价里的最低预算）。
+ * 不传按标准档；没有报价时按任务单原样交给 AI 团队。
+ */
+export const IntakeConfirmBody = z
+  .object({
+    tier: z.enum(['economy', 'standard', 'premium', 'custom']).default('standard'),
+    customMicro: z.number().int().positive().optional(),
+  })
+  .refine((b) => b.tier !== 'custom' || b.customMicro !== undefined, {
+    message: '自定义预算要填金额',
+  });
+export type IntakeConfirmBody = z.infer<typeof IntakeConfirmBody>;
 
 /** 从某条用户消息开始接需求（点了「当成任务来做」） */
 export const StartIntakeBody = z.object({ messageId: z.uuid() });

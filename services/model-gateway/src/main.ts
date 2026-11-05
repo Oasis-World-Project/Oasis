@@ -29,6 +29,7 @@ import { createChatService } from './service/chat-service.ts';
 import { createComputeService } from './service/compute-service.ts';
 import { createDecisionService } from './service/decision-service.ts';
 import { createMeter } from './service/metering.ts';
+import { withNodeRate } from './service/pricing.ts';
 import { createRunKeyService } from './service/run-key-service.ts';
 import { createToolService } from './service/tool-service.ts';
 import { createTavilyClient } from './adapters/tavily.ts';
@@ -260,10 +261,15 @@ await startService({
         pricePerCoreHourMicro: config.COMPUTE_PRICE_MICRO_PER_CORE_HOUR,
       }),
       unavailableModels: meter.regionBlockedModels,
-      executionModels: () =>
-        [...priceBook.current().values()].flatMap((price) =>
-          price.capabilities ? [price.capabilities] : [],
-        ),
+      executionModels: async () => {
+        const usage = await meter.typicalUsage().catch((err: unknown) => {
+          logger.warn({ err }, '读不到调用记录，节点估价只按价格表');
+          return undefined;
+        });
+        return [...priceBook.current().values()].flatMap((price) =>
+          price.capabilities ? [withNodeRate(price, usage)] : [],
+        );
+      },
     });
   },
 });

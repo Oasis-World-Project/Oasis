@@ -8,6 +8,7 @@ import {
   ConversationList,
   IntakeResult,
   MessageList,
+  type IntakeConfirmBody,
   type RevisionNote,
   type RevisionParameter,
 } from '@oasis/contracts/conversation';
@@ -132,7 +133,9 @@ export const answerIntake = (
 
 export const cancelIntake = (conversationId: string) => intakeCall(conversationId, 'cancel', {});
 
-export const confirmIntake = (conversationId: string) => intakeCall(conversationId, 'confirm', {});
+/** 确认任务单，带上选的预算（ADR 0016）：三档之一或自定义金额（微美元） */
+export const confirmIntake = (conversationId: string, budget: IntakeConfirmBody) =>
+  intakeCall(conversationId, 'confirm', budget);
 
 /** 修改成果（ADR 0012）：修改意见发到这个私聊，新建一条工作流做出新版；返回新增的消息 */
 export const reviseTask = (

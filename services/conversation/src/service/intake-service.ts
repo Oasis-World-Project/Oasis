@@ -8,11 +8,13 @@ import {
   AUTO_ANSWER,
   CUSTOM_ANSWER_MAX,
   CUSTOM_ANSWER_PREFIX,
+  SheetCard,
+  type IntakeConfirmBody,
   type IntakeQuestion,
   type MessageAttachment,
   type QuestionsCard,
-  type SheetCard,
 } from '@oasis/contracts/conversation';
+import { BudgetQuote, type TaskSheet } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Conversation, ConversationRepo, Intake, Message } from '../repo/conversation-repo.ts';
@@ -240,6 +242,29 @@ function intakeActions(deps: {
     }
   }
 
+  /**
+   * 任务单的三档预算和用时（ADR 0016）：由 task 列草案、按记账单价定价。报价失败不影响确认，
+   * 卡片上就不显示档位，确认时按标准档的默认方式做。
+   */
+  async function quoteFor(
+    intake: Intake,
+    sheet: TaskSheet,
+    ownerId: string,
+    requestId: string,
+  ): Promise<BudgetQuote | null> {
+    try {
+      const { quote } = await deps.task.json('POST', '/internal/quotes', {
+        body: { ownerId, brief: taskBrief(intake.request, intake.turns, sheet), sheet },
+        requestId,
+        schema: z.object({ quote: BudgetQuote.nullable() }),
+      });
+      return quote;
+    } catch (err) {
+      logger.warn({ err, requestId, intakeId: intake.id }, '报价失败，任务单先不显示预算');
+      return null;
+    }
+  }
+
   /** 读不到地区限制时按原模型来，不因此中断 */
   async function blockedModels(requestId: string): Promise<string[]> {
     try {
@@ -400,6 +425,7 @@ function intakeActions(deps: {
         intakeId: intake.id,
         intro: reply.intro,
         sheet: reply.sheet,
+        quote: await quoteFor(intake, reply.sheet, ownerId, requestId),
         status: 'open',
         taskId: null,
       };
@@ -589,6 +615,7 @@ function intakeActions(deps: {
     async confirm(input: {
       conversation: Conversation;
       ownerId: string;
+      budget?: IntakeConfirmBody;
       requestId: string;
     }): Promise<Message[]> {
       const intake = await openIntake(input.conversation);
@@ -596,8 +623,14 @@ function intakeActions(deps: {
         throw new HttpError(409, 'no_sheet', '任务单还没写好');
       }
       const { cardMessageId, materials } = intake;
+      const card = await repo.findMessage(input.conversation.id, cardMessageId);
+      const quote = SheetCard.safeParse(card?.data).data?.quote ?? null;
       // 任务单上的素材以用户实际发的文件为准（AI 看不到文件，不让它填）
-      const sheet = { ...intake.sheet, materials: materials.map((m) => m.name) };
+      const sheet: TaskSheet = {
+        ...intake.sheet,
+        materials: materials.map((m) => m.name),
+        ...(quote ? { budget: chosenBudget(quote, input.budget ?? { tier: 'standard' }) } : {}),
+      };
       // 事先定好任务 ID 并记下：确认超时或断网后再点，task 按同一个 ID 返回已经建好的任务，不会建出第二个
       const taskId = intake.taskId ?? randomUUID();
       if (!intake.taskId) await repo.updateIntake(intake.id, { taskId });
@@ -620,9 +653,13 @@ function intakeActions(deps: {
         taskId: task.id,
         cardMessageId: null,
       });
-      const card = await repo.findMessage(input.conversation.id, cardMessageId);
       if (card) {
-        await repo.setMessageData(card.id, { ...card.data, status: 'confirmed', taskId: task.id });
+        await repo.setMessageData(card.id, {
+          ...card.data,
+          sheet,
+          status: 'confirmed',
+          taskId: task.id,
+        });
       }
       const message = await repo.insertMessage({
         conversationId: input.conversation.id,
@@ -637,6 +674,27 @@ function intakeActions(deps: {
       return [message];
     },
   };
+}
+
+/** 用户选的预算 → 任务单上的预算；自定义金额不能低于最低预算，用时按金额落在哪两档之间估 */
+function chosenBudget(
+  quote: BudgetQuote,
+  choice: IntakeConfirmBody,
+): NonNullable<TaskSheet['budget']> {
+  const steps = quote.steps;
+  if (choice.tier !== 'custom') {
+    const tier = quote.tiers.find((t) => t.tier === choice.tier)!;
+    return { tier: choice.tier, micro: tier.micro, minutes: tier.minutes, steps };
+  }
+  const micro = choice.customMicro!;
+  if (micro < quote.minimumMicro)
+    throw new HttpError(
+      400,
+      'budget_too_low',
+      `预算不能低于 $${(quote.minimumMicro / 1_000_000).toFixed(2)}（最低预算）`,
+    );
+  const reached = [...quote.tiers].reverse().find((t) => micro >= t.micro) ?? quote.tiers[0]!;
+  return { tier: 'custom', micro, minutes: reached.minutes, steps };
 }
 
 /** 只留题目里有的回答；答案必须是选项之一或「你看着办」 */

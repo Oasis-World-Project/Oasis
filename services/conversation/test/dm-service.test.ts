@@ -450,6 +450,13 @@ const createdTasks: Record<string, unknown>[] = [];
 /** 建任务的请求到了 task，但回给 conversation 的是失败（超时、断线） */
 let taskFailsOnce = false;
 const task = Fastify();
+/** task 给任务单的报价；null 表示这次没报出来 */
+let quoteReply: unknown = null;
+const quoteRequests: Record<string, unknown>[] = [];
+task.post('/internal/quotes', async (request) => {
+  quoteRequests.push(request.body as Record<string, unknown>);
+  return { quote: quoteReply };
+});
 task.post('/internal/tasks', async (request, reply) => {
   createdTasks.push(request.body as Record<string, unknown>);
   if (taskFailsOnce) {
@@ -539,6 +546,8 @@ beforeEach(() => {
   taskFailsOnce = false;
   decisionCalls = 0;
   visionCalls = 0;
+  quoteReply = null;
+  quoteRequests.length = 0;
   intakeStatus = 0;
   blocked = [];
   finishReasons = [];
@@ -1513,6 +1522,53 @@ describe('接需求', () => {
     // 确认后回到普通聊天
     taskProbability = 0.1;
     expect(lastDone(await send('谢谢')).kind).toBe('text');
+  });
+
+  it('任务单附三档报价；确认时按选的档把预算写进任务单，自定义不能低于最低预算', async () => {
+    quoteReply = {
+      tiers: [
+        { tier: 'economy', micro: 400_000, minutes: 6 },
+        { tier: 'standard', micro: 1_200_000, minutes: 12 },
+        { tier: 'premium', micro: 3_000_000, minutes: 25 },
+      ],
+      minimumMicro: 400_000,
+      steps: ['写初稿', '润色'],
+      rough: false,
+    };
+    await begin();
+    intakeReplies = [sheet()];
+    await intake.answer({
+      conversation: await conversation(),
+      ownerId: OWNER,
+      answers: {},
+      skip: true,
+      requestId: 'r',
+    });
+    expect(quoteRequests[0]).toMatchObject({ ownerId: OWNER, sheet: { title: '小木屋首页' } });
+    expect(repo.rows.find((r) => r.kind === 'sheet')?.data).toMatchObject({ quote: quoteReply });
+    const low = await intake
+      .confirm({
+        conversation: await conversation(),
+        ownerId: OWNER,
+        budget: { tier: 'custom', customMicro: 100_000 },
+        requestId: 'r',
+      })
+      .catch((e: unknown) => e);
+    expect((low as HttpError).statusCode).toBe(400);
+    expect(createdTasks).toHaveLength(0);
+    await intake.confirm({
+      conversation: await conversation(),
+      ownerId: OWNER,
+      budget: { tier: 'custom', customMicro: 2_000_000 },
+      requestId: 'r',
+    });
+    // 自定义 $2 落在标准和精细之间：用时按标准档估
+    expect(createdTasks[0]).toMatchObject({
+      sheet: {
+        budget: { tier: 'custom', micro: 2_000_000, minutes: 12, steps: ['写初稿', '润色'] },
+      },
+    });
+    expect(createdTasks[0]!.brief).toContain('预算（参考，不是上限）：约 $2.00');
   });
 
   it('确认失败后再点：带同一个任务 ID 重交，task 不会建出第二个；改过的任务单换新 ID', async () => {

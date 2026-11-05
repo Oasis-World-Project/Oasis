@@ -98,6 +98,8 @@ export function createMeter(deps: {
     },
     /** 在当前网络用不了的模型：最近一次聊天调用因为地区限制被上游拒绝、之后没再成功过 */
     regionBlockedModels: () => repo.regionBlockedModels(),
+    /** 从调用记录算出的典型用量，估价用 */
+    typicalUsage: () => repo.typicalUsage(),
 
     /** 没产生费用就失败了（如长任务在供应商那边失败）：退回冻结，记下原因 */
     fail: release,

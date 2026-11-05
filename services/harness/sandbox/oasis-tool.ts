@@ -47,7 +47,10 @@ interface ToolEntry {
   name: string;
   description: string;
   usage: string;
+  unit: string;
   available: boolean;
+  /** 每个型号的典型单价和用时（旧版网关没有） */
+  rates?: { model: string; costMicro: number; seconds: number | null }[];
 }
 
 /** 解析 --名字 值；同时返回 --out 和 --file */
@@ -157,8 +160,18 @@ async function request(path: string, init: RequestInit = {}): Promise<unknown> {
 
 async function list(): Promise<void> {
   const { tools } = (await request('/tools')) as { tools: ToolEntry[] };
+  const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro < 10_000 ? 4 : 3)}`;
   for (const tool of tools.filter((t) => t.available)) {
-    say(`${tool.key}（${tool.name}）：${tool.description}\n  用法：${tool.usage}\n`);
+    // 每个型号的单价和用时（ADR 0016）：节点按预算用 --model 选，默认第一个
+    const rates = (tool.rates ?? [])
+      .map(
+        (r) =>
+          `${r.model} 每${tool.unit}约 ${usd(r.costMicro)}${r.seconds ? `、一次约 ${r.seconds} 秒` : ''}`,
+      )
+      .join('；');
+    say(
+      `${tool.key}（${tool.name}）：${tool.description}\n  用法：${tool.usage}${rates ? `\n  型号与单价（--model 指定，默认第一个）：${rates}` : ''}\n`,
+    );
   }
   const manifest = process.env.OASIS_SOFTWARE_MANIFEST;
   if (manifest)

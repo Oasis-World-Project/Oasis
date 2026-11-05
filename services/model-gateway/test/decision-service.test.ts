@@ -74,6 +74,7 @@ const repo: CallsRepo = {
   get: async () => undefined,
   computeForRun: async () => [],
   regionBlockedModels: async () => blockedModels,
+  typicalUsage: async () => ({ tools: new Map(), nodes: new Map(), nodeTokens: null }),
   async finish(_id, outcome, event) {
     finished.push(outcome);
     if (event) settledEvents.push(event);

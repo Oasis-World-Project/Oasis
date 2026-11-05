@@ -1,12 +1,11 @@
 // 规划（ADR 0005 §4）：任务从用户确认的任务单开始 → 规划员（一次 harness 运行）把方案写进 out/plan.json
 // → 规划门检查 → 没过就接着原会话改，次数用完交给用户 → 通过就建节点和连线、算预估、开跑。
 import { randomUUID } from 'node:crypto';
-import { Catalog, PlaybookList, type CatalogEntry, type Playbook } from '@oasis/contracts/agent';
-import { OASIS_HEADERS } from '@oasis/contracts/common';
+import { Catalog, PlaybookList, type Playbook } from '@oasis/contracts/agent';
 import type { RunFinishedData } from '@oasis/contracts/events';
 import { RunBody, ExecutionEnvironment } from '@oasis/contracts/harness';
 import { ExecutionModels, ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
-import type { WorkflowOptions } from '@oasis/contracts/task';
+import type { BudgetTier, WorkflowOptions } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
@@ -19,35 +18,21 @@ import {
   PLAN_FILE,
   plannerPrompt,
   revisePrompt,
-  type EstimateRates,
   type PlannerPlan,
 } from './planner.ts';
+import type { Fallback, PricedModel } from './quote.ts';
 
 export interface PlanningConfig {
-  /** 规划员用的模型（默认 DeepSeek） */
-  model: string;
+  /** 三档预算各用哪个规划员型号（ADR 0016：省钱档用快速型号） */
+  planners: Record<BudgetTier, string>;
   /** 节点默认用的模型 */
   defaultModel: string;
-  /** 判断任务属于哪类场景用的决策模型（Jev） */
-  decisionModel: string;
-  rates: EstimateRates;
+  /** 什么记录都没有时的估价兜底 */
+  fallback: Fallback;
 }
 
 const RUN_FINAL = ['succeeded', 'failed', 'cancelled', 'stopped'];
 const Unavailable = z.object({ models: z.array(z.string()) });
-const Answers = z.object({
-  answers: z.record(z.string(), z.object({ noul: z.number().optional() }).loose()),
-});
-/** 「属于这类」的概率至少这么高才附上这份手册；最多附两份 */
-const PLAYBOOK_THRESHOLD = 0.5;
-const MAX_PLAYBOOKS = 3;
-
-/** 微美元 → 给用户看的金额 */
-export function dollars(micro: number): string {
-  const usd = micro / 1_000_000;
-  // 不到 1 美分的保留两位有效数字，避免显示成 $0.00
-  return `$${usd >= 0.01 ? usd.toFixed(2) : String(Number(usd.toPrecision(2)))}`;
-}
 
 export function createPlanning(deps: {
   store: TaskStore;
@@ -60,15 +45,15 @@ export function createPlanning(deps: {
 }) {
   const { store, harness, engine, config, logger } = deps;
 
-  /** 规划员能挑的模型：已接入的，去掉在当前网络用不了的（查不到时不排除） */
-  async function catalog(): Promise<CatalogEntry[]> {
+  /** 规划员能挑的模型：已接入的，去掉在当前网络用不了的（查不到时不排除），带上典型单价 */
+  async function catalog(): Promise<PricedModel[]> {
     const { models } = await deps.agent.json('GET', '/internal/models/catalog', {
       schema: Catalog,
     });
     const execution = await deps.modelGateway.json('GET', '/internal/v1/models/execution', {
       schema: ExecutionModels,
     });
-    const usable = new Set(execution.models.map((m) => m.id));
+    const node = new Map(execution.models.map((m) => [m.id, m.node]));
     const blocked = await deps.modelGateway
       .json('GET', '/internal/v1/models/unavailable', { schema: Unavailable })
       .then((r) => new Set(r.models))
@@ -79,9 +64,12 @@ export function createPlanning(deps: {
     // 地区限制按厂商生效（同一家的型号要么都能用要么都不能用）：一个型号被拒，这家的其他型号也排除
     const vendorOf = (model: string) => model.split('/')[0];
     const blockedVendors = new Set([...blocked].map(vendorOf));
-    return models.filter(
-      (m) => usable.has(m.providerModel) && !blockedVendors.has(vendorOf(m.providerModel)),
-    );
+    return models
+      .filter((m) => node.has(m.providerModel) && !blockedVendors.has(vendorOf(m.providerModel)))
+      .map((m) => {
+        const rate = node.get(m.providerModel);
+        return rate ? { ...m, node: rate } : m;
+      });
   }
 
   /** 目录不可读时等待恢复，不能把未知当成没有工具而编造替代方案。 */
@@ -92,48 +80,24 @@ export function createPlanning(deps: {
   }
 
   /**
-   * 这个任务属于哪几类场景：每份手册问 Jev 一个「是否属于」（几乎不花钱，计入任务），
-   * 挑出概率够高的。查不到手册或 Jev 出错就不附，规划照常进行。
+   * 场景经验手册（ADR 0016 §6）：不再让 Jev 逐份判断，全部放进规划员的 in/playbooks/，
+   * 说明里列名字和适用范围，由规划员自己挑着读。读不到手册就不附，规划照常进行。
    */
-  async function playbooksFor(task: PlannerJob['task']): Promise<Playbook[]> {
+  async function playbooks(taskId: string): Promise<Playbook[]> {
     try {
-      const { playbooks } = await deps.agent.json('GET', '/internal/playbooks', {
-        schema: PlaybookList,
-      });
-      if (playbooks.length === 0) return [];
-      const sheet = task.sheet!;
-      const state = [
-        `任务：${task.brief}`,
-        `交付物：${sheet.deliverables.map((d) => `${d.name}（${d.form}）`).join('、')}`,
-        `怎么算做好：${sheet.criteria.join('；')}`,
-      ];
-      const questions = Object.fromEntries(
-        playbooks.map((p, i) => [
-          `p${i}`,
-          {
-            type: 'noul',
-            instructions: `这个任务的交付物里有没有这一类：${p.name}（${p.when}）`,
-            criteria: { true: `有${p.name}的交付物`, false: `没有${p.name}的交付物` },
-          },
-        ]),
-      );
-      const { answers } = await deps.modelGateway.json('POST', '/internal/v1/decisions', {
-        timeoutMs: null,
-        body: { model: config.decisionModel, state, questions },
-        headers: { [OASIS_HEADERS.payerId]: task.payerId, [OASIS_HEADERS.taskId]: task.id },
-        schema: Answers,
-      });
-      return playbooks
-        .map((p, i) => ({ p, score: answers[`p${i}`]?.noul ?? 0 }))
-        .filter((x) => x.score >= PLAYBOOK_THRESHOLD)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, MAX_PLAYBOOKS)
-        .map((x) => x.p);
+      return (await deps.agent.json('GET', '/internal/playbooks', { schema: PlaybookList }))
+        .playbooks;
     } catch (err) {
-      logger.warn({ err, taskId: task.id }, '挑经验手册失败，这次不附手册');
+      logger.warn({ err, taskId }, '读不到经验手册，这次不附');
       return [];
     }
   }
+
+  /** 规划员用哪个型号：按用户选的档次；旧任务和自定义金额按标准档 */
+  const plannerModel = (task: PlannerJob['task']) => {
+    const tier = task.sheet?.budget?.tier;
+    return config.planners[tier && tier !== 'custom' ? tier : 'standard'];
+  };
 
   /** 在事务里开一次规划员运行（从头排，或接着上一次改） */
   async function open(snapshot: Snapshot, w: Writer, fx: Effects, revise?: PlannerJob['revise']) {
@@ -151,6 +115,7 @@ export function createPlanning(deps: {
   async function submit(job: PlannerJob): Promise<void> {
     const { task } = job;
     try {
+      const guides = job.revise ? [] : await playbooks(task.id);
       const prompt = job.revise
         ? revisePrompt(job.revise.problems, task.sheet!)
         : plannerPrompt({
@@ -158,7 +123,7 @@ export function createPlanning(deps: {
             sheet: task.sheet!,
             catalog: await catalog(),
             tools: await tools(),
-            playbooks: await playbooksFor(task),
+            playbooks: guides,
             defaultModel: config.defaultModel,
             environment: await harness.json('GET', '/internal/execution/environment', {
               schema: ExecutionEnvironment,
@@ -169,9 +134,13 @@ export function createPlanning(deps: {
           runId: job.runId,
           payerId: task.payerId,
           taskId: task.id,
-          model: config.model,
+          model: plannerModel(task),
           goal: true,
           prompt,
+          inputs: guides.map((p) => ({
+            path: `playbooks/${p.key}.md`,
+            contentBase64: Buffer.from(p.content).toString('base64'),
+          })),
           materials: materialPaths(task.materials),
           ...(job.revise ? { continueFrom: job.revise.continueFrom } : {}),
         },
@@ -199,42 +168,39 @@ export function createPlanning(deps: {
     }
   }
 
-  /** 方案通过了：建节点和连线，算预估和上限，开跑（预估超过用户设的上限时先问用户） */
+  /**
+   * 方案通过了：建节点和连线，算预估，按预算给每个节点分一份，开跑。
+   * 预算只是参考（ADR 0016 §2）：预估再高也不暂停、不设上限。
+   */
   async function adopt(
     snapshot: Snapshot,
     w: Writer,
     fx: Effects,
     plan: PlannerPlan,
     toolList: ToolEntry[],
+    models: PricedModel[],
   ) {
     const { task } = snapshot;
     const sheet = task.sheet!;
-    const rows = planToRows(plan);
+    const { totalMicro, perNode } = estimatePlan(plan, models, toolList, config.fallback);
+    const budget = sheet.budget?.micro;
+    const rows = planToRows(plan, (key) =>
+      budget && totalMicro > 0
+        ? Math.max(1, Math.round((budget * (perNode.get(key) ?? 0)) / totalMicro))
+        : undefined,
+    );
     for (const node of rows.nodes) await w.addNode(node);
     for (const edge of rows.edges) await w.addEdge(edge);
     const idOf = new Map(rows.nodes.map((n) => [n.key, n.id]));
-    const estimate = estimatePlan(plan, config.rates, toolList);
-    const overUserCap = sheet.budgetMicro !== null && estimate > sheet.budgetMicro;
     await w.setTask({
-      estimateMicro: estimate,
-      budgetLimitMicro: sheet.budgetMicro,
+      estimateMicro: totalMicro,
+      budgetLimitMicro: null,
       deliverables: sheet.deliverables.map((d) => ({
         name: d.name,
         form: d.form,
         nodeId: idOf.get(plan.deliverables[d.name] ?? '') ?? null,
       })),
     });
-    if (overUserCap) {
-      await w.setTask({
-        status: 'needs_attention',
-        attention: {
-          reason: 'over_estimate',
-          nodeId: null,
-          message: `预计要花 ${dollars(estimate)}，超过了你设的上限 ${dollars(sheet.budgetMicro ?? 0)}`,
-        },
-      });
-      return;
-    }
     await w.setTask({ status: 'running', attention: null });
     await engine.schedule(snapshot, w, fx);
   }
@@ -247,12 +213,13 @@ export function createPlanning(deps: {
     if (task?.status !== 'planning' || task.plannerRunId !== result.runId) return;
     // 事务外读方案、查模型和工具目录，事务里只做决定
     const toolList = result.status === 'succeeded' ? await tools() : [];
+    const models = result.status === 'succeeded' ? await catalog() : [];
     const checked =
       result.status === 'succeeded'
         ? checkPlan(
             await readPlan(result.runId),
             task.sheet!,
-            await catalog(),
+            models,
             toolList,
             await harness.json('GET', '/internal/execution/environment', {
               schema: ExecutionEnvironment,
@@ -264,7 +231,7 @@ export function createPlanning(deps: {
       if (current.status !== 'planning' || current.plannerRunId !== result.runId) return;
       if ('plan' in checked) {
         logger.info({ taskId: current.id, nodes: checked.plan.nodes.length }, '方案通过规划门');
-        return adopt(snapshot, w, fx, checked.plan, toolList);
+        return adopt(snapshot, w, fx, checked.plan, toolList, models);
       }
       if (result.status === 'succeeded') {
         logger.info(
@@ -296,6 +263,9 @@ export function createPlanning(deps: {
 
     submit,
     onFinished,
+
+    /** 报价和估价用的单价：带单价的模型目录和工具目录 */
+    pricing: async () => ({ models: await catalog(), tools: await tools() }),
 
     /** 编辑节点时能选的模型和工具：和规划员看到的一样 */
     async options(): Promise<WorkflowOptions> {

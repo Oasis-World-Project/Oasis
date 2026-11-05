@@ -122,7 +122,8 @@ export function runtimeFiles(input: {
       path: 'in/.oasis-models.json',
       content: Buffer.from(
         JSON.stringify(
-          input.models.map(({ reasoning, ...model }) => ({
+          // node 是 Oasis 估价用的典型用量，不属于 dsh 的模型配置
+          input.models.map(({ reasoning, node: _node, ...model }) => ({
             ...model,
             reasoningEfforts: reasoning ? { off: null, high: 'high' } : false,
             compat: {

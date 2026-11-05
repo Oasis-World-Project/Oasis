@@ -105,7 +105,7 @@ export function registerRoutes(
     avatars: AvatarService;
     /** 在当前网络用不了的模型 */
     unavailableModels: () => Promise<string[]>;
-    executionModels: () => ModelCapabilities[];
+    executionModels: () => Promise<ModelCapabilities[]>;
   },
 ): void {
   const { chat, decisions, runKeys, tools, avatars } = services;
@@ -149,7 +149,8 @@ export function registerRoutes(
   app.get('/internal/v1/tools', async () => ({ tools: await tools.list() }));
   app.get('/internal/v1/models/execution', async () => {
     const blocked = new Set(await services.unavailableModels());
-    return { models: services.executionModels().filter((model) => !blocked.has(model.id)) };
+    const models = await services.executionModels();
+    return { models: models.filter((model) => !blocked.has(model.id)) };
   });
   app.post('/internal/v1/tools/:key', TOOL_BODY, (request, reply) =>
     useTool(internalCaller(request), request, reply),

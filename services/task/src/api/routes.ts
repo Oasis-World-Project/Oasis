@@ -5,12 +5,14 @@ import {
   DecisionBody,
   NodeMessageBody,
   PlanNode,
+  QuoteBody,
   ReviseTaskBody,
   UpdateEdgeBody,
   UpdateNodeBody,
 } from '@oasis/contracts/task';
 import { fileResponseHeaders, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
+import type { Quotes } from '../service/quote.ts';
 import type { WorkflowService } from '../service/workflow-service.ts';
 
 const TaskParams = z.object({ taskId: z.uuid() });
@@ -24,7 +26,13 @@ const EventsQuery = z.object({
 const FileQuery = z.object({ download: z.enum(['0', '1']).default('0') });
 const RetireBody = z.object({ replacedBy: z.uuid() });
 
-export function registerRoutes(app: ServiceApp, workflows: WorkflowService): void {
+export function registerRoutes(app: ServiceApp, workflows: WorkflowService, quotes: Quotes): void {
+  /** 给任务单报价（ADR 0016 §4）：三档预算和用时；草案用不了时 quote 为 null */
+  app.post('/internal/quotes', async (request) => {
+    const body = parseWith(QuoteBody, request.body);
+    return { quote: await quotes.quote({ ...body, requestId: request.id }) };
+  });
+
   /** 提交任务和工作流方案，校验后立即开跑 */
   app.post('/internal/tasks', async (request, reply) => {
     const body = parseWith(CreateTaskBody, request.body);

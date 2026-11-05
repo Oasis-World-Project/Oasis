@@ -859,7 +859,7 @@ describe('关卡的验收点检查', () => {
       checks: ['预算及原始排班一致'],
       ownerId: PAYER,
       materials: [{ uploadId: PAYER, name: '原始.csv', size: 20 }],
-      execution: { spentMicro: 54426, budgetMicro: 750000 },
+      execution: { spentMicro: 54426 },
       references: [
         { runId: 'source-run', summary: null, outputs: [{ path: '排班.json', size: 30 }] },
       ],
@@ -868,7 +868,8 @@ describe('关卡的验收点检查', () => {
     expect(state).toContain('V01,电器安全,09:00');
     expect(state).toContain('V01 09:00');
     expect(state).toContain('54426');
-    expect(state).toContain('750000');
+    // 预算只是参考（ADR 0016），不作为验收证据
+    expect(state).not.toContain('budgetMicro');
   });
   it('图片素材（批注截图）交给看图检查，描述原样交给判断；连不上时如实记为没检查到', async () => {
     const MATERIAL = '6d6d6d6d-6d6d-4d6d-8d6d-6d6d6d6d6d6d';

@@ -32,8 +32,10 @@ const tools = [
     available: true,
     models: [],
     defaultModel: null,
+    rates: [],
   },
 ];
+const fallback = { workRun: 1_000, speechRun: 1_000, computeRun: 0, nodeSeconds: 600 };
 const node = (key: string, model = 'deepseek/x') => ({
   key,
   title: key,
@@ -110,7 +112,7 @@ describe('规划门', () => {
       problems: [expect.stringContaining('最多 5 条')],
     });
   });
-  it('规划员看到各型号的档位和能读什么，被要求核心产出用旗舰、拿不准时联网查', () => {
+  it('规划员看到各型号的档位和能读什么，按预算挑型号、拿不准时联网查', () => {
     const prompt = plannerPrompt({
       brief: 'b',
       sheet,
@@ -124,7 +126,8 @@ describe('规划门', () => {
     });
     expect(prompt).toContain('deepseek/x（DeepSeek，v；旗舰；能直接读：image）');
     expect(prompt).toContain('deepseek/fast（DeepSeek，v；快速；只读文字）');
-    expect(prompt).toContain('不替用户省钱');
+    expect(prompt).toContain('按预算挑');
+    expect(prompt).toContain('用户没有选预算档，按「标准」档的思路安排');
     expect(prompt).toContain('web.search');
     expect(prompt).toContain('负责交付物的节点 checks 留空');
   });
@@ -228,12 +231,10 @@ describe('估算花费', () => {
     const checked = result(200);
     expect(checked).toHaveProperty('plan');
     if ('plan' in checked)
-      expect(
-        estimatePlan(checked.plan, { workRun: 1_000, speechRun: 1_000, computeRun: 0 }, batchTools),
-      ).toBe(481_200);
+      expect(estimatePlan(checked.plan, catalog, batchTools, fallback).totalMicro).toBe(401_000);
     expect(result(1001)).toHaveProperty('plan');
   });
-  it('干活节点一次加工具（次数 × 单价）、讨论按发言次数加汇总，再留两成', () => {
+  it('按所选型号的典型单价估价，不再乘系数；没有记录的型号用兜底；同时给出每个节点的份额', () => {
     const plan = {
       nodes: [
         {
@@ -242,7 +243,7 @@ describe('估算花费', () => {
           role: '',
           checks: [],
           expects: [],
-          tools: [{ key: 'image.generate', uses: 2 }],
+          tools: [{ key: 'image.generate', uses: 2, model: 'img/cheap' }],
         },
         {
           ...node('d'),
@@ -259,13 +260,67 @@ describe('估算花费', () => {
       ],
       edges: [],
     };
-    // (1000 + 2×40000 + (2×2 + 1) × 1000) × 1.2
-    expect(estimatePlan(plan, { workRun: 1_000, speechRun: 1_000, computeRun: 0 }, tools)).toBe(
-      103_200,
+    const priced = [
+      { ...catalog[0]!, node: { costMicro: 20_000, seconds: 300, basis: 'history' as const } },
+    ];
+    const imageTools = [
+      {
+        ...tools[0]!,
+        models: ['img/best', 'img/cheap'],
+        defaultModel: 'img/best',
+        rates: [
+          { model: 'img/best', costMicro: 90_000, seconds: 60, basis: 'history' as const },
+          { model: 'img/cheap', costMicro: 30_000, seconds: 20, basis: 'history' as const },
+        ],
+      },
+    ];
+    const estimate = estimatePlan(plan, priced, imageTools, { ...fallback, computeRun: 100 });
+    // 干活节点：型号 20000 + 算力 100 + 便宜型号 2 × 30000；讨论：(2×2+1) × (1000 + 100)
+    expect(estimate.perNode.get('a')).toBe(80_100);
+    expect(estimate.perNode.get('d')).toBe(5_500);
+    expect(estimate.totalMicro).toBe(85_600);
+    // 没有记录的型号用兜底
+    expect(estimatePlan(plan, catalog, imageTools, fallback).perNode.get('a')).toBe(61_000);
+  });
+
+  it('工具指定的型号必须是目录里这个工具能用的', () => {
+    const checked = checkPlan(
+      JSON.stringify({
+        nodes: [{ ...node('a'), tools: [{ key: 'image.generate', uses: 1, model: 'img/other' }] }],
+        edges: [],
+        deliverables: { 首页文案: 'a' },
+      }),
+      sheet,
+      catalog,
+      [{ ...tools[0]!, models: ['img/best'], defaultModel: 'img/best' }],
     );
-    // 每次运行再加 100 的算力：一共 6 次运行
-    expect(estimatePlan(plan, { workRun: 1_000, speechRun: 1_000, computeRun: 100 }, tools)).toBe(
-      103_920,
-    );
+    expect(checked).toEqual({
+      problems: ['节点「a」的工具 image.generate 不能用型号 img/other，可选：img/best'],
+    });
+  });
+
+  it('说明里写清预算档和每个型号的单价；预算是参考不是上限', () => {
+    const prompt = plannerPrompt({
+      brief: 'b',
+      sheet: {
+        ...sheet,
+        budget: { tier: 'economy', micro: 800_000, minutes: 6, steps: ['写文案'] },
+      },
+      catalog: [{ ...catalog[0]!, node: { costMicro: 20_000, seconds: 300, basis: 'history' } }],
+      tools: [
+        {
+          ...tools[0]!,
+          rates: [{ model: 'img/cheap', costMicro: 30_000, seconds: 20, basis: 'history' }],
+        },
+      ],
+      playbooks: [{ key: 'images', name: '图片类', when: '要出图' }],
+      defaultModel: 'deepseek/x',
+    });
+    expect(prompt).toContain('用户选了「省钱」档：预算约 $0.80、预计 6 分钟左右');
+    expect(prompt).toContain('预算是参考，不是上限');
+    expect(prompt).toContain('一个节点典型约 $0.02、5 分钟');
+    expect(prompt).toContain('img/cheap 每张约 $0.03、一次约 20 秒');
+    expect(prompt).toContain('in/playbooks/images.md：图片类（要出图）');
+    expect(prompt).not.toContain('不替用户省钱');
   });
 });

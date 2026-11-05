@@ -123,7 +123,7 @@ const pickModel = (args: Record<string, unknown>, models: string[]) =>
  * 按文件头认出图片的真实格式；认不出返回 undefined。供应商声明的格式不可靠（2026-11-05：
  * 要 PNG 却回 JPEG，存成 .png 后看图工具报签名无效、节点因此返工）。
  */
-export function sniffImageType(base64: string): string | undefined {
+function sniffImageType(base64: string): string | undefined {
   const head = Buffer.from(base64.slice(0, 24), 'base64');
   if (head.length >= 8 && head.readUInt32BE(0) === 0x89504e47) return 'image/png';
   if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff)
@@ -851,8 +851,8 @@ export const TOOLS: ToolDef[] = [
       '按文字或一张本地首帧生成短视频素材，存成 MP4；按实时目录确认参数，不支持参考图时明确拒绝。',
     usage:
       'oasis-tool video.generate --prompt "画面描述" [--first_frame materials/首帧.png] [--duration 5] [--resolution 720p] [--aspect_ratio 16:9] --out out/视频.mp4（没等到就按提示运行 oasis-tool wait <任务号>；首帧内联输入仍需当前供应商实际验证）',
-    unit: '段（约 5 秒）',
-    estimateMicro: 2_000_000,
+    unit: '秒',
+    estimateMicro: 400_000,
     holdMicro: (args) => (Number(args.duration) || 5) * 700_000,
     long: true,
     provider: 'openrouter',

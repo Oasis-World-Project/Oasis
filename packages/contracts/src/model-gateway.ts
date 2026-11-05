@@ -34,6 +34,17 @@ export const ModelCapabilities = z.object({
   maxTokens: z.number().int().positive(),
   input: z.array(z.enum(['text', 'image'])).min(1),
   reasoning: z.boolean(),
+  /**
+   * 这个型号负责一个干活节点的典型花费和用时（ADR 0016 §4）：有调用记录用记录的中位数，
+   * 没有就按价格表 × 所有节点的典型 token 用量估；都没有时不给。
+   */
+  node: z
+    .object({
+      costMicro: z.number().int().nonnegative(),
+      seconds: z.number().int().nonnegative().nullable(),
+      basis: z.enum(['history', 'catalog']),
+    })
+    .optional(),
 });
 export type ModelCapabilities = z.infer<typeof ModelCapabilities>;
 export const ExecutionModels = z.object({ models: z.array(ModelCapabilities) });
@@ -125,6 +136,18 @@ export const ComputeOutcome = z.object({
 // ---- 工具（ADR 0006）：生图、配音、转写、联网搜索、网页抓取、Jev 判断……都经 model-gateway 计量 ----
 
 /** 目录里的一个工具：给规划员和节点里的 AI 看 */
+/** 一个型号用一次（一个计费单位）的典型花费和用时（ADR 0016 §4：估价不写死单价） */
+export const ToolRate = z.object({
+  model: z.string(),
+  /** 每个计费单位大约多少钱（微美元） */
+  costMicro: z.number().int().nonnegative(),
+  /** 一次调用大约要等多久（秒）；不知道为 null */
+  seconds: z.number().int().nonnegative().nullable(),
+  /** 数据来源：history 调用记录的中位数；catalog 供应商价格目录；fallback 工具目录的兜底值 */
+  basis: z.enum(['history', 'catalog', 'fallback']),
+});
+export type ToolRate = z.infer<typeof ToolRate>;
+
 export const ToolEntry = z.object({
   /** 稳定的名字，如 image.generate */
   key: z.string(),
@@ -135,8 +158,10 @@ export const ToolEntry = z.object({
   usage: z.string(),
   /** 计费单位，如 张、次、千字 */
   unit: z.string(),
-  /** 用一次大约多少钱（微美元），规划时估算用 */
+  /** 兜底单价（微美元）：型号既没有调用记录、供应商也没给价格时才用 */
   estimateMicro: z.number().int().nonnegative(),
+  /** 每个可用型号的典型单价和用时，按 models 的顺序 */
+  rates: z.array(ToolRate).default([]),
   /** 要等几十秒到几分钟的长任务 */
   long: z.boolean(),
   /** 能不能用（供应商 Key 没配就不能用） */

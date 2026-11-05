@@ -104,8 +104,10 @@ const NodeCommon = {
 /** 节点要用的外部工具（ADR 0006 §5）：工具名和预计用几次（用来估算花费，不是硬上限） */
 export const NodeTool = z.object({
   key: z.string().regex(/^[a-z0-9]+(\.[a-z0-9_-]+)+$/, '工具名形如 image.generate'),
-  /** 批量工具按输入行计数，其余工具按目录单位计数。 */
+  /** 批量工具按输入行计数，其余工具按目录单位计数（视频按秒）。 */
   uses: z.number().int().min(1).default(1),
+  /** 打算用的型号（ADR 0016：按预算选）；不填按工具目录的默认型号估价 */
+  model: z.string().min(1).max(200).optional(),
 });
 export type NodeTool = z.infer<typeof NodeTool>;
 const NodeTools = z.array(NodeTool);
@@ -170,8 +172,22 @@ export const TaskSheet = z.object({
   criteria: z.array(z.string().trim().min(1).max(200)).min(1),
   /** 风格与限制 */
   style: z.array(z.string().trim().min(1).max(200)).default([]),
-  /** 用户自己设的花费上限（微美元）；没设为 null */
+  /**
+   * 用户在原话里自己说的花费（微美元），没说为 null。只作报价时自定义金额的默认值；
+   * 预算不是上限（ADR 0016 §2）。
+   */
   budgetMicro: z.number().int().positive().nullable().default(null),
+  /** 用户确认时选的预算（ADR 0016）：AI 团队按它分配力度，花完照样做；旧任务没有 */
+  budget: z
+    .object({
+      tier: z.enum(['economy', 'standard', 'premium', 'custom']),
+      micro: z.number().int().positive(),
+      /** 报价时估的大概用时（分钟） */
+      minutes: z.number().int().positive(),
+      /** 报价草案的步骤（给规划员参考，不是硬性分工） */
+      steps: z.array(z.string().max(300)).max(20).default([]),
+    })
+    .optional(),
   /** AI 自己定的事（技术假设），让用户知道，不用确认 */
   assumptions: z.array(z.string().trim().min(1).max(200)).default([]),
   /** 用户给的素材（文件名） */
@@ -182,6 +198,39 @@ export const TaskSheet = z.object({
   materialWarnings: z.array(z.string().max(500)).optional(),
 });
 export type TaskSheet = z.infer<typeof TaskSheet>;
+
+/** 预算档次（ADR 0016 §2）：省钱 / 标准 / 精细 */
+export const BudgetTier = z.enum(['economy', 'standard', 'premium']);
+export type BudgetTier = z.infer<typeof BudgetTier>;
+
+/**
+ * 报价（ADR 0016 §4）：任务单定稿时由便宜的模型列草案，代码按三档配型号、定价、估时。
+ * 最低预算就是省钱档；用户自定义的金额不能比它低。
+ */
+export const BudgetQuote = z.object({
+  tiers: z
+    .array(
+      z.object({
+        tier: BudgetTier,
+        micro: z.number().int().positive(),
+        minutes: z.number().int().positive(),
+      }),
+    )
+    .length(3),
+  minimumMicro: z.number().int().positive(),
+  /** 草案的步骤，一步一句话 */
+  steps: z.array(z.string().max(300)).max(20),
+  /** 有的单价没有记录也没有供应商价格，用了兜底值 */
+  rough: z.boolean(),
+});
+export type BudgetQuote = z.infer<typeof BudgetQuote>;
+
+/** POST /internal/quotes：给一份任务单报价，付费人付草案那一次模型调用 */
+export const QuoteBody = z.object({
+  ownerId: z.uuid(),
+  brief: z.string().trim().min(1).max(20_000),
+  sheet: TaskSheet,
+});
 
 /**
  * POST /internal/tasks：建任务。两种方式，只能选一种：

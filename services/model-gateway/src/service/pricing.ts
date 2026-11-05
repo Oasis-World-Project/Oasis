@@ -1,6 +1,8 @@
 // 估算冻结金额、按用量计算实际花费（纯函数，便于单测）。金额单位：微美元。
 import type { ChatMessage } from '@oasis/contracts/model-gateway';
+import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
 import type { ModelPrice } from '../adapters/openrouter.ts';
+import type { TypicalUsage } from '../repo/calls-repo.ts';
 
 export const USD_TO_MICRO = 1_000_000;
 
@@ -70,4 +72,53 @@ export function actualCostMicro(input: {
     estimateInputTokens(input.messages, input.extraChars) * price.prompt +
     Math.ceil(input.completionChars / 1.5) * price.completion;
   return { costMicro: Math.ceil(usd * USD_TO_MICRO), source: 'estimate' };
+}
+
+/**
+ * 视频每秒多少美元：供应商目录里同时有按美元/秒和按美分/秒命名的 SKU；音频由供应商决定，取较高档。
+ * 没有可用 SKU 时返回 NaN。冻结和估价共用这一份算法。
+ */
+export function videoSecondRate(
+  pricing: Record<string, string>,
+  resolution: string,
+  firstFrame: boolean,
+): number {
+  const rates = [
+    'duration_seconds',
+    'duration_seconds_with_audio',
+    `duration_seconds_${resolution}`,
+    `duration_seconds_${resolution}_with_audio`,
+    `${firstFrame ? 'image' : 'text'}_to_video_duration_seconds_${resolution}`,
+  ]
+    .filter((key) => pricing[key] !== undefined)
+    .map((key) => Number(pricing[key]));
+  for (const key of [
+    'cents_per_video_output_second',
+    `cents_per_video_output_second_${resolution}`,
+  ])
+    if (pricing[key] !== undefined) rates.push(Number(pricing[key]) / 100);
+  return rates.length ? Math.max(...rates) : NaN;
+}
+
+/**
+ * 型号能力 + 它负责一个干活节点的典型花费和用时（ADR 0016 §4）：有这个型号的记录用记录；
+ * 没有就按价格表 × 所有节点的典型 token 用量估（用时未知）；连典型用量都没有时不给。
+ */
+export function withNodeRate(
+  price: ModelPrice,
+  usage: TypicalUsage | undefined,
+): ModelCapabilities {
+  const capabilities = price.capabilities!;
+  const seen = usage?.nodes.get(capabilities.id);
+  if (seen)
+    return {
+      ...capabilities,
+      node: { costMicro: seen.costMicro, seconds: seen.seconds, basis: 'history' },
+    };
+  const tokens = usage?.nodeTokens;
+  if (!tokens) return capabilities;
+  const costMicro = Math.ceil(
+    (tokens.prompt * price.prompt + tokens.completion * price.completion) * USD_TO_MICRO,
+  );
+  return { ...capabilities, node: { costMicro, seconds: null, basis: 'catalog' } };
 }

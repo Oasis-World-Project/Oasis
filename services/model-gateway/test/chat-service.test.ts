@@ -61,6 +61,7 @@ const repo: CallsRepo = {
   get: async () => undefined,
   computeForRun: async () => [],
   regionBlockedModels: async () => [],
+  typicalUsage: async () => ({ tools: new Map(), nodes: new Map(), nodeTokens: null }),
   finish: async (_id, outcome) => void finished.push(outcome),
 };
 const silent = pino({ level: 'silent' });

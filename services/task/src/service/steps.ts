@@ -57,6 +57,20 @@ function contextOf(snapshot: Snapshot, node: Node): NodeContext {
     tools: (node.config.tools ?? []).map((t) => t.key),
     materials: materialPaths(snapshot.task.materials).map((m) => m.path),
     ...(node.config.deliver === undefined ? {} : { deliver: node.config.deliver }),
+    budget: {
+      ...(node.config.budgetMicro ? { nodeMicro: node.config.budgetMicro } : {}),
+      ...(snapshot.task.sheet?.budget
+        ? {
+            taskMicro: snapshot.task.sheet.budget.micro,
+            taskMinutes: snapshot.task.sheet.budget.minutes,
+          }
+        : {}),
+      spentMicro: snapshot.task.spentMicro,
+      elapsedMinutes: Math.max(
+        0,
+        Math.round((Date.now() - snapshot.task.createdAt.getTime()) / 60_000),
+      ),
+    },
   };
 }
 

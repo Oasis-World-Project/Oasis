@@ -148,7 +148,7 @@ interface GateInput {
   materials?: Material[];
   ownerId?: string;
   references?: GateRun[];
-  execution?: { spentMicro: number; budgetMicro: number | null };
+  execution?: { spentMicro: number };
 }
 
 export function createGate(deps: {

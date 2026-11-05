@@ -3,7 +3,7 @@
 // 长任务（音乐/视频）：提交时冻结并持久化意图，先保存结果再结算；未知结果保留对账状态。
 import { Readable } from 'node:stream';
 import { createHash, randomUUID } from 'node:crypto';
-import type { ToolEntry, ToolJobBody, ToolResult } from '@oasis/contracts/model-gateway';
+import type { ToolEntry, ToolJobBody, ToolRate, ToolResult } from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ObjectStore, type ServiceClient } from '@oasis/service-kit';
 import type { ProviderClient } from '../adapters/openrouter.ts';
 import type { FalClient } from '../adapters/fal.ts';
@@ -11,7 +11,9 @@ import { RenderArgs, type RenderClient } from '../adapters/runpod.ts';
 import type { SearchClient } from '../adapters/tavily.ts';
 import type { BrowserStackClient } from '../adapters/browserstack.ts';
 import { ToolAdmissionError, type ToolJob, type ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
+import type { Typical } from '../repo/calls-repo.ts';
 import type { Caller, Meter, MeteredCall } from './metering.ts';
+import { videoSecondRate } from './pricing.ts';
 import { AVATAR_CATALOG_TOOL, type AvatarCatalog } from './avatar-catalog.ts';
 import { TOOLS, type ToolConfig, type ToolDef } from './tools.ts';
 
@@ -52,6 +54,33 @@ export function createToolService(deps: {
             : tool.provider === 'fal'
               ? Boolean(deps.fal?.configured)
               : deps.openrouter.configured;
+
+  /**
+   * 每个可用型号的典型单价和用时（ADR 0016 §4）：视频按供应商每秒单价；其余优先用调用记录的
+   * 中位数；都没有才用工具目录的兜底值。读不到记录或目录时照样给兜底，不让目录因此不可用。
+   */
+  async function ratesOf(tool: ToolDef, models: string[]): Promise<ToolRate[]> {
+    const typical = await meter
+      .typicalUsage()
+      .then((u) => u.tools)
+      .catch((err: unknown) => {
+        deps.logger.warn({ err }, '读不到调用记录，工具估价用兜底值');
+        return new Map<string, Typical>();
+      });
+    const videos =
+      tool.key === 'video.generate' ? await deps.openrouter.listVideoModels().catch(() => []) : [];
+    return models.map((model) => {
+      const seen = typical.get(model);
+      const seconds = seen?.seconds ?? null;
+      if (tool.key === 'video.generate') {
+        const entry = videos.find((v) => v.id === model);
+        const rate = entry ? videoSecondRate(entry.pricing_skus ?? {}, '720p', false) : NaN;
+        if (Number.isFinite(rate) && rate > 0)
+          return { model, costMicro: Math.ceil(rate * 1_000_000), seconds, basis: 'catalog' };
+      } else if (seen) return { model, costMicro: seen.costMicro, seconds, basis: 'history' };
+      return { model, costMicro: tool.estimateMicro, seconds, basis: 'fallback' };
+    });
+  }
 
   /** 这个工具现在能用的模型：去掉当前网络用不了的 */
   async function usableModels(tool: ToolDef): Promise<string[]> {
@@ -576,22 +605,25 @@ export function createToolService(deps: {
     /** 工具目录：没配 Key、或者没有能用的模型的工具标成不可用 */
     async list(): Promise<ToolEntry[]> {
       const blocked = new Set(await meter.regionBlockedModels());
-      const entries = TOOLS.map((tool) => {
-        const all = tool.models(config);
-        const models = all.filter((m) => !blocked.has(m));
-        return {
-          key: tool.key,
-          name: tool.name,
-          description: tool.description,
-          usage: tool.usage,
-          unit: tool.unit,
-          estimateMicro: tool.estimateMicro,
-          long: tool.long,
-          available: configured(tool) && (tool.provider === 'tavily' || models.length > 0),
-          models,
-          defaultModel: models[0] ?? null,
-        };
-      });
+      const entries = await Promise.all(
+        TOOLS.map(async (tool) => {
+          const all = tool.models(config);
+          const models = all.filter((m) => !blocked.has(m));
+          return {
+            key: tool.key,
+            name: tool.name,
+            description: tool.description,
+            usage: tool.usage,
+            unit: tool.unit,
+            estimateMicro: tool.estimateMicro,
+            long: tool.long,
+            available: configured(tool) && (tool.provider === 'tavily' || models.length > 0),
+            models,
+            defaultModel: models[0] ?? null,
+            rates: await ratesOf(tool, models),
+          };
+        }),
+      );
       if (deps.avatarCatalog) entries.push(deps.avatarCatalog.entry());
       entries.push({
         key: 'text.batch',
@@ -606,6 +638,7 @@ export function createToolService(deps: {
         available: deps.openrouter.configured,
         models: [],
         defaultModel: null,
+        rates: [],
       });
       return entries;
     },
@@ -676,24 +709,11 @@ export function createToolService(deps: {
         );
         models = models.filter((model) => compatible.some((entry) => entry.id === model));
         const selected = compatible.find((entry) => entry.id === tool.modelOf(args, models));
-        const pricing = selected?.pricing_skus ?? {};
-        const resolution = String(args.resolution);
-        // 当前目录同时存在按美分和按美元/秒命名的 SKU；音频默认由供应商决定，冻结取较高档。
-        const rates = [
-          'duration_seconds',
-          'duration_seconds_with_audio',
-          `duration_seconds_${resolution}`,
-          `duration_seconds_${resolution}_with_audio`,
-          `${args.first_frame ? 'image' : 'text'}_to_video_duration_seconds_${resolution}`,
-        ]
-          .filter((key) => pricing[key] !== undefined)
-          .map((key) => Number(pricing[key]));
-        for (const key of [
-          'cents_per_video_output_second',
-          `cents_per_video_output_second_${resolution}`,
-        ])
-          if (pricing[key] !== undefined) rates.push(Number(pricing[key]) / 100);
-        const rate = rates.length ? Math.max(...rates) : NaN;
+        const rate = videoSecondRate(
+          selected?.pricing_skus ?? {},
+          String(args.resolution),
+          Boolean(args.first_frame),
+        );
         const referenceCost = args.first_frame
           ? Number(selected?.pricing_skus?.cents_per_image_input ?? 0)
           : 0;

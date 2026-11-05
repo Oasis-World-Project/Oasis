@@ -81,7 +81,7 @@ function system(name: string): string {
 {"type":"sheet","intro":"一句话说明","sheet":{"title":"不超过60字","deliverables":[{"name":"交付物名称","form":"实际格式如DOCX+PDF"}],"criteria":["如何验收，1–8条"],"style":["风格与限制"],"budgetMicro":null,"assumptions":["不改变用户要求的制作选择"],"requirements":[{"id":"r1","text":"一条有效用户要求，最多1000字","sources":[{"kind":"request","quote":"从用户原话取出的连续原文，不要照抄本占位示例"}]}]}}
 {"type":"cancel","intro":"一句话回应"}
 
-说明：题目 id 用 q1、q2…，选项 id 用 a–e。budgetMicro 只有用户明确说了花费上限才填，单位是百万分之一美元（1 美元 = 1000000），否则填 null。`;
+说明：题目 id 用 q1、q2…，选项 id 用 a–e。budgetMicro 只有用户在原话里明确说了打算花多少钱才填（只作自定义预算的默认值，预算不是上限；用户确认时会自己选预算档），单位是百万分之一美元（1 美元 = 1000000），否则填 null。`;
 }
 
 type InspectedFile = Extract<IntakeTurn, { kind: 'materials' }>['files'][number];
@@ -302,8 +302,12 @@ export function sheetText(sheet: TaskSheet): string {
     `怎么算做好：\n${list(sheet.criteria)}`,
   ];
   if (sheet.style.length > 0) parts.push(`风格与限制：\n${list(sheet.style)}`);
-  if (sheet.budgetMicro !== null) {
-    parts.push(`花费上限：$${(sheet.budgetMicro / 1_000_000).toFixed(2)}`);
+  if (sheet.budget) {
+    parts.push(
+      `预算（参考，不是上限）：约 $${(sheet.budget.micro / 1_000_000).toFixed(2)}，预计 ${sheet.budget.minutes} 分钟左右`,
+    );
+  } else if (sheet.budgetMicro !== null) {
+    parts.push(`用户说的花费（参考）：$${(sheet.budgetMicro / 1_000_000).toFixed(2)}`);
   }
   if (sheet.assumptions.length > 0) parts.push(`AI 自己定的事：\n${list(sheet.assumptions)}`);
   if (sheet.materials.length > 0) parts.push(`素材：\n${list(sheet.materials)}`);

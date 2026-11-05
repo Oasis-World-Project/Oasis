@@ -2,6 +2,7 @@ import { OASIS_HEADERS } from '@oasis/contracts/common';
 import {
   CreateDmBody,
   IntakeAnswersBody,
+  IntakeConfirmBody,
   RevisionBody,
   ReplaceReplyBody,
   SendMessageBody,
@@ -165,8 +166,9 @@ export function registerRoutes(
   app.post('/v1/conversations/:id/intake/confirm', async (request) => {
     const ownerId = requireUserId(request);
     const { id } = parseWith(IdParams, request.params);
+    const budget = parseWith(IntakeConfirmBody, request.body ?? {});
     const conversation = await dms.assertOwned(id, ownerId);
-    return result(await intake.confirm({ conversation, ownerId, requestId: request.id }));
+    return result(await intake.confirm({ conversation, ownerId, budget, requestId: request.id }));
   });
 
   /** 修改成果（ADR 0012）：发修改意见，新建一条工作流做出新版 */

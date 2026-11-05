@@ -24,6 +24,17 @@ export interface NodeContext {
   /** 用户给的素材在沙箱里的路径（materials/…） */
   materials: string[];
   deliver?: string[];
+  /** 预算和进度（ADR 0016 §5）：只是参考，节点自己决定做几版、什么时候停手 */
+  budget?: {
+    /** 分给这个节点的份额；旧节点没有 */
+    nodeMicro?: number;
+    /** 用户选的整个任务预算；旧任务没有 */
+    taskMicro?: number;
+    /** 报价时估的整个任务用时（分钟） */
+    taskMinutes?: number;
+    spentMicro: number;
+    elapsedMinutes: number;
+  };
 }
 
 export interface Speech {
@@ -67,6 +78,25 @@ function context(c: NodeContext, goalLabel: string): string[] {
   return parts;
 }
 
+const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
+
+/** 预算和进度：让节点按钱和时间自己掂量，不规定次数 */
+function budgetPart(b: NonNullable<NodeContext['budget']>): string {
+  const facts = [
+    ...(b.nodeMicro ? [`这一步分到约 ${usd(b.nodeMicro)}`] : []),
+    ...(b.taskMicro
+      ? [`整个任务预算约 ${usd(b.taskMicro)}，目前已花 ${usd(b.spentMicro)}`]
+      : [`整个任务目前已花 ${usd(b.spentMicro)}`]),
+    `已经跑了 ${b.elapsedMinutes} 分钟${b.taskMinutes ? `，报价时估的总用时约 ${b.taskMinutes} 分钟` : ''}`,
+  ];
+  return [
+    '【预算和用时】',
+    `- ${facts.join('；')}。`,
+    '- 预算是参考，不是上限：超出不会被打断，但花的是用户的钱，用户也在等。做几版、挑几张、要不要补做、什么时候停手，由你按这些自己判断；够用就交，不要为了更好无限打磨。',
+    '- 工具按预算选型号（oasis-tool list 列出了每个型号的单价和用时，用 --model 指定）；要多张图一次用 --n，会并行生成。',
+  ].join('\n');
+}
+
 const transcriptText = (speeches: Speech[]) =>
   speeches.map((s) => `- 第 ${s.round} 轮 ${s.name}：${s.text}`).join('\n');
 
@@ -91,6 +121,7 @@ export function workPrompt(c: NodeContext): string {
   return [
     `你是 Oasis 工作流里的一个节点，负责「${c.title}」。`,
     ...context(c, '你要做的事'),
+    ...(c.budget ? [budgetPart(c.budget)] : []),
     '这是持续子任务。使用原生 goal 跟踪实际交付；可以自行规划、拆分、使用子代理和选择可用模型。目标和必需文件真正完成后才 update_goal complete；遇到可解决的问题继续处理。',
     ...toolsPart(c.tools),
     [

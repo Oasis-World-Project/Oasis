@@ -397,10 +397,13 @@ beforeEach(() => {
     agent: createServiceClient('agent', harnessUrl),
     modelGateway: createServiceClient('model-gateway', harnessUrl),
     planning: {
-      model: 'deepseek/planner',
+      planners: {
+        economy: 'deepseek/flash',
+        standard: 'deepseek/planner',
+        premium: 'deepseek/planner',
+      },
       defaultModel: 'deepseek/x',
-      decisionModel: 'typesafe/jev',
-      rates: { workRun: 3_000, speechRun: 3_000, computeRun: 0 },
+      fallback: { workRun: 3_000, speechRun: 3_000, computeRun: 0, nodeSeconds: 600 },
     },
     logger: pino({ level: 'silent' }),
   });
@@ -1062,20 +1065,12 @@ describe('花费', () => {
     expect(stopped).toEqual([]);
   });
 
-  it('只有显式预算会触发停止；用户继续后解除预算', async () => {
+  it('预算只是参考（ADR 0016）：花得比预估多也照常运行，不暂停、不停节点', async () => {
     const task = await create(['A', 'B'], [], 1_000);
-    await store.transact(task.id, async (_snapshot, writer) => {
-      await writer.setTask({ budgetLimitMicro: 3_000 });
-    });
     await settle(task.id, keyOf(task, 'A'), CALL(1), 3_500);
     const detail = await service.get(OWNER, task.id);
-    expect(detail.status).toBe('needs_attention');
-    expect(detail.attention?.reason).toBe('over_budget');
-    expect(stopped).toHaveLength(2);
-    expect(await service.decide(OWNER, task.id, { choice: 'continue' })).toMatchObject({
-      status: 'running',
-      budgetLimitMicro: null,
-    });
+    expect(detail).toMatchObject({ status: 'running', attention: null, spentMicro: 3_500 });
+    expect(stopped).toHaveLength(0);
   });
 });
 
@@ -1128,17 +1123,21 @@ describe('规划（从任务单开始）', () => {
     expect(planner?.prompt).toContain('「首页文案」');
     expect(planner?.prompt).toContain('deepseek/x（DeepSeek');
     expect(planner?.prompt).not.toContain('最多 4 个节点');
-    // 经验手册：Jev 判断属于图片类（计入这个任务），只附图片类的
-    expect(planner?.prompt).toContain('【这类任务的经验】');
-    expect(planner?.prompt).toContain('图片的经验');
-    expect(planner?.prompt).not.toContain('文档的经验');
-    expect(decisions.at(-1)?.headers['x-oasis-task-id']).toBe(task.id);
+    // 经验手册（ADR 0016 §6）：不再让 Jev 挑，全文放进 in/playbooks/，说明里只列名字和适用范围
+    expect(planner?.prompt).toContain('in/playbooks/images.md：图片类（图片）');
+    expect(planner?.prompt).not.toContain('图片的经验');
+    const inputs = (planner as unknown as { inputs: { path: string; contentBase64: string }[] })
+      .inputs;
+    expect(inputs.map((i) => i.path)).toEqual(['playbooks/documents.md', 'playbooks/images.md']);
+    expect(Buffer.from(inputs[1]!.contentBase64, 'base64').toString()).toContain('图片的经验');
+    expect(decisions.filter((d) => d.headers['x-oasis-task-id'] === task.id)).toHaveLength(0);
 
     await plannerDone(goodPlan);
     const detail = await service.get(OWNER, task.id);
+    // 两个节点各 3000（没有记录时的兜底），不再乘 1.2
     expect(detail).toMatchObject({
       status: 'running',
-      estimateMicro: 7_200,
+      estimateMicro: 6_000,
       budgetLimitMicro: null,
     });
     expect(detail.nodes.map((n) => `${n.key}=${n.status}`)).toEqual([
@@ -1154,7 +1153,8 @@ describe('规划（从任务单开始）', () => {
   it('规划员看得到能用的工具；节点分到的工具计入预估，并写进节点的说明', async () => {
     const task = await fromSheet();
     const [planner] = plannerRuns();
-    expect(planner?.prompt).toContain('- image.generate（image.generate，每次约 $0.040）');
+    expect(planner?.prompt).toContain('- image.generate（image.generate）');
+    expect(planner?.prompt).toContain('型号与单价：每次约 $0.04');
     expect(planner?.prompt).not.toContain('- web.search');
 
     await plannerDone(
@@ -1165,8 +1165,8 @@ describe('规划（从任务单开始）', () => {
       }),
     );
     const detail = await service.get(OWNER, task.id);
-    // (3000 + 2 × 40000) × 1.2
-    expect(detail.estimateMicro).toBe(99_600);
+    // 3000 + 2 × 40000（工具没有记录时用目录的兜底单价）
+    expect(detail.estimateMicro).toBe(83_000);
     expect(detail.nodes[0]?.tools).toEqual([{ key: 'image.generate', uses: 2 }]);
     const prompt = runOf('draw', detail).prompt;
     expect(prompt).toContain('规划建议使用：image.generate');

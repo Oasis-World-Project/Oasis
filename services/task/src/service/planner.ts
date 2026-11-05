@@ -1,5 +1,5 @@
 // 规划员（ADR 0005 §4）的纯函数部分：给规划员的说明、规划门（检查它写的 out/plan.json）、按方案估算花费。
-// 规划员只排方案；方案对不对由代码检查，花费由代码按经验单价算，不让 AI 估。
+// 规划员只排方案；方案对不对由代码检查，花费由代码按调用记录和供应商价格算（ADR 0016 §4），不让 AI 估。
 import type { CatalogEntry, Playbook } from '@oasis/contracts/agent';
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { NodeKey, WorkflowPlan, type TaskSheet } from '@oasis/contracts/task';
@@ -7,6 +7,31 @@ import { HttpError } from '@oasis/service-kit';
 import { z } from 'zod';
 import { validatePlan, acceptanceRequirements } from './plan.ts';
 import type { ExecutionEnvironment } from '@oasis/contracts/harness';
+import { toolRate, type Fallback, type PricedModel } from './quote.ts';
+
+const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro < 10_000 ? 4 : 2)}`;
+
+/** 档次的中文名 */
+const TIER_NAMES = {
+  economy: '省钱',
+  standard: '标准',
+  premium: '精细',
+  custom: '自定义',
+} as const;
+
+/** 预算说明（规划员和节点共用口径） */
+function budgetPart(sheet: TaskSheet): string {
+  const budget = sheet.budget;
+  const head = budget
+    ? `用户选了「${TIER_NAMES[budget.tier]}」档：预算约 ${usd(budget.micro)}、预计 ${budget.minutes} 分钟左右。${budget.steps.length ? `报价时的草案（参考，不是硬性分工）：${budget.steps.join('；')}。` : ''}`
+    : '用户没有选预算档，按「标准」档的思路安排。';
+  return [
+    '【预算和用时】',
+    head,
+    '- 预算是参考，不是上限：花完了不会被打断，但花掉的是用户的钱，用户也在等结果。按这个预算和用时来安排团队，不要为了「尽量做好」无限加码。',
+    '- 档次低就多用快速型号和低价工具、每样尽量一次做成；标准档用性价比高的强模型；精细档才用旗舰、可以多做几版挑最好的。做几版、挑几张、要不要补做，由你按预算定，系统不规定次数。',
+  ].join('\n');
+}
 
 /** 规划员写的方案：工作流 + 每样交付物由哪个节点负责 */
 const PlannerPlan = WorkflowPlan.extend({
@@ -23,11 +48,11 @@ const MAX_NODE_CHECKS = 5;
 export function plannerPrompt(input: {
   brief: string;
   sheet: TaskSheet;
-  catalog: CatalogEntry[];
+  catalog: PricedModel[];
   /** 现在能用的外部工具 */
   tools: ToolEntry[];
-  /** 这类任务的经验手册（按任务单挑的，可以为空） */
-  playbooks: Pick<Playbook, 'content'>[];
+  /** 场景经验手册的名字和适用范围；全文放在 in/playbooks/<key>.md，由规划员自己挑着读 */
+  playbooks: Pick<Playbook, 'key' | 'name' | 'when'>[];
   defaultModel: string;
   environment?: ExecutionEnvironment;
 }): string {
@@ -37,6 +62,11 @@ export function plannerPrompt(input: {
       const reads = m.inputs?.filter((i) => i !== 'text');
       const notes = [
         ...(m.tier ? [TIER[m.tier]] : []),
+        ...(m.node
+          ? [
+              `一个节点典型约 ${usd(m.node.costMicro)}${m.node.seconds ? `、${Math.max(1, Math.round(m.node.seconds / 60))} 分钟` : ''}`,
+            ]
+          : []),
         ...(m.tags.length ? [m.tags.join('、')] : []),
         ...(reads ? [reads.length ? `能直接读：${reads.join('、')}` : '只读文字'] : []),
       ];
@@ -45,10 +75,17 @@ export function plannerPrompt(input: {
     .join('\n');
   const tools = input.tools.length
     ? input.tools
-        .map(
-          (t) =>
-            `- ${t.key}（${t.name}，每${t.unit}约 $${(t.estimateMicro / 1_000_000).toFixed(3)}${t.long ? '，要等几分钟' : ''}）：${t.description}`,
-        )
+        .map((t) => {
+          const rates = t.rates.length
+            ? t.rates
+                .map(
+                  (r) =>
+                    `${r.model} 每${t.unit}约 ${usd(r.costMicro)}${r.seconds ? `、一次约 ${r.seconds} 秒` : ''}`,
+                )
+                .join('；')
+            : `每${t.unit}约 ${usd(toolRate(t).costMicro)}`;
+          return `- ${t.key}（${t.name}${t.long ? '，要等几分钟' : ''}）：${t.description}\n  型号与单价：${rates}`;
+        })
         .join('\n')
     : '（现在没有可用的工具）';
   const deliverables = input.sheet.deliverables.map((d) => `「${d.name}」`).join('、');
@@ -118,13 +155,13 @@ export function plannerPrompt(input: {
           `【实测运行环境】\n${JSON.stringify(input.environment)}\n本地能力以 capabilities 为准；节点 requires 填实际依赖的本地能力名称。外部工具能力看工具目录。不要把安装 npm 包等同于已安装 Chromium 和系统库；可运行应用交齐 oasis-app.json 和配套文件，节点关卡会在独立预览执行器做实际浏览器检查；外站测试只使用工具目录中可用的 website.test。项目依赖安装到 /workspace。`,
         ]
       : []),
+    budgetPart(input.sheet),
     [
-      '【可以用的模型】（节点内部可另用其他可用模型和子代理）',
-      '- 只看交付质量，不替用户省钱：写代码、做网页和应用、3D、设计、写作、调研等真正产出成品的节点一律用旗舰；强力型号可以按专长和旗舰混用；快速档只用于格式转换、简单汇总这类机械的小事，不能负责交付物。',
+      '【可以用的模型】（节点内部可另用其他可用模型和子代理；单价来自真实记账，按预算挑）',
       '- 按节点的活挑最合适的厂商：例如前端和视觉选擅长编码与设计的，要看图、看视频的选「能直接读」里有图片、视频的。不同节点可以用不同厂商，取长补短。',
       models,
     ].join('\n'),
-    `【可以用的工具】（干活节点的 tools 只能填这些：写成 {"key": "image.generate", "uses": 预计用几次}；text.batch 和批量 jev.decide 的 uses 按输入行数填，如 200 行就填 200；按目录单位计费。批次预算只在用户明确设置时携带，恢复不重发已完成或结果不确定的行。）\n${tools}`,
+    `【可以用的工具】（干活节点的 tools 只能填这些：写成 {"key": "image.generate", "uses": 预计用几个计费单位, "model": "按预算选的型号"}；视频的 uses 按秒，text.batch 和批量 jev.decide 的 uses 按输入行数。批次预算只在用户明确设置时携带，恢复不重发已完成或结果不确定的行。）\n${tools}`,
     [
       '【节点】',
       '- work（干活）：一个 AI 在独立的容器里完成一件事，能读写文件、运行命令；成果写到 out/。',
@@ -148,7 +185,7 @@ export function plannerPrompt(input: {
     ].join('\n'),
     ...(input.playbooks.length
       ? [
-          `【这类任务的经验】（参考，不是硬规定；和任务单冲突时以任务单为准）\n\n${input.playbooks.map((p) => p.content).join('\n\n---\n\n')}`,
+          `【场景经验手册】（参考，不是硬规定；和任务单、预算冲突时以任务单和预算为准）全文在 in/playbooks/ 下，只读和这个任务相关的：\n${input.playbooks.map((p) => `- in/playbooks/${p.key}.md：${p.name}（${p.when}）`).join('\n')}`,
         ]
       : []),
     `【交付】把方案写成 out/${PLAN_FILE}（只放 JSON），格式照下面的例子：\n${JSON.stringify(example, null, 2)}\n\n写完用一两句话说明你的安排。`,
@@ -208,7 +245,7 @@ export function checkPlan(
   for (const model of new Set(used)) {
     if (!usable.has(model)) problems.push(`模型 ${model} 不在可以用的模型里`);
   }
-  const usableTools = new Set(tools.map((t) => t.key));
+  const usableTools = new Map(tools.map((t) => [t.key, t]));
   const requirements = new Map(acceptanceRequirements(sheet).map((r) => [r.id, r.text]));
   for (const node of plan.nodes) {
     for (const required of node.requires ?? [])
@@ -237,8 +274,13 @@ export function checkPlan(
     }
     if (node.kind !== 'work') continue;
     for (const tool of node.tools) {
-      if (!usableTools.has(tool.key)) {
+      const entry = usableTools.get(tool.key);
+      if (!entry) {
         problems.push(`节点「${node.key}」的工具 ${tool.key} 不在可以用的工具里`);
+      } else if (tool.model && entry.models.length && !entry.models.includes(tool.model)) {
+        problems.push(
+          `节点「${node.key}」的工具 ${tool.key} 不能用型号 ${tool.model}，可选：${entry.models.join('、')}`,
+        );
       }
     }
   }
@@ -253,33 +295,34 @@ export function checkPlan(
   return problems.length > 0 ? { problems } : { plan };
 }
 
-/** 估算用的经验单价（微美元），来自 5.2 的真实记账，以后用记账数据校准 */
-export interface EstimateRates {
-  /** 干活节点跑一次 */
-  workRun: number;
-  /** 讨论里一次发言或汇总 */
-  speechRun: number;
-  /** 每次运行（干活、发言、汇总都是一次沙箱运行）的算力 */
-  computeRun: number;
-}
-
 /**
- * 按方案估算花费：每个干活节点一次、讨论按发言次数 + 汇总（每次运行都加上算力），
- * 加上工具（预计次数 × 目录里的单价），
- * 再留两成给重做和关卡退回
+ * 按方案估算花费（ADR 0016 §4）：干活节点按所选型号的典型花费，讨论按发言次数 + 汇总，
+ * 加上工具（计费单位数 × 所选型号的单价）。不再额外乘系数：预算本身就是参考。
+ * 同时给出每个节点的份额，用来按预算给节点分配。
  */
 export function estimatePlan(
   plan: WorkflowPlan,
-  rates: EstimateRates,
-  tools: Pick<ToolEntry, 'key' | 'estimateMicro'>[],
-): number {
-  const price = new Map(tools.map((t) => [t.key, t.estimateMicro]));
-  const total = plan.nodes.reduce((sum, n) => {
-    if (n.kind === 'discussion') {
-      return sum + (n.participants.length * n.rounds + 1) * (rates.speechRun + rates.computeRun);
-    }
-    const toolCost = n.tools.reduce((s, t) => s + t.uses * (price.get(t.key) ?? 0), 0);
-    return sum + rates.workRun + rates.computeRun + toolCost;
-  }, 0);
-  return Math.ceil(total * 1.2);
+  models: PricedModel[],
+  tools: ToolEntry[],
+  fallback: Fallback,
+): { totalMicro: number; perNode: Map<string, number> } {
+  const byKey = new Map(tools.map((t) => [t.key, t]));
+  const nodeRate = (model: string) =>
+    models.find((m) => m.providerModel === model)?.node?.costMicro ?? fallback.workRun;
+  const perNode = new Map(
+    plan.nodes.map((n) => {
+      if (n.kind === 'discussion')
+        return [
+          n.key,
+          (n.participants.length * n.rounds + 1) * (fallback.speechRun + fallback.computeRun),
+        ];
+      const toolCost = n.tools.reduce((sum, t) => {
+        const tool = byKey.get(t.key);
+        return sum + t.uses * (tool ? toolRate(tool, t.model).costMicro : 0);
+      }, 0);
+      return [n.key, nodeRate(n.model) + fallback.computeRun + toolCost];
+    }),
+  );
+  const totalMicro = Math.ceil([...perNode.values()].reduce((a, b) => a + b, 0));
+  return { totalMicro, perNode };
 }

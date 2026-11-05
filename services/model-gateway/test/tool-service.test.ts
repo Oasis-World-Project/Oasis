@@ -16,7 +16,7 @@ import type { ServiceClient } from '@oasis/service-kit';
 import { createRenderClient } from '../src/adapters/runpod.ts';
 import { createHash } from 'node:crypto';
 import { createTavilyClient } from '../src/adapters/tavily.ts';
-import type { Call, CallOutcome, CallsRepo } from '../src/repo/calls-repo.ts';
+import type { Call, CallOutcome, CallsRepo, TypicalUsage } from '../src/repo/calls-repo.ts';
 import type { ToolJob, ToolJobsRepo } from '../src/repo/tool-jobs-repo.ts';
 import { createMeter } from '../src/service/metering.ts';
 import { createToolService } from '../src/service/tool-service.ts';
@@ -248,11 +248,14 @@ const finished: CallOutcome[] = [];
 const recordedCalls = new Map<string, CallOutcome>();
 const settled: EventEnvelope[] = [];
 let blocked: string[] = [];
+const noHistory = (): TypicalUsage => ({ tools: new Map(), nodes: new Map(), nodeTokens: null });
+let typical = noHistory();
 const repo: CallsRepo = {
   start: async () => {},
   get: async (id) => recordedCalls.get(id) as Call | undefined,
   computeForRun: async () => [],
   regionBlockedModels: async () => blocked,
+  typicalUsage: async () => typical,
   async finish(id, outcome, event) {
     recordedCalls.set(id, outcome);
     finished.push(outcome);
@@ -580,6 +583,7 @@ afterAll(async () => {
   await fake.close();
 });
 beforeEach(() => {
+  typical = noHistory();
   renderReceiptMissing = false;
   renderBusy = false;
   renderStatusGone = false;
@@ -1185,6 +1189,27 @@ describe('工具目录', () => {
     expect(byKey['web.search']?.available).toBe(false);
     blocked = ['typesafe/jev-1.14'];
     expect((await build('k').list()).find((t) => t.key === 'jev.decide')?.available).toBe(false);
+  });
+});
+
+describe('工具目录里的单价', () => {
+  it('有调用记录用记录的中位数；视频按供应商每秒单价；都没有才用兜底值并标出来', async () => {
+    typical = {
+      ...noHistory(),
+      tools: new Map([
+        ['bytedance-seed/seedream-4.5', { costMicro: 45_000, seconds: 110, samples: 8 }],
+      ]),
+    };
+    const list = await build('k').list();
+    const byKey = Object.fromEntries(list.map((t) => [t.key, t]));
+    expect(byKey['image.generate']?.rates).toEqual([
+      { model: 'bytedance-seed/seedream-4.5', costMicro: 45_000, seconds: 110, basis: 'history' },
+      { model: 'openai/gpt-image-2', costMicro: 150_000, seconds: null, basis: 'fallback' },
+    ]);
+    expect(byKey['video.generate']).toMatchObject({
+      unit: '秒',
+      rates: [{ model: 'alibaba/wan-2.7', costMicro: 50_000, basis: 'catalog' }],
+    });
   });
 });
 

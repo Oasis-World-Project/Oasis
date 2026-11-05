@@ -62,8 +62,14 @@ export function validatePlan(plan: WorkflowPlan): void {
 }
 
 /** 方案里的一个节点 → 库里的一行（status 由调用方定：方案里的是等待，用户新建的是新建） */
-export function nodeRow(n: PlanNode, id: string, status: 'waiting' | 'draft') {
+export function nodeRow(
+  n: PlanNode,
+  id: string,
+  status: 'waiting' | 'draft',
+  budgetMicro?: number,
+) {
   const config: NodeConfig = {
+    ...(budgetMicro ? { budgetMicro } : {}),
     ...(n.requires ? { requires: n.requires } : {}),
     checks: n.checks,
     expects: n.expects,
@@ -85,10 +91,12 @@ export function nodeRow(n: PlanNode, id: string, status: 'waiting' | 'draft') {
   };
 }
 
-/** 把方案变成节点和连线的行（节点名 → 生成的节点 ID） */
-export function planToRows(plan: WorkflowPlan) {
+/** 把方案变成节点和连线的行（节点名 → 生成的节点 ID）；budgetOf 给出每个节点分到的预算 */
+export function planToRows(plan: WorkflowPlan, budgetOf?: (key: string) => number | undefined) {
   const ids = new Map(plan.nodes.map((n) => [n.key, randomUUID()]));
-  const nodes = plan.nodes.map((n) => nodeRow(n, ids.get(n.key) as string, 'waiting'));
+  const nodes = plan.nodes.map((n) =>
+    nodeRow(n, ids.get(n.key) as string, 'waiting', budgetOf?.(n.key)),
+  );
   const edges = plan.edges.map((e) => ({
     id: randomUUID(),
     fromNodeId: ids.get(e.from) as string,

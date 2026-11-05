@@ -118,6 +118,7 @@ const repo: CallsRepo = {
         r.runId === runId && r.payerId === payerId && r.kind === 'compute' && r.model === 'sandbox',
     ),
   regionBlockedModels: async () => [],
+  typicalUsage: async () => ({ tools: new Map(), nodes: new Map(), nodeTokens: null }),
 };
 
 let billingUrl = '';
