@@ -81,4 +81,6 @@ Jev 的轻量判断（是不是任务、是不是在说正在整理的任务）�
 
 6. 规划员 502（2026-11-06 排查）。用户重跑时规划员反复失败，调用记录显示上游是 OpenRouter 的 402：`This request requires more credits, or fewer max_tokens. You requested up to 930247 tokens, but can only afford 149795`（`limit_source: openrouter_key_limit`）。两个原因：一是平台用的 API Key 在 OpenRouter 设了花费上限、快用完了（账户余额还有，但 Key 的上限先到）；二是 dsh 按整个上下文窗口要输出上限（约 93 万 token，DeepSeek V4 Pro 每次要预先核算约 $3.8），额度稍紧就整单拒绝，我们的冻结金额也跟着虚高。**已修**：model-gateway 把输出上限压到模型实际能输出的和 `MAX_OUTPUT_TOKENS`（默认 131072，含推理）中较小的那个，冻结按压过的算；上游 402 单独归为 `provider_credits`（说明是平台在供应商的额度、不是用户余额，按 402 交出去不再重试），私聊和 `oasis-tool batch` 都按它处理。Key 的上限由用户在 OpenRouter 调高。
 
+7. 任务单上没有预算档位（2026-11-06 排查）。重跑时报价其实算出来了，但 task 列草案用了 10 秒多，conversation 按普通服务查询的 10 秒超时把它当成失败，卡片上就只剩默认的标准档。**已修**：conversation 等报价按模型调用的超时（`MODEL_GATEWAY_TIMEOUT_MS`）；列草案关掉深度思考，同一份任务单从 22.8 秒降到 4.3 秒，用户少等。
+
 每步跑相关测试和工程门禁；全部完成后由用户删掉当前任务重跑验收。

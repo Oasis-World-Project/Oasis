@@ -239,6 +239,8 @@ export function createQuotes(deps: {
             stream: false,
             messages: [{ role: 'user', content: draftPrompt(input.brief, input.sheet, tools) }],
             response_format: { type: 'json_object' },
+            // 列草案不需要深度思考：开着时一次要二十多秒，用户要多等这么久才看到任务单
+            reasoning: { enabled: false },
           },
           headers: { [OASIS_HEADERS.payerId]: input.ownerId },
           requestId: input.requestId,

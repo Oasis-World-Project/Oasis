@@ -605,6 +605,7 @@ beforeEach(() => {
       fallbackModel: 'deepseek/fallback',
       maxRounds: 3,
       maxTokens: 2000,
+      quoteTimeoutMs: 180_000,
     },
     logger,
   });
@@ -1124,6 +1125,7 @@ describe('接需求', () => {
         fallbackModel: 'fallback',
         maxRounds: 3,
         maxTokens: 2000,
+        quoteTimeoutMs: 180_000,
       },
       logger: pino({ level: 'silent' }),
     });
@@ -1184,6 +1186,7 @@ describe('接需求', () => {
         fallbackModel: 'fallback',
         maxRounds: 3,
         maxTokens: 2000,
+        quoteTimeoutMs: 180_000,
       },
       logger: pino({ level: 'silent' }),
     });

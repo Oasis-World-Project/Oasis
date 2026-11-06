@@ -102,6 +102,38 @@ describe('报价（ADR 0016 §4）', () => {
     expect(quote.minimumMicro).toBe(4 * 300_000 + 150_000);
   });
 
+  it('列草案调一次快速模型、不开深度思考，按草案给出三档', async () => {
+    const sent: Record<string, unknown>[] = [];
+    const quotes = createQuotes({
+      modelGateway: {
+        json: async (_m: string, _p: string, opts: { body: Record<string, unknown> }) => {
+          sent.push(opts.body);
+          return {
+            choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(draft) } }],
+          };
+        },
+      } as unknown as ServiceClient,
+      pricing: async () => ({ models, tools: [image] }),
+      model: 'v/flash',
+      planners: { economy: 'v/flash', standard: 'v/strong', premium: 'v/strong' },
+      fallback,
+      logger: pino({ level: 'silent' }),
+    });
+    const sheet = {
+      title: 't',
+      deliverables: [{ name: '视频', form: 'MP4' }],
+      criteria: ['c'],
+      style: [],
+      budgetMicro: null,
+      assumptions: [],
+      materials: [],
+    };
+    const quote = await quotes.quote({ ownerId: 'o', brief: 'b', sheet, requestId: 'r' });
+    expect(quote?.tiers.map((t) => t.tier)).toEqual(['economy', 'standard', 'premium']);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ model: 'v/flash', reasoning: { enabled: false } });
+  });
+
   it('草案用不了（不是 JSON）时不报价，不抛错', async () => {
     const quotes = createQuotes({
       modelGateway: {

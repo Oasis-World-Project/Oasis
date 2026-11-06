@@ -67,6 +67,8 @@ export interface IntakeConfig {
   maxRounds: number;
   /** 接需求一步的输出上限；留足余量，不靠截断后重来 */
   maxTokens: number;
+  /** 报价要等 task 调一次模型列草案，按模型调用的超时等，不按普通服务查询的 10 秒 */
+  quoteTimeoutMs: number;
 }
 
 const IS_TASK = {
@@ -251,6 +253,8 @@ function intakeActions(deps: {
       const { quote } = await deps.task.json('POST', '/internal/quotes', {
         body: { ownerId, brief: taskBrief(intake.request, intake.turns, sheet), sheet },
         requestId,
+        // 2026-11-06：报价用了 10 秒多，按普通查询的 10 秒超时被当成失败，任务单上就没有预算档位
+        timeoutMs: config.quoteTimeoutMs,
         schema: z.object({ quote: BudgetQuote.nullable() }),
       });
       return quote;
