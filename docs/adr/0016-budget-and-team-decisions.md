@@ -79,4 +79,6 @@ Jev 的轻量判断（是不是任务、是不是在说正在整理的任务）�
 4. 检查减负、Jev 收敛、提示缓存核查。**已完成**：见 §5、§6、§7。
 5. 私聊和问需求的上下文（§8）。**已完成**：conversation 新增 `service/context.ts`：取整段已完成的消息（不限条数），按任务单卡、任务卡、交付消息给每条贴任务标签（结束了的注明「只作背景」）；估计 token 超过「最小窗口 − 预留」时，较早部分交给 `CONTEXT_SUMMARY_MODEL` 按任务分段压成摘要，存进 `conversations.context_summary`（expand 迁移），留下的原文不超过可用空间一半，压缩失败只带放得下的最近部分；改动或删除已压进摘要的消息、真删除任务时摘要作废。普通聊天、Jev 判断（按聊天模型和 Jev 两者较小的窗口）和问需求的每一步都用它；`HISTORY_LIMIT`、问需求的 8 条 / 2000 字、Jev 的 6 条 / 500 字和 `sinceLastTask` 全部去掉。问需求的上下文每步现取（这次任务自己的消息已在接需求记录里，不重复）；会话里发过的文件连同来源列给 AI，AI 在回答里给 `materialIds` 选这次的素材，代码只认列出来的文件；直接给任务单时新选的文件先读再写一遍（只重来这一次）。之前聊天里的附件不再自动算素材。`intakes.context` 不再写入，contract 计划：确认没有进行中的旧接需求依赖它后删除该列。
 
+6. 规划员 502（2026-11-06 排查）。用户重跑时规划员反复失败，调用记录显示上游是 OpenRouter 的 402：`This request requires more credits, or fewer max_tokens. You requested up to 930247 tokens, but can only afford 149795`（`limit_source: openrouter_key_limit`）。两个原因：一是平台用的 API Key 在 OpenRouter 设了花费上限、快用完了（账户余额还有，但 Key 的上限先到）；二是 dsh 按整个上下文窗口要输出上限（约 93 万 token，DeepSeek V4 Pro 每次要预先核算约 $3.8），额度稍紧就整单拒绝，我们的冻结金额也跟着虚高。**已修**：model-gateway 把输出上限压到模型实际能输出的和 `MAX_OUTPUT_TOKENS`（默认 131072，含推理）中较小的那个，冻结按压过的算；上游 402 单独归为 `provider_credits`（说明是平台在供应商的额度、不是用户余额，按 402 交出去不再重试），私聊和 `oasis-tool batch` 都按它处理。Key 的上限由用户在 OpenRouter 调高。
+
 每步跑相关测试和工程门禁；全部完成后由用户删掉当前任务重跑验收。

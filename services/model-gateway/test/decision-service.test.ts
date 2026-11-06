@@ -120,7 +120,7 @@ beforeAll(async () => {
     ...common,
     fallback: {
       model: 'test/fallback',
-      chat: createChatService({ ...common, defaultMaxTokens: 16384 }),
+      chat: createChatService({ ...common, defaultMaxTokens: 16384, maxOutputTokens: 131_072 }),
     },
   });
 });

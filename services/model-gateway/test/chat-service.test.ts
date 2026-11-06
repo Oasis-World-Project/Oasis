@@ -83,6 +83,7 @@ beforeAll(async () => {
     }),
     prices: () => new Map([['vendor/model', { prompt: 0.0000001, completion: 0.0000005 }]]),
     defaultMaxTokens: 1000,
+    maxOutputTokens: 100_000,
     fallbackHoldMicro: 200_000,
   });
 });
@@ -424,6 +425,34 @@ describe('一次模型调用', () => {
     expect(finished[0]).toMatchObject({ status: 'failed', chargedMicro: 0 });
   });
 
+  it('平台在供应商那边额度不够（402）：单独的错误码，说明不是用户余额，退回冻结', async () => {
+    upstreamStatus = 402;
+    upstreamMessage = 'This request requires more credits, or fewer max_tokens.';
+    const call = await chat.prepare({
+      caller: { payerId: PAYER },
+      requestId: 'r402',
+      body: request,
+    });
+    const err = await chat.open(call, new AbortController().signal).catch((e: unknown) => e);
+    expect(err).toMatchObject({ statusCode: 402, code: 'provider_credits' });
+    expect((err as HttpError).message).toContain('不是你的余额');
+    expect(billingCalls.map((c) => c.path)).toEqual(['/internal/holds', 'release']);
+  });
+
+  it('输出上限按整个上下文窗口要时压到单次回答的上限，冻结也按压过的算', async () => {
+    const call = await chat.prepare({
+      caller: { payerId: PAYER },
+      requestId: 'r-max',
+      body: { ...request, max_tokens: 930_247 },
+    });
+    expect(call.maxOutputTokens).toBe(100_000);
+    const response = await chat.open(call, new AbortController().signal);
+    await chat.pump(call, response, () => {});
+    expect(upstreamBodies[0]).toMatchObject({ max_tokens: 100_000 });
+    // 100000 × 0.5 = 50000 微美元，再加一点输入
+    expect(billingCalls[0]?.body.amountMicro).toBeLessThan(51_000);
+  });
+
   it('上游的地区限制和限流给出对应的错误码', async () => {
     upstreamStatus = 403;
     upstreamMessage = 'This model is not available in your region.';
@@ -463,6 +492,7 @@ describe('一次模型调用', () => {
       }),
       prices: () => new Map(),
       defaultMaxTokens: 1000,
+      maxOutputTokens: 100_000,
       fallbackHoldMicro: 1,
     });
     await expect(

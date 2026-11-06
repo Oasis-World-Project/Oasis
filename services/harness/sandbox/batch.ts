@@ -355,6 +355,7 @@ export async function runBatch(input: {
             'invalid_tool_args',
             'call_budget_exceeded',
             'insufficient_balance',
+            'provider_credits',
             'provider_not_configured',
           ].includes(code ?? '');
           result.status = rejected ? 'failed' : 'uncertain';

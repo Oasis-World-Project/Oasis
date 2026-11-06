@@ -212,7 +212,11 @@ await startService({
     toolService = tools;
     tools.start();
     app.addHook('onClose', () => tools.close());
-    const chat = createChatService({ ...common, defaultMaxTokens: config.DEFAULT_MAX_TOKENS });
+    const chat = createChatService({
+      ...common,
+      defaultMaxTokens: config.DEFAULT_MAX_TOKENS,
+      maxOutputTokens: config.MAX_OUTPUT_TOKENS,
+    });
     const runKeys = createRunKeyService({ repo: createRunKeysRepo(resources.postgres.pool) });
     const avatars = createAvatarService({
       client: liveAvatar,

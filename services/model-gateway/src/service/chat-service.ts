@@ -35,6 +35,8 @@ export function createChatService(deps: {
   meter: Meter;
   prices: () => Map<string, ModelPrice>;
   defaultMaxTokens: number;
+  /** 单次回答的输出上限（调用方要得更多时压到这里），见 config 的 MAX_OUTPUT_TOKENS */
+  maxOutputTokens: number;
   fallbackHoldMicro: number;
 }) {
   const { provider, meter } = deps;
@@ -68,11 +70,20 @@ export function createChatService(deps: {
       }
       const { max_cost_micro: maxCostMicro, report_cost: reportCost, ...providerBody } = input.body;
       const requested = providerBody.max_completion_tokens ?? providerBody.max_tokens;
-      const maxOutputTokens =
-        requested ??
-        deps.prices().get(providerBody.model)?.capabilities?.maxTokens ??
-        deps.defaultMaxTokens;
-      const body = requested ? providerBody : { ...providerBody, max_tokens: maxOutputTokens };
+      const modelMax = deps.prices().get(providerBody.model)?.capabilities?.maxTokens;
+      // 输出上限不超过模型实际能输出的，也不超过单次回答的上限：dsh 会按整个上下文窗口要（约 93 万），
+      // 供应商按这个数预先核算花费，额度稍紧就整单拒绝，冻结金额也会虚高（2026-11-06）
+      const maxOutputTokens = Math.min(
+        requested ?? modelMax ?? deps.defaultMaxTokens,
+        modelMax ?? Infinity,
+        deps.maxOutputTokens,
+      );
+      const field =
+        providerBody.max_completion_tokens != null ? 'max_completion_tokens' : 'max_tokens';
+      const body =
+        requested === maxOutputTokens
+          ? providerBody
+          : { ...providerBody, [field]: maxOutputTokens };
       const extraChars = input.body.tools ? JSON.stringify(input.body.tools).length : 0;
       const price = deps.prices().get(body.model);
       const amountMicro = price

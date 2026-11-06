@@ -32,6 +32,15 @@ function upstreamError(status: number, detail: string): HttpError {
   if (status === 429) {
     return new HttpError(503, 'provider_busy', '模型服务现在太忙，请稍后再试');
   }
+  // 平台在供应商那边的额度不够（账户余额或 API Key 的花费上限，2026-11-06）：不是用户的余额，
+  // 稍后再试也不会好，由管理员充值或调高 Key 的上限；按 402 交出去，调用方不必重试
+  if (status === 402) {
+    return new HttpError(
+      402,
+      'provider_credits',
+      '平台在模型服务商那边的额度不够了（不是你的余额），请管理员充值或调高 API Key 的额度上限',
+    );
+  }
   return new HttpError(502, 'provider_error', '模型服务返回了错误，请稍后再试');
 }
 

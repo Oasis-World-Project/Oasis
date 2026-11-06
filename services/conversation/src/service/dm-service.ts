@@ -26,6 +26,7 @@ const FRIENDLY_ERRORS: Record<string, string> = {
   provider_error: '模型服务出错了，请稍后再试',
   provider_region_unavailable: '这个 AI 在当前网络所在的地区用不了，换一个 AI 试试',
   provider_busy: '这个 AI 现在太忙了，过一会儿再试',
+  provider_credits: '平台在模型服务商那边的额度不够了（不是你的余额），请管理员充值或调高额度上限',
   model_unavailable: '这个 AI 还没有接入',
   stream_interrupted: '回复连接中断，已保留内容，可以继续回复',
   reply_length: '本次回复达到长度上限，已保留内容，可以继续回复',

@@ -97,6 +97,11 @@ export const modelGatewayEnv = {
     .transform((value) => value || undefined),
   /** 调用方没给输出上限（max_tokens / max_completion_tokens）时用这个（也用于估算冻结金额） */
   DEFAULT_MAX_TOKENS: z.coerce.number().int().positive().max(32_000).default(2048),
+  /**
+   * 单次回答最多输出多少 token（含推理）：调用方要得更多时压到这里。供应商按输出上限预先核算花费，
+   * 冻结金额也按它算；dsh 会按整个上下文窗口要（约 93 万），远超一轮实际用到的（2026-11-06）。
+   */
+  MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(131_072),
   /** 模型价格表多久刷新一次 */
   PRICING_REFRESH_MS: z.coerce
     .number()
