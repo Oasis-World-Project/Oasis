@@ -199,8 +199,11 @@ fake.get('/api/v1/videos/models', async () => ({
     },
   ],
 }));
+/** 视频提交被拒的状态码和原文；null = 接受 */
+let videoReject: { status: number; body: unknown } | null = null;
 fake.post('/api/v1/videos', async (request, reply) => {
   record('video', request.body);
+  if (videoReject) return reply.code(videoReject.status).send(videoReject.body);
   return reply
     .code(202)
     .send({ id: 'vid-1', polling_url: '/api/v1/videos/vid-1', status: 'pending' });
@@ -583,6 +586,7 @@ afterAll(async () => {
   await fake.close();
 });
 beforeEach(() => {
+  videoReject = null;
   typical = noHistory();
   renderReceiptMissing = false;
   renderBusy = false;
@@ -1393,6 +1397,19 @@ describe('长任务（视频）', () => {
         image_url: { url: `data:image/png;base64,${base64}` },
       },
     ]);
+  });
+
+  it('视频提交被 API Key 的花费上限拒绝：说明是平台额度不够，不是笼统的「拒绝了提交」', async () => {
+    videoReject = {
+      status: 403,
+      body: { error: { message: 'Key limit exceeded (total limit).', code: 403 } },
+    };
+    expect(await errorOf(call('video.generate', { prompt: 'x' }))).toMatchObject({
+      statusCode: 402,
+      code: 'provider_credits',
+    });
+    videoReject = { status: 400, body: { error: { message: 'bad prompt' } } };
+    expect((await errorOf(call('video.generate', { prompt: 'x' })))?.code).toBe('provider_error');
   });
 
   it('参数和价格预检失败不冻结；高价模型冻结覆盖实时目录而非固定单价', async () => {

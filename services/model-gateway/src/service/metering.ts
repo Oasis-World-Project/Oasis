@@ -24,17 +24,25 @@ export interface MeteredCall {
   caller: Caller;
 }
 
+/**
+ * 平台在供应商那边的额度不够：账户余额不够时 OpenRouter 回 402，API Key 的花费上限用完时回 403
+ * （`limit_source: openrouter_key_limit`，2026-11-06 实测）。不是用户的余额，稍后再试也不会好。
+ */
+function outOfCredits(status: number, detail: string): boolean {
+  const text = detail.toLowerCase();
+  return status === 402 || (status === 403 && /key_limit|key limit/.test(text));
+}
+
 /** 把上游拒绝的原因归成几类，让用户看到能照着做的提示；细节只进日志和调用记录。 */
-function upstreamError(status: number, detail: string): HttpError {
+export function upstreamError(status: number, detail: string): HttpError {
   if (status === 403 && detail.toLowerCase().includes(REGION_ERROR)) {
     return new HttpError(502, 'provider_region_unavailable', '这个模型在当前网络所在的地区用不了');
   }
   if (status === 429) {
     return new HttpError(503, 'provider_busy', '模型服务现在太忙，请稍后再试');
   }
-  // 平台在供应商那边的额度不够（账户余额或 API Key 的花费上限，2026-11-06）：不是用户的余额，
-  // 稍后再试也不会好，由管理员充值或调高 Key 的上限；按 402 交出去，调用方不必重试
-  if (status === 402) {
+  // 由管理员充值或调高 Key 的上限；按 402 交出去，调用方不必重试
+  if (outOfCredits(status, detail)) {
     return new HttpError(
       402,
       'provider_credits',

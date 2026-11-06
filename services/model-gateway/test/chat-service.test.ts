@@ -437,6 +437,17 @@ describe('一次模型调用', () => {
     expect(err).toMatchObject({ statusCode: 402, code: 'provider_credits' });
     expect((err as HttpError).message).toContain('不是你的余额');
     expect(billingCalls.map((c) => c.path)).toEqual(['/internal/holds', 'release']);
+    // API Key 的花费上限用完时 OpenRouter 回 403，同样归为平台额度不够
+    upstreamStatus = 403;
+    upstreamMessage = 'Key limit exceeded (total limit). limit_source: openrouter_key_limit';
+    const limited = await chat.prepare({
+      caller: { payerId: PAYER },
+      requestId: 'r403',
+      body: request,
+    });
+    expect(
+      await chat.open(limited, new AbortController().signal).catch((e: unknown) => e),
+    ).toMatchObject({ statusCode: 402, code: 'provider_credits' });
   });
 
   it('输出上限按整个上下文窗口要时压到单次回答的上限，冻结也按压过的算', async () => {

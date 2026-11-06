@@ -12,7 +12,7 @@ import type { SearchClient } from '../adapters/tavily.ts';
 import type { BrowserStackClient } from '../adapters/browserstack.ts';
 import { ToolAdmissionError, type ToolJob, type ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
 import type { Typical } from '../repo/calls-repo.ts';
-import type { Caller, Meter, MeteredCall } from './metering.ts';
+import { upstreamError, type Caller, type Meter, type MeteredCall } from './metering.ts';
 import { videoSecondRate } from './pricing.ts';
 import { AVATAR_CATALOG_TOOL, type AvatarCatalog } from './avatar-catalog.ts';
 import { TOOLS, type ToolConfig, type ToolDef } from './tools.ts';
@@ -857,9 +857,14 @@ export function createToolService(deps: {
                       throw new Error('供应商服务器响应未确认');
                     }
                     if (!response.ok) {
-                      await meter.fail(call, `供应商拒绝：${response.status}`);
+                      const detail = (await response.text().catch(() => '')).slice(0, 500);
+                      await meter.fail(call, `供应商拒绝：${response.status} ${detail}`);
                       await jobs.finish(id, 'failed', '供应商拒绝了提交');
-                      throw new HttpError(502, 'provider_error', '供应商拒绝了提交');
+                      // 平台额度用完这类原因照实说（2026-11-06：视频提交被 Key 上限拒绝，只显示「拒绝了提交」）
+                      const known = upstreamError(response.status, detail);
+                      throw known.code === 'provider_error'
+                        ? new HttpError(502, 'provider_error', '供应商拒绝了提交')
+                        : known;
                     }
                     accepted = true;
                     return response;
