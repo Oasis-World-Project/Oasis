@@ -19,7 +19,7 @@ import { harnessEnv } from './config.ts';
 import { createDockerApi, defaultDockerSocket } from './executor/docker-api.ts';
 import { createDockerExecutor, type Executor } from './executor/executor.ts';
 import { createPreviewExecutor } from './executor/preview-executor.ts';
-import { createPreviewRepo } from './repo/preview-repo.ts';
+import { createBrowserRepo } from './repo/browser-repo.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
 import { createRunService, type RunService } from './service/run-service.ts';
 import { createPreviewService, type PreviewService } from './service/preview-service.ts';
@@ -83,7 +83,7 @@ await startService({
         await runs?.stopAll();
       },
     };
-    // 任务被删除（用户删除或被新版替换）：停掉它的预览，删掉运行存档和记录（ADR 0012）
+    // 任务被用户删除：停掉它还开着的检查浏览器，删掉运行存档和记录（ADR 0012）
     const taskDeleted = startEventConsumer({
       connection: eventBus.connection,
       stream: TASK_STREAM,
@@ -145,7 +145,7 @@ await startService({
     previews = createPreviewService({
       websiteOrigins: config.WEBSITE_TEST_ORIGINS,
       store,
-      repo: createPreviewRepo(resources.postgres.pool),
+      repo: createBrowserRepo(resources.postgres.pool),
       executor: createPreviewExecutor({
         docker: createDockerApi(config.DOCKER_SOCKET ?? defaultDockerSocket()),
         image: config.PREVIEW_IMAGE,
@@ -188,6 +188,8 @@ await startService({
         ?.recover()
         .catch((err: unknown) => logger.warn({ err }, '运行接管暂未完成，稍后重试'));
     }, config.RECOVERY_INTERVAL_MS);
-    await previews.recover().catch((err: unknown) => logger.warn({ err }, '清理遗留预览失败'));
+    await previews
+      .recover()
+      .catch((err: unknown) => logger.warn({ err }, '清理遗留的检查浏览器失败'));
   },
 });

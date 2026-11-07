@@ -7,7 +7,8 @@ import type { Meter } from './metering.ts';
 const HOUR_MS = 3_600_000;
 /** 冻结比最长运行时间多留这么久，免得结算前就被自动退回 */
 const HOLD_MARGIN_MS = 10 * 60_000;
-/** 调用记录里的「模型」一栏 */
+/** 调用记录里的「模型」一栏：节点运行的沙箱记为 sandbox，检查用的浏览器单独标识 */
+const MODEL = { run: 'sandbox', 'application-check': 'application-check' } as const;
 
 export function createComputeService(deps: {
   meter: Meter;
@@ -30,7 +31,7 @@ export function createComputeService(deps: {
       nodeId: string | null;
       cores: number;
       maxMs: number;
-      purpose?: 'run' | 'preview' | 'application-check';
+      purpose?: keyof typeof MODEL;
       requestId: string;
     }): Promise<{ callId: string | null; heldMicro: number }> {
       if (deps.pricePerCoreHourMicro === 0) return { callId: null, heldMicro: 0 };
@@ -43,12 +44,7 @@ export function createComputeService(deps: {
           ...(input.nodeId ? { nodeId: input.nodeId } : {}),
         },
         kind: 'compute',
-        model:
-          input.purpose === 'preview'
-            ? 'preview'
-            : input.purpose === 'application-check'
-              ? 'application-check'
-              : 'sandbox',
+        model: MODEL[input.purpose ?? 'run'],
         amountMicro: heldMicro,
         requestId: input.requestId,
         ttlMs: input.maxMs + HOLD_MARGIN_MS,

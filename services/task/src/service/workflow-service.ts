@@ -1001,16 +1001,12 @@ export function createWorkflowService(deps: {
     onRunFinished,
 
     /**
-     * 一次属于任务的模型调用结算了：累加到任务和节点上（同一次调用只算一次）。
-     * 任务在跑、且花费超过上限时，停下所有在跑的节点，交给用户决定。
+     * 一次属于任务的调用（模型、工具、沙箱和检查浏览器的算力）结算了：累加到任务和节点上，
+     * 同一次调用只算一次。花超也不停（ADR 0016），只提醒节点收尾。
      */
     async onCallSettled(
-      data: Pick<CallSettledData, 'callId' | 'taskId' | 'nodeId' | 'chargedMicro'> & {
-        model?: string;
-      },
+      data: Pick<CallSettledData, 'callId' | 'taskId' | 'nodeId' | 'chargedMicro'>,
     ) {
-      // 成果预览在任务完成后单独付费；账单保留 taskId 关联，但不回写生成任务的花费。
-      if (data.model === 'preview') return;
       if (!(await store.get(data.taskId))) return;
       let nudge: { runId: string; text: string } | undefined;
       await transact(data.taskId, async (snapshot, w) => {

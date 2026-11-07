@@ -55,22 +55,19 @@ export const outbox = pgTable('outbox', {
   publishedAt: at('published_at'),
 });
 
-/** 交付后可重复开启的临时浏览器，不是 agent run。 */
-export const previewSessions = pgTable('preview_sessions', {
+/** 检查用的隔离浏览器（ADR 0009、0021），不是 agent run：一次检查开一个，用完即停、按实际时长结算。 */
+export const checkBrowsers = pgTable('check_browsers', {
   id: uuid('id').primaryKey(),
-  artifactId: uuid('artifact_id').notNull(),
-  ownerId: uuid('owner_id').notNull(),
+  payerId: uuid('payer_id').notNull(),
   taskId: uuid('task_id').notNull(),
   status: text('status')
-    .$type<'starting' | 'running' | 'stopping' | 'stopped' | 'expired' | 'failed'>()
+    .$type<'starting' | 'running' | 'stopping' | 'stopped' | 'failed'>()
     .notNull(),
   containerId: text('container_id'),
   computeCallId: uuid('compute_call_id'),
   heldMicro: bigint('held_micro', { mode: 'number' }).notNull().default(0),
   spentMicro: bigint('spent_micro', { mode: 'number' }),
   startedAt: at('started_at'),
-  lastInputAt: at('last_input_at'),
-  deadlineAt: at('deadline_at').notNull(),
   stoppedAt: at('stopped_at'),
   error: text('error'),
   createdAt: at('created_at').notNull().defaultNow(),

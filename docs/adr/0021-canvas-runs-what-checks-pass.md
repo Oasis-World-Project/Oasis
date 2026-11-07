@@ -24,6 +24,7 @@
 - 经验手册 `web-apps.md`：画布怎么运行静态作品、`oasis-test.json` 的位置、带后端的作品只能下载。
 - 检查镜像 `oasis/harness-preview:1.64.0` 里的控制端变了，要重新 `pnpm preview:build`。
 - 配置删除 `PREVIEW_IDLE_MS`。
+- 2026-11-08 已执行（重构阶段 1）：`preview_sessions` 只剩检查用的浏览器在用，换成 `check_browsers`，只记付费人、任务、容器、算力冻结和结算；迁移分三步（建新表、搬旧记录、删旧表）。每次检查开自己的浏览器、互不排队，去掉了「每人只能开一个」的限制（原来两个检查同时跑会撞上 409 `preview_limit`）；预览时代的 start/stop/frame 接口、`PreviewSessionBody` 和算力冻结用途 `preview` 一并删除。
 
 ## 4. 验证
 

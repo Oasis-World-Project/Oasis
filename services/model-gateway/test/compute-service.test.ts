@@ -40,14 +40,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 算力接管'
     await pool.query(`drop schema if exists ${schema} cascade`);
     await pool.end();
   });
-  it('只结算同一付费人的原运行沙箱窗口，保留预览与其他付费人，重复接管不重复发计费事件', async () => {
+  it('只结算同一付费人的原运行沙箱窗口，保留浏览器检查与其他付费人，重复接管不重复发计费事件', async () => {
     const actual = createCallsRepo(pool);
     const ids = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
     for (const [index, id] of ids.entries()) {
       await actual.start({
         id,
         kind: 'compute',
-        model: index === 2 ? 'preview' : 'sandbox',
+        model: index === 2 ? 'application-check' : 'sandbox',
         payerId: index === 3 ? randomUUID() : PAYER,
         runId: RUN,
         taskId: TASK,
@@ -193,16 +193,10 @@ describe('算力计费', () => {
     });
     expect(billingCalls).toHaveLength(0);
   });
-  it('预览与浏览器关卡的调用类型单独标识', async () => {
+  it('节点沙箱与检查用浏览器的调用类型分开标识', async () => {
     const compute = build(15_000);
-    const preview = await compute.hold({
-      ...run,
-      requestId: 'preview',
-      cores: 2,
-      maxMs: 60_000,
-      purpose: 'preview',
-    });
-    expect(rows.get(preview.callId!)?.model).toBe('preview');
+    const sandbox = await compute.hold({ ...run, requestId: 'run', cores: 2, maxMs: 60_000 });
+    expect(rows.get(sandbox.callId!)?.model).toBe('sandbox');
     const check = await compute.hold({
       ...run,
       requestId: 'check',

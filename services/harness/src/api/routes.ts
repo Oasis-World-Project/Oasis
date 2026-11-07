@@ -172,7 +172,7 @@ export function registerRoutes(
     return reply.code(202).send();
   });
 
-  /** 停止：存下产出和会话，之后可以用 continueFrom 接着做 */
+  /** 停止：存下产出（会话留在持久工作目录里），之后可以用 continueFrom 接着做 */
   app.post('/internal/runs/:runId/stop', async (request, reply) => {
     const { runId } = parseWith(RunParams, request.params);
     await runs.stop(runId);

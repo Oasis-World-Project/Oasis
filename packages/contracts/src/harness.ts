@@ -279,19 +279,6 @@ export const RunInspectBody = z.object({
   maxChars: z.number().int().min(1).max(50_000).default(8000),
 });
 
-/** 运行结束后独立开启的私有预览；应用脚本只在服务端运行。 */
-export const PreviewSessionBody = z.object({
-  id: z.uuid(),
-  artifactId: z.uuid(),
-  status: z.enum(['starting', 'running', 'stopping', 'stopped', 'expired', 'failed']),
-  heldMicro: z.number().int().nonnegative(),
-  spentMicro: z.number().int().nonnegative().nullable(),
-  startedAt: z.iso.datetime().nullable(),
-  deadlineAt: z.iso.datetime(),
-  error: z.string().nullable(),
-});
-export type PreviewSessionBody = z.infer<typeof PreviewSessionBody>;
-
 export const ApplicationCheckResult = z.object({
   application: BrowserTestResult.shape.application,
   passed: z.boolean(),

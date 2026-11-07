@@ -1,31 +1,24 @@
 import { pino } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
-import type { ApplicationBundle } from '@oasis/contracts/canvas';
 import type { ServiceClient, ObjectStore } from '@oasis/service-kit';
 import type { RunService } from '../src/service/run-service.ts';
 import type { PreviewExecutor } from '../src/executor/preview-executor.ts';
-import type { PreviewRepo, PreviewRow } from '../src/repo/preview-repo.ts';
+import type { BrowserRepo, BrowserRow } from '../src/repo/browser-repo.ts';
 import { createPreviewService } from '../src/service/preview-service.ts';
 import { createWebsiteFetch, websiteUrl } from '../src/executor/website-fetch.ts';
 
-const access = {
-  artifactId: '00000000-0000-4000-8000-000000000001',
-  ownerId: '00000000-0000-4000-8000-000000000002',
-  taskId: '00000000-0000-4000-8000-000000000003',
-};
+const RUN = '00000000-0000-4000-8000-000000000001';
+const PAYER = '00000000-0000-4000-8000-000000000002';
+const TASK = '00000000-0000-4000-8000-000000000003';
+const CALL = '00000000-0000-4000-8000-000000000004';
+const input = { runId: RUN, payerId: PAYER, taskId: TASK };
+const ACTIVE = ['starting', 'running', 'stopping'];
 
 function fixture(files?: Record<string, string>) {
-  const rows = new Map<string, PreviewRow>();
-  const repo: PreviewRepo = {
+  const rows = new Map<string, BrowserRow>();
+  // 和数据库一样，读出来的是快照
+  const repo: BrowserRepo = {
     async insert(value) {
-      if (
-        [...rows.values()].some(
-          (row) =>
-            row.ownerId === value.ownerId &&
-            ['starting', 'running', 'stopping'].includes(row.status),
-        )
-      )
-        return false;
       rows.set(value.id, {
         ...value,
         status: 'starting',
@@ -34,39 +27,29 @@ function fixture(files?: Record<string, string>) {
         heldMicro: 0,
         spentMicro: null,
         startedAt: null,
-        lastInputAt: null,
         stoppedAt: null,
         error: null,
         createdAt: new Date(),
       });
-      return true;
     },
-    async latest(artifactId, ownerId) {
-      return [...rows.values()]
-        .reverse()
-        .find((row) => row.artifactId === artifactId && row.ownerId === ownerId);
-    },
-    async active(ownerId) {
-      return [...rows.values()].find(
-        (row) =>
-          row.ownerId === ownerId && ['starting', 'running', 'stopping'].includes(row.status),
-      );
+    async get(id) {
+      const row = rows.get(id);
+      return row && { ...row };
     },
     async update(id, patch) {
       Object.assign(rows.get(id)!, patch);
     },
     async unfinished() {
-      return [...rows.values()].filter((row) =>
-        ['starting', 'running', 'stopping'].includes(row.status),
-      );
+      return [...rows.values()]
+        .filter((row) => ACTIVE.includes(row.status))
+        .map((row) => ({ ...row }));
     },
     async removeFinished(taskId) {
       for (const [id, row] of rows)
-        if (row.taskId === taskId && !['starting', 'running', 'stopping'].includes(row.status))
-          rows.delete(id);
+        if (row.taskId === taskId && !ACTIVE.includes(row.status)) rows.delete(id);
     },
   };
-  const destroy = vi.fn(async () => undefined);
+  const destroy = vi.fn(async (_id?: string) => undefined);
   const test = vi.fn(async () => ({
     report: {
       version: 1,
@@ -105,9 +88,8 @@ function fixture(files?: Record<string, string>) {
   } as unknown as PreviewExecutor;
   const modelGateway = {
     json: vi.fn(async (method: string, path: string) => {
-      if (path.startsWith('/internal/v1/compute/quote')) return { maxMicro: 500 };
       if (method === 'POST' && path === '/internal/v1/compute')
-        return { callId: '00000000-0000-4000-8000-000000000004', heldMicro: 500 };
+        return { callId: CALL, heldMicro: 500 };
       if (method === 'GET') return { status: 'succeeded', chargedMicro: 25 };
       return undefined;
     }),
@@ -121,8 +103,8 @@ function fixture(files?: Record<string, string>) {
     maxMs: 60_000,
     runs: {
       get: async () => ({
-        payerId: access.ownerId,
-        taskId: access.taskId,
+        payerId: PAYER,
+        taskId: TASK,
         status: 'succeeded',
         outputs: Object.entries(files ?? {}).map(([path, content]) => ({
           path,
@@ -144,6 +126,12 @@ function fixture(files?: Record<string, string>) {
       get: async () => Buffer.from('{}'),
     } as unknown as ObjectStore,
   });
+  /** 发出去的算力结算（POST …/settle 的请求体） */
+  const settles = () =>
+    vi
+      .mocked(modelGateway.json)
+      .mock.calls.filter(([method, path]) => method === 'POST' && String(path).endsWith('/settle'))
+      .map((call) => (call[2] as { body: unknown }).body);
   return {
     setAlive: (value: boolean) => {
       alive = value;
@@ -156,16 +144,9 @@ function fixture(files?: Record<string, string>) {
     executor,
     test,
     look,
+    settles,
   };
 }
-
-const BUNDLE: ApplicationBundle = {
-  spec: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
-  files: [
-    { path: 'oasis-app.json', contentBase64: 'e30=' },
-    { path: 'index.html', contentBase64: 'PGgxPk9LPC9oMT4=' },
-  ],
-};
 
 const staticApp = (files: Record<string, string>) => ({
   'site/oasis-app.json': JSON.stringify({
@@ -177,47 +158,36 @@ const staticApp = (files: Record<string, string>) => ({
   ...files,
 });
 
+/** 带测试计划的网页：检查会走到 box.test */
+const testedApp = (steps: unknown[]) =>
+  staticApp({
+    'site/index.html': '<h1>actual</h1>',
+    'site/oasis-test.json': JSON.stringify({ version: 1, steps }),
+  });
+
 describe('隔离浏览器检查', () => {
   it('清单字段缺失给出实际路径与字段错误，在启动和冻结前拒绝', async () => {
-    const { service, start, modelGateway } = fixture({
+    const { service, start, modelGateway, rows } = fixture({
       'site/oasis-app.json': JSON.stringify({ version: 1, kind: 'static', entry: 'index.html' }),
       'site/index.html': '<h1>actual</h1>',
     });
     try {
-      const result = await service.checkRun({
-        runId: access.artifactId,
-        payerId: access.ownerId,
-        taskId: access.taskId,
-      });
+      const result = await service.checkRun(input);
       expect(result.passed).toBe(false);
       expect(result.reason).toContain('root');
       expect(result.reason).toContain('out/site/oasis-app.json');
       expect(result.reason).toContain('in/.oasis-formats.json');
       expect(start).not.toHaveBeenCalled();
       expect(modelGateway.json).not.toHaveBeenCalled();
+      expect(rows.size).toBe(0);
     } finally {
       await service.close();
     }
   });
   it('节点自查读运行中沙箱的目录，跑同一套浏览器检查，不留档；目录里没有清单时直接说明', async () => {
-    const { service, test, destroy, rows } = fixture({
-      'site/oasis-app.json': JSON.stringify({
-        version: 1,
-        kind: 'static',
-        root: 'site',
-        entry: 'index.html',
-      }),
-      'site/index.html': '<h1>actual</h1>',
-      'site/oasis-test.json': JSON.stringify({
-        version: 1,
-        steps: [{ action: 'text', selector: 'h1', text: 'expected' }],
-      }),
-    });
-    const input = {
-      runId: access.artifactId,
-      payerId: access.ownerId,
-      taskId: access.taskId,
-    };
+    const { service, test, destroy, rows } = fixture(
+      testedApp([{ action: 'text', selector: 'h1', text: 'expected' }]),
+    );
     try {
       const result = await service.checkLive({ ...input, dir: 'site' });
       expect(result.passed).toBe(false);
@@ -225,9 +195,10 @@ describe('隔离浏览器检查', () => {
       expect(result.reason).toContain('页面错误：boom');
       expect(test).toHaveBeenCalledTimes(1);
       expect(destroy).toHaveBeenCalledTimes(1);
-      // 每次自查一条新的预览记录，用完即停
-      expect([...rows.values()].every((row) => row.artifactId !== access.artifactId)).toBe(true);
-      expect([...rows.values()].map((row) => row.status)).toEqual(['stopped']);
+      // 每次检查开一个浏览器，用完即停、结算
+      expect([...rows.values()]).toMatchObject([
+        { payerId: PAYER, taskId: TASK, status: 'stopped', heldMicro: 500, spentMicro: 25 },
+      ]);
       const missing = await service.checkLive({ ...input, dir: 'other' });
       expect(missing).toEqual({
         passed: false,
@@ -248,7 +219,6 @@ describe('隔离浏览器检查', () => {
       }),
     );
     try {
-      const input = { runId: access.artifactId, payerId: access.ownerId, taskId: access.taskId };
       expect((await service.checkLive({ ...input, dir: 'site' })).reason).toContain(
         '页面错误：boom',
       );
@@ -270,7 +240,6 @@ describe('隔离浏览器检查', () => {
     }
   });
   it('画布里加载不了的文件、放错目录的测试计划，在启动和冻结前就说清楚', async () => {
-    const input = { runId: access.artifactId, payerId: access.ownerId, taskId: access.taskId };
     const broken = fixture(
       staticApp({
         'site/index.html': '<script type="module" src="./app.js"></script>',
@@ -309,11 +278,7 @@ describe('隔离浏览器检查', () => {
     const { service, look } = fixture(staticApp({ 'site/index.html': '<canvas></canvas>' }));
     look.mockResolvedValueOnce({ blank: true, color: '#080808' });
     try {
-      const result = await service.checkRun({
-        runId: access.artifactId,
-        payerId: access.ownerId,
-        taskId: access.taskId,
-      });
+      const result = await service.checkRun(input);
       expect(result.passed).toBe(false);
       expect(result.reason).toContain('画面检查：打开后一直是一整片纯色（#080808）');
       expect(result.report?.unchecked[0]).toContain('要和 oasis-app.json 放在同一目录');
@@ -330,20 +295,9 @@ describe('隔离浏览器检查', () => {
     await expect(get({ url: 'https://127.0.0.1', method: 'POST' })).rejects.toThrow('限制');
   });
   it('业务断言失败会失败关卡，仍然停止并结算；报告读取校验属主', async () => {
-    const { service, test, destroy } = fixture({
-      'site/oasis-app.json': JSON.stringify({
-        version: 1,
-        kind: 'static',
-        root: 'site',
-        entry: 'index.html',
-      }),
-      'site/index.html': '<h1>actual</h1>',
-      'site/oasis-test.json': JSON.stringify({
-        version: 1,
-        steps: [{ action: 'text', selector: 'h1', text: 'expected' }],
-      }),
-    });
-    const input = { runId: access.artifactId, payerId: access.ownerId, taskId: access.taskId };
+    const { service, test, destroy, settles } = fixture(
+      testedApp([{ action: 'text', selector: 'h1', text: 'expected' }]),
+    );
     try {
       const result = await service.checkRun(input);
       expect(result.passed).toBe(false);
@@ -366,29 +320,15 @@ describe('隔离浏览器检查', () => {
       ]);
       expect(test).toHaveBeenCalledTimes(1);
       expect(destroy).toHaveBeenCalledTimes(1);
-      await expect(service.report({ ...input, payerId: access.taskId })).rejects.toThrow(
-        '没有这次运行',
-      );
+      expect(settles()).toHaveLength(1);
+      await expect(service.report({ ...input, payerId: TASK })).rejects.toThrow('没有这次运行');
     } finally {
       await service.close();
     }
   });
   it('检查不设时限：用户停止时断开即回收浏览器；检查用的浏览器自己退出记为未完成', async () => {
-    const manifest = {
-      'site/oasis-app.json': JSON.stringify({
-        version: 1,
-        kind: 'static',
-        root: 'site',
-        entry: 'index.html',
-      }),
-      'site/index.html': '<h1>actual</h1>',
-      'site/oasis-test.json': JSON.stringify({
-        version: 1,
-        steps: [{ action: 'visible', selector: 'h1' }],
-      }),
-    };
-    const { service, test, destroy } = fixture(manifest);
-    const input = { runId: access.artifactId, payerId: access.ownerId, taskId: access.taskId };
+    const app = testedApp([{ action: 'visible', selector: 'h1' }]);
+    const { service, test, destroy, rows } = fixture(app);
     try {
       let rejectTest!: (error: Error) => void;
       test.mockImplementationOnce(
@@ -407,10 +347,11 @@ describe('隔离浏览器检查', () => {
       abort.abort();
       await expect(checking).rejects.toMatchObject({ statusCode: 499, code: 'check_aborted' });
       expect(destroy).toHaveBeenCalled();
+      expect([...rows.values()].map((row) => row.status)).toEqual(['stopped']);
     } finally {
       await service.close();
     }
-    const dead = fixture(manifest);
+    const dead = fixture(app);
     dead.setAlive(false);
     try {
       await expect(dead.service.checkRun(input)).rejects.toMatchObject({
@@ -418,72 +359,120 @@ describe('隔离浏览器检查', () => {
         code: 'check_incomplete',
       });
       expect(dead.test).not.toHaveBeenCalled();
+      expect([...dead.rows.values()].map((row) => row.status)).toEqual(['stopped']);
     } finally {
       await dead.service.close();
     }
   });
 
   it('不合法计划在启动和冻结前拒绝', async () => {
-    const { service, start, modelGateway } = fixture({
-      'site/oasis-app.json': JSON.stringify({
-        version: 1,
-        kind: 'static',
-        root: 'site',
-        entry: 'index.html',
+    const { service, start, modelGateway } = fixture(
+      staticApp({
+        'site/index.html': '<h1>actual</h1>',
+        'site/oasis-test.json': '{"version":1,"steps":[{"action":"eval","script":"anything"}]}',
       }),
-      'site/index.html': '<h1>actual</h1>',
-      'site/oasis-test.json': '{"version":1,"steps":[{"action":"eval","script":"anything"}]}',
-    });
+    );
     try {
-      expect(
-        (
-          await service.checkRun({
-            runId: access.artifactId,
-            payerId: access.ownerId,
-            taskId: access.taskId,
-          })
-        ).passed,
-      ).toBe(false);
+      expect((await service.checkRun(input)).passed).toBe(false);
       expect(start).not.toHaveBeenCalled();
       expect(modelGateway.json).not.toHaveBeenCalled();
     } finally {
       await service.close();
     }
   });
-  it('重复启动同一会话，停止后结算一次并可重开；任务删除后记录不留', async () => {
-    const { service, start, destroy, modelGateway, rows } = fixture();
+  it('同一付费人可以同时做多个检查，各开各的浏览器、各自结算；任务删除后记录不留', async () => {
+    const { service, start, test, destroy, rows, settles } = fixture(
+      testedApp([{ action: 'visible', selector: 'h1' }]),
+    );
     try {
-      const first = await service.start(access, BUNDLE);
-      expect(first.status).toBe('running');
-      expect(first.heldMicro).toBe(500);
-      expect((await service.start(access, BUNDLE)).id).toBe(first.id);
-      expect(start).toHaveBeenCalledTimes(1);
-      expect((await service.frame(access)).seq).toBe(1);
-      const stopped = await service.stop(access);
-      expect(stopped.spentMicro).toBe(25);
-      expect((await service.stop(access)).id).toBe(first.id);
-      expect(destroy).toHaveBeenCalledTimes(1);
-      expect(
-        vi
-          .mocked(modelGateway.json)
-          .mock.calls.filter(
-            ([method, path]) => method === 'POST' && String(path).endsWith('/settle'),
-          ),
-      ).toHaveLength(1);
-      expect((await service.start(access, BUNDLE)).id).not.toBe(first.id);
-      // 任务删除：停掉、结算，再把记录真删除
-      await service.stopTask(access.taskId);
+      // 两个检查都打开浏览器、做到一半时再放行
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const original = test.getMockImplementation()!;
+      test.mockImplementation(async () => {
+        await gate;
+        return original();
+      });
+      const both = Promise.all([
+        service.checkLive({ ...input, dir: 'site' }),
+        service.checkRun(input),
+      ]);
+      await vi.waitFor(() => expect(test).toHaveBeenCalledTimes(2));
+      expect([...rows.values()].map((row) => row.status)).toEqual(['running', 'running']);
+      release();
+      expect((await both).map((result) => result.passed)).toEqual([false, false]);
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(destroy).toHaveBeenCalledTimes(2);
+      expect(settles()).toHaveLength(2);
+      expect([...rows.values()]).toMatchObject([
+        { status: 'stopped', spentMicro: 25 },
+        { status: 'stopped', spentMicro: 25 },
+      ]);
+      // 任务删除（ADR 0012）：结束了的记录真删除
+      await service.stopTask(TASK);
       expect(rows.size).toBe(0);
     } finally {
       await service.close();
     }
   });
-  it('重启回收活动容器，结算后清理孤儿容器', async () => {
-    const { service, executor, rows } = fixture();
-    await service.start(access, BUNDLE);
-    await service.recover();
-    expect([...rows.values()].map((row) => row.status)).toEqual(['stopped']);
-    expect(executor.removeOrphans).toHaveBeenCalledTimes(1);
-    await service.close();
+  it('浏览器没开成：记为失败、留下原因，冻结按 0 时长结清', async () => {
+    const { service, start, rows, settles } = fixture(
+      testedApp([{ action: 'visible', selector: 'h1' }]),
+    );
+    start.mockRejectedValueOnce(new Error('Docker 不可用'));
+    try {
+      await expect(service.checkRun(input)).rejects.toThrow('Docker 不可用');
+      expect([...rows.values()]).toMatchObject([
+        { status: 'failed', error: 'Docker 不可用', containerId: null },
+      ]);
+      expect(settles()).toEqual([{ cores: 2, elapsedMs: 0 }]);
+    } finally {
+      await service.close();
+    }
+  });
+  it('重启后停掉上次留下的浏览器并结算（停到一半的按记下的销毁时间算），再清掉没有记录的容器', async () => {
+    const { service, executor, destroy, rows, settles } = fixture();
+    const leftover = {
+      payerId: PAYER,
+      taskId: TASK,
+      computeCallId: CALL,
+      heldMicro: 500,
+      spentMicro: null,
+      error: null,
+      startedAt: new Date('2026-01-01T00:00:00Z'),
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    };
+    rows.set('a', {
+      ...leftover,
+      id: 'a',
+      status: 'running',
+      containerId: 'old-a',
+      stoppedAt: null,
+    });
+    rows.set('b', {
+      ...leftover,
+      id: 'b',
+      status: 'stopping',
+      containerId: null,
+      stoppedAt: new Date('2026-01-01T00:00:30Z'),
+    });
+    try {
+      await service.recover();
+      expect(destroy).toHaveBeenCalledWith('old-a');
+      expect([...rows.values()]).toMatchObject([
+        { id: 'a', status: 'stopped', error: '服务重启，检查已停止', spentMicro: 25 },
+        { id: 'b', status: 'stopped', error: null, spentMicro: 25 },
+      ]);
+      // 运行中的按最长时长封顶；停到一半的按当时记下的销毁时间结算，重试不多算
+      expect(settles()).toEqual([
+        { cores: 2, elapsedMs: 60_000 },
+        { cores: 2, elapsedMs: 30_000 },
+      ]);
+      expect(executor.removeOrphans).toHaveBeenCalledWith(new Set());
+    } finally {
+      await service.close();
+    }
   });
 });

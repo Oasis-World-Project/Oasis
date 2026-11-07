@@ -113,7 +113,8 @@ export const ComputeHoldBody = z.object({
     .int()
     .positive()
     .max(24 * 3600_000),
-  purpose: z.enum(['run', 'preview', 'application-check']).default('run'),
+  /** 节点运行的沙箱，或检查用的隔离浏览器（调用记录里分开标识） */
+  purpose: z.enum(['run', 'application-check']).default('run'),
 });
 export type ComputeHoldBody = z.infer<typeof ComputeHoldBody>;
 
