@@ -180,9 +180,9 @@ describe('任务被删除（ADR 0012）', () => {
       logger: pino({ level: 'silent' }),
     });
     const base = { taskId: TASK, ownerId: OWNER, deletedAt: new Date().toISOString() };
-    await notices.onDeleted({ ...base, conversationId: CONV, replacedBy: NODE });
-    await notices.onDeleted({ ...base, conversationId: null, replacedBy: null });
-    await notices.onDeleted({ ...base, ownerId: NODE, conversationId: CONV, replacedBy: null });
+    await notices.onDeleted({ ...base, conversationId: CONV });
+    await notices.onDeleted({ ...base, conversationId: null });
+    await notices.onDeleted({ ...base, ownerId: NODE, conversationId: CONV });
     expect(removed).toEqual([{ conversationId: CONV, taskId: TASK }]);
   });
 });

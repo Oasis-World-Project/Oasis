@@ -109,8 +109,6 @@ export const tasks = pgTable('tasks', {
   budgetLimitMicro: micro('budget_limit_micro'),
   sheet: jsonb('sheet').$type<TaskSheet>(),
   materials: jsonb('materials').$type<Material[]>().notNull().default([]),
-  /** 修改成果：这是哪个任务的新版（ADR 0012，旧流程） */
-  revisionOf: uuid('revision_of'),
   /** 当前是第几版工作流（ADR 0022） */
   version: integer('version').notNull().default(1),
   /** 进行中的修改（规划中 / 待确认） */

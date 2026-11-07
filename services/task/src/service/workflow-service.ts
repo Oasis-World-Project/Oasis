@@ -179,7 +179,6 @@ function toTaskBody({ task, nodes, edges, versions }: Snapshot): TaskBody {
     budgetLimitMicro: task.budgetLimitMicro,
     sheet: task.sheet,
     materials: task.materials,
-    revisionOf: task.revisionOf,
     // 验收返工次数、这轮的修改意见只给控制面用，不返回；修改还没验收时没有验收记录
     acceptance:
       task.acceptance &&
@@ -824,16 +823,6 @@ export function createWorkflowService(deps: {
     return toTaskBody(await owned(ownerId, taskId));
   }
 
-  /** 能不能修改这个任务的成果：是这个人的、已经交付、没有正在进行的修改（ADR 0012） */
-  async function checkRevisable(ownerId: string, taskId: string): Promise<void> {
-    const previous = await store.get(taskId);
-    if (previous?.task.ownerId !== ownerId)
-      throw new HttpError(404, 'task_not_found', '没有这个任务');
-    if (previous.task.status !== 'succeeded')
-      throw new HttpError(409, 'task_not_delivered', '这个任务还没有交付成果，不能修改');
-    if (await store.findActiveRevision(taskId)) throw revising();
-  }
-
   /**
    * 用户确认修改方案（ADR 0022）：先把当前工作流冻结成一版，再按方案改——沿用的原样留下，
    * 带 from 的保留原节点 ID（成果、同步路径、运行记录接得上），新节点新 ID，没出现的移出工作流；然后开跑。
@@ -1044,7 +1033,6 @@ export function createWorkflowService(deps: {
       // 同一个 ID 已经建过（确认任务单超时后重试）：原样返回，不建第二个
       const existing = body.id ? await sameTask(body) : undefined;
       if (existing) return existing;
-      if (body.revisionOf) await checkRevisable(body.ownerId, body.revisionOf);
       const base = {
         id,
         ownerId: body.ownerId,
@@ -1053,7 +1041,6 @@ export function createWorkflowService(deps: {
         title: body.title,
         brief: body.brief,
         materials: body.materials,
-        revisionOf: body.revisionOf ?? null,
       };
       if (body.sheet) {
         try {
@@ -1073,8 +1060,6 @@ export function createWorkflowService(deps: {
             // 同一个 ID 的两次请求同时到达：主键只放进一个，另一个返回它
             const raced = body.id ? await sameTask(body) : undefined;
             if (raced) return raced;
-            // 两个修改请求同时到达：数据库的部分唯一索引只放进一个
-            if (body.revisionOf) throw revising();
           }
           throw err;
         }
@@ -1115,7 +1100,6 @@ export function createWorkflowService(deps: {
         nodesDone: nodes.filter((n) => n.status === 'succeeded').length,
         nodesTotal: nodes.length,
         spentMicro: task.spentMicro,
-        revisionOf: task.revisionOf,
         // 从发出修改到新版交付（或不改了）都算修改中（ADR 0022）
         revising: isRevising(task),
         createdAt: task.createdAt.toISOString(),
@@ -1135,25 +1119,16 @@ export function createWorkflowService(deps: {
       return toTaskBody(snapshot);
     },
 
-    /**
-     * 用户删除成果（ADR 0012）：连同工作流和中间产物一起删，不可恢复。
-     * 只能删已经结束的任务；成果正在修改时先取消那次修改。
-     */
-    /** 删除任务：还没结束的先取消（停掉正在跑的运行），再连同成果、工作流和中间产物一起删 */
+    /** 删除任务（真删除）：还没结束的先取消（停掉正在跑的运行），再连同成果、工作流和中间产物一起删 */
     async remove(ownerId: string, taskId: string): Promise<void> {
       await owned(ownerId, taskId);
-      if (await store.findActiveRevision(taskId)) throw revising();
       await transact(taskId, async (snapshot, w, fx) => {
         if (!FINAL.includes(snapshot.task.status)) await cancelAll(snapshot, w, fx);
       });
-      await store.remove(taskId, null);
+      await store.remove(taskId);
       logger.info({ taskId }, '用户删除了任务和它的成果');
     },
 
-    /**
-     * 内部（canvas 换好新版后调用）：新版已交付，删除被它替换的上一版。
-     * 已经删过的直接返回（事件重投时会再调一次）。
-     */
     /**
      * 修改成果（ADR 0022，取代 0012 的「交付节点接着原会话改」）：在原任务里改，但先交给规划员看上一版
      * 决定怎么改（沿用 / 接着改 / 重新做 / 加减节点），排好后等用户确认才开跑；附件并进任务素材。
@@ -1175,8 +1150,6 @@ export function createWorkflowService(deps: {
             'task_not_delivered',
             '这个任务还没交付或正在修改，等它结束后再改',
           );
-        // 旧流程建的修订任务还没结束（2026-11-05 之前发起的）
-        if (await store.findActiveRevision(taskId)) throw revising();
         if (!task.sheet || snapshot.nodes.length === 0)
           throw new HttpError(409, 'task_not_revisable', '这个任务没有可以接着改的工作流');
         const known = new Set(task.materials.map((m) => m.uploadId));
@@ -1195,14 +1168,6 @@ export function createWorkflowService(deps: {
       });
       logger.info({ taskId }, '修改交给规划员');
       return toTaskBody(await owned(body.ownerId, taskId));
-    },
-
-    async retire(taskId: string, replacedBy: string): Promise<void> {
-      const next = await store.get(replacedBy);
-      if (next?.task.revisionOf !== taskId || next.task.status !== 'succeeded')
-        throw new HttpError(409, 'not_replaced', '新版还没交付，不能替换上一版');
-      if (await store.remove(taskId, replacedBy))
-        logger.info({ taskId, replacedBy }, '上一版已被新版替换并删除');
     },
 
     /** 节点的运行过程：转发它最近一次运行的事件 */

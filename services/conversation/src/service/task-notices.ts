@@ -92,14 +92,13 @@ export function createTaskNotices(deps: {
     },
 
     /**
-     * 任务被删除（用户删除，或被新版替换，ADR 0012）：它在私聊里的任务卡、交付消息和提醒
-     * 只留文字，标上「已替换 / 已删除」，不再提供下载和工作流入口。重复到达时结果一样。
+     * 任务被用户删除（真删除，2026-11-05）：它在私聊里的任务卡、交付消息和提醒都删掉，
+     * 不留「已删除」的空壳。重复到达时结果一样。
      */
     async onDeleted(data: TaskDeletedData): Promise<void> {
       if (!data.conversationId) return;
       const conversation = await repo.findOwned(data.conversationId, data.ownerId);
       if (!conversation) return;
-      // 真删除（2026-11-05）：任务的卡片、交付消息、提醒都删掉，不留「已删除」的空壳
       const removed = await repo.removeTaskMessages(conversation.id, data.taskId);
       if (removed) logger.info({ taskId: data.taskId, removed }, '私聊里这个任务的消息已删除');
     },

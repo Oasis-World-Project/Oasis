@@ -54,6 +54,7 @@
 
 - 不新增迁移。`tasks.revision_of`、`uploads.source_task_id`、`artifacts.replaces_sha256` 保留：2026-11-05 之前已经建好的修订任务仍按旧流程交付（canvas 整体替换上一版、task retire 上一版），之后不再产生新的修订任务。
 - Contract 计划：确认库里没有未结束的 `revision_of` 任务后，删除 canvas 的旧替换路径（`replace`）、task 的 `retire` 接口与 `revision_of` 列、canvas 的 `uploads.source_task_id`，另起 contract 迁移。
+- 2026-11-08 已执行（重构阶段 1，用户确认开发库旧数据不保留）：删掉上面这些，连同聊天卡片上「已被新版替换 / 已删除」的标记（`RemovedMark`）、任务卡片的 `revisionOf`、`task.task.deleted` 的 `replacedBy`。迁移：task `20261108140000_contract_revision_of.sql`、canvas `20261108140000_contract_upload_sources.sql`。`artifacts.replaces_sha256` 桌面端覆盖旧版还在用，保留。
 
 ## 6. 拆分
 

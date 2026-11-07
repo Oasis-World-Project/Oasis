@@ -945,7 +945,6 @@ describe('私聊发消息', () => {
         nodesDone: 2,
         nodesTotal: 5,
         spentMicro: 0,
-        revisionOf: null,
         revising: true,
         createdAt: new Date().toISOString(),
       },

@@ -103,9 +103,8 @@ export const TaskStatusChanged = {
 export type TaskStatusChangedData = z.infer<typeof TaskStatusChanged.data>;
 
 /**
- * 任务被删除（ADR 0012）：用户删除成果，或修改出的新版替换了它（replacedBy 是新版任务）。
- * 任务的节点、运行和花费记录已一并删除；canvas 删成果，harness 删运行存档、停预览，
- * conversation 把它的卡片标成已替换 / 已删除。消费者必须幂等。
+ * 任务被用户删除（真删除，2026-11-05）：任务的节点、运行和花费记录已一并删除；
+ * canvas 删成果，harness 删运行存档，conversation 删它的卡片和交付消息。消费者必须幂等。
  */
 export const TaskDeleted = {
   type: 'task.task.deleted',
@@ -113,7 +112,6 @@ export const TaskDeleted = {
     taskId: z.uuid(),
     ownerId: z.uuid(),
     conversationId: z.uuid().nullable(),
-    replacedBy: z.uuid().nullable(),
     deletedAt: z.iso.datetime(),
   }),
 } as const;

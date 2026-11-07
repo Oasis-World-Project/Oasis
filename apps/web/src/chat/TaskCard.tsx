@@ -1,6 +1,5 @@
 // 私聊保留一张任务状态卡与工作流入口；具体检查与处理选择在工作流。
 // 任务还在动时每 2.5 秒刷新；状态一变就刷新消息以读取最终交付。
-import type { RemovedMark } from '@oasis/contracts/conversation';
 import type { Attention, NodeStatus, TaskBody, TaskStatus } from '@oasis/contracts/task';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
@@ -339,50 +338,11 @@ function Progress({ task }: { task: TaskBody }) {
   );
 }
 
-/** 任务被删除后留下的卡片只剩一句话（ADR 0012） */
-export function RemovedNote({ removed }: { removed: RemovedMark }) {
-  return (
-    <p className="m-0 text-[13.5px] text-ink-muted">
-      {removed.replacedBy
-        ? '这一版已被修改后的新版替换，旧版本不保留。'
-        : '这个任务和它的成果已删除。'}
-    </p>
-  );
-}
-
-export function TaskCard({
-  taskId,
-  speaker,
-  revision = false,
-  removed,
-}: {
-  taskId: string;
-  speaker: Speaker;
-  /** 这是对某个成果的修改 */
-  revision?: boolean;
-  /** 任务已被删除或替换：不再查询，只留一句话 */
-  removed?: RemovedMark;
-}) {
+export function TaskCard({ taskId, speaker }: { taskId: string; speaker: Speaker }) {
   const actions = useChatActions();
-  const {
-    data: task,
-    isPending,
-    isError,
-  } = useQuery({
-    ...taskQuery(taskId),
-    enabled: !removed,
-  });
+  const { data: task, isPending, isError } = useQuery(taskQuery(taskId));
   useRefreshMessagesOnChange(actions.conversationId, task?.status);
-  const kind = revision ? '修改' : '任务';
-
-  if (removed) {
-    return (
-      <CardFrame speaker={speaker} label={kind} dim>
-        <CardHeading kind={kind} />
-        <RemovedNote removed={removed} />
-      </CardFrame>
-    );
-  }
+  const kind = '任务';
 
   if (isPending || isError) {
     return (

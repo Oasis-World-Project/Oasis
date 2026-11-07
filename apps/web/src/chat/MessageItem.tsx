@@ -360,14 +360,7 @@ export function MessageItem({
     case 'sheet':
       return <SheetCard card={message.data} speaker={speaker} />;
     case 'task':
-      return (
-        <TaskCard
-          taskId={message.data.taskId}
-          speaker={speaker}
-          revision={!!message.data.revisionOf}
-          {...(message.data.removed ? { removed: message.data.removed } : {})}
-        />
-      );
+      return <TaskCard taskId={message.data.taskId} speaker={speaker} />;
     case 'delivery':
       return <DeliveryCard card={message.data} speaker={speaker} />;
     case 'notice':

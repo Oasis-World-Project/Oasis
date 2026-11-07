@@ -19,7 +19,6 @@ import {
   StatusTag,
   type Speaker,
 } from './parts.tsx';
-import { RemovedNote } from './TaskCard.tsx';
 
 type DeliveredFile = DeliveryData['files'][number];
 
@@ -76,16 +75,8 @@ function groupByDeliverable(files: DeliveredFile[]) {
 export function DeliveryCard({ card, speaker }: { card: DeliveryData; speaker: Speaker }) {
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const [revising, setRevising] = useState(false);
-  const { data: task } = useQuery({ ...taskQuery(card.taskId), enabled: !card.removed });
+  const { data: task } = useQuery(taskQuery(card.taskId));
   const groups = groupByDeliverable(card.files);
-  if (card.removed) {
-    return (
-      <CardFrame speaker={speaker} label={`交付：${card.title}`} dim>
-        <CardHeading kind="交付" title={card.title} />
-        <RemovedNote removed={card.removed} />
-      </CardFrame>
-    );
-  }
   const toPreview = (file: DeliveredFile): PreviewFile => ({
     path: file.path,
     size: file.size,

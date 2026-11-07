@@ -25,7 +25,6 @@ const EventsQuery = z.object({
   runId: z.uuid().optional(),
 });
 const FileQuery = z.object({ download: z.enum(['0', '1']).default('0') });
-const RetireBody = z.object({ replacedBy: z.uuid() });
 const OwnerParams = z.object({ ownerId: z.uuid() });
 const MaterialsInUseBody = z.object({ ownerId: z.uuid(), ids: z.array(z.uuid()) });
 
@@ -81,14 +80,6 @@ export function registerRoutes(
     const { taskId } = parseWith(TaskParams, request.params);
     const body = parseWith(TaskRevisionBody, request.body);
     return revisions.revise(requireUserId(request), taskId, body, request.id);
-  });
-
-  /** 旧式修订任务交付后删除被替换的上一版（canvas 换好成果后调用，ADR 0012；新的修改不再新建任务） */
-  app.post('/internal/tasks/:taskId/retire', async (request, reply) => {
-    const { taskId } = parseWith(TaskParams, request.params);
-    const { replacedBy } = parseWith(RetireBody, request.body);
-    await workflows.retire(taskId, replacedBy);
-    return reply.code(204).send();
   });
 
   /** 删除任务：连同成果、工作流和中间产物（只能删已经结束的） */

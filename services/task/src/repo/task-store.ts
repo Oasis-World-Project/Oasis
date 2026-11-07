@@ -3,7 +3,7 @@
 // 任务的状态或「需要处理」的原因变了，就在同一个事务里往发件箱写 task.task.status_changed。
 import { TaskDeleted, TaskStatusChanged } from '@oasis/contracts/events';
 import { createEnvelope } from '@oasis/service-kit';
-import { and, asc, desc, eq, inArray, isNull, lt, lte, notInArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, lte } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { edges, nodeRuns, nodes, outbox, spendRecords, tasks, workflowVersions } from './schema.ts';
@@ -82,19 +82,16 @@ export function statusEvent(before: Pick<Task, 'status' | 'attention'>, after: T
   });
 }
 
-/** 任务被删除时发的事件（ADR 0012） */
-export function deletedEvent(task: Task, replacedBy: string | null) {
+/** 任务被删除时发的事件（真删除，2026-11-05） */
+export function deletedEvent(task: Task) {
   return createEnvelope('task', TaskDeleted.type, {
     taskId: task.id,
     ownerId: task.ownerId,
     conversationId: task.conversationId,
-    replacedBy,
     deletedAt: new Date().toISOString(),
   });
 }
 
-/** 已经结束的任务状态：修订任务结束后才允许再改、才允许删除 */
-const ENDED_STATUSES = ['succeeded', 'failed', 'cancelled'] as const;
 type NodePatch = Partial<
   Pick<
     Node,
@@ -177,15 +174,13 @@ export interface TaskStore {
   listStale(status: 'planning' | 'accepting', before: Date): Promise<Task[]>;
   /** 正在过关卡、且交出产出的那次运行结束早于 before 的节点（关卡中途断了，对账时重做） */
   listCheckingNodes(before: Date): Promise<Node[]>;
-  /** 正在修改这个任务成果、还没结束的修订任务（ADR 0012） */
-  findActiveRevision(taskId: string): Promise<Task | undefined>;
   /** 这些上传文件里，哪些是这个人某个任务的素材（删私聊时这些文件要留着） */
   materialsInUse(ownerId: string, uploadIds: string[]): Promise<string[]>;
   /**
    * 删除任务（节点、连线、运行、花费记录级联删除），同一个事务里写 task.task.deleted。
    * 任务已经不在时返回 undefined。
    */
-  remove(taskId: string, replacedBy: string | null): Promise<Task | undefined>;
+  remove(taskId: string): Promise<Task | undefined>;
 }
 
 async function load(db: NodePgDatabase, task: Task): Promise<Snapshot> {
@@ -410,15 +405,6 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
       return rows.map((r) => r.node);
     },
 
-    async findActiveRevision(taskId) {
-      const [row] = await db
-        .select()
-        .from(tasks)
-        .where(and(eq(tasks.revisionOf, taskId), notInArray(tasks.status, [...ENDED_STATUSES])))
-        .limit(1);
-      return row;
-    },
-
     async materialsInUse(ownerId, uploadIds) {
       if (!uploadIds.length) return [];
       const { rows } = await pool.query<{ id: string }>(
@@ -430,12 +416,12 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
       return rows.map((r) => r.id);
     },
 
-    remove(taskId, replacedBy) {
+    remove(taskId) {
       return db.transaction(async (tx) => {
         const [task] = await tx.select().from(tasks).where(eq(tasks.id, taskId)).for('update');
         if (!task) return undefined;
         await tx.delete(tasks).where(eq(tasks.id, taskId));
-        const event = deletedEvent(task, replacedBy);
+        const event = deletedEvent(task);
         await tx.insert(outbox).values({ id: event.id, subject: event.type, payload: event });
         return task;
       });

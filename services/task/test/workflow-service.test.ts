@@ -199,18 +199,14 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
         .filter((t) => t.ownerId === ownerId)
         .flatMap((t) => t.materials.map((m) => m.uploadId))
         .filter((id, i, all) => uploadIds.includes(id) && all.indexOf(id) === i),
-    findActiveRevision: async (taskId) =>
-      [...tasks.values()].find(
-        (t) => t.revisionOf === taskId && !['succeeded', 'failed', 'cancelled'].includes(t.status),
-      ),
-    async remove(taskId, replacedBy) {
+    async remove(taskId) {
       const task = tasks.get(taskId);
       if (!task) return undefined;
       tasks.delete(taskId);
       for (const n of [...nodes.values()].filter((x) => x.taskId === taskId)) nodes.delete(n.id);
       for (const e of [...edges.values()].filter((x) => x.taskId === taskId)) edges.delete(e.id);
       for (const r of [...runs.values()].filter((x) => x.taskId === taskId)) runs.delete(r.id);
-      events.push(deletedEvent(task, replacedBy));
+      events.push(deletedEvent(task));
       return task;
     },
   };
@@ -1820,9 +1816,9 @@ describe('节点详情（ADR 0007 §6）', () => {
   });
 });
 
-describe('修改成果与删除（ADR 0012）', () => {
+describe('删除任务（真删除）', () => {
   /** 建一个只有一个节点的任务并跑完 */
-  async function delivered(extra: { revisionOf?: string } = {}) {
+  async function delivered() {
     const task = await service.create({
       ownerId: OWNER,
       payerId: OWNER,
@@ -1830,21 +1826,10 @@ describe('修改成果与删除（ADR 0012）', () => {
       title: '测试任务',
       brief: '做一份介绍',
       plan: { nodes: [work('A')], edges: [] },
-      ...extra,
     });
     await finish(runOf('A', task).runId, 'succeeded', { outputs: [{ path: 'a.md', size: 3 }] });
     return task;
   }
-  const revise = (revisionOf: string) =>
-    service.create({
-      ownerId: OWNER,
-      payerId: OWNER,
-      materials: [],
-      title: '测试任务',
-      brief: '改一版',
-      plan: { nodes: [work('A')], edges: [] },
-      revisionOf,
-    });
   const codeOf = (p: Promise<unknown>) =>
     p.then(
       () => 'ok',
@@ -1852,38 +1837,10 @@ describe('修改成果与删除（ADR 0012）', () => {
     );
   const deletedEvents = () => events.filter((e) => e.type === 'task.task.deleted');
 
-  it('只有已交付的任务能改；同一份成果同时只改一版；别人的任务看不到', async () => {
-    const running = await create(['A'], []);
-    expect(await codeOf(revise(running.id))).toBe('task_not_delivered');
-    const first = await delivered();
-    expect(await codeOf(revise('9f9f9f9f-9f9f-4f9f-8f9f-9f9f9f9f9f9f'))).toBe('task_not_found');
-    const revision = await revise(first.id);
-    expect(revision.revisionOf).toBe(first.id);
-    expect((await service.list(OWNER)).find((t) => t.id === revision.id)?.revisionOf).toBe(
-      first.id,
-    );
-    expect(await codeOf(revise(first.id))).toBe('task_revising');
-    // 正在改的时候不能删上一版；别人删不了
-    expect(await codeOf(service.remove(OWNER, first.id))).toBe('task_revising');
-    expect(await codeOf(service.remove(STRANGER, first.id))).toBe('task_not_found');
-    expect(await codeOf(service.remove(STRANGER, revision.id))).toBe('task_not_found');
+  it('别人的任务删不了', async () => {
+    const task = await delivered();
+    expect(await codeOf(service.remove(STRANGER, task.id))).toBe('task_not_found');
     expect(deletedEvents()).toHaveLength(0);
-  });
-
-  it('新版交付后上一版被替换：删除并发 task.task.deleted（带 replacedBy），重复调用不出错', async () => {
-    const first = await delivered();
-    const revision = await revise(first.id);
-    expect(await codeOf(service.retire(first.id, revision.id))).toBe('not_replaced');
-    await finish(runOf('A', revision).runId, 'succeeded', { outputs: [{ path: 'a.md', size: 4 }] });
-    expect((await service.get(OWNER, revision.id)).status).toBe('succeeded');
-    await service.retire(first.id, revision.id);
-    await service.retire(first.id, revision.id);
-    expect(await codeOf(service.get(OWNER, first.id))).toBe('task_not_found');
-    expect(deletedEvents().map((e) => e.data)).toEqual([
-      expect.objectContaining({ taskId: first.id, ownerId: OWNER, replacedBy: revision.id }),
-    ]);
-    // 新版之后还能再改
-    expect((await revise(revision.id)).revisionOf).toBe(revision.id);
   });
 
   it('用户删除还在跑的任务：先停掉正在跑的运行，再连同工作流一起删', async () => {
@@ -1892,7 +1849,7 @@ describe('修改成果与删除（ADR 0012）', () => {
     await service.remove(OWNER, task.id);
     expect(cancelled.sort()).toEqual([...running].sort());
     expect(deletedEvents().map((e) => e.data)).toEqual([
-      expect.objectContaining({ taskId: task.id, replacedBy: null }),
+      expect.objectContaining({ taskId: task.id, ownerId: OWNER }),
     ]);
     await finish(running[0]!, 'cancelled');
     expect(await codeOf(service.get(OWNER, task.id))).toBe('task_not_found');
@@ -1903,7 +1860,7 @@ describe('修改成果与删除（ADR 0012）', () => {
     const run = runOf('A', task).runId;
     await service.remove(OWNER, task.id);
     expect(deletedEvents().map((e) => e.data)).toEqual([
-      expect.objectContaining({ taskId: task.id, replacedBy: null }),
+      expect.objectContaining({ taskId: task.id, ownerId: OWNER }),
     ]);
     await service.onCallSettled({
       callId: '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b',

@@ -62,19 +62,8 @@ export const SheetCard = z.object({
 });
 export type SheetCard = z.infer<typeof SheetCard>;
 
-/**
- * 任务被删除后留在私聊里的卡片标记（ADR 0012）：replacedBy 是替换它的新版任务，
- * 为 null 表示用户删除了它。卡片只留文字，不再提供下载和工作流入口。
- */
-export const RemovedMark = z.object({ replacedBy: z.uuid().nullable() });
-export type RemovedMark = z.infer<typeof RemovedMark>;
-
-/** 任务卡：进度和花费由前端按 taskId 去 task 查；revisionOf 表示这是对某个任务成果的修改 */
-export const TaskCard = z.object({
-  taskId: z.uuid(),
-  revisionOf: z.uuid().optional(),
-  removed: RemovedMark.optional(),
-});
+/** 任务卡：进度和花费由前端按 taskId 去 task 查（任务删除时卡片随之真删除） */
+export const TaskCard = z.object({ taskId: z.uuid() });
 
 /** 交付消息：每样交付物的文件（下载走 task 的 /v1/tasks/:id/files/:nodeId/*）和没满足的地方 */
 export const DeliveryCard = z.object({
@@ -98,7 +87,6 @@ export const DeliveryCard = z.object({
   /** 过程中节点留下的提醒 */
   warnings: z.array(z.string()),
   unchecked: z.array(z.string()).optional(),
-  removed: RemovedMark.optional(),
 });
 export type DeliveryCard = z.infer<typeof DeliveryCard>;
 
@@ -107,7 +95,6 @@ export const NoticeCard = z.object({
   taskId: z.uuid(),
   status: z.enum(['needs_attention', 'failed']),
   message: z.string(),
-  removed: RemovedMark.optional(),
 });
 export type NoticeCard = z.infer<typeof NoticeCard>;
 

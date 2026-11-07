@@ -680,16 +680,4 @@ describe('修改成果（ADR 0012）', () => {
     });
     expect(api.bodies.some((b) => b.path.includes('/conversation/'))).toBe(false);
   });
-
-  it('被替换、被删除的任务：卡片只留一句话，不再查任务、不给下载', async () => {
-    const { api } = fakeChat([
-      message('task', { taskId: TASK, removed: { replacedBy: NODE_B } }),
-      delivery({ removed: { replacedBy: null } }),
-    ]);
-    await openChat();
-    expect(await screen.findByText('这一版已被修改后的新版替换，旧版本不保留。')).toBeTruthy();
-    expect(screen.getByText('这个任务和它的成果已删除。')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /首页\.md/ })).toBeNull();
-    expect(api.requests.some((r) => r.includes(`/task/v1/tasks/${TASK}`))).toBe(false);
-  });
 });

@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runBatch } from '../sandbox/batch.ts';
 
-describe('JSONL 批次持久化与费用边界', () => {
+// 每行结果都落盘后才算完成：整个仓库并行跑测试时，Windows 上的文件写入可能拖过默认的 5 秒
+describe('JSONL 批次持久化与费用边界', { timeout: 30_000 }, () => {
   let dir: string;
   let source: string;
   let output: string;

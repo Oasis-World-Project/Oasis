@@ -41,9 +41,7 @@ export function memoryStore(): ObjectStore & {
   };
 }
 
-export function memoryArtifacts(
-  uploads: ReturnType<typeof memoryUploads> = memoryUploads(),
-): ArtifactsRepo & { rows: Artifact[] } {
+export function memoryArtifacts(): ArtifactsRepo & { rows: Artifact[] } {
   const rows: Artifact[] = [];
   let clock = Date.parse('2026-10-24T08:00:00Z');
   return {
@@ -111,18 +109,10 @@ export function memoryArtifacts(
           .map((r) => r.syncPath.split('/')[0] ?? ''),
       ),
     ],
-    async replaceTask(oldTaskId, next) {
-      const kept = rows.filter((r) => r.taskId !== oldTaskId);
-      rows.length = 0;
-      rows.push(...kept);
-      for (const row of await uploads.listBySourceTask(oldTaskId)) await uploads.remove(row.id);
-      for (const row of next) await this.insert(row);
-    },
-    async removeRows(artifactIds, uploadIds) {
+    async removeRows(artifactIds) {
       const kept = rows.filter((r) => !artifactIds.includes(r.id));
       rows.length = 0;
       rows.push(...kept);
-      for (const id of uploadIds) await uploads.remove(id);
     },
   };
 }
@@ -131,8 +121,6 @@ export function memoryUploads(): UploadsRepo & { rows: Map<string, Upload> } {
   const rows = new Map<string, Upload>();
   return {
     rows,
-    listBySourceTask: async (taskId) =>
-      [...rows.values()].filter((row) => row.sourceTaskId === taskId),
     async insert(upload) {
       const row = { claimedAt: null, ...upload, createdAt: new Date() };
       rows.set(row.id, row);

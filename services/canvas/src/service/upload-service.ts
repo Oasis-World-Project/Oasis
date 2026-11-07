@@ -30,19 +30,16 @@ export function createUploadService(deps: {
   const { repo, store } = deps;
 
   let timer: ReturnType<typeof setInterval> | undefined;
-  /** 删掉一个上传：自己的对象一起删（旧式修订素材指向成果对象，那个随成果删） */
+  /** 删掉一个上传：对象和记录一起删 */
   const purge = async (row: Upload) => {
-    if (row.objectKey.startsWith('uploads/')) await store.delete(row.objectKey);
+    await store.delete(row.objectKey);
     await repo.remove(row.id);
   };
   // 清扫（每小时）：没传完的、传完 24 小时一直没被消息或批注用上的，都彻底删掉（2026-11-05 真删除）
   const cleanup = async () => {
     const before = new Date(Date.now() - 24 * 3600_000);
-    for (const row of await repo.stale(before)) {
-      await store.delete(row.objectKey);
-      await repo.remove(row.id);
-    }
-    for (const row of await repo.unclaimed(before)) await purge(row);
+    for (const row of [...(await repo.stale(before)), ...(await repo.unclaimed(before))])
+      await purge(row);
   };
   return {
     start() {
@@ -81,7 +78,6 @@ export function createUploadService(deps: {
           state: 'uploading',
           contentType,
           objectKey,
-          sourceTaskId: null,
         });
         const saved = await store.putStream(objectKey, source, contentType, limits);
         return toUploadBody(await repo.complete(id, saved));

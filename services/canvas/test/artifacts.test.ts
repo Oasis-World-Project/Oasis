@@ -102,29 +102,18 @@ const fetched: string[] = [];
 let fileFailures = 0;
 const task = Fastify();
 let finalFiles: { deliverable: string; nodeId: string; path: string; size: number }[] | undefined;
-/** 修订任务 → 它修改的是哪个任务；canvas 换好新版后调 retire */
-const revisionOf = new Map<string, string>();
 /** 任务最近一次交付的时间（修改后再次交付时比成果登记得晚） */
 const finishedAt = new Map<string, string>();
 /** 任务的工作流版本（修改确认过几次，ADR 0022） */
 const versions = new Map<string, number>();
-const retired: { taskId: string; replacedBy: string }[] = [];
 task.get('/internal/tasks/:id', async (request) => {
   const { id } = request.params as { id: string };
   return {
     ...taskBody(id),
-    revisionOf: revisionOf.get(id) ?? null,
     version: versions.get(id) ?? 1,
     ...(finishedAt.has(id) ? { finishedAt: finishedAt.get(id) } : {}),
     ...(finalFiles === undefined ? {} : { deliveryFiles: finalFiles }),
   };
-});
-task.post('/internal/tasks/:id/retire', async (request, reply) => {
-  retired.push({
-    taskId: (request.params as { id: string }).id,
-    replacedBy: (request.body as { replacedBy: string }).replacedBy,
-  });
-  return reply.code(204).send();
 });
 task.get('/internal/tasks/:id/files/:nodeId/*', async (request, reply) => {
   const path = (request.params as { '*': string })['*'];
@@ -151,13 +140,11 @@ beforeEach(async () => {
   finalFiles = undefined;
   fetched.length = 0;
   fileFailures = 0;
-  revisionOf.clear();
   finishedAt.clear();
   versions.clear();
-  retired.length = 0;
   gatewayCalls.length = 0;
   uploadRows = memoryUploads();
-  repo = memoryArtifacts(uploadRows);
+  repo = memoryArtifacts();
   const store = memoryStore();
   objects = store;
   service = createArtifactService({
@@ -465,30 +452,7 @@ describe('类别和同步路径的规则', () => {
   });
 });
 
-describe('修改成果：原地换新版、旧式修订替换、删除（ADR 0012）', () => {
-  /** 旧流程登记的修订素材（打包的 ZIP 有自己的对象） */
-  const legacyMaterial = (taskId: string) => {
-    const id = '60000000-0000-4000-8000-000000000001';
-    uploadRows.rows.set(id, {
-      id,
-      ownerId: KAI,
-      name: '上一版成果.zip',
-      contentType: 'application/zip',
-      size: 3,
-      sha256: 'b'.repeat(64),
-      objectKey: `uploads/${KAI}/${id}`,
-      state: 'ready',
-      sourceTaskId: taskId,
-      createdAt: new Date(),
-    } as never);
-    objects.objects.set(`uploads/${KAI}/${id}`, {
-      body: Buffer.from('zip'),
-      type: 'application/zip',
-    });
-  };
-  const keysOf = (taskId: string) =>
-    [...objects.objects.keys()].filter((k) => k.startsWith(`artifacts/${taskId}/`));
-
+describe('修改成果：原地换新版、删除（ADR 0022）', () => {
   it('同一任务修改后再次交付：内容变了的原地换成新版（链接、同步路径不变，批注和截图清掉）；没变的不动；重投幂等', async () => {
     await service.onTaskStatus(event(T1));
     const copy = repo.rows.find((r) => r.taskId === T1 && r.path === '首页文案.md')!;
@@ -505,7 +469,6 @@ describe('修改成果：原地换新版、旧式修订替换、删除（ADR 001
       sha256: 'a'.repeat(64),
       objectKey: `uploads/${FRAME}`,
       state: 'ready',
-      sourceTaskId: null,
       createdAt: new Date(),
     } as never);
     objects.objects.set(`uploads/${FRAME}`, { body: Buffer.from('png!'), type: 'image/png' });
@@ -544,7 +507,6 @@ describe('修改成果：原地换新版、旧式修订替换、删除（ADR 001
     const same = rows.find((r) => r.path === 'hero.png')!;
     expect(same.sha256).toBe(heroSha);
     expect(same.replacesSha256).toBeNull();
-    expect(retired).toEqual([]);
   });
 
   it('修改后的新版不再交付的旧成果从画布删掉（ADR 0022 §5）；新版什么也没交出时保留', async () => {
@@ -568,60 +530,17 @@ describe('修改成果：原地换新版、旧式修订替换、删除（ADR 001
     expect(objects.objects.has(hero.objectKey)).toBe(false);
   });
 
-  it('旧式修订任务交付后整体替换上一版：沿用同步路径、记下旧摘要、删旧对象和修订素材，再让 task 删上一版；重投幂等', async () => {
+  it('任务被删除：成果行和对象都删掉；重投没有副作用', async () => {
     await service.onTaskStatus(event(T1));
-    const old = repo.rows.filter((r) => r.taskId === T1);
-    const oldCopy = old.find((r) => r.path === '首页文案.md')!;
-    legacyMaterial(T1);
-    revisionOf.set(T2, T1);
-    const original = files['首页文案.md'];
-    files['首页文案.md'] = '# 山里的小木屋（新版）';
-    try {
-      await service.onTaskStatus(event(T2));
-      await service.onTaskStatus(event(T2));
-    } finally {
-      files['首页文案.md'] = original!;
-    }
-    expect(repo.rows.filter((r) => r.taskId === T1)).toHaveLength(0);
-    const fresh = repo.rows.filter((r) => r.taskId === T2);
-    expect(fresh.map((r) => r.syncPath).sort()).toEqual(old.map((r) => r.syncPath).sort());
-    const copy = fresh.find((r) => r.path === '首页文案.md')!;
-    expect(copy.replacesSha256).toBe(oldCopy.sha256);
-    expect(copy.sha256).not.toBe(oldCopy.sha256);
-    expect(keysOf(T1)).toEqual([]);
-    expect(uploadRows.rows.size).toBe(0);
-    expect([...objects.objects.keys()].some((k) => k.startsWith('uploads/'))).toBe(false);
-    expect(retired).toEqual([
-      { taskId: T1, replacedBy: T2 },
-      { taskId: T1, replacedBy: T2 },
-    ]);
-    const body = (await get(`/v1/artifacts/${copy.id}`)).json<{ replacesSha256: string }>();
-    expect(body.replacesSha256).toBe(oldCopy.sha256);
-  });
-
-  it('旧式修订任务一个文件也没交出时不替换，上一版保留', async () => {
-    await service.onTaskStatus(event(T1));
-    revisionOf.set(T2, T1);
-    finalFiles = [];
-    await service.onTaskStatus(event(T2));
-    expect(repo.rows.filter((r) => r.taskId === T1)).toHaveLength(2);
-    expect(retired).toEqual([]);
-  });
-
-  it('任务被删除：成果行、对象和来自它的修订素材都删掉；重投没有副作用', async () => {
-    await service.onTaskStatus(event(T1));
-    legacyMaterial(T1);
     const deleted = {
       taskId: T1,
       ownerId: KAI,
       conversationId: null,
-      replacedBy: null,
       deletedAt: '2026-10-31T08:00:00.000Z',
     };
     await service.onTaskDeleted(deleted);
     await service.onTaskDeleted(deleted);
     expect(repo.rows).toHaveLength(0);
-    expect(uploadRows.rows.size).toBe(0);
     expect(objects.objects.size).toBe(0);
   });
 });
@@ -690,7 +609,6 @@ describe('批注与批准（ADR 0012 §9）', () => {
         sha256: 'a'.repeat(64),
         objectKey: `uploads/${id}`,
         state: 'ready',
-        sourceTaskId: null,
         createdAt: new Date(),
       } as never);
       objects.objects.set(`uploads/${id}`, { body: Buffer.from('png!'), type: 'image/png' });
@@ -719,7 +637,6 @@ describe('批注与批准（ADR 0012 §9）', () => {
       taskId: T1,
       ownerId: KAI,
       conversationId: null,
-      replacedBy: null,
       deletedAt: '2026-11-04T08:00:00.000Z',
     });
     expect(uploadRows.rows.has(B)).toBe(false);

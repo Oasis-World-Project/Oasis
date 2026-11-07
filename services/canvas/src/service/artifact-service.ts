@@ -20,7 +20,7 @@ import {
 } from '@oasis/service-kit';
 import { AVATAR_SPEC_SUFFIX, AvatarSpec } from '@oasis/contracts/avatar';
 import type { Artifact, ArtifactsRepo, NewArtifact } from '../repo/artifacts-repo.ts';
-import type { Upload, UploadsRepo } from '../repo/uploads-repo.ts';
+import type { UploadsRepo } from '../repo/uploads-repo.ts';
 import { categoryOf, safePath, safeSegment, uniqueName } from './naming.ts';
 
 /** 数字人配置文件上限（30,000 字知识要点加人设，JSON 转义后留足余量） */
@@ -95,8 +95,6 @@ function deliveredFiles(task: TaskBody): DeliveredFile[] {
 const LIST_LIMIT = 1000;
 const APP_MAX_FILES = 1000;
 const APP_MAX_BYTES = 100 * 1024 * 1024;
-/** 旧式修订任务的素材（ADR 0012 旧流程）：打包出来的有自己的对象；逐个登记的沿用成果的对象，随成果删除 */
-const packed = (upload: Upload) => upload.objectKey.startsWith('uploads/');
 
 function safeApplicationMember(path: string): boolean {
   return (
@@ -107,7 +105,7 @@ function safeApplicationMember(path: string): boolean {
 
 export function createArtifactService(deps: {
   repo: ArtifactsRepo;
-  /** 修订素材登记成上传记录（ADR 0012） */
+  /** 批注截图存成上传记录（ADR 0009 §18），成果换新版或删除时一起删 */
   uploads: UploadsRepo;
   store: ObjectStore;
   task: ServiceClient;
@@ -181,53 +179,6 @@ export function createArtifactService(deps: {
       models: file.models,
       objectKey,
     };
-  }
-
-  /**
-   * 修改出的新版交付了（ADR 0012 §2）：新文件先写进对象存储，再删上一版的对象，
-   * 然后一个事务里换行（沿用上一版的目录名），最后让 task 删掉上一版。每一步都幂等，事件重投时从头再走。
-   */
-  async function replace(event: TaskStatusChangedData, detail: TaskBody, oldTaskId: string) {
-    const previous = (await repo.listByTask(oldTaskId)).filter((r) => r.ownerId === event.ownerId);
-    const existing = await repo.listByTask(event.taskId);
-    const done = new Set(existing.map((a) => `${a.nodeId}/${a.path}`));
-    const files = deliveredFiles(detail).filter((f) => !done.has(`${f.nodeId}/${f.path}`));
-    if (existing.length === 0 && files.length === 0) {
-      logger.warn({ taskId: event.taskId, oldTaskId }, '新版没有交出文件，保留上一版');
-      return;
-    }
-    const dir =
-      existing[0]?.syncPath.split('/')[0] ??
-      previous[0]?.syncPath.split('/')[0] ??
-      (await taskDir(event, []));
-    const relativeOf = (row: Artifact) =>
-      row.syncPath.startsWith(`${dir}/`) ? row.syncPath.slice(dir.length + 1).toLowerCase() : '';
-    const oldByPath = new Map(previous.map((row) => [relativeOf(row), row]));
-    const taken = new Set(existing.map(relativeOf));
-    const rows: NewArtifact[] = [];
-    for (const file of files) {
-      const row = await copyFile(event, file);
-      const relative = uniqueName(safePath(file.path), taken, true);
-      taken.add(relative.toLowerCase());
-      rows.push({
-        ...row,
-        syncPath: `${dir}/${relative}`,
-        replacesSha256: oldByPath.get(relative.toLowerCase())?.sha256 ?? null,
-      });
-    }
-    const sources = await uploads.listBySourceTask(oldTaskId);
-    for (const row of previous) await store.delete(row.objectKey);
-    for (const source of sources.filter(packed)) await store.delete(source.objectKey);
-    await repo.replaceTask(oldTaskId, rows);
-    await dropFrames(event.ownerId, framesOf(previous));
-    logger.info(
-      { taskId: event.taskId, oldTaskId, files: rows.length },
-      '新版已登记进画布，替换了上一版',
-    );
-    await registerApplications(event.taskId);
-    await task.json('POST', `/internal/tasks/${oldTaskId}/retire`, {
-      body: { replacedBy: event.taskId },
-    });
   }
 
   /** 应用描述：文件已经登记、描述还没写入的补齐（事件重投时也会执行） */
@@ -304,8 +255,6 @@ export function createArtifactService(deps: {
         if (err instanceof HttpError && err.statusCode === 404) return; // 已经被删除了
         throw err;
       }
-      // 旧式修订任务（2026-11-05 之前新建的）：交付后整体替换上一版
-      if (detail.revisionOf) return replace(event, detail, detail.revisionOf);
       const existing = await repo.listByTask(event.taskId);
       const byKey = new Map(existing.map((a) => [`${a.nodeId}/${a.path}`, a]));
       const delivered = deliveredFiles(detail);
@@ -356,10 +305,7 @@ export function createArtifactService(deps: {
         );
         for (const row of stale) await store.delete(row.objectKey);
         if (stale.length) {
-          await repo.removeRows(
-            stale.map((a) => a.id),
-            [],
-          );
+          await repo.removeRows(stale.map((a) => a.id));
           await dropFrames(event.ownerId, framesOf(stale));
           logger.info({ taskId: event.taskId, files: stale.length }, '新版不再交付的旧成果已删除');
         }
@@ -368,20 +314,15 @@ export function createArtifactService(deps: {
     },
 
     /**
-     * 任务被删除（用户删除，或被新版替换后）：删掉它剩下的成果和来自它的修订素材（ADR 0012）。
+     * 任务被用户删除：删掉它的成果和批注截图（真删除）。
      * 先删对象再删行；重投时找不到的就没有可删的。
      */
     async onTaskDeleted(event: TaskDeletedData): Promise<void> {
       const rows = (await repo.listByTask(event.taskId)).filter((r) => r.ownerId === event.ownerId);
-      const sources = await uploads.listBySourceTask(event.taskId);
       for (const row of rows) await store.delete(row.objectKey);
-      for (const source of sources.filter(packed)) await store.delete(source.objectKey);
-      await repo.removeRows(
-        rows.map((r) => r.id),
-        sources.map((s) => s.id),
-      );
+      await repo.removeRows(rows.map((r) => r.id));
       await dropFrames(event.ownerId, framesOf(rows));
-      if (rows.length || sources.length)
+      if (rows.length)
         logger.info({ taskId: event.taskId, files: rows.length }, '任务已删除，成果一并清理');
     },
 

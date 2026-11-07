@@ -39,7 +39,7 @@ await startService({
       handle: (envelope) =>
         notices.onStatusChanged(envelope.id, TaskStatusChanged.data.parse(envelope.data)),
     });
-    // 任务被删除（用户删除或被新版替换）：它的卡片标成已替换 / 已删除（ADR 0012）
+    // 任务被用户删除：它在私聊里的卡片和交付消息一起删掉（真删除）
     const taskDeleted = startEventConsumer({
       connection: eventBus.connection,
       stream: TASK_STREAM,

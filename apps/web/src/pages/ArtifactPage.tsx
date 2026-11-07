@@ -37,12 +37,9 @@ export function ArtifactPage() {
     enabled: !!artifact,
   });
   const { data: tasks = [] } = useQuery(tasksQuery);
-  // 这份成果正在修改：原任务又跑起来了（ADR 0012，在原任务里接着改），或旧式修订任务还没结束；改完之前不能再改
+  // 这份成果正在修改：原任务又跑起来了（ADR 0022，在原任务里改）；改完之前不能再改
   const ownTask = artifact ? tasks.find((t) => t.id === artifact.taskId) : undefined;
-  const revising = artifact
-    ? (tasks.find((t) => t.revisionOf === artifact.taskId && !SETTLED_STATUSES.has(t.status)) ??
-      (ownTask && !SETTLED_STATUSES.has(ownTask.status) ? ownTask : undefined))
-    : undefined;
+  const revising = ownTask && !SETTLED_STATUSES.has(ownTask.status) ? ownTask : undefined;
   const [reviseOpen, setReviseOpen] = useState(false);
   /** 从参数面板来的修改：参数随对话框一起发 */
   const [parameters, setParameters] = useState<RevisionParameter[]>([]);
