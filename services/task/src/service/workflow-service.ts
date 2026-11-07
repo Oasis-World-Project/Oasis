@@ -52,7 +52,7 @@ const NUDGE_AT = [1.5, 2];
  * 运行中的干活节点花费刚越过一个提醒线：返回要发的提醒。节点只在开工时看到一次预算，
  * 之后看不到花了多少、跑了多久，靠这条消息知道该收手了。
  */
-export function budgetNudge(
+function budgetNudge(
   node: Pick<Node, 'kind' | 'status' | 'currentRunId' | 'config' | 'startedAt'>,
   spentMicro: number,
   now = new Date(),
