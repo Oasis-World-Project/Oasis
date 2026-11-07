@@ -9,8 +9,9 @@ import { ExecutionEnvironment } from '@oasis/contracts/harness';
 
 export interface SandboxSpec {
   runId: string;
-  /** 同一原生会话的后续运行共用工作目录；不挂载宿主机目录。 */
-  workspaceId?: string;
+  /** 这个会话的持久工作目录（工作区和 dsh 会话）；同一会话的后续运行共用，不挂载宿主机目录。 */
+  workspaceId: string;
+  /** 接着原会话或接管：持久工作目录必须已经在，不能新建空目录冒充恢复 */
   restore?: boolean;
   /** 沙箱里的环境变量（含临时 Key，不得写进日志） */
   env: Record<string, string>;
@@ -40,8 +41,9 @@ export interface Executor {
   removeOrphans(keep: ReadonlySet<string>): Promise<number>;
   /** 接管前停止旧进程，避免两份执行同时写同一目录。返回实际停止时间。 */
   suspend?(runId: string): Promise<{ endedAt: Date; cores?: number } | undefined>;
-  workspaceExists?(sessionId: string): Promise<boolean>;
-  purgeWorkspace?(sessionId: string): Promise<void>;
+  /** 会话的持久工作目录还在（接着原会话做的唯一依据） */
+  workspaceExists(sessionId: string): Promise<boolean>;
+  purgeWorkspace(sessionId: string): Promise<void>;
   environment?(): Promise<ExecutionEnvironment>;
   readStoredArchive?(runId: string, path: string): Promise<Readable | undefined>;
 }
@@ -220,26 +222,23 @@ export function createDockerExecutor(deps: {
 
     async start(spec) {
       const mounts: { Type: string; Source: string; Target: string }[] = [];
-      if (spec.workspaceId) {
-        const names = volumeNames(spec.workspaceId);
-        for (const [index, name] of names.entries()) {
-          const volume = await docker.volume(name);
-          if (volume && volume.Labels?.['oasis.session-id'] !== spec.workspaceId)
-            throw new Error('持久工作目录归属不匹配');
-          if (!volume) {
-            if (spec.restore) throw new Error('原运行持久工作目录缺失，不能从空目录恢复');
-            await docker.createVolume(name, {
-              'oasis.component': 'harness-workspace',
-              'oasis.session-id': spec.workspaceId,
-            });
-          }
-          if (index && !deps.sessionsDir) throw new Error('持久会话目录未配置');
-          mounts.push({
-            Type: 'volume',
-            Source: name,
-            Target: index === 0 ? deps.workdir : deps.sessionsDir!,
+      for (const [index, name] of volumeNames(spec.workspaceId).entries()) {
+        const volume = await docker.volume(name);
+        if (volume && volume.Labels?.['oasis.session-id'] !== spec.workspaceId)
+          throw new Error('持久工作目录归属不匹配');
+        if (!volume) {
+          if (spec.restore) throw new Error('原运行持久工作目录缺失，不能从空目录恢复');
+          await docker.createVolume(name, {
+            'oasis.component': 'harness-workspace',
+            'oasis.session-id': spec.workspaceId,
           });
         }
+        if (index && !deps.sessionsDir) throw new Error('持久会话目录未配置');
+        mounts.push({
+          Type: 'volume',
+          Source: name,
+          Target: index === 0 ? deps.workdir : deps.sessionsDir!,
+        });
       }
       for (const previous of await docker.listContainers(LABEL_COMPONENT)) {
         if (previous.Labels[LABEL_RUN] !== spec.runId) continue;

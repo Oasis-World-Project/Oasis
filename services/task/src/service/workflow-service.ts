@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { Material } from '@oasis/contracts/canvas';
 import type { CallSettledData, RunFinishedData } from '@oasis/contracts/events';
-import { RunBody, RunEventList } from '@oasis/contracts/harness';
+import { RunBody, RunEventList, WORKSPACE_UNAVAILABLE } from '@oasis/contracts/harness';
 import type {
   Attention,
   CreateTaskInput,
@@ -42,7 +42,15 @@ import { deliveryManifest, selectDeliverables, missingDeliveryFiles } from './ou
 import { nodeRow, planToRows, validatePlan } from './plan.ts';
 import { createPlanning, type PlanningConfig } from './planning-service.ts';
 import { decide } from './schedule.ts';
-import { afterRound, firstStep, resumeStep, retryStep, reworkStep, type Step } from './steps.ts';
+import {
+  afterRound,
+  firstStep,
+  redoStep,
+  resumeStep,
+  retryStep,
+  reworkStep,
+  type Step,
+} from './steps.ts';
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
 
@@ -548,6 +556,11 @@ export function createWorkflowService(deps: {
         schema: RunBody,
       });
     } catch (err) {
+      if (err instanceof HttpError && err.code === WORKSPACE_UNAVAILABLE) {
+        logger.warn({ runId: s.runId }, '原会话的工作目录不在了，这一步重新做');
+        await transact(s.task.id, (snapshot, w, fx) => redo(snapshot, w, s.runId, err.message, fx));
+        return;
+      }
       if (err instanceof HttpError && err.statusCode >= 400 && err.statusCode < 500) {
         logger.warn({ err, runId: s.runId }, 'harness 拒绝了运行');
         await onRunFinished({
@@ -566,6 +579,18 @@ export function createWorkflowService(deps: {
       const run = snapshot.activeRuns.find((r) => r.id === s.runId);
       if (run?.status === 'pending') await w.setRun(s.runId, { status: 'running' });
     });
+  }
+
+  /**
+   * 接着原会话的运行被 harness 拒绝：原会话的工作目录不在了（持久卷被清掉）。这次运行记成失败，
+   * 这一步重新开一个会话做、带上节点上一版交出的产出（ADR 0022 的「重新做」）；不算节点失败，也不占重做次数。
+   */
+  async function redo(snapshot: Snapshot, w: Writer, runId: string, error: string, fx: Effects) {
+    const run = snapshot.activeRuns.find((r) => r.id === runId);
+    const node = snapshot.nodes.find((n) => n.id === run?.nodeId);
+    if (run?.status !== 'pending' || node?.status !== 'running') return;
+    await w.setRun(run.id, { status: 'failed', error, finishedAt: new Date() });
+    await openStep(snapshot, w, node, redoStep(snapshot, node, run), fx);
   }
 
   /** 关卡检查（事务外），再按结果推进：通过 → 完成；没过且还能改 → 接着原会话改一次；否则完成并留提醒 */

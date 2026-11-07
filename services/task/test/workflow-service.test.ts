@@ -220,6 +220,8 @@ const stopped: string[] = [];
 let harnessKnows = new Set<string>();
 let finishedRemote = new Map<string, Record<string, unknown>>();
 let rejectNext = false;
+/** 这些运行的持久工作目录不在了：接着它们做时 harness 返回 409 workspace_unavailable */
+let lostWorkspaces = new Set<string>();
 const harness = Fastify();
 harness.get('/internal/v1/models/execution', async () => ({
   models: ['deepseek/x', 'openai/blocked'].map((id) => ({
@@ -239,13 +241,21 @@ harness.get('/internal/execution/environment', async () => ({
   notes: [],
 }));
 harness.post('/internal/runs', async (request, reply) => {
-  const body = request.body as { runId: string };
+  const body = request.body as { runId: string; continueFrom?: string };
   if (rejectNext) {
     rejectNext = false;
     return reply
       .code(409)
       .send({ error: { code: 'input_run_unavailable', message: '上游没了', requestId: 'r' } });
   }
+  if (body.continueFrom && lostWorkspaces.has(body.continueFrom))
+    return reply.code(409).send({
+      error: {
+        code: 'workspace_unavailable',
+        message: '原会话的工作目录已经不在了，接不上原会话',
+        requestId: 'r',
+      },
+    });
   submitted.push(body as Record<string, unknown>);
   harnessKnows.add(body.runId);
   return reply.code(202).send(runBody(body.runId, 'queued'));
@@ -402,6 +412,7 @@ beforeEach(() => {
   harnessKnows = new Set();
   finishedRemote = new Map();
   rejectNext = false;
+  lostWorkspaces = new Set();
   plans = new Map();
   unavailable = [];
   events.length = 0;
@@ -566,13 +577,60 @@ describe('工作流调度', () => {
     expect(submitted.filter((s) => s.nodeId === task.nodes[1]?.id)).toHaveLength(1);
   });
 
-  it('失败有可恢复归档时沿用同一子任务会话和产物', async () => {
+  it('失败后原会话的工作目录还在：重试时接着同一会话和产物', async () => {
     const task = await create(['A'], []);
     const previous = runOf('A', task).runId;
     await finish(previous, 'failed', { resumable: true });
     expect(submitted).toHaveLength(1);
     await service.decide(OWNER, task.id, { choice: 'retry' });
     expect(runOf('A', task)).toMatchObject({ continueFrom: previous, goal: true, inputsFrom: [] });
+  });
+
+  it('接不上原会话（工作目录不在了）：这一步重新开会话做，带上上一版产出和原本要修的问题，不算节点失败', async () => {
+    const task = await create(['A', 'B'], [['A', 'B']]);
+    const first = runOf('A', task).runId;
+    gateResults = [['标题不对']];
+    lostWorkspaces.add(first);
+    await finish(first, 'succeeded', { outputs: [{ path: 'a.md', size: 3 }] });
+
+    // 关卡没过 → 接着原会话修 → harness 说工作目录不在了 → 重新开会话做
+    const redo = runOf('A', task);
+    expect(redo.runId).not.toBe(first);
+    expect(redo.continueFrom).toBeUndefined();
+    expect(redo.goal).toBe(true);
+    expect(redo.inputsFrom).toEqual([{ runId: first, as: '_previous' }]);
+    expect(redo.prompt).toContain('你是 Oasis 工作流里的一个节点');
+    expect(redo.prompt).toContain('【重新做】');
+    expect(redo.prompt).toContain('in/_previous/');
+    expect(redo.prompt).toContain('- 标题不对');
+    const a = keyOf(task, 'A');
+    const runs = await service.nodeRuns(OWNER, task.id, a);
+    expect(runs.map((r) => [r.purpose, r.status, r.continued])).toEqual([
+      ['work', 'succeeded', false],
+      ['rework', 'failed', true],
+      ['rework', 'running', false],
+    ]);
+    expect(runs[1]?.error).toContain('工作目录已经不在了');
+    expect(await statusOf(task.id)).toMatchObject({ task: 'running', A: 'running' });
+
+    await finish(redo.runId, 'succeeded', { outputs: [{ path: 'a.md', size: 4 }] });
+    expect(await statusOf(task.id)).toMatchObject({ A: 'succeeded', B: 'running' });
+    expect(runOf('B', task).inputsFrom).toEqual([{ runId: redo.runId, as: 'A' }]);
+  });
+
+  it('停下后继续时工作目录不在了，节点也没交过产出：重新开会话从头做', async () => {
+    const task = await create(['A'], []);
+    const first = runOf('A', task).runId;
+    await service.stop(OWNER, task.id);
+    await finish(first, 'stopped', { resumable: true });
+    lostWorkspaces.add(first);
+    await service.run(OWNER, task.id);
+    const redo = runOf('A', task);
+    expect(redo.continueFrom).toBeUndefined();
+    expect(redo.inputsFrom).toEqual([]);
+    expect(redo.prompt).toContain('之前的进度没有保存下来，从头做');
+    expect(redo.prompt).not.toContain('【原本接着要你做的】');
+    expect(await statusOf(task.id)).toMatchObject({ task: 'running', A: 'running' });
   });
 
   it('原生执行器明确失败后报告根因，不在外层复制付费运行，下游不跑', async () => {
@@ -811,6 +869,28 @@ describe('讨论节点', () => {
     expect(d?.discussion).toMatchObject({ rounds: 2, round: 2 });
     expect(d?.discussion?.transcript).toHaveLength(4);
     expect(runOf('W', task).inputsFrom).toEqual([{ runId: summary.runId, as: 'D' }]);
+  });
+
+  it('下一轮接不上自己原来的会话（工作目录不在了）：重新开会话说，带上完整题目和之前的发言', async () => {
+    const task = await create([discussion('D', ['甲', '乙'])], []);
+    const [jia, yi] = runsOf('D', task);
+    lostWorkspaces.add(jia!.runId);
+    await finish(jia!.runId, 'succeeded', { summary: '我觉得要温馨' });
+    await finish(yi!.runId, 'succeeded', { summary: '我觉得要简洁' });
+    const round2 = runsOf('D', task).slice(2);
+    expect(round2).toHaveLength(2);
+    const fresh = round2.find((r) => r.model === 'deepseek/甲')!;
+    expect(fresh.continueFrom).toBeUndefined();
+    expect(fresh.prompt).toContain('你是「甲」');
+    expect(fresh.prompt).toContain('做一份温馨小屋的介绍');
+    expect(fresh.prompt).toContain(
+      '【之前的讨论】\n- 第 1 轮 甲：我觉得要温馨\n- 第 1 轮 乙：我觉得要简洁',
+    );
+    expect(fresh.prompt).toContain('第 2 轮（共 2 轮）');
+    expect(round2.find((r) => r.model === 'deepseek/乙')?.continueFrom).toBe(yi!.runId);
+
+    for (const r of round2) await finish(r.runId, 'succeeded', { summary: '兼顾' });
+    expect(runOf('D', task).model).toBe('deepseek/summary');
   });
 
   it('讨论进行中追问：记下来，下一轮发言带上', async () => {

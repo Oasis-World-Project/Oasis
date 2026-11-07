@@ -134,7 +134,10 @@ export function workPrompt(c: NodeContext): string {
   ].join('\n\n');
 }
 
-/** 讨论节点：某位参与者某一轮的发言。第一轮带完整上下文；之后接着自己的会话，只给上一轮别人说了什么 */
+/**
+ * 讨论节点：某位参与者某一轮的发言。第一轮带完整上下文；之后接着自己的会话，只给上一轮别人说了什么。
+ * 给了 history（接不上自己原来的会话、重新开会话时）：完整上下文加上之前几轮的全部发言。
+ */
 export function speechPrompt(input: {
   context: NodeContext;
   name: string;
@@ -143,23 +146,26 @@ export function speechPrompt(input: {
   rounds: number;
   others: Speech[];
   newNotes: string[];
+  history?: Speech[];
 }): string {
   const ask = [
     `这是第 ${input.round} 轮（共 ${input.rounds} 轮）。`,
     '直接在你最后一条消息里说出你的发言，不用写文件，也不用调工具，除非你需要看 in/ 里的材料。',
   ].join('');
-  if (input.round === 1) {
+  const respond = '请回应：同意什么、反对什么、还要补充什么。';
+  if (input.round === 1 || input.history) {
     return [
       `你是「${input.name}」，正在参加一场讨论：「${input.context.title}」。`,
       ...(input.stance.trim() ? [`【你的立场】\n${input.stance}`] : []),
       ...context(input.context, '讨论的题目'),
-      `【说明】\n${NO_QUESTIONS}\n- ${ask}`,
+      ...(input.history?.length ? [`【之前的讨论】\n${transcriptText(input.history)}`] : []),
+      `【说明】\n${NO_QUESTIONS}\n- ${ask}${input.round > 1 ? respond : ''}`,
     ].join('\n\n');
   }
   const notes = input.newNotes.length
     ? `\n\n【用户新追加的要求】\n${input.newNotes.map((n) => `- ${n}`).join('\n')}`
     : '';
-  return `【上一轮其他人说了】\n${transcriptText(input.others)}${notes}\n\n${ask}请回应：同意什么、反对什么、还要补充什么。`;
+  return `【上一轮其他人说了】\n${transcriptText(input.others)}${notes}\n\n${ask}${respond}`;
 }
 
 /** 讨论节点：汇总者根据全部发言写出结论 */
@@ -198,6 +204,22 @@ export function revisionPrompt(request: string, plan?: string): string {
     ...(plan ? ['AI 团队给你这一步的安排：', plan, ''] : []),
     '在上次成果的基础上改：只动意见涉及的地方；上游有更新以 in/ 里最新的为准；和你无关的意见不用管。改完在 out/ 交齐全部成果（没改的也要在），update_goal complete，用一两句话说明改了什么。',
   ].join('\n');
+}
+
+/**
+ * 接不上原会话（持久工作目录不在了）时重新做这一步：新会话里先给完整说明，再说清之前的进度在哪；
+ * 原本要接着交代的话（关卡发现的问题、用户的修改意见）附在最后。
+ */
+export function redoPrompt(full: string, previous: boolean, followUp?: string): string {
+  return [
+    full,
+    `【重新做】这一步原来的会话接不上了，这是一个新会话。${
+      previous
+        ? `这一步之前交出的文件在 in/${PREVIOUS_DIR}/，在它的基础上做，已经做好的不用重做。`
+        : '之前的进度没有保存下来，从头做。'
+    }`,
+    ...(followUp ? [`【原本接着要你做的】\n${followUp}`] : []),
+  ].join('\n\n');
 }
 
 export function reworkPrompt(unmet: string[]): string {

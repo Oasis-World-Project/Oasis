@@ -1,11 +1,20 @@
 // 回归场景（docs/engineering/回归测试.md）：每个场景 = 假供应商的脚本（任务单、方案、每个节点怎么做）
 // + 用户怎么操作 + 断言。场景名就是用户原话里的标记 [[e2e:名字]]。
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { execute, literal, query } from './db.mjs';
 import { marker, writeFiles } from './fake-provider.mjs';
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const DEFAULT_MODEL = 'deepseek/deepseek-v4-pro-0813';
+
+/** 模拟持久卷被清掉（docker volume prune、换了机器）：删掉这个会话的工作目录和 dsh 会话 */
+function dropWorkspace(sessionId) {
+  for (const name of [`oasis-workspace-${sessionId}`, `oasis-sessions-${sessionId}`]) {
+    const result = spawnSync('docker', ['volume', 'rm', name], { encoding: 'utf8' });
+    if (result.status !== 0) throw new Error(`删不掉持久卷 ${name}：${result.stderr.trim()}`);
+  }
+}
 
 /** 方案里的一个干活节点 */
 function work(scenario, key, title, goal, extra) {
@@ -528,6 +537,86 @@ const stop = {
   },
 };
 
+// ---------- 4b. 持久工作目录丢了：修改时接不上原会话，重新开会话做、带上上一版产出（ADR 0022） ----------
+const noteNode = (pick) =>
+  work('workspace', 'note', '写笔记', '写笔记，交出 out/笔记.md', {
+    model: pick(DEFAULT_MODEL),
+    expects: ['笔记.md'],
+    deliver: ['笔记.md'],
+  });
+const workspace = {
+  title: '工作目录丢失测试',
+  deliverables: [{ name: '笔记', form: 'Markdown' }],
+  criteria: ['交出笔记'],
+  get request() {
+    return `写一份笔记（之后它的工作目录会被清掉）${marker('workspace')}`;
+  },
+  plan: ({ pick }) => ({
+    nodes: [noteNode(pick)],
+    edges: [],
+    deliverables: { 笔记: 'note' },
+  }),
+  // 规划员要接着原会话改；原会话的工作目录已经没了，task 应改成重新做
+  revisionPlan: ({ pick }) => {
+    const note = noteNode(pick);
+    return {
+      summary: '笔记接着原来的会话加一句结尾。',
+      nodes: [{ ...note, goal: `${note.goal}；加一句结尾`, from: 'note', mode: 'continue' }],
+      edges: [],
+      deliverables: { 笔记: 'note' },
+    };
+  },
+  nodes: {
+    note: {
+      work: [
+        ({ seg }) =>
+          seg.text.includes('【重新做】')
+            ? {
+                bash: `test -f in/_previous/笔记.md && mkdir -p out && cp in/_previous/笔记.md out/笔记.md && printf '%s\\n' '结尾：新会话补上的' >> out/笔记.md`,
+              }
+            : { bash: writeFiles({ 'out/笔记.md': '# 笔记\n第一版。\n' }) },
+      ],
+      // 工作目录没了，不应该再接着原会话改
+      revision: [{ bash: `printf '%s\\n' '结尾：接着原会话' >> out/笔记.md` }],
+    },
+  },
+  async run(t) {
+    const { taskId } = await t.user.createTask(this.request);
+    t.track(taskId);
+    let task = await t.user.waitTask(taskId, done, '第一版交付');
+    const node = task.nodes[0];
+    const [first] = await t.user.nodeRuns(taskId, node.id);
+    dropWorkspace(first.id);
+    await t.user.revise(taskId, { request: '加一句结尾', nodeIds: [node.id] });
+    await t.user.waitTask(taskId, (x) => x.revision?.stage === 'confirm', '修改方案待确认');
+    await t.user.decide(taskId, 'continue');
+    task = await t.user.waitTask(
+      taskId,
+      (x) => done(x) && x.version === 2 && !x.revising,
+      '第二版交付',
+    );
+    const runs = await t.user.nodeRuns(taskId, node.id);
+    t.log(
+      `运行：${runs.map((r) => `${r.purpose}/${r.status}${r.continued ? '(接着)' : ''}`).join(' → ')}`,
+    );
+    t.check(
+      runs.some((r) => r.continued && r.status === 'failed' && /工作目录/.test(r.error ?? '')),
+      '接不上原会话的那次运行应记成失败、写明原因',
+    );
+    t.check(runs.at(-1)?.status === 'succeeded' && !runs.at(-1)?.continued, '应重新开会话做成功');
+    t.check(!task.nodes[0].warning, `不应留下提醒：${task.nodes[0].warning}`);
+    t.check(
+      !t.provider.of('workspace', 'note').some((c) => c.segment === 'revision'),
+      '工作目录没了还在接着原会话改',
+    );
+    const text = await t.user.waitContent(taskId, '笔记.md', (x) => x.includes('结尾'));
+    t.check(
+      text.includes('第一版') && text.includes('结尾：新会话补上的'),
+      `笔记应在上一版的基础上重新做：${text}`,
+    );
+  },
+};
+
 // ---------- 5. 长任务工具：生视频要等十几秒，交出能完整解码的 MP4 ----------
 const WAIT = /oasis-tool wait (\S+)/;
 const video = {
@@ -799,6 +888,7 @@ export const SCENARIOS = {
   media,
   revise,
   stop,
+  workspace,
   video,
   fault,
   takeover,

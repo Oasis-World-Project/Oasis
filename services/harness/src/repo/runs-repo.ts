@@ -7,9 +7,9 @@ import { outbox, runEvents, runs } from './schema.ts';
 
 export type Run = typeof runs.$inferSelect;
 export type RunEvent = typeof runEvents.$inferSelect;
+/** 和运行行在同一事务里存下的启动请求：重启接管时按它原样再起 */
 export interface DurableRunRequest {
   body: StartRunBody & Required<Pick<StartRunBody, 'inputs' | 'inputsFrom'>>;
-  persistent: boolean;
 }
 type NewRun = Pick<
   typeof runs.$inferInsert,
@@ -33,14 +33,10 @@ type RunPatch = Partial<
     | 'startedAt'
     | 'outputs'
     | 'outputKey'
-    | 'sessionKey'
     | 'summary'
   >
 >;
-export type RunOutcome = Pick<
-  Run,
-  'status' | 'error' | 'outputs' | 'outputKey' | 'sessionKey' | 'summary'
-> & {
+export type RunOutcome = Pick<Run, 'status' | 'error' | 'outputs' | 'outputKey' | 'summary'> & {
   finishedAt: Date;
 };
 

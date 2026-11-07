@@ -1,8 +1,10 @@
 // 一次 agent 运行的完整生命周期：
-// 排队 → 签发临时 Key → 起沙箱、放入输入 → dsh 握手、交任务 → 记录事件 → 等空闲（期间可追问）
-// → 取出产出和会话存档存进对象存储 → 销毁沙箱、作废 Key → 写结局并发出 harness.run.finished。
-// 用户「停止」时不等 dsh 说完：直接从还在跑的沙箱里取出产出和会话存档，再销毁沙箱；
-// 之后用 continueFrom 接着这次运行，AI 记得停下之前做到哪了（ADR 0004 §4）。
+// 排队 → 签发临时 Key → 起沙箱（挂上这个会话的持久工作目录）、放入输入 → dsh 握手、交任务
+// → 记录事件 → 等空闲（期间可追问）→ 取出产出存进对象存储 → 销毁沙箱、作废 Key
+// → 写结局并发出 harness.run.finished。
+// 工作目录和 dsh 会话在持久卷里（ADR 0015 §9），沙箱销毁后还在：停止、失败、关卡退回、修改时用
+// continueFrom 接着原会话做，AI 记得之前做到哪了。对象存储只存产出，不存会话。
+// 持久卷不在了就接不上原会话（409 workspace_unavailable），由 task 改成重新做、带上上一版产出。
 import { randomUUID } from 'node:crypto';
 import { PassThrough, Readable } from 'node:stream';
 import { UploadLookupResult } from '@oasis/contracts/canvas';
@@ -16,6 +18,7 @@ import {
   type StartRunBody,
   StartRunBody as StartRunSchema,
   type ExecutionEnvironment,
+  WORKSPACE_UNAVAILABLE,
 } from '@oasis/contracts/harness';
 import {
   ExecutionModels,
@@ -32,7 +35,6 @@ import {
 } from '@oasis/service-kit';
 import {
   connectAgent,
-  isSessionLock,
   isSessionArchive,
   SANDBOX_PATHS,
   sandboxEnv,
@@ -60,7 +62,7 @@ type Status = RunBody['status'];
 const KEEP_FILE = '.oasis-keep';
 const audioPath = /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i;
 const videoPath = /\.(mp4|mov|mkv|avi|webm|mlt|srt)$/i;
-/** 批次恢复状态随 tar 存档，但不是成果，也不传给下游节点。 */
+/** 批次恢复状态和工具的中间文件在 out/ 里，会随产出包存下，但不是成果，也不传给下游节点。 */
 const isPrivateOutput = (path: string) =>
   path === KEEP_FILE ||
   ['.oasis-batches', '.oasis-tools'].some((dir) => path === dir || path.startsWith(`${dir}/`));
@@ -77,7 +79,7 @@ interface LiveRun {
   lastText?: string;
   /** 事件按顺序写库 */
   writes: Promise<void>;
-  /** 被停止时从沙箱里取出的产出和会话存档 */
+  /** 被停止时从沙箱里取出的产出 */
   saved?: Promise<Saved>;
   done: Promise<void>;
   sessionId?: string;
@@ -86,7 +88,6 @@ interface LiveRun {
 
 interface Saved {
   outputs?: { key: string; files: { path: string; size: number }[] };
-  session?: { key: string; files: { path: string; size: number }[] };
 }
 
 /** 取消、停止、超时、服务关闭时中止运行的原因 */
@@ -98,14 +99,14 @@ class StopRun extends Error {
   }
 }
 
-/** 存下来的产出和会话 → 运行结局里的字段 */
+/** 存下来的产出 → 运行结局里的字段 */
 const savedOutcome = (saved: Saved) => ({
   outputs: saved.outputs?.files.filter((f) => !isPrivateOutput(f.path)) ?? [],
   outputKey: saved.outputs?.key ?? null,
-  sessionKey: saved.session?.key ?? null,
 });
 
-function toRunBody(run: Run, resumable = Boolean(run.sessionKey)): RunBody {
+/** resumable：这次运行的持久工作目录还在，可以接着它的会话做 */
+function toRunBody(run: Run, resumable: boolean): RunBody {
   return {
     id: run.id,
     payerId: run.payerId,
@@ -255,7 +256,7 @@ export function createRunService(deps: {
     }
   }
 
-  /** 取出产出和会话存档（会话存档失败不影响结果） */
+  /** 取出产出（会话和工作目录在持久卷里，不用存） */
   async function save(
     sandbox: Pick<Sandbox, 'readArchive' | 'inspectMedia'>,
     id: string,
@@ -290,13 +291,7 @@ export function createRunService(deps: {
         logger.warn({ err, runId: id }, '媒体检查未完成，关卡将保留未检查提醒');
       }
     }
-    const session = await archive(sandbox, SANDBOX_PATHS.sessions, `runs/${id}/session.tar`).catch(
-      (err: unknown) => {
-        logger.warn({ err, runId: id }, '会话存档失败（不影响运行结果）');
-        return undefined;
-      },
-    );
-    return { outputs, session };
+    return { outputs };
   }
 
   /** 上游运行的产出：解出来放到 in/<as>/ 下 */
@@ -316,43 +311,6 @@ export function createRunService(deps: {
       });
     }
     return files;
-  }
-
-  /**
-   * 接着之前某次运行时要放回沙箱的东西：它的产出放回 out/，它的会话存档放回 dsh 的 sessions/
-   * （去掉锁文件，否则恢复时会以为会话还被占着）。
-   */
-  async function continuation(row: Run) {
-    const previous = row.continueFrom ? await repo.get(row.continueFrom) : undefined;
-    if (!previous) return [];
-    if (await executor.workspaceExists?.(row.sessionId ?? previous.id)) return [];
-    const workspace = previous.outputKey
-      ? [
-          {
-            dir: SANDBOX_PATHS.workdir,
-            tar: rewriteArchive(
-              await store.read(previous.outputKey),
-              'out',
-              (path) => path !== KEEP_FILE,
-              deps.outputMaxBytes,
-            ),
-          },
-        ]
-      : [];
-    const dshHome = previous.sessionKey
-      ? [
-          {
-            dir: SANDBOX_PATHS.dshHome,
-            tar: rewriteArchive(
-              await store.read(previous.sessionKey),
-              'sessions',
-              (path) => !isSessionLock(path),
-              deps.outputMaxBytes,
-            ),
-          },
-        ]
-      : [];
-    return [...workspace, ...dshHome];
   }
 
   /** 用户给的素材：向 canvas 取出来，放到 materials/ 下（路径已由 task 定好、契约校验过） */
@@ -395,7 +353,7 @@ export function createRunService(deps: {
     run: LiveRun,
     mode: { goal: boolean; reasoningEffort?: 'max' },
     catalog: { models: ModelCapabilities[]; environment?: ExecutionEnvironment },
-    persistent = false,
+    /** 接管重启前已经开始的运行：工作目录里已经有输入，不再放 */
     recovering = false,
   ) {
     const { id } = row;
@@ -426,7 +384,6 @@ export function createRunService(deps: {
       error: null,
       outputs: [],
       outputKey: null,
-      sessionKey: null,
       summary: null,
     };
     const unavailable = (error: unknown) => error instanceof HttpError && error.statusCode >= 500;
@@ -477,7 +434,6 @@ export function createRunService(deps: {
       });
       stopped();
 
-      const restored = await continuation(row);
       const files = [
         ...runtimeFiles({
           models,
@@ -489,20 +445,15 @@ export function createRunService(deps: {
           recovering,
           environment,
         }),
-        ...(recovering && persistent
-          ? []
-          : inputs.map((f) => ({ path: `in/${f.path}`, content: f.content }))),
+        ...(recovering ? [] : inputs.map((f) => ({ path: `in/${f.path}`, content: f.content }))),
         // 保证 out/ 目录存在且属于沙箱用户
         { path: `out/${KEEP_FILE}`, content: Buffer.alloc(0) },
       ];
       sandbox = await executor.start({
         runId: id,
-        ...(persistent
-          ? {
-              workspaceId: row.sessionId ?? id,
-              restore: recovering || Boolean(row.continueFrom && restored.length === 0),
-            }
-          : {}),
+        workspaceId: row.sessionId ?? id,
+        // 接管或接着原会话：持久卷必须已经在，不能从空目录假装恢复
+        restore: recovering || Boolean(row.continueFrom),
         env: {
           ...deps.batchEnv,
           OASIS_TOOL_SCOPE: row.nodeId ?? row.sessionId ?? id,
@@ -515,7 +466,7 @@ export function createRunService(deps: {
         },
         files: [
           { dir: SANDBOX_PATHS.workdir, tar: await packFiles(files) },
-          ...(recovering && persistent
+          ...(recovering
             ? []
             : [
                 {
@@ -524,7 +475,6 @@ export function createRunService(deps: {
                 },
                 ...(await upstreamFiles(row)),
               ]),
-          ...restored,
         ],
       });
       const box = sandbox;
@@ -578,7 +528,7 @@ export function createRunService(deps: {
         throw new Error(`dsh 启动失败：${String(err)}；stderr：${stderrTail}`, { cause: err });
       }
       let fresh = false;
-      if (recovering && executor.workspaceExists) {
+      if (recovering) {
         const source = await sandbox.readArchive(SANDBOX_PATHS.sessions);
         const paths = source
           ? (await scanArchive(source, deps.outputMaxBytes)).map((f) => f.path)
@@ -697,7 +647,6 @@ export function createRunService(deps: {
         runKeyId: keyRevoked ? null : (keyId ?? row.runKeyId),
         outputs: outcome.outputs,
         outputKey: outcome.outputKey,
-        sessionKey: outcome.sessionKey,
         summary: outcome.summary,
       });
     } else await finish(row, outcome);
@@ -713,9 +662,7 @@ export function createRunService(deps: {
       taskId: row.taskId,
       nodeId: row.nodeId,
       status,
-      resumable:
-        Boolean(outcome.sessionKey) ||
-        Boolean(await executor.workspaceExists?.(row.sessionId ?? row.id)),
+      resumable: await executor.workspaceExists(row.sessionId ?? row.id),
       error: outcome.error,
       outputs: outcome.outputs,
       summary: outcome.summary,
@@ -731,6 +678,10 @@ export function createRunService(deps: {
     if (!row) throw new HttpError(404, 'run_not_found', '没有这次运行');
     return row;
   }
+
+  /** 对外的运行信息：能不能接着做看持久工作目录还在不在 */
+  const bodyOf = async (row: Run) =>
+    toRunBody(row, await executor.workspaceExists(row.sessionId ?? row.id));
 
   async function requestControl(id: string, how: 'stop' | 'cancel') {
     controlRequests.set(id, how);
@@ -782,7 +733,6 @@ export function createRunService(deps: {
       error: latest === 'cancel' ? '已取消' : '已停止',
       outputs: saved.outputs?.files.filter((f) => !isPrivateOutput(f.path)) ?? row.outputs,
       outputKey: saved.outputs?.key ?? row.outputKey,
-      sessionKey: saved.session?.key ?? row.sessionKey,
       summary: row.summary,
     });
     controlRequests.delete(row.id);
@@ -836,7 +786,7 @@ export function createRunService(deps: {
         if (existing) {
           if (existing.payerId !== body.payerId || existing.model !== body.model)
             throw new HttpError(409, 'run_id_conflict', '这个运行 ID 已经被别的运行用了');
-          return toRunBody(existing);
+          return bodyOf(existing);
         }
       }
       // 目录未就绪属于准入等待，不登记失败运行，也不消耗节点重试次数。
@@ -852,10 +802,10 @@ export function createRunService(deps: {
           );
         }
       }
-      // 接着之前的运行：同一付费人、已结束、留下了会话存档；没另给输入就沿用它的输入
+      // 接着之前的运行：同一付费人、已结束、持久工作目录还在；没另给输入就沿用它的输入
       let previous: Run | undefined;
       if (body.continueFrom) {
-        // 刚点了停止马上点继续：那次运行还在收尾（停沙箱、存会话），等它真正停好再接着，
+        // 刚点了停止马上点继续：那次运行还在收尾（停沙箱、存产出），等它真正停好再接着，
         // 不能当成「还没结束」拒掉（2026-11-08 回归测试发现：拒掉后节点失败、会话被取消）
         const stopping = live.get(body.continueFrom);
         if (stopping?.abort.signal.aborted) await stopping.done;
@@ -863,31 +813,19 @@ export function createRunService(deps: {
         const ended = ['succeeded', 'failed', 'cancelled', 'stopped'].includes(
           previous?.status ?? '',
         );
-        const hasWorkspace =
-          previous && Boolean(await executor.workspaceExists?.(previous.sessionId ?? previous.id));
-        if (
-          previous?.payerId !== body.payerId ||
-          !ended ||
-          (!previous.sessionKey && !hasWorkspace)
-        ) {
+        if (previous?.payerId !== body.payerId || !ended)
+          throw new HttpError(409, 'continue_unavailable', '要接着的那次运行不存在或还没结束');
+        const session = previous.sessionId ?? previous.id;
+        // 只有对象存储里的产出、没有会话，不能冒充接着原会话做
+        if (!(await executor.workspaceExists(session)))
           throw new HttpError(
             409,
-            'continue_unavailable',
-            '要接着的那次运行不存在、还没结束或没有会话存档',
+            WORKSPACE_UNAVAILABLE,
+            '原会话的工作目录已经不在了，接不上原会话',
           );
-        }
-        const oldRequest = (await repo.request(previous.id)) as DurableRunRequest | undefined;
-        if (oldRequest?.persistent) {
-          if (!(await executor.workspaceExists?.(previous.sessionId ?? previous.id)))
-            throw new HttpError(
-              409,
-              'workspace_unavailable',
-              '原会话持久工作目录缺失，不能仅凭旧产出冒充完整恢复',
-            );
-          const history = await repo.listBySession(previous.sessionId ?? previous.id);
-          if (history.some((r) => r.id !== previous!.id && r.createdAt > previous!.createdAt))
-            throw new HttpError(409, 'session_advanced', '该会话已有后续运行，请从最新进度继续');
-        }
+        const history = await repo.listBySession(session);
+        if (history.some((r) => r.id !== previous!.id && r.createdAt > previous!.createdAt))
+          throw new HttpError(409, 'session_advanced', '该会话已有后续运行，请从最新进度继续');
       }
       const id = body.runId ?? randomUUID();
       const sessionId = previous ? (previous.sessionId ?? previous.id) : id;
@@ -896,7 +834,6 @@ export function createRunService(deps: {
       if (sessions.has(sessionId) || [...live.values()].some((r) => r.sessionId === sessionId))
         throw new HttpError(409, 'session_busy', '原会话仍有运行，不能同时修改同一工作目录');
       sessions.add(sessionId);
-      const persistent = Boolean(executor.workspaceExists);
       try {
         const inserted = await repo.insert(
           {
@@ -911,7 +848,7 @@ export function createRunService(deps: {
             sessionId,
             continueFrom: previous?.id ?? null,
           },
-          { body, persistent },
+          { body },
         );
         const row = await owned(id);
         if (!inserted) {
@@ -919,7 +856,7 @@ export function createRunService(deps: {
           if (row.payerId !== body.payerId || row.model !== body.model) {
             throw new HttpError(409, 'run_id_conflict', '这个运行 ID 已经被别的运行用了');
           }
-          return toRunBody(row);
+          return bodyOf(row);
         }
         const run: LiveRun = {
           abort: new AbortController(),
@@ -945,22 +882,15 @@ export function createRunService(deps: {
             ...(body.reasoningEffort ? { reasoningEffort: body.reasoningEffort } : {}),
           },
           catalog,
-          persistent,
         ).catch((err: unknown) => logger.error({ err, runId: id }, '运行收尾失败'));
-        return toRunBody(row);
+        // 刚登记、还没结束的运行谈不上「接着做」
+        return toRunBody(row, false);
       } finally {
         sessions.delete(sessionId);
       }
     },
 
-    get: async (id: string) => {
-      const row = await owned(id);
-      return toRunBody(
-        row,
-        Boolean(row.sessionKey) ||
-          Boolean(await executor.workspaceExists?.(row.sessionId ?? row.id)),
-      );
-    },
+    get: async (id: string) => bodyOf(await owned(id)),
     /**
      * 运行中沙箱里 out/<dir> 的当前文件（节点自查 app.check 用，ADR 0017）：只给这次运行的付款人和任务，
      * 运行结束后读不到（成果以归档为准）。
@@ -985,7 +915,7 @@ export function createRunService(deps: {
     },
 
     /**
-     * 任务被删除（ADR 0012）：删掉它已结束的运行的产出包、会话存档和运行记录。
+     * 任务被删除（ADR 0012 §15 真删除）：删掉它已结束的运行的产出包、检查报告、运行记录和持久工作目录。
      * 还没结束的运行（正常不会有）先留着，返回 false，事件重投时再删。
      */
     async purgeTask(taskId: string): Promise<boolean> {
@@ -993,14 +923,13 @@ export function createRunService(deps: {
       const ended = rows.filter((row) => !['queued', 'starting', 'running'].includes(row.status));
       for (const row of ended) {
         if (row.outputKey) await store.delete(row.outputKey);
-        if (row.sessionKey) await store.delete(row.sessionKey);
         for (const kind of ['audio', 'video', 'application'])
           await store.delete(`runs/${row.id}/${kind}-check.json`);
       }
       if (ended.length === rows.length)
         for (const sessionId of new Set(ended.map((r) => r.sessionId ?? r.id)))
           if (!(await repo.listBySession(sessionId)).some((r) => r.taskId !== taskId))
-            await executor.purgeWorkspace?.(sessionId);
+            await executor.purgeWorkspace(sessionId);
       await repo.removeMany(ended.map((row) => row.id));
       if (ended.length) logger.info({ taskId, runs: ended.length }, '任务已删除，运行存档一并清理');
       return ended.length === rows.length;
@@ -1150,7 +1079,7 @@ export function createRunService(deps: {
     },
 
     /**
-     * 停止：排队中的不再开始；运行中的先存下产出和会话再销毁沙箱，之后可以接着做。
+     * 停止：排队中的不再开始；运行中的先存下产出再销毁沙箱（会话和工作目录在持久卷里），之后可以接着做。
      * 已经在收尾（马上就成功了）或已结束的不受影响，不报错。
      */
     async stop(id: string): Promise<void> {
@@ -1228,15 +1157,8 @@ export function createRunService(deps: {
             try {
               const saved = (await repo.request(row.id)) as DurableRunRequest | undefined;
               if (!saved) throw new Error('没有与运行原子保存的启动请求');
-              request = {
-                body: StartRunSchema.parse(saved.body),
-                persistent: saved.persistent === true,
-              };
-              if (
-                request.persistent &&
-                row.startedAt &&
-                !(await executor.workspaceExists?.(row.sessionId ?? row.id))
-              )
+              request = { body: StartRunSchema.parse(saved.body) };
+              if (row.startedAt && !(await executor.workspaceExists(row.sessionId ?? row.id)))
                 throw new Error('原运行持久工作目录缺失，不能从空目录恢复');
             } catch (err) {
               await finish(row, {
@@ -1244,7 +1166,6 @@ export function createRunService(deps: {
                 error: '恢复状态不可用：' + (err instanceof Error ? err.message : String(err)),
                 outputs: row.outputs,
                 outputKey: row.outputKey,
-                sessionKey: row.sessionKey,
                 summary: row.summary,
               });
               continue;
@@ -1277,7 +1198,6 @@ export function createRunService(deps: {
                   : {}),
               },
               catalog,
-              request.persistent,
               Boolean(row.startedAt),
             ).catch((err: unknown) => logger.error({ err, runId: row.id }, '恢复运行收尾失败'));
           } catch (err) {

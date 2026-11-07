@@ -19,7 +19,7 @@ export const RunStatus = z.enum([
   'succeeded',
   'failed',
   'cancelled',
-  /** 用户点了停止：已经做出来的产出和会话都存下了，可以用 continueFrom 接着做 */
+  /** 用户点了停止：已经做出来的产出存下了，会话在持久工作目录里，可以用 continueFrom 接着做 */
   'stopped',
 ]);
 export type RunStatus = z.infer<typeof RunStatus>;
@@ -88,12 +88,19 @@ export const StartRunBody = z.object({
     )
     .default([]),
   /**
-   * 接着之前某次运行做：放回它的会话（AI 记得前面聊过什么）、它的产出（放回 out/）和它的输入。
-   * 用于关卡退回修改、停止后继续、讨论的下一轮。只能接同一付费人、已结束的运行。
+   * 接着之前某次运行做：挂上它的持久工作目录（会话、out/、装好的依赖都在），AI 记得前面做到哪了；
+   * 没另给 inputsFrom 就沿用它的。用于关卡退回修改、停止后继续、修改、讨论的下一轮。
+   * 只能接同一付费人、已结束、工作目录还在的运行；工作目录不在了返回 409 {@link WORKSPACE_UNAVAILABLE}。
    */
   continueFrom: z.uuid().optional(),
 });
 export type StartRunBody = z.input<typeof StartRunBody>;
+
+/**
+ * 接着的那次运行的持久工作目录已经不在了（持久卷被清掉）：接不上原会话。
+ * 调用方应改成重新开一个会话做，把上一版产出作为输入带上（task：ADR 0022 的「重新做」）。
+ */
+export const WORKSPACE_UNAVAILABLE = 'workspace_unavailable';
 
 /** 运行产出的文件（沙箱里 /workspace/out 下的内容） */
 export const RunOutputFile = z.object({
@@ -172,6 +179,7 @@ export const RunBody = z.object({
   nodeId: z.uuid().nullable(),
   model: z.string(),
   status: RunStatus,
+  /** 持久工作目录还在，可以用 continueFrom 接着这次运行的会话做 */
   resumable: z.boolean().optional(),
   error: z.string().nullable(),
   outputs: z.array(RunOutputFile),

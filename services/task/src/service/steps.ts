@@ -3,9 +3,11 @@
 // - 讨论节点：第一轮每位参与者各说一次（并行）→ 之后每轮每人接着自己的会话回应上一轮别人的发言
 //   → 最后汇总者写结论（之后和干活节点一样过关卡）。
 // - 停止后继续：干活节点接着停下的那次运行的会话；讨论节点把这一步没说完的重新说。
+// - 接不上原会话（持久工作目录不在了）：这一步重新开会话做，带上节点上一版交出的产出（ADR 0022 的「重新做」）。
 import type { NodeConfig, NodeRunPurpose, RunMeta } from '../repo/schema.ts';
 import type { Node, NodeRun, Snapshot } from '../repo/task-store.ts';
 import {
+  redoPrompt,
   resumePrompt,
   reworkPrompt,
   revisionPrompt,
@@ -92,8 +94,17 @@ const inputsOf = (snapshot: Snapshot, node: Node) => [
 const speechesOf = (config: NodeConfig): Speech[] =>
   (config.transcript ?? []).map(({ round, name, text }) => ({ round, name, text }));
 
-/** 某位参与者某一轮的发言 */
-function speech(snapshot: Snapshot, node: Node, name: string, round: number): RunRequest {
+/**
+ * 某位参与者某一轮的发言。fresh：接不上自己原来的会话（工作目录不在了），
+ * 重新开会话说，带上完整题目和之前几轮的全部发言。
+ */
+function speech(
+  snapshot: Snapshot,
+  node: Node,
+  name: string,
+  round: number,
+  fresh = false,
+): RunRequest {
   const config = node.config;
   const participant = (config.participants ?? []).find((p) => p.name === name);
   if (!participant) throw new Error(`讨论里没有参与者「${name}」`);
@@ -112,9 +123,10 @@ function speech(snapshot: Snapshot, node: Node, name: string, round: number): Ru
       rounds,
       others,
       newNotes: node.userNotes.slice(config.notesSeen ?? 0),
+      ...(fresh && round > 1 ? { history: speechesOf(config).filter((s) => s.round < round) } : {}),
     }),
-    inputsFrom: round === 1 ? inputsOf(snapshot, node) : [],
-    ...(round > 1 && previous ? { continueFrom: previous.runId } : {}),
+    inputsFrom: round === 1 || fresh ? inputsOf(snapshot, node) : [],
+    ...(round > 1 && previous && !fresh ? { continueFrom: previous.runId } : {}),
     meta: { round, participant: name },
   };
 }
@@ -201,10 +213,42 @@ export function retryStep(snapshot: Snapshot, node: Node, failed: NodeRun): Step
     return { requests: [speech(snapshot, node, failed.meta.participant, failed.meta.round)] };
   }
   if (failed.purpose === 'summary') return { requests: [summary(snapshot, node)] };
-  // 有归档就恢复当前子任务，而不是把已付费的工作从头重放。
+  // 原会话的工作目录还在就接着做，不把已付费的工作从头重放。
   return failed.meta.resumable
     ? resumeStep(snapshot, { ...node, currentRunId: failed.id }, true)
     : firstStep(snapshot, node);
+}
+
+/**
+ * 接不上原会话（harness 说持久工作目录不在了）时重新做这一步（ADR 0022 的「重新做」）：新会话里给节点的
+ * 完整说明，节点上一版交出的产出放进 in/_previous/；关卡发现的问题、用户的修改意见附在后面。
+ */
+export function redoStep(snapshot: Snapshot, node: Node, run: NodeRun): Step {
+  const { participant, round } = run.meta;
+  if (run.purpose === 'speech' && participant && round)
+    return { requests: [speech(snapshot, node, participant, round, true)] };
+  const full =
+    node.kind === 'discussion' ? summary(snapshot, node) : firstStep(snapshot, node).requests[0]!;
+  // 修改时重新做的节点已经带着上一版（previousRunId）；其余用这个节点上一次交出的产出
+  const previous = node.config.previousRunId ? undefined : node.config.outputsRunId;
+  return {
+    requests: [
+      {
+        ...full,
+        purpose: run.purpose,
+        prompt: redoPrompt(
+          full.prompt,
+          Boolean(previous ?? node.config.previousRunId),
+          run.purpose === 'rework' ? run.request.prompt : undefined,
+        ),
+        inputsFrom: [
+          ...full.inputsFrom,
+          ...(previous ? [{ runId: previous, as: PREVIOUS_DIR }] : []),
+        ],
+        meta: run.meta,
+      },
+    ],
+  };
 }
 
 /**

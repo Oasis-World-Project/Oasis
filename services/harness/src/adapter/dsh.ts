@@ -15,17 +15,16 @@ export const SANDBOX_PATHS = {
   workdir: '/workspace',
   inputs: '/workspace/in',
   outputs: '/workspace/out',
-  /** dsh 的数据目录，会话存储在它下面的 sessions/ */
-  dshHome: '/home/node/.dsh',
-  /** dsh 的会话存储（关卡退回修改、停止后继续、讨论的下一轮时接着原会话） */
+  /**
+   * dsh 的会话存储（含附件），和 /workspace 一起挂在这个会话的持久卷上：关卡退回修改、停止后继续、
+   * 修改、讨论的下一轮时接着原会话（ADR 0015 §9）
+   */
   sessions: '/home/node/.dsh/sessions',
 } as const;
 
 /** dsh 里指向 model-gateway 的模型路由名（profile/cordis.patch.yml 里定义） */
 const PROVIDER = 'openrouter';
 
-/** 会话存档里不能带的文件：锁文件会让恢复以为会话还被占着 */
-export const isSessionLock = (path: string) => path.endsWith('.lock');
 /** 原生持久文件只在适配层识别；缺失与损坏必须区分。 */
 export const isSessionArchive = (path: string, sessionId?: string) => {
   const parts = path.split('/');
@@ -178,7 +177,7 @@ export interface AgentEvent {
   data: Record<string, unknown>;
 }
 
-/** 工具参数和结果在事件里最多保留这么多字符（完整内容在 dsh 会话存档里） */
+/** 工具参数和结果在事件里最多保留这么多字符（完整内容在持久卷里的 dsh 会话记录里） */
 const MAX_EVENT_TEXT = 4000;
 const clip = (text: string) =>
   text.length > MAX_EVENT_TEXT ? `${text.slice(0, MAX_EVENT_TEXT)}…（已截断）` : text;
