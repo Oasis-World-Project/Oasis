@@ -1,6 +1,7 @@
 // 节点出口的轻量关卡（ADR 0017）：只挡明显坏掉的成果，结果确定、不调模型。
 // 1. 文件齐不齐：产出非空，方案写明的文件都在，数量和图片尺寸符合，文件能解析（harness 的解析报告）。
-// 2. 网页能不能打开：有 oasis-app.json 的成果在隔离浏览器里跑一遍（节点自己也能用 app.check 跑同一套）。
+// 2. 网页能不能打开：有 oasis-app.json 的成果在隔离浏览器里跑一遍（节点自己也能用 app.check 跑同一套）；
+//    交给用户的网页没配 oasis-app.json 也算没满足（画布里不能运行、浏览器检查也跑不了）。
 // 3. 音视频能不能播放：完整解码一遍。
 // 任务单的「怎么算做好」由节点自己对照，不再交给模型逐条打分。检查程序本身出错记为没检查到，不冒充通过；
 // 检查只提醒、不拦截（2026-11-05 用户决定）。
@@ -96,6 +97,37 @@ export function checkRules(
   return [...new Set(unmet)];
 }
 
+/**
+ * 交给用户的网页（子目录里的 .html）要配 oasis-app.json，否则画布里不能运行、浏览器检查也跑不了。
+ * 2026-11-08 真模型回归：规划员有时没把清单写进节点要求，网页交付了，画布里却打不开。
+ * 直接放在 out/ 下的 .html 不管：清单不能放在 out/ 本身，挪目录会和方案写的交付路径对不上。
+ */
+export function checkWebManifest(outputs: RunOutputFile[], deliver: readonly string[]): string[] {
+  if (!deliver.length) return [];
+  const delivered = deliver.map(patternRegExp);
+  const roots = outputs
+    .filter((f) => APP_MANIFEST.test(f.path))
+    .map((f) => f.path.slice(0, -'/oasis-app.json'.length));
+  const dirs = new Set(
+    outputs
+      .filter(
+        (f) =>
+          /\.html?$/i.test(f.path) &&
+          f.path.includes('/') &&
+          delivered.some((re) => re.test(f.path)) &&
+          !roots.some((root) => f.path.startsWith(`${root}/`)),
+      )
+      .map((f) => f.path.slice(0, f.path.lastIndexOf('/'))),
+  );
+  // 同一个网页的子目录只报最外层那个
+  const tops = [...dirs].filter((dir) => ![...dirs].some((other) => dir.startsWith(`${other}/`)));
+  return tops.map(
+    (dir) =>
+      `交付的网页 out/${dir}/ 里没有 oasis-app.json：画布里不能直接运行，浏览器检查也跑不了。` +
+      `在 out/${dir}/ 里加上 oasis-app.json（格式见 in/.oasis-formats.json），再用 oasis-tool app.check --dir out/${dir} 自查。`,
+  );
+}
+
 interface GateInput {
   signal?: AbortSignal;
   payerId: string;
@@ -105,6 +137,8 @@ interface GateInput {
   runId: string;
   outputs: RunOutputFile[];
   expects: ExpectedFile[];
+  /** 交给用户的文件（方案里的 deliver） */
+  deliver?: readonly string[];
 }
 
 const MEDIA = [
@@ -210,6 +244,7 @@ export function createGate(deps: { harness: ServiceClient; logger: Logger }) {
       const unmet = checkRules(input.outputs, input.expects);
       // 连产出都不齐就不用往下查了
       if (unmet.length > 0) return { unmet };
+      unmet.push(...checkWebManifest(input.outputs, input.deliver ?? []));
       const unchecked: string[] = [];
       await guarded(input, '文件解析检查', unchecked, () => checkFiles(input, unmet, unchecked));
       if (input.outputs.some((file) => APP_MANIFEST.test(file.path)))

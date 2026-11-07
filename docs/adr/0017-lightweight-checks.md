@@ -55,3 +55,11 @@
 
 （过程记录已删减，原文见 git 历史：`git show 32431ae:docs/adr/0017-lightweight-checks.md`。）
 
+
+
+## 5. 2026-11-08 补充：交给用户的网页要配清单
+
+- 起因：真模型回归（`pnpm e2e --real`）里，规划员有时没把 `oasis-app.json` 写进网页节点的要求，节点交出 `site/index.html`、样式和脚本，却没有清单。关卡只对有清单的成果跑浏览器检查，于是什么也没查就交付了；画布按清单判断能不能运行，用户看到的是三个文件，打不开网页。
+- 决定：保留项 2 加一条确定的规则——节点交给用户的文件（方案里的 `deliver`）里，子目录中的 `.html` 没有被同目录或上层目录的 `oasis-app.json` 覆盖，就算没满足，退回节点在原会话里补上（提示里写明放在哪个目录、格式见 `in/.oasis-formats.json`、用 `app.check` 自查）。仍按「最多自动改 1 次，改过仍没满足带提醒交付」。
+- 不管的情况：中间节点之间传递的网页（不在 `deliver` 里）；直接放在 `out/` 下的 `.html`（清单不能放在 `out/` 本身，挪目录会和方案写的交付路径对不上）。
+- 实现：`services/task/src/service/gate.ts` 的 `checkWebManifest`；回归场景 `manifest`（`scripts/e2e/scenarios.mjs`）。

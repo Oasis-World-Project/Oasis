@@ -855,6 +855,10 @@ export function createRunService(deps: {
       // 接着之前的运行：同一付费人、已结束、留下了会话存档；没另给输入就沿用它的输入
       let previous: Run | undefined;
       if (body.continueFrom) {
+        // 刚点了停止马上点继续：那次运行还在收尾（停沙箱、存会话），等它真正停好再接着，
+        // 不能当成「还没结束」拒掉（2026-11-08 回归测试发现：拒掉后节点失败、会话被取消）
+        const stopping = live.get(body.continueFrom);
+        if (stopping?.abort.signal.aborted) await stopping.done;
         previous = await repo.get(body.continueFrom);
         const ended = ['succeeded', 'failed', 'cancelled', 'stopped'].includes(
           previous?.status ?? '',

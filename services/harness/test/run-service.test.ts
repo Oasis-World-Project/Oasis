@@ -94,6 +94,8 @@ let pauseFails = false;
 let orphansRemoved: ReadonlySet<string> | undefined;
 /** 起沙箱要多久（模拟容器启动慢） */
 let startDelayMs = 0;
+/** 从沙箱取存档要多久（模拟停止时存会话慢） */
+let archiveDelayMs = 0;
 const workspaces = new Set<string>();
 let noNativeSession = false;
 const executor: Executor = {
@@ -140,6 +142,7 @@ const executor: Executor = {
       stderr: new PassThrough(),
       async readArchive(path) {
         lifecycle.push('archive');
+        await sleep(archiveDelayMs);
         const dir = path.split('/').at(-1) ?? 'x';
         if (dir === 'sessions' && noNativeSession) return undefined;
         // 会话目录里带一个锁文件，接着原会话时应该被去掉
@@ -412,6 +415,7 @@ beforeEach(() => {
   rows.clear();
   stored.clear();
   startDelayMs = 0;
+  archiveDelayMs = 0;
 });
 
 async function until<T>(read: () => T | undefined, ms = 3_000): Promise<T> {
@@ -792,6 +796,18 @@ describe('一次 agent 运行', () => {
     expect((await finished(next.id)).status).toBe('succeeded');
     expect(methods).toContain('session/resume');
     expect(started[1]).toMatchObject({ workspaceId: run.id, restore: true });
+  });
+
+  it('停止后马上继续：等那次运行停好再接着，不当成「还没结束」拒掉', async () => {
+    // 2026-11-08 回归测试发现：存会话时继续请求就到了，被 409 拒掉，节点失败
+    archiveDelayMs = 200;
+    const run = await service.start({ ...base, prompt: 'SLOW 慢慢做' });
+    await until(() => events.find((e) => e.kind === 'user_message'));
+    await service.stop(run.id);
+    const next = await service.start({ ...base, prompt: '接着做', continueFrom: run.id });
+    expect((await finished(run.id)).status).toBe('stopped');
+    expect((await finished(next.id)).status).toBe('succeeded');
+    expect(methods).toContain('session/resume');
   });
 
   it('冻结失败不归档仍在变动的检查点，并明确告知保存失败', async () => {

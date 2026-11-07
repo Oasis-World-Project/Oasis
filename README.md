@@ -97,6 +97,9 @@ docs/       工程方向、架构决策记录（ADR）
 |---|---|
 | `pnpm lint` / `pnpm typecheck` / `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、依赖方向、死代码、重复率、数据库迁移检查 |
+| `pnpm e2e` | 全链路回归（假模型、真容器、真画布，约 2 分钟，先停 `pnpm dev`）；`--real` 用真模型跑 3 个小场景，每场景 ≤ $1。见 `docs/engineering/回归测试.md` |
+| `pnpm trace <任务 ID>` | 查一个任务的运行、调用、费用来源和画布成果，并标出异常 |
+| `pnpm accept` | 验收模式：服务从当前代码启动、不随改动重启，Web 用构建版 |
 | `pnpm cleanup` | 清理临时产物并报告释放的空间 |
 | `pnpm infra:ps` / `pnpm infra:down` | 查看 / 停止全部容器 |
 | `pnpm sandbox:build` | 构建 agent 沙箱镜像（dsh 版本锁定在镜像标签里） |

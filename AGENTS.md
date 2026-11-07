@@ -22,7 +22,12 @@
 | `pnpm sandbox:build` | 构建 agent 沙箱镜像 `oasis/harness-sandbox-base:<dsh 版本>` |
 | `pnpm lint` · `pnpm typecheck` · `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、依赖方向、死代码、重复率、迁移检查 |
+| `pnpm e2e` | 全链路回归：假模型、真容器、真画布，从私聊发任务跑到桌面端画布里打开成果（先停 `pnpm dev`；`--keep` 跑完不停服务；`--real` 真模型、每场景 ≤ $1）。见 `docs/engineering/回归测试.md` |
+| `pnpm trace <任务 ID>` | 一个任务的运行、调用、费用来源和画布成果，标出异常（按估算扣费、卡住的调用、没退回的冻结、遗留容器） |
+| `pnpm accept` | 验收模式：服务从当前代码起、不随改动重启，Web 用构建版（先停 `pnpm dev`） |
 | `pnpm cleanup` | 任务收尾清理并报告释放空间（`--build`、`--docker` 可选） |
+
+- **回归规矩（2026-11-08）**：改了 task、harness、model-gateway、canvas、conversation 的行为，提交前跑一次 `pnpm e2e`，全绿再提交；验收失败先写成回归场景（`scripts/e2e/scenarios.mjs`）再修。
 
 ## B. 架构约定
 

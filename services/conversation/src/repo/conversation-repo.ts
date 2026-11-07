@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
@@ -93,11 +94,19 @@ export interface ConversationRepo {
   updateIntake(id: string, patch: IntakePatch): Promise<Intake>;
 }
 
+/** 会话锁的租约：持有期间每 10 秒续一次；进程崩了，30 秒后别的实例就能接着处理这段对话 */
+const LOCK_LEASE_SECONDS = 30;
+const LOCK_RENEW_MS = 10_000;
+
 export function createConversationRepo(
   pool: pg.Pool | pg.PoolClient,
   heldLocks: ReadonlySet<string> = new Set(),
 ): ConversationRepo {
   const db = drizzle(pool);
+  /**
+   * 同一会话同时只处理一轮：锁是 conversation_locks 里的一行租约，不占着连接等模型回复
+   * （以前用会话级 advisory lock，每轮要占一条连接直到回复结束，几个人同时发任务就把连接池占满）。
+   */
   async function lock<T>(
     namespace: string,
     conversationId: string,
@@ -105,29 +114,38 @@ export function createConversationRepo(
   ): Promise<T> {
     const key = `${namespace}:${conversationId}`;
     if (heldLocks.has(key)) return work(repo);
-    const client = 'release' in pool ? pool : await pool.connect();
-    let locked = false,
-      broken = false;
+    const holder = randomUUID();
+    const taken = await pool.query(
+      `insert into conversation_locks (key, holder, expires_at)
+       values ($1, $2, now() + make_interval(secs => $3))
+       on conflict (key) do update set holder = excluded.holder, expires_at = excluded.expires_at
+       where conversation_locks.expires_at < now()`,
+      [key, holder, LOCK_LEASE_SECONDS],
+    );
+    if (!taken.rowCount)
+      throw new HttpError(
+        409,
+        namespace === 'intake' ? 'intake_busy' : 'conversation_busy',
+        '正在处理这段对话，请稍候或先停止回复',
+      );
+    // 续租失败（数据库短暂不可用）不打断这一轮：下次再续，真过期了别的请求才可能接手
+    const renew = setInterval(() => {
+      pool
+        .query(
+          'update conversation_locks set expires_at = now() + make_interval(secs => $3) where key = $1 and holder = $2',
+          [key, holder, LOCK_LEASE_SECONDS],
+        )
+        .catch(() => {});
+    }, LOCK_RENEW_MS);
+    renew.unref();
     try {
-      locked = (
-        await client.query('select pg_try_advisory_lock(hashtextextended($1,0)) locked', [key])
-      ).rows[0].locked;
-      if (!locked)
-        throw new HttpError(
-          409,
-          namespace === 'intake' ? 'intake_busy' : 'conversation_busy',
-          '正在处理这段对话，请稍候或先停止回复',
-        );
-      return await work(createConversationRepo(client, new Set([...heldLocks, key])));
+      return await work(createConversationRepo(pool, new Set([...heldLocks, key])));
     } finally {
-      if (locked) {
-        try {
-          await client.query('select pg_advisory_unlock(hashtextextended($1,0))', [key]);
-        } catch {
-          broken = true;
-        }
-      }
-      if (!('release' in pool)) client.release(broken);
+      clearInterval(renew);
+      // 释放失败也没关系：租约到期自动失效
+      await pool
+        .query('delete from conversation_locks where key = $1 and holder = $2', [key, holder])
+        .catch(() => {});
     }
   }
   const repo: ConversationRepo = {

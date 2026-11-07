@@ -1,7 +1,28 @@
 import { HttpError, type ServiceClient } from '@oasis/service-kit';
 import { pino } from 'pino';
 import { describe, expect, it } from 'vitest';
-import { checkRules, createGate } from '../src/service/gate.ts';
+import { checkRules, checkWebManifest, createGate } from '../src/service/gate.ts';
+
+describe('交给用户的网页要配 oasis-app.json', () => {
+  const page = (path: string) => ({ path, size: 10 });
+  it('交付目录里有网页却没有清单：按最外层目录报一次，告诉节点怎么补', () => {
+    const unmet = checkWebManifest(
+      [page('site/index.html'), page('site/pages/about.html'), page('site/app.js')],
+      ['site/**'],
+    );
+    expect(unmet).toHaveLength(1);
+    expect(unmet[0]).toContain('out/site/ 里没有 oasis-app.json');
+    expect(unmet[0]).toContain('in/.oasis-formats.json');
+  });
+  it('配了清单、不交给用户的网页、直接放在 out/ 下的网页都不报', () => {
+    expect(
+      checkWebManifest([page('site/index.html'), page('site/oasis-app.json')], ['site/**']),
+    ).toEqual([]);
+    expect(checkWebManifest([page('draft/index.html')], ['报告.md'])).toEqual([]);
+    expect(checkWebManifest([page('index.html')], ['*.html'])).toEqual([]);
+    expect(checkWebManifest([page('site/index.html')], [])).toEqual([]);
+  });
+});
 
 describe('关卡的规则检查', () => {
   it('expects 与 deliver 重复的缺文件提醒只列一次，仍逐条执行不同约束', () => {

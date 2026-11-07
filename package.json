@@ -36,6 +36,9 @@
     "media:recover": "node scripts/media.mjs recover",
     "video:smoke": "node scripts/video.mjs",
     "check:engineering": "node scripts/check-engineering.mjs",
+    "e2e": "node scripts/e2e.mjs",
+    "trace": "node scripts/trace.mjs",
+    "accept": "node scripts/accept.mjs",
     "avatar:tunnel": "node scripts/avatar-tunnel.mjs",
     "cleanup": "node scripts/cleanup-task.mjs",
     "prepare": "lefthook install"

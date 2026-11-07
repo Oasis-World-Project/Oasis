@@ -52,15 +52,17 @@ function modelViewerBundle(mode: string): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, import.meta.dirname, '');
+  // 前端只和 gateway 打交道；开发时由 Vite 转发，避免跨域。验收模式（pnpm accept）用构建好的版本，同一个地址和转发
+  const serve = {
+    host: '127.0.0.1',
+    port: Number(env.WEB_PORT || 5173),
+    strictPort: true,
+    proxy: env.GATEWAY_URL ? { '/api': { target: env.GATEWAY_URL } } : undefined,
+  };
   return {
     plugins: [react(), tailwindcss(), modelViewerBundle(mode)],
-    server: {
-      host: '127.0.0.1',
-      port: Number(env.WEB_PORT || 5173),
-      strictPort: true,
-      // 前端只和 gateway 打交道；开发时由 Vite 转发，避免跨域
-      proxy: env.GATEWAY_URL ? { '/api': { target: env.GATEWAY_URL } } : undefined,
-    },
+    server: serve,
+    preview: serve,
     test: {
       environment: 'jsdom',
       include: ['test/**/*.test.{ts,tsx}'],

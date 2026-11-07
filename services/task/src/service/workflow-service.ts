@@ -599,6 +599,7 @@ export function createWorkflowService(deps: {
       runId,
       outputs: node.outputs,
       expects: [...(node.config.expects ?? []), ...(node.config.deliver ?? [])],
+      deliver: node.config.deliver ?? [],
     });
     await transact(taskId, async (fresh, w, fx) => {
       // 检查期间节点被停止、任务被取消：结果作废

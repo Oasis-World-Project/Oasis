@@ -246,7 +246,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       controller.abort();
     }
   });
-  it('跨仓库实例互斥；单连接池不死锁，生成失败保留已存消息并释放锁', async () => {
+  it('跨仓库实例互斥；持锁不占连接，生成失败保留已存消息并释放锁，租约过期可接手', async () => {
     const singlePool = new pg.Pool({
       connectionString: process.env.TEST_DATABASE_URL,
       options: `-c search_path=${schema}`,
@@ -271,6 +271,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
         status: 'complete',
       });
       messageId = message.id;
+      // 持锁期间不占连接：同一个只有 1 条连接的池，锁外的查询（如拼上下文）照样能跑
+      expect((await single.completeMessages(dm)).some((m) => m.id === message.id)).toBe(true);
       entered();
       await gate;
       throw new Error('model failed');
@@ -287,6 +289,19 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       await other.withIntakeLock(dm, async (scoped) => {
         expect(await scoped.findOwned(dm, owner)).toBeDefined();
       });
+      // 持锁的进程崩了：租约过期后别的实例能接手
+      await pool.query(
+        "insert into conversation_locks(key,holder,expires_at) values($1,$2,now() - interval '1 second')",
+        [`intake:${dm}`, randomUUID()],
+      );
+      await other.withIntakeLock(dm, async () => undefined);
+      expect(
+        (
+          await pool.query('select count(*)::int n from conversation_locks where key=$1', [
+            `intake:${dm}`,
+          ])
+        ).rows[0].n,
+      ).toBe(0);
       await pool.query('delete from messages where id=$1', [messageId]);
     } finally {
       unblock();
