@@ -41,6 +41,9 @@ function modelViewerBundle(mode: string): Plugin {
     handleHotUpdate(ctx) {
       if (ctx.file.endsWith('/canvas/model-viewer.ts') || ctx.file.endsWith('model-preview.ts')) {
         compiled = undefined;
+        // 虚拟模块的转换结果缓存在模块图里，不清掉的话刷新页面拿到的还是旧查看器
+        const cached = ctx.server.moduleGraph.getModuleById('\0oasis-model-viewer');
+        if (cached) ctx.server.moduleGraph.invalidateModule(cached);
         ctx.server.ws.send({ type: 'full-reload' });
       }
     },

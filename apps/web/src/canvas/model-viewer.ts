@@ -386,8 +386,9 @@ function run(port: MessagePort) {
     const line = new Color(data.theme.line || data.theme.light);
     grid = new GridHelper(radius * 4, 20, line, line);
     grid.position.y = -size.y / 2;
-    axes = new AxesHelper(radius * 0.5);
-    axes.position.y = -size.y / 2;
+    // 坐标轴放在模型脚下的左前角外侧，不被模型挡住
+    axes = new AxesHelper(radius * 0.4);
+    axes.position.set(-size.x / 2 - radius * 0.1, -size.y / 2, size.z / 2 + radius * 0.1);
     grid.visible = axes.visible = false;
     guides.add(grid, axes);
     scene.add(guides);
