@@ -154,7 +154,6 @@ await startService({
         pidsLimit: config.PREVIEW_PIDS_LIMIT,
         appPort: config.PREVIEW_APP_PORT,
       }),
-      canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 60_000 }),
       modelGateway: createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
         timeoutMs: 10_000,
       }),
@@ -162,7 +161,6 @@ await startService({
       runs,
       cpus: config.PREVIEW_CPUS,
       maxMs: config.PREVIEW_MAX_MS,
-      idleMs: config.PREVIEW_IDLE_MS,
     });
     registerRoutes(
       app,

@@ -16,6 +16,7 @@
     "@fontsource/noto-sans-sc": "5.3.1",
     "@oasis/contracts": "workspace:*",
     "@oasis/design-tokens": "workspace:*",
+    "@oasis/live-page": "workspace:*",
     "@tanstack/react-query": "5.104.5",
     "@tanstack/react-router": "1.170.45",
     "@xyflow/react": "12.12.0",

@@ -1,0 +1,32 @@
+{
+  "name": "@oasis/live-page",
+  "version": "0.0.0",
+  "private": true,
+  "description": "网页成果在画布隔离框里怎么运行：画布预览和节点检查共用同一套组装规则（ADR 0021）。只放这套规则，不放业务逻辑。",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "es-module-lexer": "catalog:",
+    "parse5": "catalog:"
+  },
+  "devDependencies": {
+    "@oasis/tsconfig": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

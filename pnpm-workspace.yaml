@@ -16,6 +16,7 @@ catalog:
   '@types/pg': 8.23.1
   dbmate: 2.37.0
   drizzle-orm: 0.45.4
+  es-module-lexer: 2.3.2
   fastify: 5.12.7
   fflate: 0.8.3
   pg: 8.23.1

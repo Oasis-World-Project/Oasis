@@ -7,13 +7,6 @@ import {
   UploadQuery,
 } from '@oasis/contracts/canvas';
 import {
-  PreviewAudioBody,
-  PreviewFrameBody,
-  PreviewInputBody,
-  PreviewQuoteBody,
-  PreviewSessionBody,
-} from '@oasis/contracts/harness';
-import {
   fileResponseHeaders,
   HttpError,
   parseWith,
@@ -172,76 +165,6 @@ export function registerRoutes(
     return sendStored(request, reply, store, { ...row, download: download === '1' });
   });
 
-  const previewAccess = async (userId: string, id: string) => {
-    const row = await artifacts.get(userId, id);
-    if (!row.appSpec) throw new HttpError(422, 'not_application', '不是可运行成果');
-    return { artifactId: row.id, ownerId: userId, taskId: row.taskId };
-  };
-  if (harness) {
-    app.get('/v1/artifacts/:id/preview/quote', async (request) => {
-      const { id } = parseWith(IdParams, request.params);
-      await previewAccess(requireUserId(request), id);
-      return harness.json('POST', '/internal/previews/quote', {
-        requestId: request.id,
-        body: {},
-        schema: PreviewQuoteBody,
-      });
-    });
-    app.post('/v1/artifacts/:id/preview', async (request) => {
-      const { id } = parseWith(IdParams, request.params);
-      return harness.json('POST', '/internal/previews', {
-        body: await previewAccess(requireUserId(request), id),
-        requestId: request.id,
-        schema: PreviewSessionBody,
-      });
-    });
-    app.get('/v1/artifacts/:id/preview', async (request) => {
-      const { id } = parseWith(IdParams, request.params);
-      return harness.json('POST', '/internal/previews/lookup', {
-        body: await previewAccess(requireUserId(request), id),
-        requestId: request.id,
-        schema: PreviewSessionBody.nullable(),
-      });
-    });
-    app.delete('/v1/artifacts/:id/preview', async (request) => {
-      const { id } = parseWith(IdParams, request.params);
-      return harness.json('POST', '/internal/previews/stop', {
-        body: await previewAccess(requireUserId(request), id),
-        requestId: request.id,
-        schema: PreviewSessionBody,
-      });
-    });
-    app.get('/v1/artifacts/:id/preview/frame', async (request) => {
-      const { id } = parseWith(IdParams, request.params);
-      return harness.json('POST', '/internal/previews/frame', {
-        body: await previewAccess(requireUserId(request), id),
-        requestId: request.id,
-        schema: PreviewFrameBody,
-      });
-    });
-    app.get('/v1/artifacts/:id/preview/audio', async (request) => {
-      const { id } = parseWith(IdParams, request.params);
-      const { afterSeq } = parseWith(
-        z.object({ afterSeq: z.coerce.number().int().min(-1).default(-1) }),
-        request.query,
-      );
-      return harness.json('POST', '/internal/previews/audio', {
-        body: { ...(await previewAccess(requireUserId(request), id)), afterSeq },
-        requestId: request.id,
-        schema: PreviewAudioBody,
-      });
-    });
-    app.post('/v1/artifacts/:id/preview/input', async (request) => {
-      const { id } = parseWith(IdParams, request.params);
-      const input = parseWith(PreviewInputBody, request.body);
-      await harness.json('POST', '/internal/previews/input', {
-        body: { ...(await previewAccess(requireUserId(request), id)), input },
-        requestId: request.id,
-      });
-      return { accepted: true };
-    });
-  }
-
   app.post('/v1/previews', { bodyLimit: previewLimits.inputBytes }, async (request, reply) => {
     requireUserId(request);
     const { name } = parseWith(UploadQuery, request.query);
@@ -310,12 +233,5 @@ export function registerRoutes(
       .header('content-length', row.size)
       .header('x-oasis-file-sha256', row.sha256 ?? '')
       .send(content);
-  });
-  app.post('/internal/applications/lookup', async (request) => {
-    const { ownerId, artifactId } = parseWith(
-      z.object({ ownerId: z.uuid(), artifactId: z.uuid() }),
-      request.body,
-    );
-    return artifacts.application(ownerId, artifactId);
   });
 }

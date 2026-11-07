@@ -20,6 +20,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-sdk-protocol": "0.2.1-rc.5",
     "@oasis/contracts": "workspace:*",
+    "@oasis/live-page": "workspace:*",
     "@oasis/service-kit": "workspace:*",
     "drizzle-orm": "catalog:",
     "fast-xml-parser": "5.11.2",

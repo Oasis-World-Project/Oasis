@@ -1,7 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import readline from 'node:readline';
-import type { PreviewInputBody } from '@oasis/contracts/harness';
 import { BrowserTestPlan, BrowserTestResult, UiTestReport } from '@oasis/contracts/ui-test';
 import type { DockerApi } from './docker-api.ts';
 import { demultiplex } from './executor.ts';
@@ -12,12 +11,12 @@ const seccompProfile = readFileSync(new URL('../../seccomp-profile.json', import
 export interface LivePreview {
   id: string;
   frame(): { seq: number; jpegBase64: string } | undefined;
-  audio(afterSeq: number): { seq: number; webmBase64: string }[];
   diagnostics(): string[];
   /** 预览进程还在（进程退出或容器被回收后为 false） */
   alive(): boolean;
   test(plan: BrowserTestPlan): Promise<BrowserTestResult>;
-  input(value: PreviewInputBody): void;
+  /** 画面检查：等页面画出来，返回是否一直是一整片纯色（ADR 0021） */
+  look(): Promise<{ blank: boolean; color?: string }>;
   ready(): Promise<void>;
   destroy(): Promise<void>;
 }
@@ -87,7 +86,9 @@ export function createPreviewExecutor(deps: {
         demultiplex(connection, stdout, stderr);
         stderr.resume();
         let latest: { seq: number; jpegBase64: string } | undefined;
-        const audio: { seq: number; webmBase64: string }[] = [];
+        let looking:
+          | { accept(value: { blank: boolean; color?: string }): void; reject(error: Error): void }
+          | undefined;
         // 页面诊断按内容去重并计数，不截断、不限条数
         const diagnostics = new Map<string, number>();
         let alive = true;
@@ -109,8 +110,9 @@ export function createPreviewExecutor(deps: {
             kind?: string;
             seq?: number;
             jpegBase64?: string;
-            webmBase64?: string;
             message?: string;
+            blank?: unknown;
+            color?: unknown;
             report?: unknown;
             name?: unknown;
             base64?: unknown;
@@ -147,6 +149,13 @@ export function createPreviewExecutor(deps: {
             if (parsed.success) screenshots.push(parsed.data);
             return;
           }
+          if (data.kind === 'look-result' && looking) {
+            looking.accept({
+              blank: data.blank === true,
+              ...(typeof data.color === 'string' ? { color: data.color.slice(0, 20) } : {}),
+            });
+            return;
+          }
           if (data.kind === 'test-result' && testResult) {
             const parsed = UiTestReport.safeParse(data.report);
             if (parsed.success) testResult.accept({ report: parsed.data, screenshots });
@@ -162,17 +171,11 @@ export function createPreviewExecutor(deps: {
           } else if (data.kind === 'error' && testResult) {
             // 测试中途控制端报错：如实结束这次测试，不让它一直等下去
             testResult.reject(new Error(data.message ?? '浏览器测试中断'));
+          } else if (data.kind === 'error' && looking) {
+            looking.reject(new Error(data.message ?? '画面检查中断'));
           } else if (data.kind === 'diagnostic' && typeof data.message === 'string')
             diagnostics.set(data.message, (diagnostics.get(data.message) ?? 0) + 1);
           else if (
-            data.kind === 'audio' &&
-            Number.isInteger(data.seq) &&
-            typeof data.webmBase64 === 'string' &&
-            data.webmBase64.length <= 128 * 1024
-          ) {
-            audio.push({ seq: data.seq!, webmBase64: data.webmBase64 });
-            if (audio.length > 80) audio.shift();
-          } else if (
             data.kind === 'frame' &&
             Number.isInteger(data.seq) &&
             typeof data.jpegBase64 === 'string' &&
@@ -183,6 +186,7 @@ export function createPreviewExecutor(deps: {
         lines.on('close', () => {
           alive = false;
           testResult?.reject(new Error('浏览器测试进程提前结束'));
+          looking?.reject(new Error('浏览器测试进程提前结束'));
           if (!resolved) {
             resolved = true;
             reject(new Error('预览进程提前结束'));
@@ -192,7 +196,6 @@ export function createPreviewExecutor(deps: {
         return {
           id,
           frame: () => latest,
-          audio: (afterSeq) => audio.filter((chunk) => chunk.seq > afterSeq).slice(0, 20),
           diagnostics: () =>
             [...diagnostics].map(([message, times]) =>
               times > 1 ? `${message}（共 ${times} 次）` : message,
@@ -220,8 +223,17 @@ export function createPreviewExecutor(deps: {
               screenshots = [];
             }
           },
-          input: (value) => {
-            connection.write(`${JSON.stringify(value)}\n`);
+          look: async () => {
+            if (looking) throw new Error('浏览器正在做画面检查');
+            // 不设时限：控制端按动画帧数下结论；进程退出时提前结束
+            try {
+              return await new Promise<{ blank: boolean; color?: string }>((accept, reject) => {
+                looking = { accept, reject };
+                connection.write(`${JSON.stringify({ kind: 'look' })}\n`);
+              });
+            } finally {
+              looking = undefined;
+            }
           },
           // 不设时限：控制端报告就绪或出错、进程退出时结束
           ready: () => ready,

@@ -253,7 +253,7 @@ describe('网页应用在画布里运行', () => {
       },
     });
 
-  it('打开静态应用：入口网页带上同成果的样式，在只给脚本权限的隔离框里运行；可改用容器预览', async () => {
+  it('打开静态应用：入口网页带上同成果的样式，在只给脚本权限的隔离框里运行；没有平台容器预览（ADR 0021）', async () => {
     const api = install();
     await open(`/canvas/artifacts/${app[0]!.id}`);
     const frame = await screen.findByTitle('site');
@@ -262,9 +262,8 @@ describe('网页应用在画布里运行', () => {
     expect(doc).toContain('canvas{width:100%}');
     expect(doc).toContain('<script>spin()</script>');
     expect(doc.indexOf('Content-Security-Policy')).toBeLessThan(doc.indexOf('<script'));
-    expect(api.requests).not.toContain('POST /canvas/v1/artifacts/' + app[0]!.id + '/preview');
-    fireEvent.click(screen.getByRole('button', { name: '平台容器预览' }));
-    await waitFor(() => expect(screen.queryByTitle('site')).toBeNull());
+    expect(api.requests.some((r) => r.includes('/preview'))).toBe(false);
+    expect(screen.queryByRole('button', { name: '平台容器预览' })).toBeNull();
   });
 
   it('单独打开应用里的网页也会运行，并能引用同成果的文件', async () => {

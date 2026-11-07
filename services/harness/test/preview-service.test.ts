@@ -1,5 +1,6 @@
 import { pino } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
+import type { ApplicationBundle } from '@oasis/contracts/canvas';
 import type { ServiceClient, ObjectStore } from '@oasis/service-kit';
 import type { RunService } from '../src/service/run-service.ts';
 import type { PreviewExecutor } from '../src/executor/preview-executor.ts';
@@ -85,10 +86,11 @@ function fixture(files?: Record<string, string>) {
     screenshots: [{ name: 'step-0.jpg', base64: '/9j/2Q==' }],
   }));
   let alive = true;
+  const look = vi.fn(async (): Promise<{ blank: boolean; color?: string }> => ({ blank: false }));
   const start = vi.fn(async () => ({
     id: 'container-1',
     frame: () => ({ seq: 1, jpegBase64: 'AA==' }),
-    input: vi.fn(),
+    look,
     ready: async () => undefined,
     diagnostics: () => ['页面错误：boom（共 2 次）'],
     alive: () => alive,
@@ -101,15 +103,6 @@ function fixture(files?: Record<string, string>) {
     destroy,
     removeOrphans: vi.fn(async () => 0),
   } as unknown as PreviewExecutor;
-  const canvas = {
-    json: vi.fn(async () => ({
-      spec: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
-      files: [
-        { path: 'oasis-app.json', contentBase64: 'e30=' },
-        { path: 'index.html', contentBase64: 'PGgxPk9LPC9oMT4=' },
-      ],
-    })),
-  } as unknown as ServiceClient;
   const modelGateway = {
     json: vi.fn(async (method: string, path: string) => {
       if (path.startsWith('/internal/v1/compute/quote')) return { maxMicro: 500 };
@@ -122,12 +115,10 @@ function fixture(files?: Record<string, string>) {
   const service = createPreviewService({
     repo,
     executor,
-    canvas,
     modelGateway,
     logger: pino({ level: 'silent' }),
     cpus: 2,
     maxMs: 60_000,
-    idleMs: 20_000,
     runs: {
       get: async () => ({
         payerId: access.ownerId,
@@ -164,10 +155,29 @@ function fixture(files?: Record<string, string>) {
     modelGateway,
     executor,
     test,
+    look,
   };
 }
 
-describe('私有预览生命周期', () => {
+const BUNDLE: ApplicationBundle = {
+  spec: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
+  files: [
+    { path: 'oasis-app.json', contentBase64: 'e30=' },
+    { path: 'index.html', contentBase64: 'PGgxPk9LPC9oMT4=' },
+  ],
+};
+
+const staticApp = (files: Record<string, string>) => ({
+  'site/oasis-app.json': JSON.stringify({
+    version: 1,
+    kind: 'static',
+    root: 'site',
+    entry: 'index.html',
+  }),
+  ...files,
+});
+
+describe('隔离浏览器检查', () => {
   it('清单字段缺失给出实际路径与字段错误，在启动和冻结前拒绝', async () => {
     const { service, start, modelGateway } = fixture({
       'site/oasis-app.json': JSON.stringify({ version: 1, kind: 'static', entry: 'index.html' }),
@@ -224,6 +234,89 @@ describe('私有预览生命周期', () => {
         reason: expect.stringContaining('out/other 里没有 oasis-app.json'),
         frameCaptured: false,
       });
+    } finally {
+      await service.close();
+    }
+  });
+  it('静态网页按画布的方式打开：入口换成只放隔离框的外壳，多文件模块也一并装进框里（ADR 0021）', async () => {
+    const { service, start } = fixture(
+      staticApp({
+        'site/index.html':
+          '<script type="importmap">{"imports":{"three":"./js/three.js"}}</script><script type="module" src="./js/app.js"></script>',
+        'site/js/app.js': "import * as T from 'three'; T.go();",
+        'site/js/three.js': "export const go = () => document.body.append('ok');",
+      }),
+    );
+    try {
+      const input = { runId: access.artifactId, payerId: access.ownerId, taskId: access.taskId };
+      expect((await service.checkLive({ ...input, dir: 'site' })).reason).toContain(
+        '页面错误：boom',
+      );
+      const files = (
+        start.mock.calls[0] as unknown as [{ files: { path: string; content: Buffer }[] }]
+      )[0].files;
+      const entry = files.find((file) => file.path === 'index.html')!.content.toString('utf8');
+      expect(entry).toContain(
+        '<iframe title="oasis-live" sandbox="allow-scripts allow-pointer-lock"',
+      );
+      expect(entry).toContain('Content-Security-Policy');
+      expect(entry).toContain('oasis-file:/js/three.js');
+      // 其余交付文件原样带上
+      expect(files.map((file) => file.path)).toEqual(
+        expect.arrayContaining(['js/app.js', 'js/three.js', 'oasis-app.json']),
+      );
+    } finally {
+      await service.close();
+    }
+  });
+  it('画布里加载不了的文件、放错目录的测试计划，在启动和冻结前就说清楚', async () => {
+    const input = { runId: access.artifactId, payerId: access.ownerId, taskId: access.taskId };
+    const broken = fixture(
+      staticApp({
+        'site/index.html': '<script type="module" src="./app.js"></script>',
+        'site/app.js': "import { x } from './gone.js'; x();",
+      }),
+    );
+    try {
+      const result = await broken.service.checkRun(input);
+      expect(result.passed).toBe(false);
+      expect(result.reason).toContain('这些文件在画布里加载不了：site/gone.js');
+      expect(result.reason).toContain('fetch/XHR');
+      expect(broken.start).not.toHaveBeenCalled();
+    } finally {
+      await broken.service.close();
+    }
+    const misplaced = fixture(
+      staticApp({
+        'site/index.html': '<h1>ok</h1>',
+        'oasis-test.json': JSON.stringify({
+          version: 1,
+          steps: [{ action: 'visible', selector: 'h1' }],
+        }),
+      }),
+    );
+    try {
+      const result = await misplaced.service.checkRun(input);
+      expect(result.reason).toBe(
+        'oasis-test.json 放在了 out/oasis-test.json，要和 oasis-app.json 一起放进 out/site/ 才会执行。',
+      );
+      expect(misplaced.start).not.toHaveBeenCalled();
+    } finally {
+      await misplaced.service.close();
+    }
+  });
+  it('画面一直是一整片纯色时检查不通过（ADR 0021）', async () => {
+    const { service, look } = fixture(staticApp({ 'site/index.html': '<canvas></canvas>' }));
+    look.mockResolvedValueOnce({ blank: true, color: '#080808' });
+    try {
+      const result = await service.checkRun({
+        runId: access.artifactId,
+        payerId: access.ownerId,
+        taskId: access.taskId,
+      });
+      expect(result.passed).toBe(false);
+      expect(result.reason).toContain('画面检查：打开后一直是一整片纯色（#080808）');
+      expect(result.report?.unchecked[0]).toContain('要和 oasis-app.json 放在同一目录');
     } finally {
       await service.close();
     }
@@ -360,10 +453,10 @@ describe('私有预览生命周期', () => {
   it('重复启动同一会话，停止后结算一次并可重开；任务删除后记录不留', async () => {
     const { service, start, destroy, modelGateway, rows } = fixture();
     try {
-      const first = await service.start(access);
+      const first = await service.start(access, BUNDLE);
       expect(first.status).toBe('running');
       expect(first.heldMicro).toBe(500);
-      expect((await service.start(access)).id).toBe(first.id);
+      expect((await service.start(access, BUNDLE)).id).toBe(first.id);
       expect(start).toHaveBeenCalledTimes(1);
       expect((await service.frame(access)).seq).toBe(1);
       const stopped = await service.stop(access);
@@ -377,7 +470,7 @@ describe('私有预览生命周期', () => {
             ([method, path]) => method === 'POST' && String(path).endsWith('/settle'),
           ),
       ).toHaveLength(1);
-      expect((await service.start(access)).id).not.toBe(first.id);
+      expect((await service.start(access, BUNDLE)).id).not.toBe(first.id);
       // 任务删除：停掉、结算，再把记录真删除
       await service.stopTask(access.taskId);
       expect(rows.size).toBe(0);
@@ -386,10 +479,10 @@ describe('私有预览生命周期', () => {
     }
   });
   it('重启回收活动容器，结算后清理孤儿容器', async () => {
-    const { service, executor } = fixture();
-    await service.start(access);
+    const { service, executor, rows } = fixture();
+    await service.start(access, BUNDLE);
     await service.recover();
-    expect((await service.current(access))?.status).toBe('stopped');
+    expect([...rows.values()].map((row) => row.status)).toEqual(['stopped']);
     expect(executor.removeOrphans).toHaveBeenCalledTimes(1);
     await service.close();
   });

@@ -1,6 +1,7 @@
 // 画布里打开一个成果（外观照原型 ⑨⑩）：点阵底；顶栏只有返回、批注、下载三个图标（2026-11-04 精简）。
-// 中间预览（图片、视频、音频、PDF、Markdown、文字、网页；其他格式提示下载）。网页和静态应用在本机隔离框里直接运行（ADR 0009 §17），
-// 带后端的应用走平台容器预览。批注面板里「发给 AI 团队修改」，直接交给 AI 团队在原任务里接着改（ADR 0012）。
+// 中间预览（图片、视频、音频、PDF、Markdown、文字、网页；其他格式提示下载）。网页和静态应用在本机隔离框里直接运行（ADR 0009 §17）；
+// 带后端的应用不在画布里运行，只能下载（ADR 0021 删掉了画面转发式的平台容器预览）。
+// 批注面板里「发给 AI 团队修改」，直接交给 AI 团队在原任务里接着改（ADR 0012）。
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ArrowLeft, Download, LoaderCircle, PencilLine, SlidersHorizontal } from 'lucide-react';
@@ -19,7 +20,6 @@ import { AvatarPreview } from '../canvas/AvatarPreview.tsx';
 import { ParameterPanel } from '../canvas/ParameterPanel.tsx';
 import { AVATAR_FIELDS, type Values } from '../canvas/parameters.ts';
 import { LivePreview } from '../canvas/LivePreview.tsx';
-import { PreviewPlayer } from '../canvas/PreviewPlayer.tsx';
 import { RevisePanel } from '../canvas/RevisePanel.tsx';
 import { pdfCompanion } from '../canvas/snapshots.ts';
 
@@ -49,9 +49,6 @@ export function ArtifactPage() {
   // 数字人的参数面板（ADR 0013）
   const [avatarParams, setAvatarParams] = useState(false);
   const [avatarValues, setAvatarValues] = useState<Values>({});
-  /** 静态应用在本机框里加载不全时，用户可改用平台容器预览 */
-  const [containerFor, setContainerFor] = useState<string | null>(null);
-  const container = containerFor === artifactId;
   const pdf = artifact ? pdfCompanion(artifact, siblings) : undefined;
   /** 顶栏的批注开关；换一个成果时自动关掉 */
   const [annotatingFor, setAnnotatingFor] = useState<string | null>(null);
@@ -198,17 +195,20 @@ export function ArtifactPage() {
               {...(artifact.application
                 ? {
                     live:
-                      appEntry && staticApp && !container ? (
+                      appEntry && staticApp ? (
                         <LivePreview
                           key={appEntry.id}
                           file={{ path: appEntry.path, url: artifactContentUrl(appEntry.id) }}
                           name={staticApp.root}
                           root={staticApp.root}
                           assets={assets}
-                          onFallback={() => setContainerFor(artifactId)}
                         />
                       ) : (
-                        <PreviewPlayer artifactId={artifact.id} />
+                        <p className="m-0 p-6 text-sm text-ink-muted">
+                          {staticApp
+                            ? `应用的入口 ${staticApp.root}/${staticApp.entry} 没有交付，没法在这里运行。`
+                            : '这个应用带后端，不能在画布里运行。请下载后在电脑上用 Node 启动。'}
+                        </p>
                       ),
                   }
                 : {})}

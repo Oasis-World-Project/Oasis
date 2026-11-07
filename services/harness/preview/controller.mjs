@@ -1,6 +1,6 @@
 /* global process, URL, fetch, setTimeout, clearTimeout, setInterval, Buffer */
 // page.evaluate / addInitScript 里的函数在浏览器里执行：
-/* global document, getComputedStyle, innerWidth, innerHeight, requestAnimationFrame, MutationObserver */
+/* global document, getComputedStyle, innerWidth, innerHeight, requestAnimationFrame, MutationObserver, Image */
 // 预览容器内唯一的受信控制端。应用和浏览器只访问本容器的回环地址。
 import { spawn } from 'node:child_process';
 import { createReadStream, existsSync, statSync } from 'node:fs';
@@ -17,6 +17,44 @@ const origin =
   kind === 'website' ? new URL(process.env.WEBSITE_URL).origin : `http://127.0.0.1:${port}`;
 const staticRoot = kind === 'static' ? path.resolve(root, path.dirname(entry ?? '')) : root;
 const send = (data) => process.stdout.write(`${JSON.stringify(data)}\n`);
+
+/**
+ * 在浏览器里执行：把截图缩到 320×180，取出现最多的颜色；和它差得明显的像素不到千分之一，就算一整片纯色。
+ * 少量文字、细线也能超过这个比例，所以只有真的什么都没画（WebGL 只清了屏、白页、黑页）才算。
+ */
+async function uniform(jpegBase64) {
+  const image = new Image();
+  image.src = `data:image/jpeg;base64,${jpegBase64}`;
+  await image.decode();
+  const width = 320;
+  const height = 180;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  context.drawImage(image, 0, 0, width, height);
+  const data = context.getImageData(0, 0, width, height).data;
+  const counts = new Map();
+  for (let i = 0; i < data.length; i += 4) {
+    const key = ((data[i] >> 4) << 8) | ((data[i + 1] >> 4) << 4) | (data[i + 2] >> 4);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  let mode = 0;
+  let most = -1;
+  for (const [key, count] of counts)
+    if (count > most) {
+      most = count;
+      mode = key;
+    }
+  const centre = [(mode >> 8) & 15, (mode >> 4) & 15, mode & 15].map((v) => v * 16 + 8);
+  let different = 0;
+  for (let i = 0; i < data.length; i += 4)
+    if (centre.some((value, channel) => Math.abs(data[i + channel] - value) > 24)) different += 1;
+  return {
+    blank: different < width * height * 0.001,
+    color: `#${centre.map((v) => v.toString(16).padStart(2, '0')).join('')}`,
+  };
+}
 if (
   !['static', 'node', 'website'].includes(kind) ||
   !/^[\p{L}\p{N}_.-]+(?:\/[\p{L}\p{N}_.-]+)*$/u.test(entry ?? '') ||
@@ -136,80 +174,12 @@ try {
     permissions: [],
     serviceWorkers: 'block',
   });
-  let audioSeq = 0;
-  let audioBudget = 8;
-  let audioBudgetAt = Date.now();
-  await context.exposeBinding('__oasisAudio', (_source, webmBase64) => {
-    const now = Date.now();
-    audioBudget = Math.min(8, audioBudget + (now - audioBudgetAt) * 0.008);
-    audioBudgetAt = now;
-    if (typeof webmBase64 === 'string' && webmBase64.length <= 128 * 1024 && audioBudget >= 1) {
-      audioBudget -= 1;
-      send({ kind: 'audio', seq: audioSeq++, webmBase64 });
-    }
-  });
   // 页面安定判断用：累计 DOM 变化次数（只计数，不读页面内容）
   await context.addInitScript(() => {
     globalThis.__oasisMutations = 0;
     new MutationObserver((records) => {
       globalThis.__oasisMutations += records.length;
     }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
-  });
-  await context.addInitScript(() => {
-    const NativeContext = globalThis.AudioContext;
-    const NativeMediaRecorder = globalThis.MediaRecorder;
-    if (
-      !NativeContext ||
-      !NativeMediaRecorder ||
-      !NativeMediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-    )
-      return;
-    const captures = new WeakMap();
-    const originalConnect = globalThis.AudioNode.prototype.connect;
-    globalThis.AudioNode.prototype.connect = function (target, ...args) {
-      if (target === this.context.destination) {
-        const capture = captures.get(this.context);
-        if (capture) originalConnect.call(this, capture, args[0] ?? 0, 0);
-      }
-      return originalConnect.call(this, target, ...args);
-    };
-    const install = (context) => {
-      const destination = context.createMediaStreamDestination();
-      captures.set(context, destination);
-      const recorder = new NativeMediaRecorder(destination.stream, {
-        mimeType: 'audio/webm;codecs=opus',
-      });
-      recorder.ondataavailable = async (event) => {
-        if (!event.data.size) return;
-        const bytes = new Uint8Array(await event.data.arrayBuffer());
-        let binary = '';
-        for (const byte of bytes) binary += String.fromCharCode(byte);
-        void globalThis.__oasisAudio(globalThis.btoa(binary));
-      };
-      recorder.start(250);
-    };
-    globalThis.AudioContext = class extends NativeContext {
-      constructor(...args) {
-        super(...args);
-        install(this);
-      }
-    };
-    const originalPlay = globalThis.HTMLMediaElement.prototype.play;
-    const mediaSources = new WeakSet();
-    globalThis.HTMLMediaElement.prototype.play = function (...args) {
-      if (!mediaSources.has(this)) {
-        try {
-          const context = new globalThis.AudioContext();
-          const source = context.createMediaElementSource(this);
-          source.connect(context.destination);
-          void context.resume();
-          mediaSources.add(this);
-        } catch {
-          /* 元素可能已由应用接入其它音频图 */
-        }
-      }
-      return originalPlay.apply(this, args);
-    };
   });
   await context.route('**/*', async (route) => {
     try {
@@ -262,6 +232,17 @@ try {
   });
   if (!firstPage || firstPage.status() >= 400)
     throw new Error(`首页返回 ${firstPage?.status() ?? '空响应'}`);
+  /**
+   * 静态网页（ADR 0021）：harness 把入口换成了只放隔离框的外壳，框里是和画布一模一样的文档。
+   * 测试步骤、安定判断都对着框里的页面做；其他种类直接对着整页。
+   */
+  const liveFrame = async () => {
+    const handle = await page.waitForSelector('iframe[title="oasis-live"]', { state: 'attached' });
+    const frame = await handle.contentFrame();
+    if (!frame) throw new Error('隔离框没有打开');
+    return frame;
+  };
+  let target = kind === 'static' ? await liveFrame() : page;
   let pendingInput = Promise.resolve();
   let testing = false;
 
@@ -270,7 +251,7 @@ try {
   const SETTLED_FRAMES = 30;
   /** 等下一帧，并返回期间 DOM 是否有变化（变化计数由初始化脚本累计） */
   const nextFrame = () =>
-    page.evaluate(
+    target.evaluate(
       () =>
         new Promise((resolve) =>
           requestAnimationFrame(() => resolve(globalThis.__oasisMutations ?? 0)),
@@ -281,7 +262,7 @@ try {
    * 结果不变、DOM 不动时，返回最后一次的 { ok: false, why }。
    */
   async function settle(probe) {
-    await page.waitForLoadState('load');
+    await target.waitForLoadState('load');
     let quiet = 0;
     let mutations = await nextFrame();
     for (;;) {
@@ -295,7 +276,7 @@ try {
   }
   /** 说清楚一个选择器现在匹配到了什么：几个、第一个的尺寸和样式、文字 */
   async function describe(selector) {
-    return page.evaluate((query) => {
+    return target.evaluate((query) => {
       let nodes;
       try {
         nodes = [...document.querySelectorAll(query)];
@@ -328,7 +309,7 @@ try {
         : `匹配 ${d.count} 个；第一个 ${d.width}×${d.height}px，位置 (${d.left}, ${d.top})，display=${d.display}，visibility=${d.visibility}，opacity=${d.opacity}${d.disabled ? '，已禁用' : ''}${d.text ? `，文字「${d.text}」` : ''}`;
   /** 元素中心点上实际接收点击的是谁（被遮挡时说出挡住它的元素） */
   async function hitTarget(selector) {
-    return page.evaluate((query) => {
+    return target.evaluate((query) => {
       const target = document.querySelector(query);
       if (!target) return { ok: false, why: '页面上没有匹配的元素' };
       const box = target.getBoundingClientRect();
@@ -375,7 +356,7 @@ try {
       }
       const label = `第 ${index + 1} 步 ${step.action}${step.selector ? ` ${step.selector}` : step.path ? ` ${step.path}` : ''}`;
       try {
-        const locator = step.selector ? page.locator(step.selector).first() : undefined;
+        const locator = step.selector ? target.locator(step.selector).first() : undefined;
         /** 等元素可见；要操作它时还要等它可用 */
         const ready = async (usable = true) => {
           const checked = await settle(async () => {
@@ -397,9 +378,17 @@ try {
           case 'navigate': {
             const url = new URL(step.path, origin);
             if (url.origin !== origin) throw new Error('导航超出测试目标');
-            const response = await page.goto(url.href, { waitUntil: 'domcontentloaded' });
+            // 画布里只运行入口页面（ADR 0021）：静态网页只能重新打开入口
+            if (kind === 'static' && !['/', `/${path.basename(entry)}`].includes(url.pathname))
+              throw new Error(
+                '画布里只运行入口页面，不能打开别的页面；多页内容请做成同一页里的切换',
+              );
+            const response = await page.goto(kind === 'static' ? origin : url.href, {
+              waitUntil: 'domcontentloaded',
+            });
             if (!response) throw new Error('页面没有响应');
             if (response.status() >= 400) throw new Error(`页面返回 ${response.status()}`);
+            if (kind === 'static') target = await liveFrame();
             break;
           }
           case 'click': {
@@ -426,12 +415,12 @@ try {
           case 'count': {
             const checked = await settle(async () => {
               if (step.action === 'count') {
-                const count = await page.locator(step.selector).count();
+                const count = await target.locator(step.selector).count();
                 return count === step.count
                   ? { ok: true }
                   : { ok: false, why: `等到页面安定后匹配 ${count} 个，要求 ${step.count} 个` };
               }
-              const texts = await page.locator(step.selector).allTextContents();
+              const texts = await target.locator(step.selector).allTextContents();
               return texts.some((text) => text.includes(step.text))
                 ? { ok: true }
                 : {
@@ -491,40 +480,38 @@ try {
         });
       return;
     }
-    if (testing) return;
-    if (
-      input.kind === 'pointer' &&
-      Number.isInteger(input.x) &&
-      Number.isInteger(input.y) &&
-      input.x >= 0 &&
-      input.x < 1280 &&
-      input.y >= 0 &&
-      input.y < 720
-    ) {
+    if (input.kind === 'look' && !testing) {
+      testing = true;
       pendingInput = pendingInput
-        .then(async () => {
-          await page.mouse.move(input.x, input.y);
-          if (input.action === 'down') await page.mouse.down();
-          if (input.action === 'up') await page.mouse.up();
+        .then(async () => send({ kind: 'look-result', ...(await look()) }))
+        .catch((error) => {
+          send({ kind: 'error', message: `画面检查中断：${reasonOf(error)}` });
         })
-        .catch(() => undefined);
-    } else if (input.kind === 'key' && typeof input.key === 'string' && input.key.length <= 32) {
-      pendingInput = pendingInput
-        .then(async () => {
-          if (input.action === 'down') await page.keyboard.down(input.key);
-          if (input.action === 'up') await page.keyboard.up(input.key);
-        })
-        .catch(() => undefined);
-    } else if (
-      input.kind === 'scroll' &&
-      Number.isInteger(input.deltaY) &&
-      Math.abs(input.deltaY) <= 1000
-    ) {
-      pendingInput = pendingInput
-        .then(() => page.mouse.wheel(0, input.deltaY))
-        .catch(() => undefined);
+        .finally(() => {
+          testing = false;
+        });
     }
   });
+  /**
+   * 画面检查（ADR 0021）：页面加载完后每隔一段动画帧截一次图，只要不是一整片纯色就算画出来了；
+   * 一直是纯色时，最多等 LOOK_FRAMES 帧再下结论。截图在一个空白页里解码统计，不碰被测页面。
+   */
+  const LOOK_FRAMES = 300;
+  async function look() {
+    await target.waitForLoadState('load');
+    const helper = await context.newPage();
+    try {
+      let result = { blank: true };
+      for (let waited = 0; ; waited += 30) {
+        const shot = await page.screenshot({ type: 'jpeg', quality: 80 });
+        result = await helper.evaluate(uniform, shot.toString('base64'));
+        if (!result.blank || waited >= LOOK_FRAMES) return result;
+        for (let i = 0; i < 30; i++) await nextFrame();
+      }
+    } finally {
+      await helper.close();
+    }
+  }
   let seq = 0;
   send({ kind: 'ready' });
   setInterval(() => {

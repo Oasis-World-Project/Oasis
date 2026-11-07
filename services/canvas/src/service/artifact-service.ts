@@ -416,38 +416,6 @@ export function createArtifactService(deps: {
       );
     },
 
-    /** 只从同任务同节点、已登记的最终成果组装离线运行包。 */
-    async application(ownerId: string, id: string) {
-      const manifest = await this.get(ownerId, id);
-      if (!manifest.appSpec) throw new HttpError(422, 'not_application', '这个成果不是可运行应用');
-      const { root, entry } = manifest.appSpec;
-      const rows = (await repo.listByTask(manifest.taskId)).filter(
-        (row) =>
-          row.ownerId === ownerId &&
-          row.nodeId === manifest.nodeId &&
-          row.path.startsWith(`${root}/`) &&
-          row.size > 0,
-      );
-      if (
-        rows.length > APP_MAX_FILES ||
-        rows.reduce((sum, row) => sum + row.size, 0) > APP_MAX_BYTES
-      )
-        throw new HttpError(413, 'application_size', '应用文件超过运行上限');
-      if (!rows.some((row) => row.path === `${root}/${entry}`))
-        throw new HttpError(422, 'application_entry', '应用入口文件缺失');
-      const files = [];
-      for (const row of rows) {
-        const path = row.path.slice(root.length + 1);
-        if (!safeApplicationMember(path))
-          throw new HttpError(422, 'application_path', '应用文件路径不安全');
-        const content = await store.get(row.objectKey);
-        if (content.length !== row.size)
-          throw new HttpError(422, 'application_content', '应用文件大小不一致');
-        files.push({ path, contentBase64: content.toString('base64') });
-      }
-      return { spec: manifest.appSpec, files };
-    },
-
     /** 和桌面同步使用完全相同的最终文件集合与 syncPath。 */
     async archive(ownerId: string, taskId: string, limits: { bytes: number; files: number }) {
       const rows = (await repo.listByTask(taskId)).filter((row) => row.ownerId === ownerId);

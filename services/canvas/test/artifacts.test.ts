@@ -273,7 +273,7 @@ describe('任务完成时登记成果', () => {
     });
   });
 
-  it('仅同节点最终文件可组成应用，重放补齐描述且按属主取离线包', async () => {
+  it('仅同节点最终文件可组成应用，重放补齐描述', async () => {
     files['site/oasis-app.json'] = JSON.stringify({
       version: 1,
       kind: 'static',
@@ -292,21 +292,15 @@ describe('任务完成时登记成果', () => {
     const manifest = repo.rows.find((row) => row.path === 'site/oasis-app.json')!;
     expect(manifest.category).toBe('app');
     expect(manifest.appSpec?.entry).toBe('index.html');
-    expect((await service.application(KAI, manifest.id)).files.map((file) => file.path)).toEqual([
-      'oasis-app.json',
-      'index.html',
-      'assets/game.js',
-    ]);
-    await expect(service.application(MIA, manifest.id)).rejects.toThrow();
-    expect((await get(`/v1/artifacts/${manifest.id}/preview/quote`)).statusCode).toBe(200);
-    expect((await get(`/v1/artifacts/${manifest.id}/preview/quote`, {}, MIA)).statusCode).toBe(404);
+    // 画面转发式的平台容器预览已删除（ADR 0021）
+    expect((await get(`/v1/artifacts/${manifest.id}/preview/quote`)).statusCode).toBe(404);
     manifest.appSpec = null;
     await service.onTaskStatus(event(T1));
     expect(repo.rows.find((row) => row.id === manifest.id)?.appSpec).toMatchObject({
       root: 'site',
     });
   });
-  it('含隐藏文件的运行包不登记为应用，不能启动预览', async () => {
+  it('含隐藏文件的运行包不登记为应用', async () => {
     files['site/oasis-app.json'] = JSON.stringify({
       version: 1,
       kind: 'static',
@@ -324,7 +318,6 @@ describe('任务完成时登记成果', () => {
     await service.onTaskStatus(event(T2));
     const manifest = repo.rows.find((row) => row.path === 'site/oasis-app.json')!;
     expect(manifest.appSpec).toBeNull();
-    expect((await get(`/v1/artifacts/${manifest.id}/preview/quote`)).statusCode).toBe(422);
   });
   it('打包只包含自己的最终成果，ZIP 路径与桌面同步一致；超限或穿越拒绝', async () => {
     await service.onTaskStatus(event(T1));

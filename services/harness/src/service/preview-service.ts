@@ -1,13 +1,11 @@
+// 隔离浏览器里的网页检查（ADR 0009、0017、0021）：节点自查 app.check、节点关卡、外站测试共用。
+// 画面转发给用户看的「平台容器预览」已删除（ADR 0021）；这里的容器只给检查用。
 import { createHash, randomUUID } from 'node:crypto';
+import { LIVE_SANDBOX, livePage } from '@oasis/live-page';
 import { BrowserTestPlan, type BrowserTestResult } from '@oasis/contracts/ui-test';
 import { createWebsiteFetch, websiteUrl } from '../executor/website-fetch.ts';
 import { ApplicationBundle, ApplicationSpec } from '@oasis/contracts/canvas';
-import {
-  type ApplicationCheckResult,
-  PreviewQuoteBody,
-  type PreviewInputBody,
-  type PreviewSessionBody,
-} from '@oasis/contracts/harness';
+import { type ApplicationCheckResult, type PreviewSessionBody } from '@oasis/contracts/harness';
 import { ComputeHold, ComputeOutcome } from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ObjectStore, type ServiceClient } from '@oasis/service-kit';
 import type { PreviewExecutor, LivePreview } from '../executor/preview-executor.ts';
@@ -15,7 +13,11 @@ import type { PreviewRepo, PreviewRow } from '../repo/preview-repo.ts';
 import type { RunService } from './run-service.ts';
 
 type Access = { artifactId: string; ownerId: string; taskId: string };
-type Quote = { maxMicro: number; maxMs: number; idleMs: number };
+
+/** 画布运行网页的规则，交给节点看（没过时写进原因） */
+const CANVAS_RULE =
+  '画布把网页放进不联网的隔离框运行：<script>/<link>/<img> 和 ES 模块 import（含 importmap）引用同目录文件可以；' +
+  'fetch/XHR 读本地文件、CDN、localStorage 不行，模型等数据请内嵌成 data: 地址或 JS 里的常量。';
 
 /** 浏览器检查没过时说清楚哪一步、为什么，以及页面自己报的错（交给节点修复，也给用户看） */
 function failureReason(report: BrowserTestResult['report']): string {
@@ -29,6 +31,48 @@ function failureReason(report: BrowserTestResult['report']): string {
 
 type Failure = { passed: false; reason: string; frameCaptured: false };
 const fail = (reason: string): Failure => ({ passed: false, reason, frameCaptured: false });
+
+const escapeAttr = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+
+/**
+ * 静态网页按画布的方式组装（ADR 0021）：入口换成一个只放隔离框的外壳，框里是和画布一模一样的文档。
+ * 浏览器检查跑的就是用户在画布里看到的那份；画布里加载不了的文件直接算没通过。
+ */
+async function asCanvasPage(
+  bundle: ApplicationBundle,
+): Promise<{ bundle: ApplicationBundle } | Failure> {
+  if (bundle.spec.kind !== 'static') return { bundle };
+  const files = new Map(bundle.files.map((file) => [file.path, file.contentBase64]));
+  const entry = files.get(bundle.spec.entry);
+  if (entry === undefined) return fail('应用入口文件缺失');
+  const page = await livePage(
+    Buffer.from(entry, 'base64').toString('utf8'),
+    bundle.spec.entry,
+    '',
+    async (path) => {
+      const content = files.get(path);
+      return content === undefined ? undefined : new Uint8Array(Buffer.from(content, 'base64'));
+    },
+  );
+  if (page.missing.length) {
+    // 运行包里的路径相对应用目录；说给节点听时换回 out/ 下的路径
+    const missing = page.missing.map((item) => `${bundle.spec.root}/${item}`);
+    return fail(
+      `这些文件在画布里加载不了：${missing.slice(0, 8).join('、')}${missing.length > 8 ? ' 等' : ''}。${CANVAS_RULE}`,
+    );
+  }
+  const host =
+    '<!doctype html><meta charset="utf-8"><style>html,body{margin:0;height:100%;overflow:hidden}' +
+    'iframe{display:block;border:0;width:100%;height:100%}</style>' +
+    `<iframe title="oasis-live" sandbox="${LIVE_SANDBOX}" allow="autoplay; fullscreen" srcdoc="${escapeAttr(page.html)}"></iframe>`;
+  files.set(bundle.spec.entry, Buffer.from(host).toString('base64'));
+  return {
+    bundle: {
+      spec: bundle.spec,
+      files: [...files].map(([path, contentBase64]) => ({ path, contentBase64 })),
+    },
+  };
+}
 
 /**
  * 按清单把 out/ 里的网页成果组装成运行包（关卡和节点自查共用）：清单、入口、大小、测试计划不合格时
@@ -77,6 +121,18 @@ async function assemble(
   });
   if (!bundle.success) return fail('运行包包含不安全路径或格式');
   const testFile = members.find((file) => file.path === `${spec.root}/oasis-test.json`);
+  // 测试计划放错目录时说清楚，不当成「没写测试」悄悄跳过
+  const misplaced = outputs.find(
+    (file) =>
+      file !== testFile &&
+      (file.path === 'oasis-test.json' || file.path.endsWith('/oasis-test.json')),
+  );
+  if (!testFile && misplaced)
+    return fail(
+      `oasis-test.json 放在了 out/${misplaced.path}，要和 oasis-app.json 一起放进 out/${spec.root}/ 才会执行。`,
+    );
+  const canvas = await asCanvasPage(bundle.data);
+  if ('reason' in canvas) return canvas;
   let plan: BrowserTestPlan | undefined;
   if (testFile) {
     try {
@@ -86,7 +142,8 @@ async function assemble(
     }
   }
   return {
-    bundle: bundle.data,
+    // 浏览器打开的是画布那一份；留档的摘要仍按交付的原文件算
+    bundle: canvas.bundle,
     plan,
     inputSha256: createHash('sha256').update(JSON.stringify(bundle.data)).digest('hex'),
     application: {
@@ -102,19 +159,15 @@ async function assemble(
 export function createPreviewService(deps: {
   repo: PreviewRepo;
   executor: PreviewExecutor;
-  canvas: ServiceClient;
   modelGateway: ServiceClient;
   logger: Logger;
   runs?: RunService;
   store?: ObjectStore;
   cpus: number;
   maxMs: number;
-  idleMs: number;
   websiteOrigins?: string[];
 }) {
   const live = new Map<string, LivePreview>();
-  const lastTouch = new Map<string, number>();
-  const inputBudget = new Map<string, { tokens: number; at: number }>();
   const closing = new Map<string, Promise<PreviewRow>>();
   /** 正在做关卡浏览器检查的预览：不按截止时间或无操作回收，只随检查结束、停止或取消结束 */
   const checking = new Set<string>();
@@ -137,17 +190,6 @@ export function createPreviewService(deps: {
     if (row && row.taskId !== access.taskId)
       throw new HttpError(404, 'preview_not_found', '没有这个预览');
     return row;
-  }
-
-  async function quote(): Promise<Quote> {
-    const value = await deps.modelGateway.json(
-      'GET',
-      `/internal/v1/compute/quote?cores=${deps.cpus}&maxMs=${deps.maxMs}`,
-      {
-        schema: PreviewQuoteBody.pick({ maxMicro: true }),
-      },
-    );
-    return { maxMicro: value.maxMicro, maxMs: deps.maxMs, idleMs: deps.idleMs };
   }
 
   async function stopRow(
@@ -192,8 +234,6 @@ export function createPreviewService(deps: {
         error: error ?? null,
         containerId: null,
       });
-      lastTouch.delete(row.id);
-      inputBudget.delete(row.id);
       checking.delete(row.id);
       return (await deps.repo.latest(row.artifactId, row.ownerId))!;
     })();
@@ -242,18 +282,6 @@ export function createPreviewService(deps: {
     });
   }
 
-  async function current(access: Access) {
-    const row = await owned(access);
-    return row ? body(row) : null;
-  }
-
-  async function activity(row: PreviewRow) {
-    const now = Date.now();
-    if (now - (lastTouch.get(row.id) ?? 0) < 10_000) return;
-    lastTouch.set(row.id, now);
-    await deps.repo.update(row.id, { lastInputAt: new Date(now) });
-  }
-
   async function running(access: Access) {
     const row = await owned(access);
     if (!row || row.status !== 'running')
@@ -273,13 +301,10 @@ export function createPreviewService(deps: {
           );
           continue;
         }
-        const now = Date.now();
-        const idle =
-          row.lastInputAt?.getTime() ?? row.startedAt?.getTime() ?? row.createdAt.getTime();
-        if (now >= row.deadlineAt.getTime() || now - idle >= deps.idleMs)
-          await stopRow(row, 'expired').catch((err: unknown) =>
-            deps.logger.warn({ err, previewId: row.id }, '预览过期回收失败'),
-          );
+        // 不在检查中的会话只会是服务重启前留下的：照常停掉、结算
+        await stopRow(row, 'expired').catch((err: unknown) =>
+          deps.logger.warn({ err, previewId: row.id }, '回收遗留的检查浏览器失败'),
+        );
       }
       const pending = await deps.repo.unfinished();
       await deps.executor.removeOrphans(new Set(pending.map((row) => row.id)));
@@ -288,8 +313,6 @@ export function createPreviewService(deps: {
   timer.unref();
 
   return {
-    quote,
-    current,
     async report(input: { runId: string; payerId: string; taskId: string }) {
       const run = await deps.runs?.get(input.runId);
       if (!run || run.payerId !== input.payerId || run.taskId !== input.taskId)
@@ -303,11 +326,11 @@ export function createPreviewService(deps: {
     },
     async start(
       access: Access,
-      supplied?: ApplicationBundle,
-      limitMs = deps.maxMs,
-      purpose: 'preview' | 'application-check' = 'preview',
+      bundle: ApplicationBundle,
       website?: string,
     ): Promise<PreviewSessionBody> {
+      const limitMs = deps.maxMs;
+      const purpose = 'application-check';
       const active = await deps.repo.active(access.ownerId);
       if (active) {
         if (active.artifactId === access.artifactId && active.taskId === access.taskId)
@@ -317,7 +340,7 @@ export function createPreviewService(deps: {
       await deps.executor.check();
       const id = randomUUID();
       // 检查用的会话从一开始就不受截止/无操作回收：启动多慢都等
-      if (purpose === 'application-check') checking.add(id);
+      checking.add(id);
       const deadlineAt = new Date(Date.now() + limitMs);
       if (!(await deps.repo.insert({ id, ...access, deadlineAt }))) {
         checking.delete(id);
@@ -326,13 +349,6 @@ export function createPreviewService(deps: {
         throw new HttpError(409, 'preview_limit', '请先停止已有预览');
       }
       try {
-        const bundle =
-          supplied ??
-          (await deps.canvas.json('POST', '/internal/applications/lookup', {
-            body: access,
-            requestId: id,
-            schema: ApplicationBundle,
-          }));
         const files = bundle.files.map((file) => ({
           path: file.path,
           content: Buffer.from(file.contentBase64, 'base64'),
@@ -398,8 +414,6 @@ export function createPreviewService(deps: {
             spec: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
             files: [{ path: 'index.html', contentBase64: 'IA==' }],
           },
-          deps.maxMs,
-          'application-check',
           input.url,
         );
         const { box } = await running(access);
@@ -537,7 +551,7 @@ export function createPreviewService(deps: {
       let previewId: string | undefined;
       try {
         signal?.throwIfAborted();
-        const session = await this.start(access, bundle, deps.maxMs, 'application-check');
+        const session = await this.start(access, bundle);
         previewId = session.id;
         checking.add(session.id);
         // 算力按窗口冻结；检查超过一个窗口就结清上一段、再冻结下一段（不是时限）
@@ -576,11 +590,19 @@ export function createPreviewService(deps: {
                 passed: true,
                 steps: [],
                 diagnostics: [],
-                unchecked: ['未提供 oasis-test.json，仅完成启动检查，业务交互未检查'],
+                unchecked: [
+                  '应用目录里没有 oasis-test.json（要和 oasis-app.json 放在同一目录），只做了启动和画面检查，业务交互未检查',
+                ],
               },
               screenshots: [],
             };
+        // 画面检查（ADR 0021）：等页面画出来；一直是一整片纯色就算没画出东西
+        const look = await box.look();
         result.report.diagnostics = box.diagnostics();
+        if (look.blank)
+          result.report.diagnostics.push(
+            `画面检查：打开后一直是一整片纯色（${look.color ?? '单色'}），看起来什么都没画出来`,
+          );
         if (result.report.diagnostics.length) result.report.passed = false;
         return {
           report: result.report,
@@ -606,20 +628,6 @@ export function createPreviewService(deps: {
       const frame = box.frame();
       if (!frame) throw new HttpError(503, 'preview_frame_pending', '预览画面正在准备');
       return frame;
-    },
-    async audio(access: Access, afterSeq: number) {
-      const { box } = await running(access);
-      return { chunks: box.audio(afterSeq) };
-    },
-    async input(access: Access, value: PreviewInputBody) {
-      const { row, box } = await running(access);
-      const now = Date.now();
-      const prior = inputBudget.get(row.id) ?? { tokens: 40, at: now };
-      const tokens = Math.min(40, prior.tokens + (now - prior.at) * 0.04);
-      if (tokens < 1) throw new HttpError(429, 'preview_input_rate', '操作太快，请稍后再试');
-      inputBudget.set(row.id, { tokens: tokens - 1, at: now });
-      await activity(row);
-      box.input(value);
     },
     async recover() {
       for (const row of await deps.repo.unfinished()) {

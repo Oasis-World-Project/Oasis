@@ -136,7 +136,7 @@ export function plannerPrompt(input: {
       JSON.stringify(example, null, 2),
       '- kind：work 是一个 AI 在独立容器里做一件事，成果写到 out/；discussion 是几位参与者（各自的模型和立场）讨论几轮、由 model 汇总，只在真要权衡取舍时用。',
       '- 连线 from → to：上游的 out/ 放进下游的 in/<上游 key>/；没有连线的节点同时开跑。',
-      `- deliverables：任务单上每样交付物都指定由哪个节点交出；那个节点要写 deliver（最终交付的文件路径，可用 * 通配，* 只匹配一层，** 递归）。`,
+      `- deliverables：任务单上每样交付物都指定由哪个节点交出；那个节点要写 deliver（最终交付的文件路径，可用 * 通配，* 只匹配一层，** 递归）。deliver 只放任务单上的交付物；为做它产生的预览图、参考图、草稿只在节点之间传递，不写进 deliver。`,
       '- expects：节点必须产出的文件（可写 {"pattern":"图/*.png","minCount":4} 这类数量要求），系统会核对。checks：可选，节点交付前自己看一眼的几件事，最多 5 条。',
       '- goal 只写这个节点要做什么、交出什么文件，不写检查流程，检查交给节点自己判断；节点不能再问用户。key 只用英文字母、数字、下划线、短横线。',
     ].join('\n'),

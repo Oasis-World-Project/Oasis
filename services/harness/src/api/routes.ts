@@ -1,7 +1,5 @@
 // harness 只有内部接口（gateway 不转发 /internal）：task 等服务用它启动运行、看进度、追问、停止、取消。
 import {
-  PreviewInputBody,
-  PreviewStartBody,
   RunInspectBody,
   MaterialInspectBody,
   RunMessageBody,
@@ -122,31 +120,6 @@ export function registerRoutes(
         if (!reply.raw.writableEnded) abort.abort();
       });
       return previews.checkRun({ runId, payerId, taskId, signal: abort.signal });
-    });
-    app.post('/internal/previews/quote', async () => previews.quote());
-    app.post('/internal/previews', async (request) =>
-      previews.start(parseWith(PreviewStartBody, request.body)),
-    );
-    app.post('/internal/previews/lookup', async (request) =>
-      previews.current(parseWith(PreviewStartBody, request.body)),
-    );
-    app.post('/internal/previews/stop', async (request) =>
-      previews.stop(parseWith(PreviewStartBody, request.body)),
-    );
-    app.post('/internal/previews/frame', async (request) =>
-      previews.frame(parseWith(PreviewStartBody, request.body)),
-    );
-    app.post('/internal/previews/audio', async (request) => {
-      const body = parseWith(
-        PreviewStartBody.extend({ afterSeq: z.number().int().min(-1) }),
-        request.body,
-      );
-      return previews.audio(body, body.afterSeq);
-    });
-    app.post('/internal/previews/input', async (request) => {
-      const body = parseWith(PreviewStartBody.extend({ input: PreviewInputBody }), request.body);
-      await previews.input(body, body.input);
-      return { accepted: true };
     });
   }
   /** 启动一次运行：立即返回（202），运行在后台进行，结束时发出 harness.run.finished */

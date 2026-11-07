@@ -34,7 +34,6 @@ export const harnessEnv = {
   PREVIEW_PIDS_LIMIT: positiveInt.default(512),
   PREVIEW_APP_PORT: positiveInt.max(65535).default(3180),
   PREVIEW_MAX_MS: positiveInt.max(60 * 60_000).default(30 * 60_000),
-  PREVIEW_IDLE_MS: positiveInt.max(30 * 60_000).default(5 * 60_000),
   /** 沙箱所在的内部网络：不通外网，只能访问沙箱入口代理 */
   SANDBOX_NETWORK: z.string().default('oasis-sandbox'),
   /** 沙箱里的 dsh 调模型、oasis-tool 调工具用的地址（入口代理，只放行几条 /run/v1/* 路径） */

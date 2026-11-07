@@ -1,10 +1,11 @@
 // 网页和静态应用在画布里直接运行（ADR 0009 §17）：sandbox 框只给脚本权限，CSP 禁网；画面由本机浏览器渲染，可直接拖动、点选、键盘操作。
+// 组装规则在 @oasis/live-page，节点的 app.check 用的是同一套（ADR 0021），检查过了这里就打得开。
 // 报告类网页可以切到「只看内容」：沿用清洗后的无脚本预览（含看板）。
+import { LIVE_SANDBOX, livePage, type LivePage } from '@oasis/live-page';
 import { RotateCcw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { readPreviewFile } from '../api/file-preview.ts';
 import { DocumentPreview } from './DocumentPreview.tsx';
-import { LIVE_SANDBOX, livePage, type LivePage } from './live-page.ts';
 
 /** 单个文件和整个网页的读取上限：保护本机内存，不是时限 */
 const FILE_LIMIT = 64 * 1024 * 1024;
@@ -26,7 +27,6 @@ export function LivePreview({
   root,
   assets = [],
   allowStatic = false,
-  onFallback,
 }: {
   file: LiveAsset;
   name: string;
@@ -36,8 +36,6 @@ export function LivePreview({
   assets?: LiveAsset[];
   /** 报告类网页可切到无脚本的静态内容 */
   allowStatic?: boolean;
-  /** 本机框里加载不全时，改用平台容器预览 */
-  onFallback?: () => void;
 }) {
   const [state, setState] = useState<{
     url: string;
@@ -127,18 +125,12 @@ export function LivePreview({
             {shown === 'live' ? '只看内容' : '运行网页'}
           </button>
         )}
-        {onFallback && (
-          <button type="button" className={button} onClick={onFallback}>
-            平台容器预览
-          </button>
-        )}
       </div>
       {shown === 'live' && page.missing.length > 0 && (
         <p role="status" className="m-0 border-b border-hairline px-4 py-2 text-[12px] text-accent">
           有 {page.missing.length} 个文件没能在这里加载，画面可能不完整：
           {page.missing.slice(0, 5).join('、')}
-          {page.missing.length > 5 ? ' 等' : ''}
-          {onFallback ? '。可以改用平台容器预览。' : '。'}
+          {page.missing.length > 5 ? ' 等' : ''}。
         </p>
       )}
       {shown === 'live' && stopped ? (
