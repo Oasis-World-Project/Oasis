@@ -5,7 +5,7 @@ import { Catalog, PlaybookList, type Playbook } from '@oasis/contracts/agent';
 import type { RunFinishedData } from '@oasis/contracts/events';
 import { RunBody, ExecutionEnvironment } from '@oasis/contracts/harness';
 import { ExecutionModels, ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
-import type { BudgetTier, WorkflowOptions } from '@oasis/contracts/task';
+import type { WorkflowOptions } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
@@ -23,8 +23,8 @@ import {
 import type { Fallback, PricedModel } from './quote.ts';
 
 export interface PlanningConfig {
-  /** 三档预算各用哪个规划员型号（ADR 0016：省钱档用快速型号） */
-  planners: Record<BudgetTier, string>;
+  /** 规划员型号：不分档，一律最强型号（用户 2026-11-07 决定） */
+  planner: string;
   /** 节点默认用的模型 */
   defaultModel: string;
   /** 什么记录都没有时的估价兜底 */
@@ -93,12 +93,6 @@ export function createPlanning(deps: {
     }
   }
 
-  /** 规划员用哪个型号：按用户选的档次；旧任务和自定义金额按标准档 */
-  const plannerModel = (task: PlannerJob['task']) => {
-    const tier = task.sheet?.budget?.tier;
-    return config.planners[tier && tier !== 'custom' ? tier : 'standard'];
-  };
-
   /** 在事务里开一次规划员运行（从头排，或接着上一次改） */
   async function open(snapshot: Snapshot, w: Writer, fx: Effects, revise?: PlannerJob['revise']) {
     const runId = randomUUID();
@@ -117,7 +111,7 @@ export function createPlanning(deps: {
     try {
       const guides = job.revise ? [] : await playbooks(task.id);
       const prompt = job.revise
-        ? revisePrompt(job.revise.problems, task.sheet!)
+        ? revisePrompt(job.revise.problems)
         : plannerPrompt({
             brief: task.brief,
             sheet: task.sheet!,
@@ -134,7 +128,9 @@ export function createPlanning(deps: {
           runId: job.runId,
           payerId: task.payerId,
           taskId: task.id,
-          model: plannerModel(task),
+          model: config.planner,
+          // 规划员一律用最高思考档
+          reasoningEffort: 'max',
           goal: true,
           prompt,
           inputs: guides.map((p) => ({

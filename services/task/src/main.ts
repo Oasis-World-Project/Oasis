@@ -50,11 +50,6 @@ await startService({
     const modelGateway = createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
       timeoutMs: 60_000,
     });
-    const planners = {
-      economy: config.PLANNER_ECONOMY_MODEL,
-      standard: config.PLANNER_MODEL,
-      premium: config.PLANNER_MODEL,
-    };
     const fallback = {
       workRun: config.ESTIMATE_WORK_RUN_MICRO,
       speechRun: config.ESTIMATE_SPEECH_RUN_MICRO,
@@ -68,14 +63,18 @@ await startService({
       maxParallel: config.MAX_PARALLEL_NODES,
       agent: createServiceClient('agent', config.AGENT_URL, { timeoutMs: 5_000 }),
       modelGateway,
-      planning: { planners, defaultModel: config.DEFAULT_NODE_MODEL, fallback },
+      planning: {
+        planner: config.PLANNER_MODEL,
+        defaultModel: config.DEFAULT_NODE_MODEL,
+        fallback,
+      },
       logger,
     });
     quotes = createQuotes({
       modelGateway,
       pricing: () => workflows.pricing(),
       model: config.QUOTE_MODEL,
-      planners,
+      planner: config.PLANNER_MODEL,
       fallback,
       logger,
     });

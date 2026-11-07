@@ -181,11 +181,11 @@ export function quoteOf(
   models: PricedModel[],
   tools: ToolEntry[],
   fallback: Fallback,
-  planners: Record<BudgetTier, PricedModel | undefined>,
+  planner: PricedModel | undefined,
 ): BudgetQuote {
   const tiers = (['economy', 'standard', 'premium'] as const).map((tier) => ({
     tier,
-    ...priceDraft(draft, tier, models, tools, fallback, planners[tier]),
+    ...priceDraft(draft, tier, models, tools, fallback, planner),
   }));
   // 档位之间不倒挂：更高档至少和低一档一样多
   for (let i = 1; i < tiers.length; i++)
@@ -219,8 +219,8 @@ export function createQuotes(deps: {
   pricing: () => Promise<{ models: PricedModel[]; tools: ToolEntry[] }>;
   /** 列草案用的便宜模型 */
   model: string;
-  /** 三档的规划员型号 */
-  planners: Record<BudgetTier, string>;
+  /** 规划员型号（各档相同） */
+  planner: string;
   fallback: Fallback;
   logger: Logger;
 }) {
@@ -252,13 +252,13 @@ export function createQuotes(deps: {
         const draft = Draft.parse(JSON.parse(choice.message.content ?? ''));
         const known = new Set(tools.map((t) => t.key));
         for (const step of draft.steps) step.tools = step.tools.filter((t) => known.has(t.key));
-        const planner = (tier: BudgetTier) =>
-          models.find((m) => m.providerModel === deps.planners[tier]);
-        return quoteOf(draft, models, tools, deps.fallback, {
-          economy: planner('economy'),
-          standard: planner('standard'),
-          premium: planner('premium'),
-        });
+        return quoteOf(
+          draft,
+          models,
+          tools,
+          deps.fallback,
+          models.find((m) => m.providerModel === deps.planner),
+        );
       } catch (err) {
         deps.logger.warn({ err }, '报价草案用不了，这次不报价');
         return null;

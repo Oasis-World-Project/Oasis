@@ -2,11 +2,6 @@
 
 > 适用：Excel 汇总、销售或运营分析、数据核对、单文件交互看板。
 
-- 按任务复杂度决定分工；先用 pandas/openpyxl 读取源文件并检查空值、单位、时间范围，不编造数字。
-- 交付数据核对说明：指标定义、计算方法、源文件/工作表/列名，并抽查至少 3 个关键数字。
-- Excel 使用公式时保留公式；用沙箱 LibreOffice 无界面重算，重新读取缓存值与独立计算结果核对。仅有公式字符串不代表数值已正确；失败须报告。
-- 看板交付单文件 HTML，脚本、样式和图片均内嵌。简单图表可用原生 SVG/Canvas；使用 ECharts 时只打包需要的组件，需要的 npm 包经沙箱软件包代理安装，再打包内嵌。不能依赖 CDN、远程字体或在线接口。
-- 应用内不执行原 HTML 的脚本。需要画布交互时，在单文件里附 `<script id="oasis-dashboard" type="application/json">` 数据，内容为 `{title,charts:[{title,type:"bar"|"line"|"pie",labels:["月份"],series:[{name:"销售额",values:[123]}]}]}`。JSON 中的 `<` 写成 `\u003c`，避免意外结束 script 标签。下载后仍可通过内嵌脚本独立使用。
-- 每份最多 20 个图表，每图最多 200 个标签、10 个系列；文字最多 200 字，数值必须有限，values 长度必须等于 labels。不传任意 ECharts 配置、函数、formatter 或 URL。应用提供图表切换、图例和原始数据查看；报告外链由应用另列，用户主动点击。
-- 离线核验检查实际网络请求，不把 SVG/XML 命名空间 URI 当作外链，也不改写第三方库源码中的这些标识符。验证完成后关闭 jsdom/浏览器和计时器，避免测试挂起；构建依赖与校验脚本放在交付目录外。
-- deliver 列最终 XLSX/HTML 和数据核对说明；临时 CSV、调试图和草稿另存。沙箱为 2 核、2 GB，大文件按需分块处理。
+- 沙箱有 pandas、openpyxl、LibreOffice（可无界面重算公式）。
+- 看板交单文件 HTML，所有资源内嵌，不依赖 CDN。
+- 要在画布里交互：在 HTML 里放 `<script id="oasis-dashboard" type="application/json">`，内容 `{title,charts:[{title,type:"bar"|"line"|"pie",labels:[…],series:[{name,values:[…]}]}]}`（最多 20 图、每图 200 个标签、10 个系列；JSON 里的 `<` 写成 `<`）。

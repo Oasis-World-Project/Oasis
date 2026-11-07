@@ -7,6 +7,7 @@ import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
 import type { ExecutionEnvironment } from '@oasis/contracts/harness';
 import { ApplicationSpec } from '@oasis/contracts/canvas';
 import { BrowserTestPlan } from '@oasis/contracts/ui-test';
+import { MODEL_PREVIEW_LIMITS, ModelPreviewSpec } from '@oasis/contracts/model-preview';
 import { createJsonRpcClient } from './jsonrpc.ts';
 
 /** 沙箱镜像里的目录约定（与 infra/images/harness-sandbox-base/Dockerfile 一致） */
@@ -83,6 +84,8 @@ export function runtimeFiles(input: {
   sessionId: string;
   objective: string;
   goal: boolean;
+  /** 规划员用最强思考档（用户 2026-11-07 要求）；不给时最高到 high */
+  reasoningEffort?: 'max';
   goalRoundWindow: number;
   recovering?: boolean;
   environment?: ExecutionEnvironment;
@@ -107,6 +110,18 @@ export function runtimeFiles(input: {
             schema: BrowserTestPlan.toJSONSchema(),
             location: '与 oasis-app.json 同目录的 oasis-test.json',
           },
+          // 3D 预览的事实（原来写在节点提示里，2026-11-07 挪到这里：用到再读）
+          model3d: {
+            interactive:
+              '画布直接交互预览自包含的 GLB：不引用外部文件、不用扩展，骨骼/形变/压缩暂不支持。',
+            limits: MODEL_PREVIEW_LIMITS,
+            otherFormats:
+              'blend/obj/fbx/stl/usdz/ply/gltf 不能直接预览；要预览就在同目录放 oasis-model-preview.json，指向同时交付的 GLB、封面图或转台视频。',
+            sidecar: {
+              schema: ModelPreviewSpec.toJSONSchema(),
+              location: '与原件同目录的 oasis-model-preview.json；路径相对该文件，sha256 填实际值',
+            },
+          },
         }),
       ),
     },
@@ -125,7 +140,14 @@ export function runtimeFiles(input: {
           // node 是 Oasis 估价用的典型用量，不属于 dsh 的模型配置
           input.models.map(({ reasoning, node: _node, ...model }) => ({
             ...model,
-            reasoningEfforts: reasoning ? { off: null, high: 'high' } : false,
+            // node-goal 插件默认取最后一档：只有要最强思考的运行才声明 max
+            reasoningEfforts: reasoning
+              ? {
+                  off: null,
+                  high: 'high',
+                  ...(input.reasoningEffort === 'max' ? { max: 'max' } : {}),
+                }
+              : false,
             compat: {
               thinkingFormat: 'openrouter',
               supportsReasoningEffort: reasoning,

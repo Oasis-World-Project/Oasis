@@ -44,6 +44,8 @@ export const StartRunBody = z.object({
   model: z.string().min(1).max(200),
   /** 工作节点使用原生持久目标；普通发言仍可只跑一轮。 */
   goal: z.boolean().default(false),
+  /** 思考强度：max 用模型支持的最高档（规划员）；不给时最高到 high */
+  reasoningEffort: z.enum(['max']).optional(),
   /** 规划所需的本地能力；预检失败在登记和冻结之前返回。 */
   requires: z.array(z.string().min(1).max(100)).default([]),
   /** 交给 agent 的完整任务说明 */

@@ -62,7 +62,7 @@ describe('任务单来源与默认答案', () => {
       deliverables: [{ name: '表', form: 'XLSX' }],
       criteria: ['按报价计算'],
     });
-    expect(taskBrief('按报价计算', turns, sheet)).toContain('AI 假设不得覆盖');
+    expect(taskBrief('按报价计算', turns, sheet)).toContain('用户的原话：按报价计算');
     expect(
       taskBrief(
         '按报价计算',

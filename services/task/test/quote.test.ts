@@ -77,27 +77,19 @@ describe('报价（ADR 0016 §4）', () => {
 
   it('按档定价；用时取依赖链最长的一条加规划；最低预算就是省钱档', () => {
     const planner = models[1];
-    const quote = quoteOf(draft, models, [image], fallback, {
-      economy: models[0],
-      standard: planner,
-      premium: planner,
-    });
-    // 省钱：规划 10000 + 三步各 10000 + 1 张 × 20000
-    expect(quote.tiers[0]).toEqual({ tier: 'economy', micro: 60_000, minutes: 7 });
+    const quote = quoteOf(draft, models, [image], fallback, planner);
+    // 省钱：规划一律用最强型号 100000 + 三步各 10000 + 1 张 × 20000
+    expect(quote.tiers[0]).toEqual({ tier: 'economy', micro: 150_000, minutes: 10 });
     // 标准：规划 100000 + 三步各 100000 + 2 张 × 40000；用时 300 + 300 + (300 + 40)
     expect(quote.tiers[1]).toEqual({ tier: 'standard', micro: 480_000, minutes: 16 });
     expect(quote.tiers[2]!.micro).toBe(100_000 + 3 * 400_000 + 4 * 90_000);
-    expect(quote.minimumMicro).toBe(60_000);
+    expect(quote.minimumMicro).toBe(150_000);
     expect(quote.steps).toEqual(['定角色和分镜', '出首帧', '写字幕']);
     expect(quote.rough).toBe(false);
   });
 
   it('没有任何记录时用兜底并标成粗估', () => {
-    const quote = quoteOf(draft, [], [{ ...image, rates: [] }], fallback, {
-      economy: undefined,
-      standard: undefined,
-      premium: undefined,
-    });
+    const quote = quoteOf(draft, [], [{ ...image, rates: [] }], fallback, undefined);
     expect(quote.rough).toBe(true);
     expect(quote.minimumMicro).toBe(4 * 300_000 + 150_000);
   });
@@ -115,7 +107,7 @@ describe('报价（ADR 0016 §4）', () => {
       } as unknown as ServiceClient,
       pricing: async () => ({ models, tools: [image] }),
       model: 'v/flash',
-      planners: { economy: 'v/flash', standard: 'v/strong', premium: 'v/strong' },
+      planner: 'v/strong',
       fallback,
       logger: pino({ level: 'silent' }),
     });
@@ -143,7 +135,7 @@ describe('报价（ADR 0016 §4）', () => {
       } as unknown as ServiceClient,
       pricing: async () => ({ models, tools: [image] }),
       model: 'v/flash',
-      planners: { economy: 'v/flash', standard: 'v/strong', premium: 'v/strong' },
+      planner: 'v/strong',
       fallback,
       logger: pino({ level: 'silent' }),
     });

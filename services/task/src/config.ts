@@ -15,11 +15,10 @@ export const taskEnv = {
   /** 修改成果时核对用户附的文件（参考图、标注截图），并标成已用上 */
   CANVAS_URL: z.url().default('http://127.0.0.1:4106'),
   /**
-   * 规划员用的模型（ADR 0005 §4、ADR 0016）：标准和精细档用 DeepSeek 最强的型号（深度思考、可联网查资料），
-   * 省钱档用快速型号。
+   * 规划员用的模型：不论哪一档、什么任务，一律用最强型号、最高思考档（用户 2026-11-07 决定，取代 ADR 0016
+   * 「省钱档用快速型号」）。
    */
   PLANNER_MODEL: z.string().min(1).default('deepseek/deepseek-v4-pro-0813'),
-  PLANNER_ECONOMY_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
   /** 任务单报价时列草案用的便宜模型（ADR 0016 §4） */
   QUOTE_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
   /** 节点默认用的模型：例子里的型号、地区用不了时换成它（用户定：DeepSeek，用最强的型号） */

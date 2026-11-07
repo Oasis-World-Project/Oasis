@@ -46,7 +46,7 @@ const node = (key: string, model = 'deepseek/x') => ({
 });
 
 describe('规划门', () => {
-  it('首次规划和原会话修订都携带完整任务单；没有要求编号时不示范虚构编号', () => {
+  it('首次规划携带完整任务单；修订接着原会话，只列问题', () => {
     const confirmed = {
       ...sheet,
       style: ['澄清后仅日文招牌'],
@@ -63,38 +63,26 @@ describe('规划门', () => {
       defaultModel: 'deepseek/x',
     });
     expect(prompt).toContain(JSON.stringify(confirmed));
-    expect(prompt).toContain('criteria:0');
-    expect(prompt).toContain('style:0');
-    expect(prompt).not.toContain('"requirementIds":["r1"]');
-    expect(revisePrompt(['路径有误'], confirmed)).toContain(JSON.stringify(confirmed));
+    expect(revisePrompt(['路径有误'])).toContain('- 路径有误');
   });
-  it('新 AI 检查只能引用确认任务单，规划员自行加的自测方法不能升级为强制要求', () => {
-    const check = {
-      id: 'self-check',
-      text: '必须用 Node 桩自检并交日志',
-      requirementIds: ['criteria:0'],
-      files: ['result.md'],
-    };
+  it('checks 是节点自己看的几件事：可以是一句话，也接受旧的对象格式', () => {
     const plan = (checks: unknown[]) =>
       JSON.stringify({
         nodes: [{ ...node('home'), checks }],
         edges: [],
         deliverables: { 首页文案: 'home' },
       });
-    expect(checkPlan(plan([check]), sheet, catalog, tools)).toMatchObject({
-      plan: {
-        nodes: [{ checks: [{ id: 'self-check', text: 'c', requirementIds: ['criteria:0'] }] }],
-      },
+    expect(checkPlan(plan(['开头点明卖点']), sheet, catalog, tools)).toMatchObject({
+      plan: { nodes: [{ checks: ['开头点明卖点'] }] },
     });
     expect(
-      checkPlan(plan([{ ...check, requirementIds: [] }]), sheet, catalog, tools),
-    ).toMatchObject({ problems: [expect.stringContaining('没有用户要求来源')] });
-    expect(
-      checkPlan(plan([{ ...check, requirementIds: ['criteria:99'] }]), sheet, catalog, tools),
-    ).toMatchObject({ problems: [expect.stringContaining('未知要求')] });
-    expect(checkPlan(plan(['必须提交 Node 自检记录']), sheet, catalog, tools)).toMatchObject({
-      problems: [expect.stringContaining('引用确认任务单')],
-    });
+      checkPlan(
+        plan([{ id: 'c1', text: '画面 1:1', requirementIds: [], files: [] }]),
+        sheet,
+        catalog,
+        tools,
+      ),
+    ).toHaveProperty('plan');
   });
   it('每个节点最多 5 条检查：多了退回规划员合并', () => {
     const many = Array.from({ length: 6 }, (_, i) => ({
@@ -112,7 +100,7 @@ describe('规划门', () => {
       problems: [expect.stringContaining('最多 5 条')],
     });
   });
-  it('规划员看到各型号的档位和能读什么，按预算挑型号、拿不准时联网查', () => {
+  it('规划员看到各型号的档位和能读什么；默认最简单的方案、不动手试跑', () => {
     const prompt = plannerPrompt({
       brief: 'b',
       sheet,
@@ -126,10 +114,9 @@ describe('规划门', () => {
     });
     expect(prompt).toContain('deepseek/x（DeepSeek，v；旗舰；能直接读：image）');
     expect(prompt).toContain('deepseek/fast（DeepSeek，v；快速；只读文字）');
-    expect(prompt).toContain('按预算挑');
-    expect(prompt).toContain('用户没有选预算档，按「标准」档的思路安排');
-    expect(prompt).toContain('web.search');
-    expect(prompt).toContain('checks 是节点交付前的自查清单');
+    expect(prompt).toContain('用户没有选预算档');
+    expect(prompt).toContain('简单任务一个节点就够');
+    expect(prompt).toContain('不要动手做或试跑实现');
   });
   it('节点所需能力必须来自实测环境，不能把包可安装当成浏览器已就绪', () => {
     const environment = {
@@ -316,8 +303,8 @@ describe('估算花费', () => {
       playbooks: [{ key: 'images', name: '图片类', when: '要出图' }],
       defaultModel: 'deepseek/x',
     });
-    expect(prompt).toContain('用户选了「省钱」档：预算约 $0.80、预计 6 分钟左右');
-    expect(prompt).toContain('预算是参考，不是上限');
+    expect(prompt).toContain('用户选了「省钱」档：约 $0.80、6 分钟左右');
+    expect(prompt).toContain('这是参考不是上限');
     expect(prompt).toContain('一个节点典型约 $0.02、5 分钟');
     expect(prompt).toContain('img/cheap 每张约 $0.03、一次约 20 秒');
     expect(prompt).toContain('in/playbooks/images.md：图片类（要出图）');

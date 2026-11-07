@@ -150,7 +150,6 @@ export function taskBrief(request: string, turns: IntakeTurn[], sheet: TaskSheet
     .filter((turn) => turn.kind !== 'sheet' && turn.kind !== 'materials')
     .map(describeTurn);
   const brief = [
-    `【执行依据】最后任务单记录有效用户要求；只有用户明确修改/撤回的旧要求不再执行。AI 假设不得覆盖原话和附件事实，确认不代表授权 AI 自行改变范围。发现冲突如实说明，不擅自扩大任务。成果默认只在系统中保存与预览，用户主动下载或授权文件夹同步才写入电脑。`,
     `用户的原话：${request}`,
     ...history,
     `【最后确认的任务单】\n${sheetText(sheet)}`,

@@ -391,7 +391,7 @@ export function createWorkflowService(deps: {
             finishedAt: null,
             config: {
               ...node.config,
-              repairChecks: ['整体验收发现交付文件不齐，请补齐：', ...missing],
+              repairChecks: missing,
             },
           });
         await schedule(fresh, w, fx);

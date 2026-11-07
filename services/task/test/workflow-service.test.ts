@@ -393,11 +393,7 @@ beforeEach(() => {
     agent: createServiceClient('agent', harnessUrl),
     modelGateway: createServiceClient('model-gateway', harnessUrl),
     planning: {
-      planners: {
-        economy: 'deepseek/flash',
-        standard: 'deepseek/planner',
-        premium: 'deepseek/planner',
-      },
+      planner: 'deepseek/planner',
       defaultModel: 'deepseek/x',
       fallback: { workRun: 3_000, speechRun: 3_000, computeRun: 0, nodeSeconds: 600 },
     },
@@ -1119,7 +1115,9 @@ describe('规划（从任务单开始）', () => {
     expect(task).toMatchObject({ status: 'planning', nodes: [], sheet: { title: '小木屋首页' } });
     const [planner] = plannerRuns();
     expect(planner?.model).toBe('deepseek/planner');
-    expect(planner?.prompt).toContain('「首页文案」');
+    // 规划员不分档：一律最强型号、最高思考档
+    expect((planner as unknown as { reasoningEffort?: string }).reasoningEffort).toBe('max');
+    expect(planner?.prompt).toContain('首页文案');
     expect(planner?.prompt).toContain('deepseek/x（DeepSeek');
     expect(planner?.prompt).not.toContain('最多 4 个节点');
     // 经验手册（ADR 0016 §6）：不再让 Jev 挑，全文放进 in/playbooks/，说明里只列名字和适用范围
@@ -1168,7 +1166,7 @@ describe('规划（从任务单开始）', () => {
     expect(detail.estimateMicro).toBe(83_000);
     expect(detail.nodes[0]?.tools).toEqual([{ key: 'image.generate', uses: 2 }]);
     const prompt = runOf('draw', detail).prompt;
-    expect(prompt).toContain('规划建议使用：image.generate');
+    expect(prompt).toContain('规划建议用：image.generate');
     expect(prompt).toContain('oasis-tool list');
   });
 
@@ -1322,7 +1320,7 @@ describe('整体验收（从任务单来的任务）', () => {
     expect(detail.acceptance?.unmet).toContain('最终交付缺少文件 out/*.md');
     expect(runOf('home', task).continueFrom).toBe(runsOf('home', task)[0]?.runId);
     expect(runOf('home', task).goal).toBeFalsy();
-    expect(runOf('home', task).prompt).toContain('整体验收发现交付文件不齐');
+    expect(runOf('home', task).prompt).toContain('最终交付缺少文件 out/*.md');
     expect(runsOf('poster', task)).toHaveLength(1);
     expect(events.map((e) => (e.data as { status: string }).status)).toEqual([
       'running',
@@ -1373,7 +1371,7 @@ describe('整体验收（从任务单来的任务）', () => {
       materials: { uploadId: string; path: string }[];
     };
     expect(home.continueFrom).toBe(firstHome);
-    expect(home.prompt).toContain('用户看过交付的成果，提出了下面的修改意见');
+    expect(home.prompt).toContain('用户看了成果，提出修改意见');
     expect(home.prompt).toContain('标题改短');
     expect(home.materials).toEqual([{ uploadId: SHOT, path: 'materials/批注-home-截图1.png' }]);
     expect(submitted.filter((s) => !s.nodeId)).toHaveLength(planners);

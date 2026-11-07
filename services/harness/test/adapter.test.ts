@@ -129,6 +129,37 @@ describe('dsh 事件翻译', () => {
         reasoningEfforts: { high: 'high' },
       },
     ]);
+    // 规划员要最高思考档：只有这种运行才声明 max（插件默认取最后一档）
+    const strongest = runtimeFiles({
+      models: [
+        {
+          id: 'deepseek/x',
+          name: 'DeepSeek',
+          contextWindow: 1000000,
+          maxTokens: 131072,
+          input: ['text'],
+          reasoning: true,
+        },
+      ],
+      sessionId: 'root',
+      objective: 'task',
+      goal: true,
+      reasoningEffort: 'max',
+      goalRoundWindow: 256,
+    });
+    const declared = JSON.parse(
+      strongest.find((f) => f.path.endsWith('.oasis-models.json'))!.content.toString(),
+    ) as { reasoningEfforts: Record<string, string | null> }[];
+    expect(Object.keys(declared[0]!.reasoningEfforts).at(-1)).toBe('max');
+    expect(
+      Object.keys(
+        (
+          JSON.parse(
+            files.find((f) => f.path.endsWith('.oasis-models.json'))!.content.toString(),
+          ) as { reasoningEfforts: Record<string, string | null> }[]
+        )[0]!.reasoningEfforts,
+      ),
+    ).not.toContain('max');
     expect(env.OASIS_MODELS).toBeUndefined();
     // dsh 运行命令时会去掉 OASIS_RUN_KEY，oasis-tool 用这一份
     expect(env.OASIS_TOOL_AUTH).toBe('k');

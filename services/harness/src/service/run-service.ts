@@ -393,12 +393,13 @@ export function createRunService(deps: {
     inputs: { path: string; content: Buffer }[],
     materials: Material[],
     run: LiveRun,
-    goal: boolean,
+    mode: { goal: boolean; reasoningEffort?: 'max' },
     catalog: { models: ModelCapabilities[]; environment?: ExecutionEnvironment },
     persistent = false,
     recovering = false,
   ) {
     const { id } = row;
+    const { goal, reasoningEffort } = mode;
     const { models, environment } = catalog;
     const release = await gate.acquire();
     let sandbox: Sandbox | undefined;
@@ -483,6 +484,7 @@ export function createRunService(deps: {
           sessionId: row.sessionId ?? id,
           objective: row.prompt,
           goal,
+          ...(reasoningEffort ? { reasoningEffort } : {}),
           goalRoundWindow: deps.goalRoundWindow ?? 256,
           recovering,
           environment,
@@ -934,7 +936,10 @@ export function createRunService(deps: {
           inputs,
           body.materials ?? [],
           run,
-          body.goal ?? false,
+          {
+            goal: body.goal ?? false,
+            ...(body.reasoningEffort ? { reasoningEffort: body.reasoningEffort } : {}),
+          },
           catalog,
           persistent,
         ).catch((err: unknown) => logger.error({ err, runId: id }, '运行收尾失败'));
@@ -1261,7 +1266,12 @@ export function createRunService(deps: {
               })),
               request.body.materials ?? [],
               run,
-              request.body.goal ?? false,
+              {
+                goal: request.body.goal ?? false,
+                ...(request.body.reasoningEffort
+                  ? { reasoningEffort: request.body.reasoningEffort }
+                  : {}),
+              },
               catalog,
               request.persistent,
               Boolean(row.startedAt),

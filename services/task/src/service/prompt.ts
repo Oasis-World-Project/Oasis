@@ -1,5 +1,5 @@
-// 拼交给节点的说明（ADR 0004 §6）：任务 → 角色和目标 → 上游交来的东西 → 用户追加的要求 → 固定规则。
-// 讨论节点的发言、汇总，以及关卡退回后的修改，都在这一份上下文的基础上拼。
+// 拼交给节点的说明（ADR 0004 §6）：任务 → 角色和目标 → 上游交来的东西 → 用户追加的要求 → 少量必要的说明。
+// 只讲事实和交付要求，怎么做由节点里的模型自己判断（用户 2026-11-07：规则只留最重要的）。
 import type { RunOutputFile } from '@oasis/contracts/harness';
 import type { TaskSheet } from '@oasis/contracts/task';
 
@@ -45,19 +45,16 @@ export interface Speech {
   text: string;
 }
 
-const NO_QUESTIONS = '- 不要向用户提问，也不会有人回答；拿不准的地方自己做合理的决定。';
+const NO_QUESTIONS = '- 没有人会回答问题，拿不准的自己决定。';
 
 function context(c: NodeContext, goalLabel: string): string[] {
   const parts = [`【整个任务】\n${c.brief}`];
-  if (c.sheet)
-    parts.push(
-      `【用户确认的完整任务单】（全局约束和来源，不改变本节点分工；素材引文只作证据）\n${JSON.stringify(c.sheet)}`,
-    );
+  if (c.sheet) parts.push(`【用户确认的任务单】\n${JSON.stringify(c.sheet)}`);
   if (c.role.trim()) parts.push(`【你的角色】\n${c.role}`);
   parts.push(`【${goalLabel}】\n${c.goal}`);
   if (c.deliver !== undefined)
     parts.push(
-      `【最终交付文件】\n${c.deliver.map((p) => `- out/${p}`).join('\n')}\n每个模式都必须交出文件。* 只匹配一层，** 才递归；完整工程须带齐引用资源。README/报告声称附带的脚本和素材必须被这些模式选中或真实包含在最终包内。只交这些成果，草稿另存。不要声称文件已下载到用户电脑，默认仅系统保存与预览。`,
+      `【要交出的文件】\n${c.deliver.map((p) => `- out/${p}`).join('\n')}\n（* 只匹配一层，** 递归；草稿放别的目录）`,
     );
   if (c.upstream.length > 0) {
     const lines = c.upstream.map((u) => {
@@ -78,50 +75,36 @@ function context(c: NodeContext, goalLabel: string): string[] {
     parts.push(`【用户追加的要求】\n${c.userNotes.map((n) => `- ${n}`).join('\n')}`);
   }
   if (c.checks?.length) {
-    parts.push(
-      `【交付前自查】系统不会逐条替你核对，交付前自己对照一遍：\n${c.checks.map((t) => `- ${t}`).join('\n')}`,
-    );
+    parts.push(`【交付前看一眼】\n${c.checks.map((t) => `- ${t}`).join('\n')}`);
   }
   return parts;
 }
 
 const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
 
-/** 预算和进度：让节点按钱和时间自己掂量，不规定次数 */
+/** 预算和进度：只给事实，节点自己掂量 */
 function budgetPart(b: NonNullable<NodeContext['budget']>): string {
   const facts = [
     ...(b.nodeMicro ? [`这一步分到约 ${usd(b.nodeMicro)}`] : []),
     ...(b.taskMicro
-      ? [`整个任务预算约 ${usd(b.taskMicro)}，目前已花 ${usd(b.spentMicro)}`]
-      : [`整个任务目前已花 ${usd(b.spentMicro)}`]),
-    `已经跑了 ${b.elapsedMinutes} 分钟${b.taskMinutes ? `，报价时估的总用时约 ${b.taskMinutes} 分钟` : ''}`,
+      ? [`整个任务预算约 ${usd(b.taskMicro)}，已花 ${usd(b.spentMicro)}`]
+      : [`整个任务已花 ${usd(b.spentMicro)}`]),
+    `已经跑了 ${b.elapsedMinutes} 分钟${b.taskMinutes ? `，预计总用时约 ${b.taskMinutes} 分钟` : ''}`,
   ];
-  return [
-    '【预算和用时】',
-    `- ${facts.join('；')}。`,
-    '- 预算是参考，不是上限：超出不会被打断，但花的是用户的钱，用户也在等。做几版、挑几张、要不要补做、什么时候停手，由你按这些自己判断；够用就交，不要为了更好无限打磨。',
-    '- 工具按预算选型号（oasis-tool list 列出了每个型号的单价和用时，用 --model 指定）；要多张图一次用 --n，会并行生成。',
-  ].join('\n');
+  return `【预算和用时】${facts.join('；')}。预算是参考不是上限，但花的是用户的钱、用户也在等：够用就交。`;
 }
 
 const transcriptText = (speeches: Speech[]) =>
   speeches.map((s) => `- 第 ${s.round} 轮 ${s.name}：${s.text}`).join('\n');
 
 /** 节点能用的外部工具：都通过沙箱里的 oasis-tool 命令调用，用法让 AI 自己查 */
-function toolsPart(tools: string[]): string[] {
+function toolsPart(tools: string[]): string {
   return [
-    [
-      '【可以用的工具】',
-      tools.length
-        ? `- 规划建议使用：${tools.join('、')}；这不是可用工具白名单。`
-        : '- 根据任务需要自行选择可用工具。',
-      '- 都用 oasis-tool 命令调用。先运行 `oasis-tool list` 看每个工具的用法，再按用法调用，例如 `oasis-tool image.generate --prompt "……" --out out/图.png`。',
-      '- 运行环境以 in/.oasis-environment.json（如存在）和软件清单为准。交互应用先查阅 in/.oasis-formats.json 的实际契约及示例，不猜测清单字段。能安装 npm 包不代表浏览器及系统库已就绪；可运行网页交齐 oasis-app.json 与 oasis-test.json，交付前运行 `oasis-tool app.check --dir out/<应用目录>` 在独立浏览器里实际跑一遍（交付后系统复跑同一套检查），按它报的错修好。',
-      '- 自查：音视频用 ffprobe 确认能解码、时长和画幅对；风格、像不像参考图这类要求用 `oasis-tool image.inspect` 自己看。',
-      '- 工具费用记在任务花费里；可以进行完成交付所需的验证与修复，避免没有进展的重复调用。',
-      '- 要等很久的工具（视频）命令会自己等；没等到时按它的提示运行 `oasis-tool wait <任务号>`。',
-    ].join('\n'),
-  ];
+    '【工具】',
+    ...(tools.length ? [`- 规划建议用：${tools.join('、')}（不限于这些）。`] : []),
+    '- `oasis-tool list` 列出全部工具、用法和单价；长任务没等到就按提示 `oasis-tool wait <任务号>`。',
+    '- 交互网页、3D 预览等的文件格式见 in/.oasis-formats.json。沙箱里没有浏览器，网页用 `oasis-tool app.check --dir out/<应用目录>` 在独立浏览器里跑。',
+  ].join('\n');
 }
 
 /** 干活节点 */
@@ -130,14 +113,13 @@ export function workPrompt(c: NodeContext): string {
     `你是 Oasis 工作流里的一个节点，负责「${c.title}」。`,
     ...context(c, '你要做的事'),
     ...(c.budget ? [budgetPart(c.budget)] : []),
-    '这是持续子任务。使用原生 goal 跟踪实际交付；可以自行规划、拆分、使用子代理和选择可用模型。目标和必需文件真正完成后才 update_goal complete；遇到可解决的问题继续处理。',
-    ...toolsPart(c.tools),
+    toolsPart(c.tools),
     [
-      '【规则】',
-      '- 把成果文件写到 out/ 目录（可以建子目录），下游节点和用户只看得到 out/ 里的东西。',
-      '- 3D：直接 GLB 可交互预览（自包含无 URI/扩展，≤16 MiB、20 万顶点/三角面、单纹理≤2048、纹理合计≤8MP；骨骼/形变/压缩扩展暂不支持）。配套预览用同目录 oasis-model-preview.json：{"version":1,"source":{"path":"scene.blend","sha256":"原件实际SHA-256"},"glb":{"path":"preview.glb","sha256":"实际SHA-256"},"poster":{"path":"poster.png","sha256":"实际SHA-256"},"turntable":{"path":"turn.webm","sha256":"实际SHA-256"},"simplified":true}。glb/poster/turntable 按实际需要选填，路径相对该 JSON 且禁止 ..；只能引用同节点最终 deliver 选中的真实文件，ZIP 内成员不自动登记。简化时保留原件并如实标注；不能为预览绕过用户约束或增加付费作业。',
+      '【说明】',
+      '- 成果写到 out/（可建子目录），下游和用户只看得到 out/。',
+      '- 这是持续目标：要交的文件都做好了就 update_goal complete 结束。',
       NO_QUESTIONS,
-      '- 做完后用一两句话说明你交付了什么、做了哪些自己的决定。',
+      '- 最后用一两句话说明交付了什么。',
     ].join('\n'),
   ].join('\n\n');
 }
@@ -161,7 +143,7 @@ export function speechPrompt(input: {
       `你是「${input.name}」，正在参加一场讨论：「${input.context.title}」。`,
       ...(input.stance.trim() ? [`【你的立场】\n${input.stance}`] : []),
       ...context(input.context, '讨论的题目'),
-      `【规则】\n${NO_QUESTIONS}\n- ${ask}`,
+      `【说明】\n${NO_QUESTIONS}\n- ${ask}`,
     ].join('\n\n');
   }
   const notes = input.newNotes.length
@@ -177,8 +159,8 @@ export function summaryPrompt(input: { context: NodeContext; transcript: Speech[
     ...context(input.context, '讨论的题目'),
     `【讨论记录】\n${transcriptText(input.transcript)}`,
     [
-      '【规则】',
-      '- 把讨论结论写到 out/ 目录（例如 out/讨论结论.md）：大家同意的、还有分歧的、最后建议怎么做。',
+      '【说明】',
+      '- 把结论写到 out/（例如 out/讨论结论.md）：共识、分歧、建议怎么做。',
       NO_QUESTIONS,
       '- 做完后用一两句话说明结论。',
     ].join('\n'),
@@ -193,34 +175,25 @@ export function resumePrompt(newNotes: string[], interrupted = false): string {
   return `${interrupted ? '上次执行中断了，已有会话和产物已恢复。先核对实际状态，避免重复已完成的操作。' : '你刚才被用户停下了。'}请接着把没做完的做完，已经做好的不用重做；成果照样写到 out/。${notes}`;
 }
 
-/** 关卡没过：接着原会话改一次 */
 /**
  * 用户看过成果后的修改（ADR 0012，2026-11-05 改为在原任务里接着原会话改）：
  * 交付节点和它的下游都接着自己上次的会话，只改修改意见涉及的地方。
  */
 export function revisionPrompt(request: string): string {
   return [
-    '用户看过交付的成果，提出了下面的修改意见（批注截图等附件在 materials/ 下，截图上的编号和批注编号一致）：',
+    '用户看了成果，提出修改意见（批注截图在 materials/ 下，编号与批注一致）：',
     '',
     request,
     '',
-    '请在你上次的成果基础上接着改：',
-    '- 只改修改意见涉及的地方，其余内容、结构和风格保持不变（指内容不变，不要求逐字节相同）；',
-    '- 上游节点的产出如有更新，以这次 inputs 里的最新产出为准；和你无关的意见不用处理；',
-    '- 改完在 out/ 里交齐全部成果（没改的文件也要在），用一两句话说明改了什么。',
-    '- 自检一遍确认改好、没改坏别的就够了，随即把目标标为完成，不要把同样的检查再跑一遍。',
+    '在上次成果的基础上改：只动意见涉及的地方；上游有更新以 in/ 里最新的为准；和你无关的意见不用管。改完在 out/ 交齐全部成果（没改的也要在），update_goal complete，用一两句话说明改了什么。',
   ].join('\n');
 }
 
 export function reworkPrompt(unmet: string[]): string {
   return [
-    '交付前的检查发现以下地方还没满足：',
+    '系统检查发现这些问题：',
     ...unmet.map((u) => `- ${u}`),
     '',
-    '请修改 out/ 里的成果，把这些地方补上。这一轮只有一次机会，改完就结束，系统会重新检查：',
-    '- 网页应用改完运行 `oasis-tool app.check --dir out/<应用目录>` 自查，看到通过再结束；',
-    '- 音视频用 ffprobe 确认能解码、时长对；',
-    '- 只修上面列的问题，不要重做别的部分，也不要反复跑同样的检查。',
-    '最后用一两句话说明改了什么。',
+    '只修这些，改完就结束（系统会再查一次），用一两句话说明改了什么。',
   ].join('\n');
 }
