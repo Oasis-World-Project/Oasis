@@ -26,7 +26,7 @@ import { ChatActionsContext } from '../chat/use-chat-actions.ts';
 import { formatCost } from '../ui/format.ts';
 import { NodeEditor, type EditorResult } from '../workflow/NodeEditor.tsx';
 import { NodePanel } from '../workflow/NodePanel.tsx';
-import { canEditWorkflow, checkSummary, taskStatusOf } from '../workflow/rules.ts';
+import { canEditWorkflow, taskStatusOf } from '../workflow/rules.ts';
 import { useSpeakers } from '../workflow/use-speakers.ts';
 import { useWorkflowActions } from '../workflow/use-workflow-actions.ts';
 import { WorkflowGraph, type GraphHandlers } from '../workflow/WorkflowGraph.tsx';
@@ -120,7 +120,7 @@ export function WorkflowPage() {
   const node = shown.nodes.find((n) => n.id === selectedId);
   const issues = shown.nodes.filter(
     (n) =>
-      (n.status !== 'succeeded' && n.gateChecks?.some((c) => c.status !== 'passed')) ||
+      (n.status !== 'succeeded' && n.warning) ||
       n.status === 'failed' ||
       n.status === 'stopped' ||
       shown.attention?.nodeId === n.id,
@@ -374,12 +374,13 @@ export function WorkflowPage() {
                   >
                     <span className="line-clamp-2">{n.title}</span>
                     <span className="text-ink-muted">
-                      {checkSummary(n) ??
-                        (n.status === 'failed'
-                          ? '执行失败 · 查看运行记录'
-                          : n.status === 'stopped'
-                            ? '执行已停止 · 查看运行记录'
-                            : '检查停下了 · 查看原因')}
+                      {n.status === 'failed'
+                        ? '执行失败 · 查看运行记录'
+                        : n.status === 'stopped'
+                          ? '执行已停止 · 查看运行记录'
+                          : shown.attention?.nodeId === n.id
+                            ? '需要处理 · 查看原因'
+                            : '有提醒 · 查看'}
                     </span>
                   </button>
                 ))}

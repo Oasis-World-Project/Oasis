@@ -132,7 +132,7 @@ export function WorkflowGraph({
         position: positions.get(node.id) ?? { x: 0, y: 0 },
         data: {
           node,
-          state: nodeState(task, node),
+          state: nodeState(node),
           speakers: speakers.speakersOf(node),
           toolName: speakers.toolName,
           selected: node.id === selected,

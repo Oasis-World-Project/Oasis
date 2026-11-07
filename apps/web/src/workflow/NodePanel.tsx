@@ -20,7 +20,7 @@ import { TaskDecisions } from '../chat/TaskCard.tsx';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { RunHistory } from './RunHistory.tsx';
-import { checkSummary, nodeState, nodeActions, waitingOn } from './rules.ts';
+import { nodeState, nodeActions, waitingOn } from './rules.ts';
 import type { useSpeakers } from './use-speakers.ts';
 import type { WorkflowActions } from './use-workflow-actions.ts';
 
@@ -239,20 +239,14 @@ export function NodePanel({
 }) {
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const allowed = nodeActions(task, node);
-  const status = nodeState(task, node);
+  const status = nodeState(node);
   const who = speakers.speakersOf(node);
   const busy = actions.busy !== null;
   const live = status.tone === 'active';
-  // 检查中途停下、等用户点「继续」
-  const paused =
-    task.status === 'needs_attention' &&
-    task.attention?.reason === 'checks_incomplete' &&
-    task.attention.nodeId === node.id;
   const blockers =
     node.status === 'waiting' || (node.status === 'cancelled' && !node.startedAt)
       ? waitingOn(task, node)
       : [];
-  const results = node.gateChecks ?? [];
   const toPreview = (file: NodeBody['outputs'][number]): PreviewFile => ({
     path: file.path,
     size: file.size,
@@ -351,59 +345,19 @@ export function NodePanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
+        {/* 关卡只查文件齐不齐、网页和音视频能不能打开（ADR 0017）；没满足的、没查到的记在节点提醒里 */}
         <Section title="检查结果">
           <p className="m-0 text-[13px] font-medium">
-            {checkSummary(node) ??
-              (live && node.status === 'checking'
-                ? '检查进行中，尚未生成结果。'
-                : paused
-                  ? '检查在中途停下了，还没有结论。点「继续」从停下的地方接着检查。'
-                  : '尚无检查结果。')}
+            {live && node.status === 'checking'
+              ? '检查进行中，尚未生成结果。'
+              : node.status === 'succeeded'
+                ? node.warning
+                  ? '检查过了，有提醒（见下方）。'
+                  : '检查通过：交付的文件齐全，能打开。'
+                : '尚无检查结果。'}
           </p>
-          {results.length > 0 && (
-            <p className="m-0 text-[12px] text-ink-muted">
-              {node.status === 'succeeded'
-                ? '此节点阶段已完成，阶段检查不等于最终成品验收通过。'
-                : task.status === 'cancelled'
-                  ? '保留取消前的检查记录。'
-                  : '以下为已保存的检查结果。'}
-              未检查表示证据不足或检查中断，不等于产物不合格。
-            </p>
-          )}
-          <ul aria-label="逐项检查结果" className="m-0 flex list-none flex-col gap-3 p-0">
-            {results.map((c) => (
-              <li key={c.id} className="rounded-item bg-track p-3 text-[13px] leading-relaxed">
-                <span
-                  className={`text-[12px] font-medium ${c.status === 'passed' ? 'text-ink-muted' : 'text-accent'}`}
-                >
-                  {c.status === 'passed' ? '通过' : c.status === 'unmet' ? '未通过' : '未检查'}
-                </span>
-                <p className="mb-1 mt-1 font-medium">{c.text}</p>
-                <p className="m-0 whitespace-pre-wrap break-words text-ink-muted">
-                  {c.reason.length > 220
-                    ? `${c.reason.slice(0, 220)}…`
-                    : c.reason || '未记录具体原因。'}
-                </p>
-                {c.reason.length > 220 && (
-                  <details className="mt-2">
-                    <summary className="cursor-pointer">完整检查依据</summary>
-                    <p className="mb-0 whitespace-pre-wrap break-words text-ink-muted">
-                      {c.reason}
-                    </p>
-                  </details>
-                )}
-                {c.evidence.length > 0 && (
-                  <p className="mb-0 mt-2 break-words text-[12px] text-ink-muted">
-                    证据：{c.evidence.join('、')}
-                  </p>
-                )}
-              </li>
-            ))}
-          </ul>
         </Section>
-        {task.attention?.nodeId === node.id && (
-          <TaskDecisions task={task} compact showReason={results.length === 0} />
-        )}
+        {task.attention?.nodeId === node.id && <TaskDecisions task={task} compact />}
         {blockers.length > 0 && (
           <Section title={task.status === 'cancelled' ? '取消前的上游依赖' : '等待哪些上游'}>
             <p className="m-0 text-[13px] text-ink-muted">
@@ -441,7 +395,7 @@ export function NodePanel({
           </p>
         </Section>
         {node.checks.length > 0 && (
-          <Section title="交出前要过的关卡">
+          <Section title="交付前自查（节点自己对照）">
             <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[13px] leading-relaxed">
               {node.checks.map((c, i) => (
                 <li key={i}>{typeof c === 'string' ? c : c.text}</li>

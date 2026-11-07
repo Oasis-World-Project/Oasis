@@ -73,14 +73,6 @@ export const TaskRequirement = z.object({
   text: z.string().trim().min(1).max(1000),
   sources: z.array(RequirementSource).min(1),
 });
-export const CheckResult = z.object({
-  id: z.string(),
-  text: z.string(),
-  status: z.enum(['passed', 'unmet', 'unchecked']),
-  reason: z.string(),
-  evidence: z.array(z.string()),
-});
-export type CheckResult = z.infer<typeof CheckResult>;
 
 /** 两种节点共有的部分 */
 const NodeCommon = {
@@ -91,7 +83,7 @@ const NodeCommon = {
   role: z.string().max(2000).default(''),
   /** 这个节点要做的事（讨论节点就是讨论的题目） */
   goal: z.string().trim().min(1).max(20_000),
-  /** 关卡的验收点（普通话）：交出产出前由 Jev 逐条判断 */
+  /** 交付前的自查清单（普通话）：写进节点的说明，由节点自己对照，关卡不逐条打分（ADR 0017） */
   checks: z.array(TaskCheck).default([]),
   /** 关卡的规则检查：这些文件必须在 out/ 里且不是空的 */
   expects: z.array(ExpectedFile).default([]),
@@ -353,7 +345,6 @@ export const Attention = z.object({
     'over_budget',
     'plan_failed',
     'over_estimate',
-    'checks_incomplete',
     /** 修改方案排好了，等用户确认（ADR 0022） */
     'revision_plan',
   ]),
@@ -371,7 +362,6 @@ export const NodeBody = z.object({
   goal: z.string(),
   model: z.string(),
   checks: z.array(TaskCheck),
-  gateChecks: z.array(CheckResult).optional(),
   expects: z.array(ExpectedFile),
   requires: NodeCommon.requires,
   deliver: z.array(OutputPattern).optional(),
@@ -455,13 +445,14 @@ export const TaskBody = z.object({
   budgetLimitMicro: z.number().int().nonnegative().nullable(),
   /** 用户确认的任务单（直接给方案建的任务没有） */
   sheet: TaskSheet.nullable(),
-  /** 整体验收结果：缺失或未满足需修复，必要检查未知需重查；还没验收时为 null。 */
+  /**
+   * 整体验收结果（ADR 0017：只核对交付文件齐不齐）：unmet 是补过一次仍缺的文件，unchecked 是没检查到的；
+   * 都只是提醒，照样交付。还没验收时为 null。
+   */
   acceptance: z
     .object({
       unmet: z.array(z.string()),
       unchecked: z.array(z.string()).optional(),
-      notes: z.array(z.string()).optional(),
-      checks: z.array(CheckResult).optional(),
     })
     .nullable(),
   /** task 生成的统一清单；缺省表示旧任务，空数组不能回退到所有产出。 */

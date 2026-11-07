@@ -401,7 +401,7 @@ export function NodeEditor({
               })}
             </fieldset>
           )}
-          <Field label="交出前要过的关卡" hint="一行一条，最多 5 条，可以不写">
+          <Field label="交付前自查" hint="节点交付前自己对照，一行一条，最多 5 条，可以不写">
             <textarea
               value={checks}
               onChange={(e) => setChecks(e.target.value)}

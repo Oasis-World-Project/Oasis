@@ -46,6 +46,7 @@
 ## 3. 数据与契约
 
 - 不新增迁移。`NodeConfig.gateChecks`、`TaskBody.acceptance.checks/notes` 不再写入新值；旧任务保留的值照常显示。Contract 计划：确认没有进行中的旧任务依赖它们后，删除 `NodeBody.gateChecks`、`acceptance.checks/notes`、`CheckResult` 的展示代码与配置字段。
+- 2026-11-08 已执行（重构阶段 1，开发库旧数据不保留）：上面这些都删了，连同不会再出现的「检查停下了」（`checks_incomplete`）和它的「继续检查」「跳过检查」。节点详情的「检查结果」只说明检查进行中、通过或有提醒（提醒在节点提醒里）；方案里的 `checks` 在界面上叫「交付前自查」。这些字段都在 JSON 列里，没有迁移。
 - `repairChecks` 仍在用：整体验收发现交付文件不齐时，写给缺文件的交付节点（只给缺的那几个，不再让全部交付节点重做）。
 - 用户提出的修改（ADR 0012）仍是一轮新工作，用持续目标；只有关卡和交付不齐触发的修复是单轮。
 - 新增契约：model-gateway 工具 `app.check`（参数 `dir`）；harness `POST /internal/runs/:runId/application-check/live {payerId, taskId, dir}`：直接读这次运行中沙箱里的 `out/<dir>`，做与关卡相同的浏览器检查，不保存报告。不用把网页包从沙箱上传一遍，沙箱里的 oasis-tool 和镜像都不用改。

@@ -103,7 +103,6 @@ function toNodeBody(node: Node): NodeBody {
     goal: node.goal,
     model: node.model,
     checks: c.checks ?? [],
-    ...(c.gateChecks ? { gateChecks: c.gateChecks } : {}),
     expects: c.expects ?? [],
     ...(c.requires ? { requires: c.requires } : {}),
     ...(c.deliver === undefined ? {} : { deliver: c.deliver }),
@@ -217,7 +216,6 @@ const UNAVAILABLE: Record<Attention['reason'], string> = {
   over_estimate: '预估超过你设的上限时只能照做或取消',
   plan_failed: '工作流没排好时只能重新规划或取消',
   workflow_broken: '工作流的连线断开了：先把线接好再点运行，或者取消任务',
-  checks_incomplete: '检查停下了，可以继续、跳过检查或取消',
   revision_plan: '修改方案只能确认，或者不改了',
 };
 
@@ -609,11 +607,6 @@ export function createWorkflowService(deps: {
     const snapshot = await store.get(taskId);
     const node = snapshot?.nodes.find((n) => n.id === nodeId);
     if (!snapshot || node?.status !== 'checking' || node.currentRunId !== runId) return;
-    if (
-      snapshot.task.status === 'needs_attention' &&
-      snapshot.task.attention?.reason === 'checks_incomplete'
-    )
-      return;
     // 检查轻量化（ADR 0017）：只挡明显坏掉的成果，任务单要求由节点自己对照
     const { unmet, unchecked } = await gate.check({
       signal,
@@ -1351,33 +1344,6 @@ export function createWorkflowService(deps: {
         const { reason, nodeId } = task.attention;
         if (reason === 'revision_plan' && choice === 'continue' && task.revision?.plan)
           return applyRevision(snapshot, w, fx);
-        // 「继续」：从停下的地方接着检查——记下的检查结果和已保存的浏览器报告接着用（2026-11-05 用户决定）
-        if (reason === 'checks_incomplete' && choice === 'retry') {
-          await w.setTask({ status: nodeId ? 'running' : 'accepting', attention: null });
-          if (nodeId) {
-            const node = snapshot.nodes.find((n) => n.id === nodeId);
-            if (node?.status === 'checking' && node.currentRunId)
-              fx.gate.push({ taskId, nodeId, runId: node.currentRunId });
-          } else fx.accept.push(taskId);
-          return;
-        }
-        if (reason === 'checks_incomplete' && choice === 'continue') {
-          // 用户看过没做完的检查，决定跳过检查（2026-11-04 用户决定，2026-11-05 改名「跳过检查」）：
-          // 未检查项原样留在节点提醒和验收记录里，不冒充通过。
-          if (nodeId) {
-            const node = snapshot.nodes.find((n) => n.id === nodeId);
-            if (node?.status === 'checking')
-              await w.setNode(node.id, {
-                status: 'succeeded',
-                finishedAt: new Date(),
-                warning: `你选择了跳过检查。${node.warning ?? task.attention.message}`,
-              });
-            await w.setTask({ status: 'running', attention: null });
-            return schedule(snapshot, w, fx);
-          }
-          await w.setTask({ status: 'succeeded', attention: null, finishedAt: new Date() });
-          return;
-        }
         if (reason === 'node_failed') {
           const failed = snapshot.nodes.find((n) => n.id === nodeId && n.status === 'failed');
           if (failed) {

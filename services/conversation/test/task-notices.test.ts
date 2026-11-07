@@ -149,7 +149,7 @@ describe('任务的结果回到私聊', () => {
       'accepting',
     ] as const) {
       const data = event(status, {
-        attention: { reason: 'checks_incomplete', nodeId: NODE, message: '证据不足' },
+        attention: { reason: 'node_failed', nodeId: NODE, message: '网络断开' },
       });
       await notices.onStatusChanged(EVENT, data);
       await notices.onStatusChanged(EVENT, data);

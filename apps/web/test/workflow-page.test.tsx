@@ -197,52 +197,22 @@ afterEach(() => vi.unstubAllGlobals());
 const nodeButton = (name: RegExp) => screen.findByRole('button', { name, hidden: true });
 
 describe('工作流视图', () => {
-  it('节点逐项展示通过/未通过/未检查、原因和证据；需要处理时不假装仍在检查', async () => {
-    task = {
-      ...task,
-      status: 'needs_attention',
-      attention: { reason: 'checks_incomplete', nodeId: B, message: '检查尚未完成' },
-    };
-    task.nodes[1] = {
-      ...task.nodes[1]!,
-      status: 'checking',
-      gateChecks: [
-        {
-          id: 'c1',
-          text: '13 类陈设清晰可辨',
-          status: 'unchecked',
-          reason: '现有图片无法辨认咖啡机，需要补齐原始预览证据。',
-          evidence: ['preview/hero.png'],
-        },
-        {
-          id: 'c2',
-          text: '所有声明文件已交付',
-          status: 'unmet',
-          reason: '明确缺少已声明的 tools/build.py。',
-          evidence: ['report.md'],
-        },
-        {
-          id: 'c3',
-          text: '几何资源有效',
-          status: 'passed',
-          reason: '几何检查完成。',
-          evidence: ['scene.glb'],
-        },
-      ],
-    };
+  it('节点详情说清检查到哪了：检查中、通过、有提醒（关卡只查文件齐不齐、能不能打开）', async () => {
+    task.nodes[0] = { ...task.nodes[0]!, warning: '没检查到：浏览器检查超时' };
+    task.nodes[1] = { ...task.nodes[1]!, status: 'checking' };
+    task.nodes[2] = { ...task.nodes[2]!, status: 'succeeded' };
     const api = fakeWorkflow();
     await openWorkflow();
-    expect(await nodeButton(/^写首页文案，检查停下了$/)).toBeTruthy();
-    const panel = await screen.findByRole('complementary', { name: '节点：写首页文案' });
-    const checks = within(panel).getByRole('list', { name: '逐项检查结果' });
-    expect(within(checks).getByText('未检查')).toBeTruthy();
-    expect(within(checks).getByText('未通过')).toBeTruthy();
-    expect(within(checks).getByText('通过')).toBeTruthy();
-    expect(within(checks).getByText('现有图片无法辨认咖啡机，需要补齐原始预览证据。')).toBeTruthy();
-    expect(within(checks).getByText('证据：preview/hero.png')).toBeTruthy();
-    expect(within(panel).getByRole('button', { name: '继续' })).toBeTruthy();
-    // 检查停下时也可以跳过检查，不会卡死
-    expect(within(panel).getByRole('button', { name: '跳过检查' })).toBeTruthy();
+    fireEvent.click(await nodeButton(/^写首页文案，检查中$/));
+    let panel = await screen.findByRole('complementary', { name: '节点：写首页文案' });
+    expect(within(panel).getByText('检查进行中，尚未生成结果。')).toBeTruthy();
+    fireEvent.click(await nodeButton(/^理清卖点，完成$/));
+    panel = await screen.findByRole('complementary', { name: '节点：理清卖点' });
+    expect(within(panel).getByText('检查过了，有提醒（见下方）。')).toBeTruthy();
+    expect(within(panel).getByText(/浏览器检查超时/)).toBeTruthy();
+    fireEvent.click(await nodeButton(/^出效果图，完成$/));
+    panel = await screen.findByRole('complementary', { name: '节点：出效果图' });
+    expect(within(panel).getByText('检查通过：交付的文件齐全，能打开。')).toBeTruthy();
     expect(api.requests.some((r) => r.startsWith('POST'))).toBe(false);
   });
 
@@ -257,32 +227,14 @@ describe('工作流视图', () => {
     expect(await screen.findByRole('complementary', { name: '节点：写首页文案' })).toBeTruthy();
   });
 
-  it('取消后仍能从问题入口查看最后的检查依据，但不能运行或重查', async () => {
+  it('取消后仍能从问题入口查看节点留下的提醒，但不能运行或重查', async () => {
     task = { ...task, status: 'cancelled', attention: null };
-    task.nodes[0] = {
-      ...task.nodes[0]!,
-      gateChecks: [
-        {
-          id: 'final',
-          text: '最终整体观感',
-          status: 'unchecked',
-          reason: '本阶段只制定契约，留待成品核验。',
-          evidence: [],
-        },
-      ],
-    };
+    // 已完成节点的提醒不算「需要查看」
+    task.nodes[0] = { ...task.nodes[0]!, warning: '没检查到：浏览器检查超时' };
     task.nodes[1] = {
       ...task.nodes[1]!,
       status: 'cancelled',
-      gateChecks: [
-        {
-          id: 'c1',
-          text: '室内陈设',
-          status: 'unchecked',
-          reason: '缺少原始预览图。',
-          evidence: ['preview/hero.png'],
-        },
-      ],
+      warning: '原定的模型 openai/blocked 在当前网络用不了，改用 deepseek/x',
     };
     const api = fakeWorkflow();
     await openWorkflow();
@@ -290,7 +242,7 @@ describe('工作流视图', () => {
     expect(within(overview).queryByRole('button', { name: '查看节点记录：理清卖点' })).toBeNull();
     fireEvent.click(within(overview).getByRole('button', { name: /写首页文案/ }));
     const panel = await screen.findByRole('complementary', { name: '节点：写首页文案' });
-    expect(within(panel).getByText('缺少原始预览图。')).toBeTruthy();
+    expect(within(panel).getByText(/改用 deepseek\/x/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: '继续' })).toBeNull();
     expect(within(panel).queryByRole('button', { name: '运行' })).toBeNull();
     expect(api.requests.some((r) => r.startsWith('POST'))).toBe(false);
@@ -330,16 +282,17 @@ describe('工作流视图', () => {
     expect(screen.queryByRole('button', { name: '继续' })).toBeNull();
   });
 
-  it('很长的检查原因默认折叠，展开后仍可阅读完整原因并继续', async () => {
-    const message = '正文截断；vendor/three.module.js；'.repeat(100);
+  it('很长的原因默认折叠，展开后仍可阅读完整原因并继续', async () => {
+    const message = '「写首页文案」连不上模型服务商；vendor/three.module.js；'.repeat(100);
     task = {
       ...task,
+      nodes: task.nodes.map((n) => (n.id === B ? { ...n, status: 'failed' as const } : n)),
       status: 'needs_attention',
-      attention: { reason: 'checks_incomplete', nodeId: B, message },
+      attention: { reason: 'node_failed', nodeId: B, message },
     };
     const api = fakeWorkflow();
     await openWorkflow();
-    expect(screen.getByRole('status').textContent).toBe('检查停下了');
+    expect(screen.getByRole('status').textContent).toBe('任务需要处理');
     const summary = screen.getByText('查看详细原因');
     const details = summary.closest('details')!;
     expect(details.open).toBe(false);

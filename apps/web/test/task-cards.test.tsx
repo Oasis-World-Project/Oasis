@@ -386,7 +386,7 @@ describe('任务卡', () => {
   });
 
   it('需要处理仅保留简短状态和工作流入口，历史重复提醒不再刷屏', async () => {
-    const details = '店内 13 类陈设的原始预览证据不足。';
+    const details = '「写首页文案」连不上模型服务商（网络中断或超时）';
     const { api } = fakeChat(
       [
         message('task', { taskId: TASK }),
@@ -397,7 +397,7 @@ describe('任务卡', () => {
         task: () =>
           task({
             status: 'needs_attention',
-            attention: { reason: 'checks_incomplete', nodeId: NODE_B, message: details },
+            attention: { reason: 'node_failed', nodeId: NODE_B, message: details },
           }),
       },
     );

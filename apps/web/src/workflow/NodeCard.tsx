@@ -5,7 +5,7 @@ import { Check } from 'lucide-react';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { NODE_H, NODE_W } from './layout.ts';
-import { checkSummary, type nodeState } from './rules.ts';
+import type { nodeState } from './rules.ts';
 import type { Speaker } from './use-speakers.ts';
 
 type FlowNodeData = {
@@ -23,8 +23,6 @@ export type FlowNode = Node<FlowNodeData, 'step'>;
 
 /** 卡片下面那行说明：讨论几轮、用什么工具、花了多少、关卡提醒 */
 function metaOf(node: NodeBody, toolName: (key: string) => string): string {
-  const summary = checkSummary(node);
-  if (summary) return summary;
   if (node.warning) return '有提醒，点开查看';
   if (node.discussion) {
     const { round, rounds } = node.discussion;

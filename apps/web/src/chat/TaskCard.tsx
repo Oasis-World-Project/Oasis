@@ -131,11 +131,6 @@ const DECISIONS: Record<
   // 修改方案排好了：确认才开跑；「不改了」见下面（ADR 0022）
   revision_plan: [{ choice: 'continue', label: '确认修改' }],
   workflow_broken: [],
-  // 检查中途停下：「继续」从停下的地方接着检查，「跳过检查」不再检查直接往下（2026-11-05 用户要求）
-  checks_incomplete: [
-    { choice: 'retry', label: '继续' },
-    { choice: 'continue', label: '跳过检查' },
-  ],
 };
 
 /** 修改方案（ADR 0022）：规划员的说明、每个节点怎么处理、预计花费（只算要跑的） */
@@ -179,15 +174,7 @@ function RevisionPlan({ revision }: { revision: NonNullable<TaskBody['revision']
 const BRIEF_CHARS = 120;
 
 /** 工作流需要处理时的说明和选择。 */
-export function TaskDecisions({
-  task,
-  compact = false,
-  showReason = true,
-}: {
-  task: TaskBody;
-  compact?: boolean;
-  showReason?: boolean;
-}) {
+export function TaskDecisions({ task, compact = false }: { task: TaskBody; compact?: boolean }) {
   const actions = useChatActions();
   const { attention } = task;
   if (task.status !== 'needs_attention' || !attention) return null;
@@ -203,11 +190,11 @@ export function TaskDecisions({
       ) : compact ? (
         <>
           <p role="status" className="m-0 text-[14px] font-medium leading-relaxed">
-            {attention.reason === 'checks_incomplete' ? '检查停下了' : '任务需要处理'}
+            任务需要处理
           </p>
           {/* 原因的第一句直接显示；很长或有多行时，完整原因折叠在下面 */}
           <p className="m-0 text-[13px] leading-relaxed text-ink-muted">{brief}</p>
-          {showReason && long && (
+          {long && (
             <details key={attention.message}>
               <summary className="cursor-pointer text-[13px] text-ink-muted">查看详细原因</summary>
               <p className="m-0 mt-2 max-h-[32vh] overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-[13px] leading-relaxed">

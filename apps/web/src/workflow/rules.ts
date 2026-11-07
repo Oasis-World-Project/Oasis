@@ -34,25 +34,8 @@ const NODE_STATUS: Record<NodeStatus, { label: string; tone: Tone }> = {
   cancelled: { label: '已取消', tone: 'idle' },
 };
 
-/** 持久检查结果优先于进程状态；等待用户重查时没有后台检查在跑。 */
-export function nodeState(task: TaskBody, node: NodeBody) {
-  if (
-    node.status === 'checking' &&
-    task.status === 'needs_attention' &&
-    task.attention?.reason === 'checks_incomplete' &&
-    task.attention.nodeId === node.id
-  )
-    return { label: '检查停下了', tone: 'trouble' as const };
-  return NODE_STATUS[node.status];
-}
-
-export function checkSummary(node: NodeBody): string | undefined {
-  const results = node.gateChecks;
-  if (!results?.length) return undefined;
-  const count = (status: 'passed' | 'unmet' | 'unchecked') =>
-    results.filter((c) => c.status === status).length;
-  return `通过 ${count('passed')} · 未通过 ${count('unmet')} · 未检查 ${count('unchecked')}`;
-}
+/** 节点状态给人看的说法和色调 */
+export const nodeState = (node: NodeBody) => NODE_STATUS[node.status];
 
 /** 只依据真实连线与节点状态解释等待，不把所有下游都说成检查失败。 */
 export function waitingOn(task: TaskBody, node: NodeBody): { id: string | null; title: string }[] {

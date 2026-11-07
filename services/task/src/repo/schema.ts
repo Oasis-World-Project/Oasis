@@ -11,11 +11,10 @@ import type {
   TaskSheet,
   TaskStatus,
   TaskCheck,
-  CheckResult,
 } from '@oasis/contracts/task';
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
-/** 节点配置：关卡的验收点和应有文件；讨论节点还有参与者、轮数、进行到第几轮和讨论记录 */
+/** 节点配置：自查清单和应有文件；讨论节点还有参与者、轮数、进行到第几轮和讨论记录 */
 export interface NodeConfig {
   requires?: string[];
   /** 最终验收退回后，等待上游最新产出再在原会话修复。 */
@@ -25,7 +24,6 @@ export interface NodeConfig {
   /** 修改时「重新做」的节点：上一版它交出产出的那次运行，产出放进 in/_previous/（ADR 0022） */
   previousRunId?: string;
   checks?: TaskCheck[];
-  gateChecks?: CheckResult[];
   expects?: ExpectedFile[];
   deliver?: string[];
   /** 干活节点要用的外部工具（model：规划员按预算选的型号） */
@@ -119,8 +117,6 @@ export const tasks = pgTable('tasks', {
   acceptance: jsonb('acceptance').$type<{
     unmet: string[];
     unchecked?: string[];
-    notes?: string[];
-    checks?: CheckResult[];
     /** 整体验收没满足、退回交付节点改过几次（最多一次）；不返回给用户 */
     repairs?: number;
     /**
