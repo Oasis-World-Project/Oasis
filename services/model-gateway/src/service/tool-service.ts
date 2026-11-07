@@ -21,6 +21,8 @@ import { TOOLS, type ToolConfig, type ToolDef } from './tools.ts';
 const HOLD_MARGIN_MS = 10 * 60_000;
 
 export function createToolService(deps: {
+  /** 单价要不要参考调用记录（开发阶段关掉，只用供应商价格和目录兜底值） */
+  estimateFromHistory?: boolean;
   harness?: ServiceClient;
   browserstack?: BrowserStackClient;
   openrouter: ProviderClient;
@@ -60,13 +62,15 @@ export function createToolService(deps: {
    * 中位数；都没有才用工具目录的兜底值。读不到记录或目录时照样给兜底，不让目录因此不可用。
    */
   async function ratesOf(tool: ToolDef, models: string[]): Promise<ToolRate[]> {
-    const typical = await meter
-      .typicalUsage()
-      .then((u) => u.tools)
-      .catch((err: unknown) => {
-        deps.logger.warn({ err }, '读不到调用记录，工具估价用兜底值');
-        return new Map<string, Typical>();
-      });
+    const typical = deps.estimateFromHistory
+      ? await meter
+          .typicalUsage()
+          .then((u) => u.tools)
+          .catch((err: unknown) => {
+            deps.logger.warn({ err }, '读不到调用记录，工具估价用兜底值');
+            return new Map<string, Typical>();
+          })
+      : new Map<string, Typical>();
     const videos =
       tool.key === 'video.generate' ? await deps.openrouter.listVideoModels().catch(() => []) : [];
     return models.map((model) => {

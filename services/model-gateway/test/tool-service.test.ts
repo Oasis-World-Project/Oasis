@@ -431,9 +431,15 @@ let renderBusy = false;
 let renderStatusGone = false;
 let renderExposure: number | undefined;
 const stagingReads: string[] = [];
-const build = (tavilyKey: string | undefined, withMusic = false, withRender = false) => {
+const build = (
+  tavilyKey: string | undefined,
+  withMusic = false,
+  withRender = false,
+  fromHistory = true,
+) => {
   const logger = pino({ level: 'silent' });
   return createToolService({
+    estimateFromHistory: fromHistory,
     render: withRender
       ? createRenderClient({
           baseUrl: 'https://api.runpod.ai/v2',
@@ -1215,6 +1221,17 @@ describe('工具目录里的单价', () => {
       unit: '秒',
       rates: [{ model: 'alibaba/wan-2.7', costMicro: 50_000, basis: 'catalog' }],
     });
+  });
+  it('开发阶段不看调用记录：有记录也只用供应商价格和目录兜底值', async () => {
+    typical = {
+      ...noHistory(),
+      tools: new Map([
+        ['bytedance-seed/seedream-4.5', { costMicro: 45_000, seconds: 110, samples: 8 }],
+      ]),
+    };
+    const list = await build('k', false, false, false).list();
+    const rates = list.find((t) => t.key === 'image.generate')?.rates ?? [];
+    expect(rates.every((r) => r.basis !== 'history')).toBe(true);
   });
 });
 

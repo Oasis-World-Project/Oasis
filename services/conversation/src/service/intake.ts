@@ -261,7 +261,7 @@ function tidyReply(raw: unknown): unknown {
   if (Array.isArray(raw.questions)) out.questions = tidyQuestions(raw.questions);
   if (isRecord(raw.sheet)) {
     const sheet = raw.sheet;
-    // 素材清单和读取覆盖由服务端维护，忽略模型在这些只读字段里的内容。
+    // 素材清单、读取覆盖和预算由服务端维护，忽略模型在这些只读字段里的内容。
     out.sheet = {
       ...sheet,
       title: clip(sheet.title, 60),
@@ -278,6 +278,8 @@ function tidyReply(raw: unknown): unknown {
         : sheet.requirements,
       materials: [],
       materialWarnings: undefined,
+      // 预算由用户确认时选档、服务端写入；模型抄来的旧预算（如上个任务的）不能显示在新任务单上
+      budget: undefined,
     };
   }
   const hasSheet = isRecord(out.sheet);

@@ -154,6 +154,17 @@ export const modelGatewayEnv = {
   /** 配音拿不到实际花费时每个字估多少（微美元） */
   TOOL_SPEECH_MICRO_PER_CHAR: z.coerce.number().int().nonnegative().default(20),
   /** 沙箱算力每核每小时多少钱（微美元；按云服务器成本价约 $0.015）。为 0 时不计费 */
+  /**
+   * 估价要不要参考调用记录。开发阶段的记录多半来自失控的运行，样本再多也不可信，先关掉，
+   * 只按价格表估（2026-11-07 用户决定；稳定后再打开）。
+   */
+  ESTIMATE_FROM_HISTORY: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /** 不看记录时，一个干活节点按这么多 token 乘型号单价估 */
+  ESTIMATE_NODE_PROMPT_TOKENS: z.coerce.number().int().positive().default(300_000),
+  ESTIMATE_NODE_COMPLETION_TOKENS: z.coerce.number().int().positive().default(20_000),
   COMPUTE_PRICE_MICRO_PER_CORE_HOUR: z.coerce.number().int().nonnegative().default(15_000),
   /** 实时数字人（LiveAvatar，ADR 0013）；没配置时开数字人会话返回 503 */
   LIVEAVATAR_API_KEY: z

@@ -86,25 +86,29 @@ describe('估价用的典型单价（ADR 0016 §4）', () => {
   };
   const price = { capabilities, prompt: 1e-6, completion: 4e-6 };
 
-  it('节点：有这个型号的记录用记录，没有按价格表乘典型用量，都没有就不给', () => {
+  it('节点：有这个型号的记录用记录，没有按价格表乘典型用量；不给记录时按假设用量', () => {
     const usage = {
       tools: new Map(),
       nodes: new Map([['v/m', { costMicro: 30_000, seconds: 240, samples: 5 }]]),
       nodeTokens: { prompt: 200_000, completion: 10_000 },
     };
-    expect(withNodeRate(price, usage).node).toEqual({
+    const assumed = { prompt: 300_000, completion: 20_000 };
+    expect(withNodeRate(price, usage, assumed).node).toEqual({
       costMicro: 30_000,
       seconds: 240,
       basis: 'history',
     });
-    expect(withNodeRate(price, { ...usage, nodes: new Map() }).node).toEqual({
+    expect(withNodeRate(price, { ...usage, nodes: new Map() }, assumed).node).toEqual({
       costMicro: 240_000,
       seconds: null,
       basis: 'catalog',
     });
-    expect(
-      withNodeRate(price, { ...usage, nodes: new Map(), nodeTokens: null }).node,
-    ).toBeUndefined();
+    // 开发阶段不看记录：300k × $1/M + 20k × $4/M = $0.38
+    expect(withNodeRate(price, undefined, assumed).node).toEqual({
+      costMicro: 380_000,
+      seconds: null,
+      basis: 'catalog',
+    });
   });
 
   it('视频每秒：美元和美分 SKU 都认，取较高档；没有 SKU 是 NaN', () => {

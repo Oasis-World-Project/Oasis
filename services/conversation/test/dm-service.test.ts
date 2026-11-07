@@ -164,11 +164,14 @@ describe('任务单来源与默认答案', () => {
           budgetMicro: null,
           assumptions: [],
           requirements: [],
+          // 模型抄来的旧预算：不能出现在新任务单上
+          budget: { tier: 'standard', micro: 10_000_000, minutes: 60, steps: [] },
         },
       }),
       true,
     );
     expect(long.reply?.type === 'sheet' && long.reply.sheet.title).toHaveLength(60);
+    expect(long.reply?.type === 'sheet' && long.reply.sheet.budget).toBeUndefined();
     expect(readIntakeReply('好的', false)).toEqual({
       reply: null,
       problem: '回答里没有 JSON 对象',

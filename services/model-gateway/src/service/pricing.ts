@@ -101,12 +101,13 @@ export function videoSecondRate(
 }
 
 /**
- * 型号能力 + 它负责一个干活节点的典型花费和用时（ADR 0016 §4）：有这个型号的记录用记录；
- * 没有就按价格表 × 所有节点的典型 token 用量估（用时未知）；连典型用量都没有时不给。
+ * 型号能力 + 它负责一个干活节点的典型花费和用时（ADR 0016 §4）：给了调用记录且有这个型号的记录就用记录；
+ * 否则按价格表 × 典型 token 用量估（记录里的典型用量，没有就用配置的假设值；用时未知）。
  */
 export function withNodeRate(
   price: ModelPrice,
   usage: TypicalUsage | undefined,
+  assumed: { prompt: number; completion: number },
 ): ModelCapabilities {
   const capabilities = price.capabilities!;
   const seen = usage?.nodes.get(capabilities.id);
@@ -115,8 +116,7 @@ export function withNodeRate(
       ...capabilities,
       node: { costMicro: seen.costMicro, seconds: seen.seconds, basis: 'history' },
     };
-  const tokens = usage?.nodeTokens;
-  if (!tokens) return capabilities;
+  const tokens = usage?.nodeTokens ?? assumed;
   const costMicro = Math.ceil(
     (tokens.prompt * price.prompt + tokens.completion * price.completion) * USD_TO_MICRO,
   );

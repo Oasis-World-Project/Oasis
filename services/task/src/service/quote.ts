@@ -106,7 +106,7 @@ function draftPrompt(brief: string, sheet: TaskSheet, tools: ToolEntry[]): strin
     `【可以用的工具】\n${catalog || '（没有）'}`,
     [
       '【要求】',
-      '- steps：完成这项任务需要的几步（越少越好，能并行的不要串起来）。key 用英文短名，title 一句话说清这步做什么，after 填它要等的前几步的 key。',
+      '- steps：完成这项任务要几步。简单任务一步就够（一个 AI 从头做到尾），确实需要分工或并行时才拆，能并行的不要串起来。key 用英文短名，title 一句话说清这步做什么，after 填它要等的前几步的 key。',
       '- 每步要调用的工具写进 tools：uses 是计费单位的数量（视频按秒，图片按张），分三档估：economy 只做一次、刚好满足要求；standard 正常质量；premium 允许多做几版挑最好的。不用工具的步骤 tools 留空。',
       '- 只输出一个 JSON 对象：{"steps":[{"key":"…","title":"…","after":[],"tools":[{"key":"…","uses":{"economy":1,"standard":1,"premium":2}}]}]}',
     ].join('\n'),
@@ -124,7 +124,8 @@ function nodeCost(model: PricedModel | undefined, fallback: Fallback) {
   return {
     micro: (model?.node?.costMicro ?? fallback.workRun) + fallback.computeRun,
     seconds: model?.node?.seconds ?? fallback.nodeSeconds,
-    rough: !model?.node || model.node.seconds === null,
+    // 用时没有记录时按固定值估（开发阶段本来就不看记录），只有连单价都没有才算粗估
+    rough: !model?.node,
   };
 }
 

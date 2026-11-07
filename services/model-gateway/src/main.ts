@@ -151,6 +151,7 @@ await startService({
       apiKey: config.LIVEAVATAR_API_KEY,
     });
     const tools = createToolService({
+      estimateFromHistory: config.ESTIMATE_FROM_HISTORY,
       harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 65000 }),
       browserstack: createBrowserStackClient({
         username: config.BROWSERSTACK_USERNAME,
@@ -266,12 +267,19 @@ await startService({
       }),
       unavailableModels: meter.regionBlockedModels,
       executionModels: async () => {
-        const usage = await meter.typicalUsage().catch((err: unknown) => {
-          logger.warn({ err }, '读不到调用记录，节点估价只按价格表');
-          return undefined;
-        });
+        // 开发阶段不参考调用记录（ESTIMATE_FROM_HISTORY）：只按价格表 × 假设的用量估
+        const usage = config.ESTIMATE_FROM_HISTORY
+          ? await meter.typicalUsage().catch((err: unknown) => {
+              logger.warn({ err }, '读不到调用记录，节点估价只按价格表');
+              return undefined;
+            })
+          : undefined;
+        const assumed = {
+          prompt: config.ESTIMATE_NODE_PROMPT_TOKENS,
+          completion: config.ESTIMATE_NODE_COMPLETION_TOKENS,
+        };
         return [...priceBook.current().values()].flatMap((price) =>
-          price.capabilities ? [withNodeRate(price, usage)] : [],
+          price.capabilities ? [withNodeRate(price, usage, assumed)] : [],
         );
       },
     });
