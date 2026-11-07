@@ -53,11 +53,5 @@
 
 ## 4. 实施记录
 
-2026-11-07：
+（过程记录已删减，原文见 git 历史：`git show 32431ae:docs/adr/0017-lightweight-checks.md`。）
 
-- task：`gate.ts` 从 1130 行减到约 220 行，只剩文件解析、浏览器、音视频三类确定检查，不再调模型；`createGate` 只要 harness 和 logger。整体验收只查交付文件齐不齐，只让缺文件的交付节点补一次。删除 `filesForInspection`、`deliveryIntegrityChecks`、`revisionCheck` 和 `GATE_*` 配置。
-- 关卡和交付不齐触发的修复是单轮（`goal: false`），修复提示要求用 `app.check`/ffprobe 自查、只修列出的问题；用户提出的修改仍是持续目标。
-- 方案里的 `checks` 写进节点提示的【交付前自查】；规划员提示改成「自查清单」，负责交付物的节点也要列上要守的用户要求。
-- harness：`preview-service` 拆出 `assemble`（按清单组装运行包）和 `browse`（隔离浏览器检查），关卡 `checkRun` 和自查 `checkLive` 共用；`run-service.liveFiles` 读运行中沙箱的目录。
-- model-gateway：新增 `app.check` 工具，结果写成节点能照着改的话（原因、失败步骤、没检查到的地方）。
-- 限制：同一用户同时只能有一个预览会话（含检查），用户正开着预览或另一个节点正在检查时，`app.check` 会返回「请先停止已有预览」，稍后重试即可。

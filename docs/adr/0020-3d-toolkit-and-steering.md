@@ -38,9 +38,5 @@
 
 ## 4. 实施记录
 
-2026-11-07：
+（过程记录已删减，原文见 git 历史：`git show 32431ae:docs/adr/0020-3d-toolkit-and-steering.md`。）
 
-- 本机重建了沙箱基础镜像和 3D 镜像；`pnpm sandbox:check:3d` 全部通过，含新增的 oasis_blender 导出、snapshot 出图和拼图、check 焊点后无误报开口且 glTF Validator 通过。
-- snapshot 出图用阴影捕捉地面 + 透明背景，再铺到中性浅灰底上（影棚效果，没有地平线）。
-- 本机到 deb.debian.org 太慢（装 Blender 时索引 404），3D 镜像加了可选的 `SANDBOX_APT_MIRROR`（只影响构建）。
-- 未在真实任务里验证：插件把运行中消息挪到当前这一步、导演台新工具条的观感、桌面端 3D 截图批注。
