@@ -6,21 +6,68 @@ import type { TypicalUsage } from '../repo/calls-repo.ts';
 
 export const USD_TO_MICRO = 1_000_000;
 
-/** 一条消息里参与计费的字符数：文字内容、多段内容和工具调用都算上。 */
-function messageChars(message: ChatMessage): number {
+/**
+ * 一张图片（或一段音频、一个文件）按这么多输入 token 估。供应商按尺寸计费，一张大图一两千 token；
+ * 不能按 base64 字符数算：一张 500 KB 的渲染图有 70 万字符，会被估成 45 万 token（2026-11-08 雨夜便利店）。
+ */
+export const MEDIA_TOKENS = 1_500;
+/** 消息里的多媒体片段（OpenAI 兼容格式） */
+const MEDIA_PARTS = new Set([
+  'image_url',
+  'input_image',
+  'input_audio',
+  'video_url',
+  'input_video',
+  'file',
+]);
+
+/** 结构化内容的字符数和其中的多媒体片段数（多媒体不计字符，内嵌的 data: 地址也算一个多媒体） */
+function measure(value: unknown): { chars: number; media: number } {
+  let media = 0;
+  const json = JSON.stringify(value, (_key, part: unknown) => {
+    if (
+      part &&
+      typeof part === 'object' &&
+      MEDIA_PARTS.has(String((part as { type?: unknown }).type))
+    ) {
+      media += 1;
+      return null;
+    }
+    if (typeof part === 'string' && part.length > 1024 && part.startsWith('data:')) {
+      media += 1;
+      return '';
+    }
+    return part;
+  });
+  return { chars: json?.length ?? 0, media };
+}
+
+/** 一条消息里参与计费的字符数和多媒体片段数：文字内容、多段内容和工具调用都算上。 */
+function messageSize(message: ChatMessage): { chars: number; media: number } {
   const { content, tool_calls: toolCalls } = message;
-  const contentChars =
-    typeof content === 'string' ? content.length : content ? JSON.stringify(content).length : 0;
-  return contentChars + (toolCalls ? JSON.stringify(toolCalls).length : 0);
+  const parts =
+    typeof content === 'string'
+      ? { chars: content.length, media: 0 }
+      : content
+        ? measure(content)
+        : { chars: 0, media: 0 };
+  return { chars: parts.chars + (toolCalls ? measure(toolCalls).chars : 0), media: parts.media };
 }
 
 /**
- * 输入 token 数的保守估计：按 1.5 个字符 1 个 token 算（中文接近 1:1，英文约 4:1，宁可多冻结），
- * 每条消息再加 8 个 token 的格式开销。extraChars 是消息以外也要发给模型的内容（如工具定义）。
+ * 输入 token 数的保守估计：文字按 1.5 个字符 1 个 token 算（中文接近 1:1，英文约 4:1，宁可多冻结），
+ * 每条消息再加 8 个 token 的格式开销，每个图片等多媒体片段按 MEDIA_TOKENS。
+ * extraChars 是消息以外也要发给模型的内容（如工具定义）。
  */
 export function estimateInputTokens(messages: readonly ChatMessage[], extraChars = 0): number {
-  const chars = messages.reduce((total, message) => total + messageChars(message), extraChars);
-  return Math.ceil(chars / 1.5) + messages.length * 8;
+  let chars = extraChars;
+  let media = 0;
+  for (const message of messages) {
+    const size = messageSize(message);
+    chars += size.chars;
+    media += size.media;
+  }
+  return Math.ceil(chars / 1.5) + messages.length * 8 + media * MEDIA_TOKENS;
 }
 
 /** 最多可能花多少：全部输入 + 输出写满 max_tokens。至少 1 微美元。 */

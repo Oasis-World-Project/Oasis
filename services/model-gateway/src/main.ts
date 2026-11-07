@@ -140,6 +140,15 @@ await startService({
       logger,
       reconnectMs: config.UPSTREAM_RECONNECT_MS,
     });
+    // 网关中途重启时在途的调用没收尾：启动时和之后每 5 分钟收一次
+    const sweepStale = () =>
+      void meter
+        .sweepStale(config.STALE_CALL_MS)
+        .catch((err: unknown) => logger.warn({ err }, '收尾没收尾的调用失败，下次再试'));
+    const staleTimer = setInterval(sweepStale, 5 * 60_000);
+    staleTimer.unref();
+    app.addHook('onReady', async () => sweepStale());
+    app.addHook('onClose', async () => clearInterval(staleTimer));
     const common = {
       provider,
       meter,

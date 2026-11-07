@@ -79,6 +79,9 @@ export function notConnected(err: unknown, depth = 0): boolean {
   return notConnected(cause, depth + 1);
 }
 
+/** 没收尾的调用的收尾原因 */
+const STALE_ERROR = '调用没有收尾（网关中途重启或连接中断），冻结已退回，没有扣费';
+
 export function createMeter(deps: {
   billing: ServiceClient;
   repo: CallsRepo;
@@ -120,6 +123,35 @@ export function createMeter(deps: {
 
     /** 没产生费用就失败了（如长任务在供应商那边失败）：退回冻结，记下原因 */
     fail: release,
+
+    /**
+     * 收尾没收尾的调用：网关中途重启时，在途的聊天、决策请求既没结算也没退回，调用记录一直停在「运行中」，
+     * 冻结要等过期才回收（2026-11-08 两条）。开始超过 olderThanMs 的，退回冻结、记为失败、不扣费。
+     * 冻结早就过期了，这时已经结算不了，只能按没扣费收尾。
+     */
+    async sweepStale(olderThanMs: number): Promise<number> {
+      const stale = await repo.staleRunning(new Date(Date.now() - olderThanMs));
+      for (const row of stale) {
+        if (!row.holdId) {
+          await repo.finish(row.id, { status: 'failed', error: STALE_ERROR, chargedMicro: 0 });
+          continue;
+        }
+        await release(
+          {
+            id: row.id,
+            holdId: row.holdId,
+            requestId: row.requestId ?? row.id,
+            model: row.model,
+            kind: row.kind,
+            caller: { payerId: row.payerId },
+          },
+          STALE_ERROR,
+        );
+      }
+      if (stale.length)
+        logger.warn({ count: stale.length }, '收尾了没收尾的模型调用（冻结已退回，不扣费）');
+      return stale.length;
+    },
 
     /** 冻结额度并登记调用。额度不够时 billing 返回 402，调用方应直接把错误交出去、不调上游。 */
     async hold(input: {

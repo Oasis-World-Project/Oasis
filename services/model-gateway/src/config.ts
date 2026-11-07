@@ -193,4 +193,13 @@ export const modelGatewayEnv = {
   AVATAR_SWEEP_MS: z.coerce.number().int().min(5_000).default(60_000),
   /** 查不到价格时按这个金额冻结（$0.20） */
   FALLBACK_HOLD_MICRO: z.coerce.number().int().positive().default(200_000),
+  /**
+   * 聊天、决策调用开始多久还没收尾就当作网关中途重启丢下的，退回冻结、记为失败（每 5 分钟查一次）。
+   * 要比冻结有效期（billing HOLD_TTL_MS，默认 10 分钟）加上等网络恢复（UPSTREAM_RECONNECT_MS）更长。
+   */
+  STALE_CALL_MS: z.coerce
+    .number()
+    .int()
+    .min(15 * 60_000)
+    .default(30 * 60_000),
 };

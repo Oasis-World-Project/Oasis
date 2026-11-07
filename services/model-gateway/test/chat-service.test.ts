@@ -54,6 +54,17 @@ openrouter.post('/chat/completions', async (request, reply) => {
   ].join('');
 });
 
+/** 假的生成记录：中断后按生成 ID 查实际花费（美元） */
+const generationCosts = new Map<string, number>();
+const generationLookups: string[] = [];
+openrouter.get('/generation', async (request, reply) => {
+  const { id } = request.query as { id: string };
+  generationLookups.push(id);
+  const cost = generationCosts.get(id);
+  if (cost === undefined) return reply.code(404).send({ error: { message: 'not found' } });
+  return { data: { id, total_cost: cost } };
+});
+
 const started: Parameters<CallsRepo['start']>[0][] = [];
 const finished: CallOutcome[] = [];
 const repo: CallsRepo = {
@@ -61,6 +72,7 @@ const repo: CallsRepo = {
   get: async () => undefined,
   computeForRun: async () => [],
   regionBlockedModels: async () => [],
+  staleRunning: async () => [],
   typicalUsage: async () => ({ tools: new Map(), nodes: new Map(), nodeTokens: null }),
   finish: async (_id, outcome) => void finished.push(outcome),
 };
@@ -85,6 +97,7 @@ beforeAll(async () => {
     defaultMaxTokens: 1000,
     maxOutputTokens: 100_000,
     fallbackHoldMicro: 200_000,
+    generationLookupDelaysMs: [0, 0],
   });
 });
 afterAll(async () => {
@@ -96,6 +109,8 @@ beforeEach(() => {
   started.length = 0;
   finished.length = 0;
   upstreamBodies = [];
+  generationCosts.clear();
+  generationLookups.length = 0;
   upstreamStatus = 200;
   upstreamMessage = 'boom';
   balanceEnough = true;
@@ -349,6 +364,50 @@ describe('一次模型调用', () => {
     await chat.pump(call, response, () => undefined);
     expect(finished[0]).toMatchObject({ status: 'failed' });
     expect(finished[0]?.error).toContain('中断');
+  });
+  it('中断时按生成 ID 向供应商查实际花费结算；查不到才按估算（2026-11-08）', async () => {
+    const interrupted = () =>
+      new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {"id":"gen-1","choices":[{"delta":{"reasoning":"想"}}]}\n\n',
+                ),
+              );
+            },
+            pull(controller) {
+              controller.error(new DOMException('This operation was aborted', 'AbortError'));
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+      );
+    generationCosts.set('gen-1', 0.031);
+    const first = await chat.prepare({
+      caller: { payerId: PAYER },
+      requestId: 'r1',
+      body: request,
+    });
+    await chat.pump(first, interrupted(), () => undefined);
+    expect(finished[0]).toMatchObject({
+      status: 'failed',
+      upstreamCostMicro: 31_000,
+      costSource: 'provider',
+    });
+    expect(generationLookups).toEqual(['gen-1']);
+
+    generationCosts.clear();
+    const second = await chat.prepare({
+      caller: { payerId: PAYER },
+      requestId: 'r2',
+      body: request,
+    });
+    await chat.pump(second, interrupted(), () => undefined);
+    // 两次都查不到：按估算记
+    expect(generationLookups).toEqual(['gen-1', 'gen-1', 'gen-1']);
+    expect(finished[1]).toMatchObject({ status: 'failed', costSource: 'estimate' });
   });
   it('批次预算在冻结前校验，不透传供应商；非流式返回计量金额', async () => {
     await expect(

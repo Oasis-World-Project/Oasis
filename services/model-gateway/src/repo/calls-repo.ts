@@ -1,5 +1,5 @@
 import type { EventEnvelope } from '@oasis/contracts/events';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { calls, outbox } from './schema.ts';
@@ -50,6 +50,8 @@ export interface CallsRepo {
   /** 最近一次聊天、工具或决策调用因「地区不可用」失败的模型（之后没再成功过） */
   regionBlockedModels(): Promise<string[]>;
   typicalUsage(): Promise<TypicalUsage>;
+  /** 很久以前开始、一直没收尾的聊天和决策调用（网关中途重启时在途的请求） */
+  staleRunning(before: Date, limit?: number): Promise<Call[]>;
   computeForRun(runId: string, payerId: string): Promise<Call[]>;
 }
 
@@ -63,6 +65,18 @@ export function createCallsRepo(pool: pg.Pool): CallsRepo {
       const [row] = await db.select().from(calls).where(eq(calls.id, id));
       return row;
     },
+    staleRunning: (before, limit = 100) =>
+      db
+        .select()
+        .from(calls)
+        .where(
+          and(
+            eq(calls.status, 'running'),
+            inArray(calls.kind, ['chat', 'decision']),
+            lt(calls.createdAt, before),
+          ),
+        )
+        .limit(limit),
     computeForRun: (runId, payerId) =>
       db
         .select()

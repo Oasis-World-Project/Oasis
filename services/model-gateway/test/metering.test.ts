@@ -108,3 +108,38 @@ describe('网络短暂断开', () => {
     }
   });
 });
+
+describe('没收尾的调用（2026-11-08）', () => {
+  it('网关中途重启丢下的聊天、决策调用：退回冻结、记为失败、不扣费；只查开始很久的', async () => {
+    const released: string[] = [];
+    const finished: { id: string; outcome: unknown }[] = [];
+    let before: Date | undefined;
+    const rows = [
+      { id: 'c1', holdId: 'h1', requestId: 'r1', model: 'm', kind: 'chat', payerId: 'p' },
+      { id: 'c2', holdId: null, requestId: null, model: 'm', kind: 'decision', payerId: 'p' },
+    ];
+    const meter = createMeter({
+      billing: {
+        json: async (_method: string, path: string) => {
+          released.push(path);
+          return {};
+        },
+      } as unknown as ServiceClient,
+      repo: {
+        staleRunning: async (at: Date) => {
+          before = at;
+          return rows;
+        },
+        finish: async (id: string, outcome: unknown) => void finished.push({ id, outcome }),
+      } as unknown as CallsRepo,
+      logger: pino({ level: 'silent' }),
+    });
+    expect(await meter.sweepStale(30 * 60_000)).toBe(2);
+    expect(Date.now() - before!.getTime()).toBeGreaterThanOrEqual(30 * 60_000);
+    expect(released).toEqual(['/internal/holds/h1/release']);
+    expect(finished).toEqual([
+      { id: 'c1', outcome: expect.objectContaining({ status: 'failed', chargedMicro: 0 }) },
+      { id: 'c2', outcome: expect.objectContaining({ status: 'failed', chargedMicro: 0 }) },
+    ]);
+  });
+});

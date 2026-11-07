@@ -3,6 +3,7 @@ import {
   actualCostMicro,
   estimateHoldMicro,
   estimateInputTokens,
+  MEDIA_TOKENS,
   videoSecondRate,
   withNodeRate,
 } from '../src/service/pricing.ts';
@@ -36,6 +37,27 @@ describe('冻结金额估算', () => {
     ];
     expect(estimateInputTokens(withTools)).toBeGreaterThan(estimateInputTokens(messages) + 60);
     expect(estimateInputTokens(messages, 150)).toBe(estimateInputTokens(messages) + 100);
+  });
+  it('图片按固定 token 数估，不按 base64 字符数（2026-11-08：一张图曾被估成 45 万 token）', () => {
+    const image = (url: string) => ({
+      role: 'user' as const,
+      content: [
+        { type: 'text' as const, text: '看看这张渲染图' },
+        { type: 'image_url' as const, image_url: { url } },
+      ],
+    });
+    const big = image(`data:image/png;base64,${'A'.repeat(700_000)}`);
+    const small = image('https://example.com/a.png');
+    expect(estimateInputTokens([big])).toBe(estimateInputTokens([small]));
+    expect(estimateInputTokens([big])).toBeLessThan(MEDIA_TOKENS + 100);
+    expect(estimateInputTokens([big])).toBeGreaterThan(MEDIA_TOKENS);
+    // 工具结果里内嵌的 data: 地址也算一张图
+    const tool = {
+      role: 'tool' as const,
+      tool_call_id: 't',
+      content: [{ type: 'text' as const, text: `data:image/png;base64,${'B'.repeat(5_000)}` }],
+    };
+    expect(estimateInputTokens([tool])).toBeLessThan(MEDIA_TOKENS + 100);
   });
   it('再便宜也至少冻结 1 微美元', () => {
     expect(estimateHoldMicro({ prompt: 0, completion: 0 }, messages, 10)).toBe(1);

@@ -4,13 +4,12 @@ import type { DecisionRequest } from '@oasis/contracts/model-gateway';
 import { HttpError } from '@oasis/service-kit';
 import type { ModelPrice, ProviderClient } from '../adapters/openrouter.ts';
 import type { Caller, Meter } from './metering.ts';
-import { USD_TO_MICRO, type Usage } from './pricing.ts';
+import { MEDIA_TOKENS as IMAGE_TOKENS, USD_TO_MICRO, type Usage } from './pricing.ts';
 import { z } from 'zod';
 import type { ChatService } from './chat-service.ts';
 
-/** 输入 token 的保守估计：与聊天一致，按 1.5 个字符 1 个 token；图片按 1,500 token 一张 */
+/** 输入 token 的保守估计：与聊天一致，按 1.5 个字符 1 个 token；图片按 MEDIA_TOKENS 一张 */
 const CHARS_PER_TOKEN = 1.5;
-const IMAGE_TOKENS = 1_500;
 
 function estimateDecisionTokens(body: DecisionRequest): number {
   const state = typeof body.state === 'string' ? [body.state] : body.state;
