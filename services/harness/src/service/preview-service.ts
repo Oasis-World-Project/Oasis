@@ -3,6 +3,7 @@ import { BrowserTestPlan, type BrowserTestResult } from '@oasis/contracts/ui-tes
 import { createWebsiteFetch, websiteUrl } from '../executor/website-fetch.ts';
 import { ApplicationBundle, ApplicationSpec } from '@oasis/contracts/canvas';
 import {
+  type ApplicationCheckResult,
   PreviewQuoteBody,
   type PreviewInputBody,
   type PreviewSessionBody,
@@ -24,6 +25,78 @@ function failureReason(report: BrowserTestResult['report']): string {
     ...report.diagnostics.map((message) => `页面诊断：${message}`),
   ];
   return parts.length ? parts.join('；') : '浏览器交互断言或页面诊断未通过';
+}
+
+type Failure = { passed: false; reason: string; frameCaptured: false };
+const fail = (reason: string): Failure => ({ passed: false, reason, frameCaptured: false });
+
+/**
+ * 按清单把 out/ 里的网页成果组装成运行包（关卡和节点自查共用）：清单、入口、大小、测试计划不合格时
+ * 直接返回没通过的原因，不启动浏览器。
+ */
+async function assemble(
+  manifestPath: string,
+  outputs: { path: string; size: number }[],
+  read: (path: string) => Promise<Buffer>,
+) {
+  let description: unknown;
+  try {
+    description = JSON.parse((await read(manifestPath)).toString('utf8'));
+  } catch {
+    return fail('应用清单不是 JSON');
+  }
+  const parsed = ApplicationSpec.safeParse(description);
+  if (!parsed.success)
+    return fail(
+      '应用清单字段错误：' +
+        parsed.error.issues
+          .map((issue) => `${issue.path.join('.') || '清单'}：${issue.message}`)
+          .join('；') +
+        `。清单位于 out/${manifestPath}；root 应为相对 out/ 的目录 ${manifestPath.slice(0, manifestPath.lastIndexOf('/'))}，entry 相对 root。实际契约见 in/.oasis-formats.json。`,
+    );
+  if (manifestPath !== `${parsed.data.root}/oasis-app.json`)
+    return fail(
+      `清单位于 out/${manifestPath}，与 root=${parsed.data.root} 不一致；root 相对 out/，entry 相对 root。`,
+    );
+  const spec = parsed.data;
+  const members = outputs.filter((file) => file.path.startsWith(`${spec.root}/`) && file.size > 0);
+  if (
+    members.length > 1000 ||
+    members.reduce((sum, file) => sum + file.size, 0) > 100 * 1024 * 1024 ||
+    !members.some((file) => file.path === `${spec.root}/${spec.entry}`)
+  )
+    return fail('应用文件数量、大小或入口不合格');
+  const bundle = ApplicationBundle.safeParse({
+    spec,
+    files: await Promise.all(
+      members.map(async (file) => ({
+        path: file.path.slice(spec.root.length + 1),
+        contentBase64: (await read(file.path)).toString('base64'),
+      })),
+    ),
+  });
+  if (!bundle.success) return fail('运行包包含不安全路径或格式');
+  const testFile = members.find((file) => file.path === `${spec.root}/oasis-test.json`);
+  let plan: BrowserTestPlan | undefined;
+  if (testFile) {
+    try {
+      plan = BrowserTestPlan.parse(JSON.parse((await read(testFile.path)).toString('utf8')));
+    } catch {
+      return fail('oasis-test.json 测试计划不合法');
+    }
+  }
+  return {
+    bundle: bundle.data,
+    plan,
+    inputSha256: createHash('sha256').update(JSON.stringify(bundle.data)).digest('hex'),
+    application: {
+      manifestPath,
+      spec,
+      files: members.map((file) => file.path),
+      ...(plan ? { plan } : {}),
+      network: 'none' as const,
+    },
+  };
 }
 
 export function createPreviewService(deps: {
@@ -353,14 +426,14 @@ export function createPreviewService(deps: {
       if (!row) throw new HttpError(404, 'preview_not_found', '没有这个预览');
       return body(['stopped', 'expired', 'failed'].includes(row.status) ? row : await stopRow(row));
     },
-    /** 节点关卡使用同一隔离浏览器真正打开本次运行包；测试会话同样有冻结、审计与回收。 */
+    /** 节点关卡：打开本次运行交出的网页包；报告留档，供用户下载。 */
     async checkRun(input: {
       runId: string;
       payerId: string;
       taskId: string;
       /** 用户停止/取消节点时 task 断开请求：立即回收浏览器，不再等结果 */
       signal?: AbortSignal;
-    }) {
+    }): Promise<ApplicationCheckResult> {
       if (!deps.runs) throw new HttpError(503, 'check_unavailable', '浏览器检查暂不可用');
       const run = await deps.runs.get(input.runId);
       if (
@@ -371,84 +444,100 @@ export function createPreviewService(deps: {
         throw new HttpError(404, 'run_not_found', '没有这次运行');
       const manifestPath = run.outputs.find((file) => file.path.endsWith('/oasis-app.json'))?.path;
       if (!manifestPath) throw new HttpError(422, 'manifest_missing', '没有应用清单');
-      const manifest = await deps.runs.file(input.runId, manifestPath);
-      let description: unknown;
-      try {
-        description = JSON.parse(manifest.content.toString('utf8'));
-      } catch {
-        return { passed: false, reason: '应用清单不是 JSON', frameCaptured: false };
-      }
-      const parsed = ApplicationSpec.safeParse(description);
-      if (!parsed.success)
-        return {
-          passed: false,
-          reason:
-            '应用清单字段错误：' +
-            parsed.error.issues
-              .map((issue) => `${issue.path.join('.') || '清单'}：${issue.message}`)
-              .join('；') +
-            `。清单位于 out/${manifestPath}；root 应为相对 out/ 的目录 ${manifestPath.slice(0, manifestPath.lastIndexOf('/'))}，entry 相对 root。实际契约见 in/.oasis-formats.json。`,
-          frameCaptured: false,
-        };
-      if (manifestPath !== `${parsed.data.root}/oasis-app.json`)
-        return {
-          passed: false,
-          reason: `清单位于 out/${manifestPath}，与 root=${parsed.data.root} 不一致；root 相对 out/，entry 相对 root。`,
-          frameCaptured: false,
-        };
-      const spec = parsed.data;
-      const members = run.outputs.filter(
-        (file) => file.path.startsWith(`${spec.root}/`) && file.size > 0,
-      );
-      if (
-        members.length > 1000 ||
-        members.reduce((sum, file) => sum + file.size, 0) > 100 * 1024 * 1024 ||
-        !members.some((file) => file.path === `${spec.root}/${spec.entry}`)
-      )
-        return { passed: false, reason: '应用文件数量、大小或入口不合格', frameCaptured: false };
-      const assembled: ApplicationBundle = {
-        spec,
-        files: await Promise.all(
-          members.map(async (file) => ({
-            path: file.path.slice(spec.root.length + 1),
-            contentBase64: (await deps.runs!.file(input.runId, file.path)).content.toString(
-              'base64',
-            ),
-          })),
-        ),
-      };
-      const bundle = ApplicationBundle.safeParse(assembled);
-      if (!bundle.success)
-        return { passed: false, reason: '运行包包含不安全路径或格式', frameCaptured: false };
-      const access = { artifactId: input.runId, ownerId: input.payerId, taskId: input.taskId };
-      const testFile = members.find((file) => file.path === `${spec.root}/oasis-test.json`);
-      let plan: BrowserTestPlan | undefined;
-      if (testFile) {
-        try {
-          plan = BrowserTestPlan.parse(
-            JSON.parse((await deps.runs.file(input.runId, testFile.path)).content.toString('utf8')),
-          );
-        } catch {
-          return { passed: false, reason: 'oasis-test.json 测试计划不合法', frameCaptured: false };
-        }
-      }
-      const inputSha256 = createHash('sha256').update(JSON.stringify(bundle.data)).digest('hex');
-      const application = {
+      const prepared = await assemble(
         manifestPath,
-        spec,
-        files: members.map((file) => file.path),
-        ...(plan ? { plan } : {}),
-        network: 'none' as const,
+        run.outputs,
+        async (path) => (await deps.runs!.file(input.runId, path)).content,
+      );
+      if ('reason' in prepared) return prepared;
+      const access = { artifactId: input.runId, ownerId: input.payerId, taskId: input.taskId };
+      const checked = await this.browse(access, prepared.bundle, prepared.plan, input.signal);
+      if (!('report' in checked)) return checked;
+      const { application, inputSha256 } = prepared;
+      if (deps.store)
+        await deps.store.put(
+          `runs/${input.runId}/application-check.json`,
+          Buffer.from(
+            JSON.stringify({
+              report: checked.report,
+              screenshots: checked.steps,
+              application,
+              inputSha256,
+              opening: checked.opening,
+            }),
+          ),
+          'application/json',
+        );
+      return {
+        passed: checked.report.passed,
+        reason: checked.report.passed ? null : failureReason(checked.report),
+        frameCaptured: true,
+        report: checked.report,
+        application,
+        inputSha256,
+        screenshots: [
+          ...(checked.opening ? [{ name: 'opening.jpg', base64: checked.opening }] : []),
+          ...checked.steps,
+        ],
       };
+    },
+    /**
+     * 节点自查（ADR 0017 的 app.check）：直接读运行中沙箱里 out/<dir> 的当前文件，
+     * 用和关卡同一套隔离浏览器检查跑一遍；不留档，结果当场交回节点。
+     */
+    async checkLive(input: {
+      runId: string;
+      payerId: string;
+      taskId: string;
+      dir: string;
+      signal?: AbortSignal;
+    }): Promise<ApplicationCheckResult> {
+      if (!deps.runs) throw new HttpError(503, 'check_unavailable', '浏览器检查暂不可用');
+      const files = await deps.runs.liveFiles(input);
+      const prefixed = new Map(files.map((file) => [`${input.dir}/${file.path}`, file.content]));
+      const manifestPath = `${input.dir}/oasis-app.json`;
+      if (!prefixed.has(manifestPath))
+        return fail(`out/${input.dir} 里没有 oasis-app.json；实际契约见 in/.oasis-formats.json`);
+      const prepared = await assemble(
+        manifestPath,
+        [...prefixed].map(([path, content]) => ({ path, size: content.length })),
+        async (path) => prefixed.get(path)!,
+      );
+      if ('reason' in prepared) return prepared;
+      // 每次自查用新的预览记录：不和用户正在看的预览、关卡留档混在一起
+      const access = { artifactId: randomUUID(), ownerId: input.payerId, taskId: input.taskId };
+      const checked = await this.browse(access, prepared.bundle, prepared.plan, input.signal);
+      if (!('report' in checked)) return checked;
+      return {
+        passed: checked.report.passed,
+        reason: checked.report.passed ? null : failureReason(checked.report),
+        frameCaptured: true,
+        report: checked.report,
+      };
+    },
+    /** 在隔离浏览器里打开网页包、按测试计划操作；检查程序自己出错时抛出，页面问题如实返回 */
+    async browse(
+      access: Access,
+      bundle: ApplicationBundle,
+      plan: BrowserTestPlan | undefined,
+      signal?: AbortSignal,
+    ): Promise<
+      | Failure
+      | {
+          report: BrowserTestResult['report'];
+          steps: BrowserTestResult['screenshots'];
+          opening?: string;
+        }
+    > {
       // 不设时限（2026-11-04 用户决定）：页面多慢都等，由控制端按页面是否安定下结论；
       // 只有检查得出结果、浏览器进程退出，或用户停止/取消节点时才结束。
       const stopOnAbort = () => void this.stop(access).catch(() => undefined);
-      input.signal?.addEventListener('abort', stopOnAbort, { once: true });
+      signal?.addEventListener('abort', stopOnAbort, { once: true });
       let renewal: NodeJS.Timeout | undefined;
       let previewId: string | undefined;
       try {
-        input.signal?.throwIfAborted();
-        const session = await this.start(access, bundle.data, deps.maxMs, 'application-check');
+        signal?.throwIfAborted();
+        const session = await this.start(access, bundle, deps.maxMs, 'application-check');
         previewId = session.id;
         checking.add(session.id);
         // 算力按窗口冻结；检查超过一个窗口就结清上一段、再冻结下一段（不是时限）
@@ -462,7 +551,7 @@ export function createPreviewService(deps: {
         const box = live.get(session.id)!;
         let opening: { jpegBase64: string } | undefined;
         for (;;) {
-          input.signal?.throwIfAborted();
+          signal?.throwIfAborted();
           // 检查程序自己的浏览器没了：这是检查未完成，不是成品失败
           if (!box.alive())
             throw new HttpError(
@@ -493,37 +582,22 @@ export function createPreviewService(deps: {
             };
         result.report.diagnostics = box.diagnostics();
         if (result.report.diagnostics.length) result.report.passed = false;
-        if (deps.store)
-          await deps.store.put(
-            `runs/${input.runId}/application-check.json`,
-            Buffer.from(
-              JSON.stringify({ ...result, application, inputSha256, opening: opening?.jpegBase64 }),
-            ),
-            'application/json',
-          );
         return {
-          passed: result.report.passed,
-          reason: result.report.passed ? null : failureReason(result.report),
-          frameCaptured: true,
           report: result.report,
-          application,
-          inputSha256,
-          screenshots: [
-            ...(opening ? [{ name: 'opening.jpg', base64: opening.jpegBase64 }] : []),
-            ...result.screenshots,
-          ],
+          steps: result.screenshots,
+          ...(opening ? { opening: opening.jpegBase64 } : {}),
         };
       } catch (err) {
-        if (input.signal?.aborted) throw new HttpError(499, 'check_aborted', '检查已被停止');
+        if (signal?.aborted) throw new HttpError(499, 'check_aborted', '检查已被停止');
         if (err instanceof Error && /应用没有在回环地址|首页返回|net::ERR_/.test(err.message))
-          return { passed: false, reason: err.message, frameCaptured: false };
+          return fail(err.message);
         throw err;
       } finally {
         clearInterval(renewal);
-        input.signal?.removeEventListener('abort', stopOnAbort);
+        signal?.removeEventListener('abort', stopOnAbort);
         if (previewId) checking.delete(previewId);
         await this.stop(access).catch((err: unknown) =>
-          deps.logger.warn({ err, runId: input.runId }, '浏览器检查结束后回收失败'),
+          deps.logger.warn({ err, artifactId: access.artifactId }, '浏览器检查结束后回收失败'),
         );
       }
     },

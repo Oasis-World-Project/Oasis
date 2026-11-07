@@ -1171,6 +1171,7 @@ describe('工具目录', () => {
     const byKey = Object.fromEntries(list.map((t) => [t.key, t]));
     expect(Object.keys(byKey)).toEqual([
       'website.test',
+      'app.check',
       'android.test',
       '3d.render',
       '3d.generate',

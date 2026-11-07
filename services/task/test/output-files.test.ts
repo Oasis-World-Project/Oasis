@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '../src/repo/task-store.ts';
 import {
-  deliveryIntegrityChecks,
   deliveryManifest,
-  filesForInspection,
   selectDeliverables,
   missingDeliveryFiles,
 } from '../src/service/output-files.ts';
@@ -31,18 +29,6 @@ describe('最终文件清单', () => {
       '最终交付缺少文件 out/素材包/*',
     ]);
     expect(missingDeliveryFiles(outputs, ['final.mp4', '素材包/**'])).toEqual([]);
-  });
-  it('关卡按期望与交付文件的并集选取，脚本不挤占正文；旧节点不改变行为', () => {
-    const outputs = [
-      { path: '工作/build.py', size: 90000 },
-      { path: '报告.docx', size: 100 },
-      { path: '配套.pdf', size: 100 },
-    ];
-    expect(
-      filesForInspection(outputs, [{ pattern: '*.docx' }], ['*.pdf']).map((f) => f.path),
-    ).toEqual(['报告.docx', '配套.pdf']);
-    expect(filesForInspection(outputs, [])).toBe(outputs);
-    expect(filesForInspection(outputs, ['不存在.md'])).toEqual([]);
   });
   it('按独立 deliver 选择实际文件，保留配套 PDF，排除草稿和空文件；不会修改节点产出', () => {
     const nodes = [node(['最终/*.docx', '最终/*.pdf'])];
@@ -74,33 +60,5 @@ describe('最终文件清单', () => {
     expect(selectDeliverables(deliverables, [appNode])[0]?.files?.map((f) => f.path)).toEqual(
       outputs.slice(0, 3).map((f) => f.path),
     );
-    expect(filesForInspection(outputs, [], ['site/*']).map((f) => f.path)).toEqual([
-      'site/oasis-app.json',
-      'site/index.html',
-    ]);
-  });
-});
-
-describe('交付说明核验的证据', () => {
-  it('说明文档和结构化数据文件都作为证据，代码与媒体不算', () => {
-    const outputs = [
-      'audit/验收报告.md',
-      'audit/oasis-test.json',
-      'audit/raw.jsonl',
-      'data/表.csv',
-      'cfg.yaml',
-      'site/index.html',
-      'site/app.js',
-      'cover.png',
-    ].map((path) => ({ path, size: 10 }));
-    const [check] = deliveryIntegrityChecks(outputs);
-    expect(typeof check === 'object' ? check.files : undefined).toEqual([
-      'audit/验收报告.md',
-      'audit/oasis-test.json',
-      'audit/raw.jsonl',
-      'data/表.csv',
-      'cfg.yaml',
-    ]);
-    expect(deliveryIntegrityChecks([{ path: 'site/index.html', size: 10 }])).toEqual([]);
   });
 });

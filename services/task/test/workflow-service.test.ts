@@ -350,20 +350,11 @@ function runBody(id: string, status: string, extra: Record<string, unknown> = {}
 let gateResults: (string[] | GateResult | 'throw')[] = [];
 let gateWaits: (Promise<void> | undefined)[] = [];
 const gateSignals: (AbortSignal | undefined)[] = [];
-const gateCalls: { runId: string; checks: string[]; memo?: Record<string, unknown> }[] = [];
+const gateCalls: { runId: string; expects: unknown[] }[] = [];
 const gate = {
-  async check(input: {
-    runs: { runId: string }[];
-    checks: string[];
-    signal?: AbortSignal;
-    memo?: Record<string, unknown>;
-  }) {
+  async check(input: { runId: string; expects: unknown[]; signal?: AbortSignal }) {
     gateSignals.push(input.signal);
-    gateCalls.push({
-      runId: input.runs[0]?.runId ?? '',
-      checks: input.checks,
-      ...(input.memo ? { memo: input.memo } : {}),
-    });
+    gateCalls.push({ runId: input.runId, expects: input.expects });
     await gateWaits.shift();
     const next = gateResults.shift() ?? [];
     if (next === 'throw') throw new Error('关卡断了');
@@ -466,6 +457,7 @@ interface Submitted {
   prompt: string;
   inputsFrom: { runId: string; as: string }[];
   continueFrom?: string;
+  goal?: boolean;
 }
 const runsOf = (key: string, task: { nodes: { id: string; key: string }[] }) => {
   const nodeId = task.nodes.find((n) => n.key === key)?.id;
@@ -661,6 +653,8 @@ describe('出口关卡', () => {
     expect(rework.runId).not.toBe(first.runId);
     expect(rework.continueFrom).toBe(first.runId);
     expect(rework.prompt).toContain('- 缺少文件 out/*.md');
+    // 修复是单轮的，跑完回到关卡（ADR 0017）
+    expect(rework.goal).toBeFalsy();
     expect(await statusOf(task.id)).toMatchObject({ A: 'running', B: 'waiting' });
 
     await finish(rework.runId, 'succeeded', { outputs: [{ path: 'a.md', size: 3 }] });
@@ -789,7 +783,7 @@ describe('讨论节点', () => {
     expect(summary.prompt).toContain('第 1 轮 乙：我觉得要简洁');
 
     await finish(summary.runId, 'succeeded', { outputs: [{ path: '讨论结论.md', size: 10 }] });
-    expect(gateCalls).toEqual([{ runId: summary.runId, checks: ['给出明确建议'] }]);
+    expect(gateCalls.map((c) => c.runId)).toEqual([summary.runId]);
     const detail = await service.get(OWNER, task.id);
     const d = detail.nodes.find((n) => n.key === 'D');
     expect(d?.status).toBe('succeeded');
@@ -1315,77 +1309,35 @@ describe('整体验收（从任务单来的任务）', () => {
     return service.get(OWNER, task.id);
   };
 
-  it('最终验收未返回时的并发对账不会重发判断', async () => {
+  it('交付文件不齐：只让缺文件的交付节点接着原会话补一次，补齐后才完成', async () => {
     const task = await start();
     await finish(runOf('home', task).runId, 'succeeded', {
-      outputs: [{ path: 'home.md', size: 9 }],
-    });
-    let release!: () => void;
-    gateWaits = [
-      undefined,
-      new Promise<void>((resolve) => {
-        release = resolve;
-      }),
-    ];
-    const pending = finish(runOf('poster', task).runId, 'succeeded', {
-      outputs: [{ path: 'poster.md', size: 9 }],
-    });
-    const overlaps: Promise<void>[] = [];
-    try {
-      await vi.waitFor(() => expect(gateCalls).toHaveLength(3));
-      overlaps.push(service.reconcile(0), service.reconcile(0));
-      await new Promise((resolve) => setImmediate(resolve));
-      expect(gateCalls).toHaveLength(3);
-    } finally {
-      release();
-    }
-    await Promise.all([pending, ...overlaps]);
-    expect((await service.get(OWNER, task.id)).status).toBe('succeeded');
-    expect(gateCalls).toHaveLength(3);
-  });
-
-  it('整体验收未满足：原会话修复，全部通过后才完成', async () => {
-    const task = await start();
-    gateResults = [[], [], ['不超过 80 字']]; // 两个节点各自的关卡通过；整体验收有一条没满足
-    await finish(runOf('home', task).runId, 'succeeded', {
-      outputs: [{ path: '首页.md', size: 9 }],
+      outputs: [{ path: '首页.txt', size: 9 }],
     });
     await finish(runOf('poster', task).runId, 'succeeded', {
       outputs: [{ path: '海报.md', size: 9 }],
     });
     const detail = await service.get(OWNER, task.id);
-    expect(detail).toMatchObject({
-      status: 'running',
-      finishedAt: null,
-      acceptance: { unmet: ['不超过 80 字'] },
-    });
-    for (const key of ['home', 'poster'])
-      expect(runOf(key, task).continueFrom).toBe(runsOf(key, task)[0]?.runId);
-    expect(detail.deliveryFiles?.map((f) => [f.deliverable, f.path])).toEqual([
-      ['首页文案', '首页.md'],
-      ['海报文案', '海报.md'],
-    ]);
-    expect(gateCalls.at(-1)).toEqual({
-      runId: runsOf('home', task)[0]!.runId,
-      checks: [
-        '语气温馨',
-        '不超过 80 字',
-        expect.objectContaining({ id: 'delivery-contents', files: ['首页.md', '海报.md'] }),
-      ],
-    });
+    expect(detail).toMatchObject({ status: 'running', finishedAt: null });
+    expect(detail.acceptance?.unmet).toContain('最终交付缺少文件 out/*.md');
+    expect(runOf('home', task).continueFrom).toBe(runsOf('home', task)[0]?.runId);
+    expect(runOf('home', task).goal).toBeFalsy();
+    expect(runOf('home', task).prompt).toContain('整体验收发现交付文件不齐');
+    expect(runsOf('poster', task)).toHaveLength(1);
     expect(events.map((e) => (e.data as { status: string }).status)).toEqual([
       'running',
       'accepting',
       'running',
     ]);
-    for (const key of ['home', 'poster'])
-      await finish(runOf(key, task).runId, 'succeeded', {
-        outputs: [{ path: key + '.md', size: 9 }],
-      });
+    await finish(runOf('home', task).runId, 'succeeded', {
+      outputs: [{ path: '首页.md', size: 9 }],
+    });
     expect(await service.get(OWNER, task.id)).toMatchObject({
       status: 'succeeded',
       acceptance: { unmet: [] },
     });
+    // 整体验收不再调关卡（不对照任务单逐条打分）
+    expect(gateCalls).toHaveLength(3);
   });
 
   it('修改在原任务里接着原会话做：不新建任务、不重新规划，附件并进素材，下游跟着更新', async () => {
@@ -1438,15 +1390,8 @@ describe('整体验收（从任务单来的任务）', () => {
     });
     expect(await service.get(OWNER, task.id)).toMatchObject({ status: 'succeeded' });
     expect((await service.list(OWNER)).map((t) => [t.id, t.revising])).toEqual([[task.id, false]]);
-    // 修改轮的节点检查和整体验收只查这次的修改意见，不再把原任务单重查一遍
-    const revisionCalls = gateCalls.filter((c) =>
-      [runOf('home', task).runId, runOf('poster', task).runId].includes(c.runId),
-    );
-    expect(revisionCalls.length).toBeGreaterThanOrEqual(3);
-    for (const call of revisionCalls) {
-      expect(JSON.stringify(call.checks)).toContain('标题改短');
-      expect(JSON.stringify(call.checks)).not.toContain('语气温馨');
-    }
+    // 用户的修改是一轮新工作，照常用持续目标
+    expect(runsOf('home', task).find((r) => r.continueFrom === firstHome)?.goal).toBe(true);
     expect((await service.get(OWNER, task.id)).acceptance).not.toHaveProperty('revision');
     // 正在改的时候不能再发起修改
     await service.revise(task.id, { ownerId: OWNER, request: '再改', materials: [] });
@@ -1459,75 +1404,21 @@ describe('整体验收（从任务单来的任务）', () => {
     ).toBe(409);
   });
 
-  it('负责交付物的节点不重复查任务单（紧接着的整体验收逐条核对），其他节点照常查', async () => {
-    const task = await createPlanned({
-      ownerId: OWNER,
-      materials: [],
-      payerId: OWNER,
-      title: '小木屋首页',
-      brief: 'b',
-      sheet: {
-        title: '小木屋首页',
-        deliverables: [{ name: '首页文案', form: 'Markdown' }],
-        criteria: ['语气温馨', '不超过 80 字'],
-        style: [],
-        budgetMicro: null,
-        assumptions: [],
-        materials: [],
-      },
-    });
-    const planner = submitted.find((s) => !s.nodeId) as { runId: string };
-    const check = (id: string, req: string) => ({
-      id,
-      text: 'x',
-      requirementIds: [req],
-      files: [],
-    });
-    plans.set(
-      planner.runId,
-      JSON.stringify({
-        nodes: [
-          { ...work('draft'), deliver: undefined, checks: [check('c1', 'criteria:0')] },
-          { ...work('home'), checks: [check('c2', 'criteria:1')] },
-        ],
-        edges: [{ from: 'draft', to: 'home' }],
-        deliverables: { 首页文案: 'home' },
-      }),
-    );
-    await finish(planner.runId, 'succeeded');
-    const detail = await service.get(OWNER, task.id);
-    await finish(runOf('draft', detail).runId, 'succeeded', {
-      outputs: [{ path: 'draft.md', size: 9 }],
-    });
-    await finish(runOf('home', detail).runId, 'succeeded', {
-      outputs: [{ path: 'home.md', size: 9 }],
-    });
-    const [draftCall, homeCall, acceptanceCall] = gateCalls;
-    expect(JSON.stringify(draftCall?.checks)).toContain('语气温馨');
-    expect(JSON.stringify(homeCall?.checks)).not.toContain('不超过 80 字');
-    expect(acceptanceCall?.checks).toEqual(expect.arrayContaining(['语气温馨', '不超过 80 字']));
-  });
-
-  it('整体验收改过一次仍没满足：带着没满足项交付，不再退回、不停下', async () => {
+  it('交付文件补过一次仍不齐：带着记录交付，不再退回、不停下', async () => {
     const task = await start();
-    gateResults = [[], [], ['不超过 80 字'], [], [], ['不超过 80 字']];
-    for (const key of ['home', 'poster'])
-      await finish(runOf(key, task).runId, 'succeeded', {
-        outputs: [{ path: key + '.md', size: 9 }],
-      });
-    expect((await service.get(OWNER, task.id)).status).toBe('running');
-    for (const key of ['home', 'poster'])
-      await finish(runOf(key, task).runId, 'succeeded', {
-        outputs: [{ path: key + '.md', size: 9 }],
+    await finish(runOf('poster', task).runId, 'succeeded', {
+      outputs: [{ path: 'poster.md', size: 9 }],
+    });
+    for (let i = 0; i < 2; i++)
+      await finish(runOf('home', task).runId, 'succeeded', {
+        outputs: [{ path: 'home.txt', size: 9 }],
       });
     const done = await service.get(OWNER, task.id);
-    expect(done).toMatchObject({
-      status: 'succeeded',
-      attention: null,
-      acceptance: { unmet: ['不超过 80 字'] },
-    });
+    expect(done).toMatchObject({ status: 'succeeded', attention: null });
+    expect(done.acceptance?.unmet).toContain('最终交付缺少文件 out/*.md');
     expect(done.acceptance).not.toHaveProperty('repairs');
-    for (const key of ['home', 'poster']) expect(runsOf(key, task)).toHaveLength(2);
+    expect(runsOf('home', task)).toHaveLength(2);
+    expect(runsOf('poster', task)).toHaveLength(1);
   });
 
   it('跳过失败节点不能让缺文件的整体验收成功', async () => {
@@ -1547,9 +1438,8 @@ describe('整体验收（从任务单来的任务）', () => {
 
   it('最终修复沿依赖顺序推进，下游收到上游最新产物且沿用自己的原会话', async () => {
     const task = await start(['两份文案一致'], [{ from: 'home', to: 'poster' }]);
-    gateResults = [[], [], ['两份文案一致']];
     await finish(runOf('home', task).runId, 'succeeded', {
-      outputs: [{ path: 'home.md', size: 9 }],
+      outputs: [{ path: 'home.txt', size: 9 }],
     });
     const oldPoster = runOf('poster', task).runId;
     await finish(oldPoster, 'succeeded', { outputs: [{ path: 'poster.md', size: 9 }] });
@@ -1567,25 +1457,6 @@ describe('整体验收（从任务单来的任务）', () => {
     expect((await service.get(OWNER, task.id)).status).toBe('succeeded');
   });
 
-  it('整体验收没检查到也照常交付，不重做作品、不停下，没检查到的记在验收记录里', async () => {
-    const task = await start();
-    gateResults = [[], [], { unmet: [], unchecked: ['检查服务不可用'] }];
-    const count = () => submitted.length;
-    for (const key of ['home', 'poster'])
-      await finish(runOf(key, task).runId, 'succeeded', {
-        outputs: [{ path: key + '.md', size: 9 }],
-      });
-    const before = count();
-    const done = await service.get(OWNER, task.id);
-    expect(done).toMatchObject({
-      status: 'succeeded',
-      attention: null,
-      acceptance: { unmet: [], unchecked: ['检查服务不可用'] },
-    });
-    expect(done.finishedAt).not.toBeNull();
-    expect(count()).toBe(before);
-  });
-
   it('节点没检查到：直接完成、下游开跑，提醒里写明没检查到', async () => {
     const task = await create(['A', 'B'], [['A', 'B']]);
     gateResults = [
@@ -1600,21 +1471,6 @@ describe('整体验收（从任务单来的任务）', () => {
     expect(a.warning).toBe('没检查到：验收点检查没做完：连不上模型服务商（网络中断或超时）');
     expect(runsOf('A', task)).toHaveLength(1);
     expect(runsOf('B', task)).toHaveLength(1);
-  });
-
-  it('验收中途断了：任务停在验收中，对账时重新验收', async () => {
-    const task = await start();
-    gateResults = [[], [], 'throw'];
-    await finish(runOf('home', task).runId, 'succeeded', { outputs: [{ path: 'a.md', size: 1 }] });
-    await finish(runOf('poster', task).runId, 'succeeded', {
-      outputs: [{ path: 'b.md', size: 1 }],
-    });
-    expect((await service.get(OWNER, task.id)).status).toBe('accepting');
-    await service.reconcile(0);
-    expect(await service.get(OWNER, task.id)).toMatchObject({
-      status: 'succeeded',
-      acceptance: { unmet: [] },
-    });
   });
 });
 

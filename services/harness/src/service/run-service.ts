@@ -44,6 +44,7 @@ import { startRunLease } from './run-lease.ts';
 import type { Executor, Sandbox } from '../executor/executor.ts';
 import {
   archiveFile,
+  extractFiles,
   packFiles,
   packStreams,
   readLimited,
@@ -950,6 +951,23 @@ export function createRunService(deps: {
         Boolean(row.sessionKey) ||
           Boolean(await executor.workspaceExists?.(row.sessionId ?? row.id)),
       );
+    },
+    /**
+     * 运行中沙箱里 out/<dir> 的当前文件（节点自查 app.check 用，ADR 0017）：只给这次运行的付款人和任务，
+     * 运行结束后读不到（成果以归档为准）。
+     */
+    liveFiles: async (input: { runId: string; payerId: string; taskId: string; dir: string }) => {
+      const row = await owned(input.runId);
+      if (row.payerId !== input.payerId || row.taskId !== input.taskId)
+        throw new HttpError(404, 'run_not_found', '没有这次运行');
+      if (row.status !== 'running' || !executor.readStoredArchive)
+        throw new HttpError(409, 'run_not_running', '只能检查正在运行的节点的成果');
+      const stream = await executor.readStoredArchive(
+        input.runId,
+        `${SANDBOX_PATHS.outputs}/${input.dir}`,
+      );
+      if (!stream) throw new HttpError(404, 'dir_not_found', `out/${input.dir} 不存在`);
+      return extractFiles(await readLimited(stream, 100 * 1024 * 1024 + 1024 * 1024));
     },
     environment: async () => {
       if (!executor.environment)

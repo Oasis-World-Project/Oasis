@@ -129,7 +129,7 @@ describe('规划门', () => {
     expect(prompt).toContain('按预算挑');
     expect(prompt).toContain('用户没有选预算档，按「标准」档的思路安排');
     expect(prompt).toContain('web.search');
-    expect(prompt).toContain('负责交付物的节点 checks 留空');
+    expect(prompt).toContain('checks 是节点交付前的自查清单');
   });
   it('节点所需能力必须来自实测环境，不能把包可安装当成浏览器已就绪', () => {
     const environment = {

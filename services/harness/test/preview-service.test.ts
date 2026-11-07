@@ -139,6 +139,14 @@ function fixture(files?: Record<string, string>) {
         })),
       }),
       file: async (_id: string, path: string) => ({ content: Buffer.from(files![path]!) }),
+      // 运行中的沙箱：返回 out/<dir> 下的文件（路径相对 dir）
+      liveFiles: async ({ dir }: { dir: string }) =>
+        Object.entries(files ?? {})
+          .filter(([path]) => path.startsWith(`${dir}/`))
+          .map(([path, content]) => ({
+            path: path.slice(dir.length + 1),
+            content: Buffer.from(content),
+          })),
     } as unknown as RunService,
     store: {
       put: vi.fn(async () => undefined),
@@ -181,6 +189,45 @@ describe('私有预览生命周期', () => {
       await service.close();
     }
   });
+  it('节点自查读运行中沙箱的目录，跑同一套浏览器检查，不留档；目录里没有清单时直接说明', async () => {
+    const { service, test, destroy, rows } = fixture({
+      'site/oasis-app.json': JSON.stringify({
+        version: 1,
+        kind: 'static',
+        root: 'site',
+        entry: 'index.html',
+      }),
+      'site/index.html': '<h1>actual</h1>',
+      'site/oasis-test.json': JSON.stringify({
+        version: 1,
+        steps: [{ action: 'text', selector: 'h1', text: 'expected' }],
+      }),
+    });
+    const input = {
+      runId: access.artifactId,
+      payerId: access.ownerId,
+      taskId: access.taskId,
+    };
+    try {
+      const result = await service.checkLive({ ...input, dir: 'site' });
+      expect(result.passed).toBe(false);
+      expect(result.reason).toContain('实际为「actual」');
+      expect(result.reason).toContain('页面错误：boom');
+      expect(test).toHaveBeenCalledTimes(1);
+      expect(destroy).toHaveBeenCalledTimes(1);
+      // 每次自查一条新的预览记录，用完即停
+      expect([...rows.values()].every((row) => row.artifactId !== access.artifactId)).toBe(true);
+      expect([...rows.values()].map((row) => row.status)).toEqual(['stopped']);
+      const missing = await service.checkLive({ ...input, dir: 'other' });
+      expect(missing).toEqual({
+        passed: false,
+        reason: expect.stringContaining('out/other 里没有 oasis-app.json'),
+        frameCaptured: false,
+      });
+    } finally {
+      await service.close();
+    }
+  });
   it('外站代理拒绝非白名单、写请求、内网地址及非 HTTPS', async () => {
     expect(() => websiteUrl('https://evil.example', ['https://example.com'])).toThrow();
     expect(() => websiteUrl('http://example.com', ['http://example.com'])).toThrow();
@@ -219,7 +266,7 @@ describe('私有预览生命周期', () => {
         network: 'none',
       });
       expect(result.inputSha256).toMatch(/^[a-f0-9]{64}$/);
-      // 首屏画面和步骤截图一起交给关卡做视觉检查
+      // 首屏画面和步骤截图随结果返回（报告留档供下载）
       expect(result.screenshots).toEqual([
         { name: 'opening.jpg', base64: 'AA==' },
         { name: 'step-0.jpg', base64: '/9j/2Q==' },

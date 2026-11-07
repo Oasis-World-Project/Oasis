@@ -37,18 +37,10 @@ import {
   requireNotStarted,
 } from './graph.ts';
 import { materialPaths } from './materials.ts';
-import {
-  deliveryManifest,
-  filesForInspection,
-  selectDeliverables,
-  missingDeliveryFiles,
-  selectedOutputFiles,
-  deliveryIntegrityChecks,
-} from './output-files.ts';
+import { deliveryManifest, selectDeliverables, missingDeliveryFiles } from './output-files.ts';
 import { nodeRow, planToRows, validatePlan } from './plan.ts';
 import { createPlanning, type PlanningConfig } from './planning-service.ts';
-import { decide, incoming } from './schedule.ts';
-import { revisionCheck, revisionPrompt } from './prompt.ts';
+import { decide } from './schedule.ts';
 import { afterRound, firstStep, resumeStep, retryStep, reworkStep, type Step } from './steps.ts';
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
@@ -140,9 +132,7 @@ function toTaskBody({ task, nodes, edges }: Snapshot): TaskBody {
     acceptance:
       task.acceptance &&
       (({ repairs: _repairs, revision, ...rest }) =>
-        revision !== undefined && !rest.checks && !FINAL.includes(task.status) ? null : rest)(
-        task.acceptance,
-      ),
+        revision !== undefined && !FINAL.includes(task.status) ? null : rest)(task.acceptance),
     deliverables: task.deliverables,
     ...(deliveryFiles === undefined ? {} : { deliveryFiles }),
     nodes: nodes.map(toNodeBody),
@@ -282,7 +272,7 @@ export function createWorkflowService(deps: {
       const previous = node.currentRunId ? await store.findRun(node.currentRunId) : undefined;
       const canResume = previous && (previous.status === 'succeeded' || previous.meta.resumable);
       const step = canResume
-        ? reworkStep(clean, repairChecks, revision ? revisionPrompt(revision) : undefined)
+        ? reworkStep(clean, repairChecks, revision)
         : previous
           ? retryStep(snapshot, clean, previous)
           : firstStep(snapshot, clean);
@@ -343,97 +333,52 @@ export function createWorkflowService(deps: {
   }
 
   /**
-   * 整体验收（事务外，ADR 0005 §5）：负责交付物的节点交出的东西一起交给关卡，对照任务单的「怎么算做好」。
-   * 明确未满足则恢复负责交付的节点修复；检查未知不得标成功。
+   * 整体验收（ADR 0005 §5，ADR 0017 起只查交付文件齐不齐）：缺文件的交付节点接着原会话补一次，
+   * 补过仍缺就带着记录交付。
    */
   async function runAcceptance(taskId: string): Promise<void> {
-    return checkOnce(`accept:${taskId}`, { taskId }, (signal) => checkDelivery(taskId, signal));
+    return checkOnce(`accept:${taskId}`, { taskId }, () => checkDelivery(taskId));
   }
 
-  async function checkDelivery(taskId: string, signal: AbortSignal): Promise<void> {
+  async function checkDelivery(taskId: string): Promise<void> {
     const snapshot = await store.get(taskId);
     if (snapshot?.task.status !== 'accepting' || !snapshot.task.sheet) return;
     const { task } = snapshot;
-    const { sheet } = snapshot.task;
+    // 整体验收只核对交付文件齐不齐（ADR 0017）：节点关卡已经跑过文件、网页和音视频检查，
+    // 任务单的要求由节点自己对照，不再逐条打分
     const missing: string[] = [];
+    /** 交付不齐的节点：只让它们补，交齐了的不动 */
+    const short = new Set<string>();
     const deliverables = selectDeliverables(task.deliverables, snapshot.nodes);
     for (const owner of new Set(deliverables.map((d) => d.nodeId))) {
       const node = snapshot.nodes.find((n) => n.id === owner);
-      if (node) missing.push(...missingDeliveryFiles(node.outputs, node.config.deliver));
+      const lacking = node ? missingDeliveryFiles(node.outputs, node.config.deliver) : [];
+      if (lacking.length) short.add(node!.id);
+      missing.push(...lacking);
     }
-    const runs = deliverables.flatMap((d) => {
+    for (const d of deliverables) {
       const node = snapshot.nodes.find((n) => n.id === d.nodeId);
-      const runId = node?.config.outputsRunId;
-      const outputs = d.files ?? node?.outputs ?? [];
-      if (!node || !runId || outputs.length === 0) {
+      if (!node?.config.outputsRunId || (d.files ?? node.outputs).length === 0) {
         missing.push(`「${d.name}」没有交出文件`);
-        return [];
+        if (node) short.add(node.id);
       }
-      return [{ runId, summary: node.summary, outputs, label: d.name }];
-    });
-    // 检查只提醒、不拦截（2026-11-05 用户决定）：没满足改一次、没检查到记在验收记录里，照常交付。
-    // 修改轮只查这次的修改意见（任务单第一轮已经核对过）
+    }
     const revision = task.acceptance?.revision;
-    const { unmet, unchecked, checks, notes } =
-      runs.length > 0
-        ? await gate.check({
-            signal,
-            ...(task.sheet?.budget ? { tier: task.sheet.budget.tier } : {}),
-            payerId: task.payerId,
-            taskId,
-            nodeId: null,
-            goal: task.brief,
-            runs,
-            checks:
-              revision !== undefined
-                ? [
-                    revisionCheck(revision),
-                    ...deliveryIntegrityChecks(runs.flatMap((r) => r.outputs)),
-                  ]
-                : [
-                    ...sheet.criteria,
-                    ...sheet.style,
-                    ...deliveryIntegrityChecks(runs.flatMap((r) => r.outputs)),
-                    ...(sheet.requirements ?? []).map((r) => ({
-                      id: r.id,
-                      text: r.text,
-                      requirementIds: [r.id],
-                      files: [],
-                    })),
-                  ],
-            expects: [],
-            details: revision !== undefined || Boolean(sheet.requirements),
-            deliveryPaths: runs.flatMap((r) => r.outputs.map((f) => f.path)),
-            ownerId: task.ownerId,
-            materials: task.materials,
-            execution: { spentMicro: task.spentMicro },
-          })
-        : { unmet: [], unchecked: undefined };
     await transact(taskId, async (fresh, w, fx) => {
       if (fresh.task.status !== 'accepting') return;
-      // 预算只是参考（ADR 0016 §2）：验收不查花费、不因花费暂停
-      const problems = [...missing, ...unmet];
       const repairs = fresh.task.acceptance?.repairs ?? 0;
       await w.setTask({
         acceptance: {
-          unmet: [...missing, ...unmet],
-          ...(unchecked?.length ? { unchecked } : {}),
-          ...(notes?.length ? { notes } : {}),
-          ...(checks ? { checks } : {}),
+          unmet: missing,
           ...(repairs ? { repairs } : {}),
           ...(revision !== undefined ? { revision } : {}),
         },
         deliverables,
         finishedAt: null,
       });
-      if (
-        problems.length &&
-        repairs < MAX_REWORKS &&
-        fresh.nodes.some((n) => deliverables.some((d) => d.nodeId === n.id) && n.currentRunId)
-      ) {
-        // 明确没满足：交付节点接着原会话改一次；改过之后照常交付，没满足的记在验收记录里
-        const owners = new Set(deliverables.map((d) => d.nodeId));
-        const targets = fresh.nodes.filter((n) => owners.has(n.id) && n.currentRunId);
+      // 交付文件不齐：缺文件的交付节点接着原会话补一次；补过之后照常交付，缺的记在验收记录里
+      const targets = fresh.nodes.filter((n) => short.has(n.id) && n.currentRunId);
+      if (missing.length && repairs < MAX_REWORKS && targets.length) {
         await w.setTask({
           status: 'running',
           attention: null,
@@ -446,12 +391,7 @@ export function createWorkflowService(deps: {
             finishedAt: null,
             config: {
               ...node.config,
-              repairChecks: [
-                revision !== undefined
-                  ? '整体验收发现这次的修改还没改好，请按修改意见核对交付物。'
-                  : '整体验收未通过，请按原始任务单核对全部交付物。',
-                ...problems,
-              ],
+              repairChecks: ['整体验收发现交付文件不齐，请补齐：', ...missing],
             },
           });
         await schedule(fresh, w, fx);
@@ -588,80 +528,26 @@ export function createWorkflowService(deps: {
       snapshot.task.attention?.reason === 'checks_incomplete'
     )
       return;
-    const delivery =
-      node.config.deliver === undefined
-        ? undefined
-        : selectedOutputFiles(node.outputs, node.config.deliver);
-    // 检查要少而准（2026-11-05 用户决定）：修改轮只查修改意见；负责交付物的节点不重复查任务单，
-    // 由紧接着的整体验收逐条核对（没有任务单的旧任务没有整体验收，照旧在节点上查）
-    const revision = snapshot.task.acceptance?.revision;
-    const owner =
-      Boolean(snapshot.task.sheet) &&
-      selectDeliverables(snapshot.task.deliverables, snapshot.nodes).some(
-        (d) => d.nodeId === nodeId,
-      );
-    const requirementChecks =
-      revision !== undefined ? [revisionCheck(revision)] : owner ? [] : (node.config.checks ?? []);
-    // 检查只提醒、不拦截（2026-11-05 用户决定）：检查内部出错由关卡记成没检查到，这里照常往下走
-    const result = await gate.check({
-      stage: 'node',
-      nodeGoal: node.goal,
+    // 检查轻量化（ADR 0017）：只挡明显坏掉的成果，任务单要求由节点自己对照
+    const { unmet, unchecked } = await gate.check({
       signal,
-      ...(snapshot.task.sheet?.budget ? { tier: snapshot.task.sheet.budget.tier } : {}),
       payerId: snapshot.task.payerId,
       taskId,
       nodeId,
-      goal: `${snapshot.task.brief}\n\n当前节点目标：${node.goal}`,
-      runs: [
-        {
-          runId,
-          summary: node.summary,
-          outputs: filesForInspection(
-            node.outputs,
-            node.config.expects ?? [],
-            node.config.deliver,
-            node.config.checks,
-          ),
-        },
-      ],
-      checks: [...requirementChecks, ...(delivery ? deliveryIntegrityChecks(delivery) : [])],
+      runId,
+      outputs: node.outputs,
       expects: [...(node.config.expects ?? []), ...(node.config.deliver ?? [])],
-      ...(delivery ? { deliveryPaths: delivery.map((f) => f.path) } : {}),
-      ownerId: snapshot.task.ownerId,
-      materials: snapshot.task.materials,
-      execution: { spentMicro: snapshot.task.spentMicro },
-      references: incoming(node, snapshot.edges).flatMap((edge) => {
-        const upstream = snapshot.nodes.find((n) => n.id === edge.fromNodeId);
-        if (!upstream?.config.outputsRunId) return [];
-        return [
-          {
-            runId: upstream.config.outputsRunId,
-            label: upstream.title,
-            summary: upstream.summary,
-            outputs: filesForInspection(
-              upstream.outputs,
-              upstream.config.expects ?? [],
-              upstream.config.deliver,
-              upstream.config.checks,
-            ),
-          },
-        ];
-      }),
     });
-    const { unmet, unchecked, checks, notes } = result;
     await transact(taskId, async (fresh, w, fx) => {
       // 检查期间节点被停止、任务被取消：结果作废
       const current = fresh.nodes.find((n) => n.id === nodeId);
       if (current?.status !== 'checking' || current.currentRunId !== runId) return;
-      if (checks) await w.setNode(nodeId, { config: { ...current.config, gateChecks: checks } });
       // 明确没满足：接着原会话改，最多 MAX_REWORKS 次；其余（改过仍没满足、没检查到）都记成提醒往下走
       if (unmet.length && current.reworks < MAX_REWORKS) {
         logger.info({ nodeId, unmet }, '关卡没过，接着原会话修改一次');
         await w.setNode(nodeId, { reworks: current.reworks + 1 });
         await openStep(fresh, w, current, reworkStep(current, unmet), fx);
       } else {
-        // 只提醒用户需要知道的；关卡自己的过程说明（notes）只记日志，不做成提醒
-        if (notes?.length) logger.info({ nodeId, notes }, '关卡说明');
         const reminders = [
           ...(unmet.length ? [`改过一次仍可能没满足：${unmet.join('；')}`] : []),
           ...(unchecked?.length ? [`没检查到：${unchecked.join('；')}`] : []),
@@ -1112,7 +998,7 @@ export function createWorkflowService(deps: {
           status: 'running',
           attention: null,
           finishedAt: null,
-          // 记下这轮的修改意见：节点和整体验收只查它（见 checkNode / checkDelivery）
+          // 记下这轮的修改意见：完成前不显示上一轮的验收记录
           acceptance: { unmet: [], revision: body.request },
           materials: [...task.materials, ...body.materials.filter((m) => !known.has(m.uploadId))],
         });

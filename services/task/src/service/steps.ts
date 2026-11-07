@@ -1,5 +1,5 @@
 // 节点的下一步要开哪些运行（纯函数）：
-// - 干活节点：持续目标；失败优先恢复原会话；关卡未过在原会话修复。
+// - 干活节点：持续目标；失败优先恢复原会话；关卡未过在原会话修复一轮（不用持续目标，ADR 0017）。
 // - 讨论节点：第一轮每位参与者各说一次（并行）→ 之后每轮每人接着自己的会话回应上一轮别人的发言
 //   → 最后汇总者写结论（之后和干活节点一样过关卡）。
 // - 停止后继续：干活节点接着停下的那次运行的会话；讨论节点把这一步没说完的重新说。
@@ -8,6 +8,7 @@ import type { Node, NodeRun, Snapshot } from '../repo/task-store.ts';
 import {
   resumePrompt,
   reworkPrompt,
+  revisionPrompt,
   speechPrompt,
   summaryPrompt,
   workPrompt,
@@ -57,6 +58,7 @@ function contextOf(snapshot: Snapshot, node: Node): NodeContext {
     tools: (node.config.tools ?? []).map((t) => t.key),
     materials: materialPaths(snapshot.task.materials).map((m) => m.path),
     ...(node.config.deliver === undefined ? {} : { deliver: node.config.deliver }),
+    checks: (node.config.checks ?? []).map((c) => (typeof c === 'string' ? c : c.text)),
     budget: {
       ...(node.config.budgetMicro ? { nodeMicro: node.config.budgetMicro } : {}),
       ...(snapshot.task.sheet?.budget
@@ -198,15 +200,18 @@ export function retryStep(snapshot: Snapshot, node: Node, failed: NodeRun): Step
     : firstStep(snapshot, node);
 }
 
-/** 关卡没过：接着刚交出产出的那次运行修复 */
-export function reworkStep(node: Node, unmet: string[], prompt = reworkPrompt(unmet)): Step {
+/**
+ * 接着刚交出产出的那次运行再改：关卡没过、交付文件不齐时修复，用户提出修改意见时按意见改。
+ * 修复是单轮的，跑完回到关卡重查（ADR 0017）；用户的修改是一轮新工作，照常用持续目标（ADR 0015）。
+ */
+export function reworkStep(node: Node, unmet: string[], revision?: string): Step {
   return {
     requests: [
       {
         purpose: 'rework',
-        goal: true,
+        goal: revision !== undefined,
         model: node.model,
-        prompt,
+        prompt: revision !== undefined ? revisionPrompt(revision) : reworkPrompt(unmet),
         inputsFrom: [],
         continueFrom: node.currentRunId ?? undefined,
         meta: {},

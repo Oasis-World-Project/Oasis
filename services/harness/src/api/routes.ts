@@ -84,6 +84,32 @@ export function registerRoutes(
       );
       return reply.type('application/json').send(await previews.report({ runId, payerId, taskId }));
     });
+    // 节点自查（ADR 0017）：读运行中沙箱的 out/<dir>，跑和关卡同一套浏览器检查，不留档
+    app.post('/internal/runs/:runId/application-check/live', async (request, reply) => {
+      const { runId } = parseWith(RunParams, request.params);
+      const body = parseWith(
+        z.object({
+          payerId: z.uuid(),
+          taskId: z.uuid(),
+          dir: z
+            .string()
+            .min(1)
+            .max(200)
+            .refine(
+              (dir) =>
+                !dir.includes('\\') &&
+                dir.split('/').every((part) => part && part !== '.' && part !== '..'),
+              'dir 是 out/ 下的相对目录',
+            ),
+        }),
+        request.body,
+      );
+      const abort = new AbortController();
+      reply.raw.on('close', () => {
+        if (!reply.raw.writableEnded) abort.abort();
+      });
+      return previews.checkLive({ runId, ...body, signal: abort.signal });
+    });
     app.post('/internal/runs/:runId/application-check', async (request, reply) => {
       const { runId } = parseWith(RunParams, request.params);
       const { payerId, taskId } = parseWith(

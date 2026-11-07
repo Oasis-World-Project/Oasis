@@ -2,6 +2,7 @@
 // 目录放在这里（和供应商适配在一起），由 model-gateway 对外提供；以后接新供应商（如 fal.ai）只在这里加。
 import { z } from 'zod';
 import { BrowserTestResult, WebsiteTestArgs } from '@oasis/contracts/ui-test';
+import { ApplicationCheckResult } from '@oasis/contracts/harness';
 import type { ServiceClient } from '@oasis/service-kit';
 import { createHash } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
@@ -38,6 +39,8 @@ export interface ToolConfig {
 interface ToolDeps {
   harness?: ServiceClient;
   taskId?: string;
+  /** 调用工具的那次节点运行（app.check 读它沙箱里的当前成果） */
+  runId?: string;
   browserstack?: BrowserStackClient;
   payerId?: string;
   render?: RenderClient;
@@ -319,6 +322,23 @@ const DecisionResponse = z.looseObject({
   usage: z.looseObject({ cost: z.number().optional() }).optional(),
 });
 
+const AppCheckArgs = z.object({ dir: z.string().min(1).max(220) });
+
+/** app.check 的结果说成节点能直接照着改的话：原因、页面报错、没覆盖到的地方 */
+function appCheckText(dir: string, result: ApplicationCheckResult): string {
+  const report = result.report;
+  const lines = [
+    result.passed
+      ? `out/${dir}：浏览器检查通过（交付后关卡复跑的是同一套检查）。`
+      : `out/${dir}：浏览器检查没通过：${result.reason ?? '原因未返回'}`,
+    ...(report?.steps ?? [])
+      .filter((step) => step.status === 'failed')
+      .map((step) => `- 第 ${step.index + 1} 步 ${step.action}：${step.error ?? '未通过'}`),
+    ...(report?.unchecked ?? []).map((item) => `- 没检查到：${item}`),
+  ];
+  return lines.join('\n');
+}
+
 /** 实际花费拿不到时的估算 */
 const estimate = (costMicro: number) => ({ costMicro, source: 'estimate' as const });
 const provider = (costUsd: number) => ({ costMicro: usd(costUsd), source: 'provider' as const });
@@ -360,6 +380,45 @@ export const TOOLS: ToolDef[] = [
           },
           ...result.screenshots.map((file) => ({ ...file, mediaType: 'image/jpeg' })),
         ],
+        cost: { costMicro: 0, source: 'provider' },
+      };
+    },
+  },
+  {
+    key: 'app.check',
+    name: '网页应用自查',
+    description:
+      '把 out/ 里的网页应用（带 oasis-app.json）放进和交付检查同一个隔离浏览器里打开，按 oasis-test.json 操作，当场返回页面报错和没通过的步骤。',
+    usage: 'oasis-tool app.check --dir out/site（--dir 是 oasis-app.json 所在目录）',
+    unit: '次（算力单独结算）',
+    estimateMicro: 0,
+    holdMicro: () => 1,
+    provider: 'harness',
+    models: () => ['oasis/browser'],
+    modelOf: () => 'oasis/browser',
+    args: AppCheckArgs,
+    long: false,
+    run: async (deps, args) => {
+      if (!deps.taskId || !deps.runId)
+        throw new HttpError(400, 'run_required', '网页应用自查只能在任务节点里用');
+      const dir = AppCheckArgs.parse(args)
+        .dir.replace(/^(\.\/)?(\/workspace\/)?(out\/)?/, '')
+        .replace(/\/+$/, '');
+      if (!dir)
+        throw new HttpError(400, 'invalid_args', '--dir 写 oasis-app.json 所在的目录，如 out/site');
+      const response = await deps.upstream(() =>
+        deps.harness!.stream('POST', `/internal/runs/${deps.runId}/application-check/live`, {
+          body: { payerId: deps.payerId, taskId: deps.taskId, dir },
+          // 页面多慢都等（与关卡一致），调用方中断时随之回收浏览器
+          timeoutMs: null,
+          signal: deps.signal,
+        }),
+      );
+      const result = ApplicationCheckResult.parse(await response.json());
+      return {
+        text: appCheckText(dir, result),
+        data: result.report ?? null,
+        files: [],
         cost: { costMicro: 0, source: 'provider' },
       };
     },

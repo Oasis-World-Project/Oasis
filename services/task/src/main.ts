@@ -64,17 +64,7 @@ await startService({
     workflows = createWorkflowService({
       store: createTaskStore(postgres.pool),
       harness,
-      gate: createGate({
-        harness,
-        modelGateway,
-        model: config.GATE_MODEL,
-        evidenceModel: config.GATE_EVIDENCE_MODEL,
-        threshold: config.GATE_THRESHOLD,
-        textMaxChars: config.GATE_TEXT_MAX_CHARS,
-        visionMaxImages: config.GATE_VISION_MAX_IMAGES,
-        visionMaxBytes: config.GATE_VISION_MAX_BYTES,
-        logger,
-      }),
+      gate: createGate({ harness, logger }),
       maxParallel: config.MAX_PARALLEL_NODES,
       agent: createServiceClient('agent', config.AGENT_URL, { timeoutMs: 5_000 }),
       modelGateway,

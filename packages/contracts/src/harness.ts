@@ -334,6 +334,7 @@ export const ApplicationCheckResult = z.object({
     .string()
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
-  /** 平台截取的画面（打开后的首屏 opening.jpg 与测试步骤截图）：交给视觉检查，不是节点自述 */
+  /** 平台截取的画面（打开后的首屏 opening.jpg 与测试步骤截图），不是节点自述 */
   screenshots: z.array(z.object({ name: z.string().max(100), base64: z.string() })).optional(),
 });
+export type ApplicationCheckResult = z.infer<typeof ApplicationCheckResult>;

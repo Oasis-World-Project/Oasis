@@ -781,6 +781,7 @@ export function createToolService(deps: {
         const toolDeps = {
           harness: deps.harness,
           taskId: input.caller.taskId,
+          runId: input.caller.runId,
           browserstack: deps.browserstack,
           payerId: input.caller.payerId,
           openrouter: deps.openrouter,

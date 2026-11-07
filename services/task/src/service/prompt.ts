@@ -1,7 +1,7 @@
 // 拼交给节点的说明（ADR 0004 §6）：任务 → 角色和目标 → 上游交来的东西 → 用户追加的要求 → 固定规则。
 // 讨论节点的发言、汇总，以及关卡退回后的修改，都在这一份上下文的基础上拼。
 import type { RunOutputFile } from '@oasis/contracts/harness';
-import type { TaskCheck, TaskSheet } from '@oasis/contracts/task';
+import type { TaskSheet } from '@oasis/contracts/task';
 
 interface UpstreamInput {
   key: string;
@@ -24,6 +24,8 @@ export interface NodeContext {
   /** 用户给的素材在沙箱里的路径（materials/…） */
   materials: string[];
   deliver?: string[];
+  /** 交付前的自查清单（方案里的 checks；ADR 0017：节点自己对照，系统不再逐条打分） */
+  checks?: string[];
   /** 预算和进度（ADR 0016 §5）：只是参考，节点自己决定做几版、什么时候停手 */
   budget?: {
     /** 分给这个节点的份额；旧节点没有 */
@@ -75,6 +77,11 @@ function context(c: NodeContext, goalLabel: string): string[] {
   if (c.userNotes.length > 0) {
     parts.push(`【用户追加的要求】\n${c.userNotes.map((n) => `- ${n}`).join('\n')}`);
   }
+  if (c.checks?.length) {
+    parts.push(
+      `【交付前自查】系统不会逐条替你核对，交付前自己对照一遍：\n${c.checks.map((t) => `- ${t}`).join('\n')}`,
+    );
+  }
   return parts;
 }
 
@@ -109,7 +116,8 @@ function toolsPart(tools: string[]): string[] {
         ? `- 规划建议使用：${tools.join('、')}；这不是可用工具白名单。`
         : '- 根据任务需要自行选择可用工具。',
       '- 都用 oasis-tool 命令调用。先运行 `oasis-tool list` 看每个工具的用法，再按用法调用，例如 `oasis-tool image.generate --prompt "……" --out out/图.png`。',
-      '- 运行环境以 in/.oasis-environment.json（如存在）和软件清单为准。交互应用先查阅 in/.oasis-formats.json 的实际契约及示例，不猜测清单字段。能安装 npm 包不代表浏览器及系统库已就绪；可运行网页交齐 oasis-app.json 与 oasis-test.json，平台会在独立浏览器执行实际交互检查。',
+      '- 运行环境以 in/.oasis-environment.json（如存在）和软件清单为准。交互应用先查阅 in/.oasis-formats.json 的实际契约及示例，不猜测清单字段。能安装 npm 包不代表浏览器及系统库已就绪；可运行网页交齐 oasis-app.json 与 oasis-test.json，交付前运行 `oasis-tool app.check --dir out/<应用目录>` 在独立浏览器里实际跑一遍（交付后系统复跑同一套检查），按它报的错修好。',
+      '- 自查：音视频用 ffprobe 确认能解码、时长和画幅对；风格、像不像参考图这类要求用 `oasis-tool image.inspect` 自己看。',
       '- 工具费用记在任务花费里；可以进行完成交付所需的验证与修复，避免没有进展的重复调用。',
       '- 要等很久的工具（视频）命令会自己等；没等到时按它的提示运行 `oasis-tool wait <任务号>`。',
     ].join('\n'),
@@ -204,21 +212,15 @@ export function revisionPrompt(request: string): string {
   ].join('\n');
 }
 
-/** 修改轮的验收点：只查这次的修改意见改好没有（原任务单第一轮已经核对过） */
-export function revisionCheck(request: string): TaskCheck {
-  return {
-    id: 'revision',
-    text: `用户这次的修改意见已经改到交付物里，且没有改坏原有内容：\n${request}`,
-    requirementIds: [],
-    files: [],
-  };
-}
-
 export function reworkPrompt(unmet: string[]): string {
   return [
     '交付前的检查发现以下地方还没满足：',
     ...unmet.map((u) => `- ${u}`),
     '',
-    '请修改 out/ 里的成果，把这些地方补上。改完后用一两句话说明改了什么。',
+    '请修改 out/ 里的成果，把这些地方补上。这一轮只有一次机会，改完就结束，系统会重新检查：',
+    '- 网页应用改完运行 `oasis-tool app.check --dir out/<应用目录>` 自查，看到通过再结束；',
+    '- 音视频用 ffprobe 确认能解码、时长对；',
+    '- 只修上面列的问题，不要重做别的部分，也不要反复跑同样的检查。',
+    '最后用一两句话说明改了什么。',
   ].join('\n');
 }
