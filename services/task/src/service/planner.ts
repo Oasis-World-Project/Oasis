@@ -7,6 +7,7 @@ import { HttpError } from '@oasis/service-kit';
 import { z } from 'zod';
 import { validatePlan } from './plan.ts';
 import type { ExecutionEnvironment } from '@oasis/contracts/harness';
+import { kindOf, type Rates } from './kinds/index.ts';
 import { toolRate, type Fallback, type PricedModel } from './quote.ts';
 
 const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro < 10_000 ? 4 : 2)}`;
@@ -226,10 +227,7 @@ export function workflowProblems(
   }
   const checked = plan.nodes.filter((n) => !fixed.has(n.key));
   const usable = new Set(catalog.map((m) => m.providerModel));
-  const used = checked.flatMap((n) => [
-    n.model,
-    ...(n.kind === 'discussion' ? n.participants.map((p) => p.model) : []),
-  ]);
+  const used = checked.flatMap((n) => kindOf(n).models(n));
   for (const model of new Set(used)) {
     if (!usable.has(model)) problems.push(`模型 ${model} 不在可以用的模型里`);
   }
@@ -242,17 +240,7 @@ export function workflowProblems(
       problems.push(
         `节点「${node.key}」有 ${node.checks.length} 条 checks，最多 ${MAX_NODE_CHECKS} 条`,
       );
-    if (node.kind !== 'work') continue;
-    for (const tool of node.tools) {
-      const entry = usableTools.get(tool.key);
-      if (!entry) {
-        problems.push(`节点「${node.key}」的工具 ${tool.key} 不在可以用的工具里`);
-      } else if (tool.model && entry.models.length && !entry.models.includes(tool.model)) {
-        problems.push(
-          `节点「${node.key}」的工具 ${tool.key} 不能用型号 ${tool.model}，可选：${entry.models.join('、')}`,
-        );
-      }
-    }
+    problems.push(...kindOf(node).toolProblems(node, usableTools));
   }
   const keys = new Set(plan.nodes.map((n) => n.key));
   for (const d of sheet.deliverables) {
@@ -277,22 +265,17 @@ export function estimatePlan(
   fallback: Fallback,
 ): { totalMicro: number; perNode: Map<string, number> } {
   const byKey = new Map(tools.map((t) => [t.key, t]));
-  const nodeRate = (model: string) =>
-    models.find((m) => m.providerModel === model)?.node?.costMicro ?? fallback.workRun;
-  const perNode = new Map(
-    plan.nodes.map((n) => {
-      if (n.kind === 'discussion')
-        return [
-          n.key,
-          (n.participants.length * n.rounds + 1) * (fallback.speechRun + fallback.computeRun),
-        ];
-      const toolCost = n.tools.reduce((sum, t) => {
-        const tool = byKey.get(t.key);
-        return sum + t.uses * (tool ? toolRate(tool, t.model).costMicro : 0);
-      }, 0);
-      return [n.key, nodeRate(n.model) + fallback.computeRun + toolCost];
-    }),
-  );
+  const rates: Rates = {
+    node: (model) =>
+      models.find((m) => m.providerModel === model)?.node?.costMicro ?? fallback.workRun,
+    tool(key, model) {
+      const tool = byKey.get(key);
+      return tool ? toolRate(tool, model).costMicro : 0;
+    },
+    speech: fallback.speechRun,
+    compute: fallback.computeRun,
+  };
+  const perNode = new Map(plan.nodes.map((n) => [n.key, kindOf(n).estimate(n, rates)]));
   const totalMicro = Math.ceil([...perNode.values()].reduce((a, b) => a + b, 0));
   return { totalMicro, perNode };
 }

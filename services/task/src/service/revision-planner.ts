@@ -15,6 +15,7 @@ import {
 import { z } from 'zod';
 import type { RevisionPlanNode, RevisionState } from '../repo/schema.ts';
 import type { Edge, Node } from '../repo/task-store.ts';
+import { kindOf } from './kinds/index.ts';
 import {
   estimatePlan,
   exampleNode,
@@ -57,7 +58,7 @@ const isReuse = (n: RevisionPlanNode): n is { key: string; reuse: string } => 'r
 /** 上一版的节点 → 方案里的完整节点（沿用的节点照搬，规划门和估价用） */
 function asPlanNode(node: Node): PlanNode {
   const c = node.config;
-  const common = {
+  return kindOf(node).plan(node, {
     key: node.key,
     title: node.title,
     role: node.role,
@@ -67,20 +68,15 @@ function asPlanNode(node: Node): PlanNode {
     expects: c.expects ?? [],
     ...(c.requires ? { requires: c.requires } : {}),
     ...(c.deliver ? { deliver: c.deliver } : {}),
-  };
-  return (
-    node.kind === 'discussion'
-      ? {
-          ...common,
-          kind: 'discussion',
-          participants: c.participants ?? [],
-          rounds: c.rounds ?? 1,
-        }
-      : { ...common, kind: 'work', tools: c.tools ?? [] }
-  ) as PlanNode;
+  });
 }
 
 const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
+/** 节点用过的工具（给规划员看；没有就不写） */
+function toolsOf(n: Node) {
+  const { tools } = kindOf(n).body(n);
+  return tools.length ? { tools: tools.map((t) => t.key) } : {};
+}
 const minutesOf = (n: Node) =>
   n.startedAt && n.finishedAt
     ? Math.max(1, Math.round((n.finishedAt.getTime() - n.startedAt.getTime()) / 60_000))
@@ -98,7 +94,7 @@ function previousWorkflow(nodes: Node[], edges: Edge[], deliverables: Record<str
         model: n.model,
         status: n.status,
         goal: n.goal.length > 800 ? `${n.goal.slice(0, 800)}…` : n.goal,
-        ...(n.config.tools?.length ? { tools: n.config.tools.map((t) => t.key) } : {}),
+        ...toolsOf(n),
         ...(n.config.deliver ? { deliver: n.config.deliver } : {}),
         outputs: n.outputs.slice(0, 40).map((f) => f.path),
         ...(n.summary ? { said: n.summary.slice(0, 300) } : {}),
@@ -227,7 +223,7 @@ export function checkRevisionPlan(
       problems.push(`节点「${entry.key}」和上一版的「${from}」类型不同，不能写 from，当新节点排`);
     if (mode === 'continue') {
       if (!source) problems.push(`接着原会话改要写 from（节点「${entry.key}」）`);
-      else if (source.kind !== 'work' || entry.kind !== 'work' || !source.currentRunId)
+      else if (!kindOf(source).continuable || !kindOf(entry).continuable || !source.currentRunId)
         problems.push(`只有上一版跑过的干活节点能接着原会话改（节点「${entry.key}」）`);
       else if (entry.model !== source.model)
         problems.push(`节点「${entry.key}」接着原会话改要用原来的模型 ${source.model}`);

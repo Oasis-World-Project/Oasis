@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { PlanNode, WorkflowPlan } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
 import type { NodeConfig } from '../repo/schema.ts';
+import { kindOf } from './kinds/index.ts';
 
 /** 找环：返回环上的一个节点名，没有环返回 undefined（Kahn 拓扑排序剩下的就是环上的） */
 export function findCycle(
@@ -37,12 +38,7 @@ export function validatePlan(plan: WorkflowPlan): void {
     if (!known.has(edge.to)) problems.push(`连线的终点「${edge.to}」不存在`);
     if (edge.from === edge.to) problems.push(`节点「${edge.from}」不能连向自己`);
   }
-  for (const node of plan.nodes) {
-    if (node.kind !== 'discussion') continue;
-    const names = node.participants.map((p) => p.name);
-    if (new Set(names).size !== names.length)
-      problems.push(`讨论「${node.title}」里有重名的参与者`);
-  }
+  for (const node of plan.nodes) problems.push(...kindOf(node).problems(node));
   const pairs = plan.edges.map((e) => `${e.from}→${e.to}`);
   if (new Set(pairs).size !== pairs.length) problems.push('有重复的连线');
   if (problems.length === 0) {
@@ -65,9 +61,7 @@ export function nodeRow(
     checks: n.checks,
     expects: n.expects,
     ...(n.deliver === undefined ? {} : { deliver: n.deliver }),
-    ...(n.kind === 'discussion'
-      ? { participants: n.participants, rounds: n.rounds, round: 0, transcript: [] }
-      : { tools: n.tools }),
+    ...kindOf(n).config(n),
   };
   return {
     id,

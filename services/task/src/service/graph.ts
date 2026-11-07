@@ -5,6 +5,7 @@ import type { PlanNode, UpdateNodeBody } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
 import type { NodeConfig } from '../repo/schema.ts';
 import type { Edge, Node, Snapshot } from '../repo/task-store.ts';
+import { kindOf } from './kinds/index.ts';
 import { findCycle } from './plan.ts';
 
 /** 还没开始的节点：可以改、删，可以往里接线 */
@@ -31,53 +32,26 @@ export function requireNotStarted(node: Node, action: string): void {
   }
 }
 
-/** 参与者不能重名 */
-function checkParticipants(title: string, participants: { name: string }[] | undefined): void {
-  const names = (participants ?? []).map((p) => p.name);
-  if (new Set(names).size !== names.length) {
-    throw new HttpError(400, 'invalid_node', `讨论「${title}」里有重名的参与者`);
-  }
-}
-
-/** 新建节点：节点名在任务里不能重复 */
+/** 新建节点：节点名在任务里不能重复，节点自身也要没问题（如讨论里参与者不能重名） */
 export function checkNewNode(snapshot: Snapshot, node: PlanNode): void {
   if (snapshot.nodes.some((n) => n.key === node.key)) {
     throw conflict('node_key_taken', `已经有叫「${node.key}」的节点了`);
   }
-  if (node.kind === 'discussion') checkParticipants(node.title, node.participants);
+  const problems = kindOf(node).problems(node);
+  if (problems.length) throw new HttpError(400, 'invalid_node', problems.join('；'));
 }
 
-/** 修改节点：算出要写的列和配置 */
+/** 修改节点：算出要写的列和配置（这种节点自己的配置项由它的插件核对） */
 export function nodeChanges(node: Node, body: UpdateNodeBody) {
-  const {
-    title,
-    role,
-    goal,
-    model,
-    checks,
-    expects,
-    deliver,
-    participants,
-    rounds,
-    tools,
-    requires,
-  } = body;
-  if (node.kind !== 'discussion' && (participants !== undefined || rounds !== undefined)) {
-    throw new HttpError(400, 'invalid_node', '只有讨论节点有参与者和轮数');
-  }
-  if (node.kind === 'discussion' && tools !== undefined) {
-    throw new HttpError(400, 'invalid_node', '只有干活节点能用工具');
-  }
-  if (participants) checkParticipants(title ?? node.title, participants);
+  const { title, role, goal, model, checks, expects, deliver, requires } = body;
+  const own = kindOf(node).edit(node, body);
   const config: NodeConfig = {
     ...node.config,
     ...(checks ? { checks } : {}),
     ...(expects ? { expects } : {}),
     ...(deliver !== undefined ? { deliver } : {}),
     ...(requires !== undefined ? { requires } : {}),
-    ...(participants ? { participants } : {}),
-    ...(rounds ? { rounds } : {}),
-    ...(tools ? { tools } : {}),
+    ...own,
   };
   return {
     ...(title !== undefined ? { title } : {}),

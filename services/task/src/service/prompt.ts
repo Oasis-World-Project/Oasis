@@ -1,5 +1,6 @@
 // 拼交给节点的说明（ADR 0004 §6）：任务 → 角色和目标 → 上游交来的东西 → 用户追加的要求 → 少量必要的说明。
 // 只讲事实和交付要求，怎么做由节点里的模型自己判断（用户 2026-11-07：规则只留最重要的）。
+// 这里是各种节点共用的部分；某种节点自己的说明（干活、讨论发言、汇总）在 kinds/ 里它的插件中。
 import type { RunOutputFile } from '@oasis/contracts/harness';
 import type { TaskSheet } from '@oasis/contracts/task';
 
@@ -19,8 +20,6 @@ export interface NodeContext {
   goal: string;
   upstream: UpstreamInput[];
   userNotes: string[];
-  /** 分给这个节点的外部工具（工具名） */
-  tools: string[];
   /** 用户给的素材在沙箱里的路径（materials/…） */
   materials: string[];
   deliver?: string[];
@@ -44,15 +43,10 @@ export interface NodeContext {
 /** 修改时「重新做」的节点：上一版它交出的文件放在 in/ 下的这个目录（ADR 0022） */
 export const PREVIOUS_DIR = '_previous';
 
-export interface Speech {
-  round: number;
-  name: string;
-  text: string;
-}
+export const NO_QUESTIONS = '- 没有人会回答问题，拿不准的自己决定。';
 
-const NO_QUESTIONS = '- 没有人会回答问题，拿不准的自己决定。';
-
-function context(c: NodeContext, goalLabel: string): string[] {
+/** 说明里的上下文几段：任务、任务单、角色、目标（goalLabel 是这一段的标题）、要交的文件、上游、素材、追加要求、自查 */
+export function contextParts(c: NodeContext, goalLabel: string): string[] {
   const parts = [`【整个任务】\n${c.brief}`];
   if (c.sheet) parts.push(`【用户确认的任务单】\n${JSON.stringify(c.sheet)}`);
   if (c.role.trim()) parts.push(`【你的角色】\n${c.role}`);
@@ -88,99 +82,6 @@ function context(c: NodeContext, goalLabel: string): string[] {
     parts.push(`【交付前看一眼】\n${c.checks.map((t) => `- ${t}`).join('\n')}`);
   }
   return parts;
-}
-
-const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
-
-/** 预算和进度：只给事实，节点自己掂量 */
-function budgetPart(b: NonNullable<NodeContext['budget']>): string {
-  const facts = [
-    ...(b.nodeMicro ? [`这一步分到约 ${usd(b.nodeMicro)}`] : []),
-    ...(b.taskMicro
-      ? [`整个任务预算约 ${usd(b.taskMicro)}，已花 ${usd(b.spentMicro)}`]
-      : [`整个任务已花 ${usd(b.spentMicro)}`]),
-    `已经跑了 ${b.elapsedMinutes} 分钟${b.taskMinutes ? `，预计总用时约 ${b.taskMinutes} 分钟` : ''}`,
-  ];
-  return `【预算和用时】${facts.join('；')}。预算是参考不是上限，但花的是用户的钱、用户也在等：够用就交。`;
-}
-
-const transcriptText = (speeches: Speech[]) =>
-  speeches.map((s) => `- 第 ${s.round} 轮 ${s.name}：${s.text}`).join('\n');
-
-/** 节点能用的外部工具：都通过沙箱里的 oasis-tool 命令调用，用法让 AI 自己查 */
-function toolsPart(tools: string[]): string {
-  return [
-    '【工具】',
-    ...(tools.length ? [`- 规划建议用：${tools.join('、')}（不限于这些）。`] : []),
-    '- `oasis-tool list` 列出全部工具、用法和单价；长任务没等到就按提示 `oasis-tool wait <任务号>`。',
-    '- 交互网页、3D 预览等的文件格式见 in/.oasis-formats.json。沙箱里没有浏览器，网页用 `oasis-tool app.check --dir out/<应用目录>` 在独立浏览器里跑。',
-  ].join('\n');
-}
-
-/** 干活节点 */
-export function workPrompt(c: NodeContext): string {
-  return [
-    `你是 Oasis 工作流里的一个节点，负责「${c.title}」。`,
-    ...context(c, '你要做的事'),
-    ...(c.budget ? [budgetPart(c.budget)] : []),
-    toolsPart(c.tools),
-    [
-      '【说明】',
-      '- 成果写到 out/（可建子目录），下游和用户只看得到 out/。',
-      '- 这是持续目标：要交的文件都做好了就 update_goal complete 结束。',
-      NO_QUESTIONS,
-      '- 最后用一两句话说明交付了什么。',
-    ].join('\n'),
-  ].join('\n\n');
-}
-
-/**
- * 讨论节点：某位参与者某一轮的发言。第一轮带完整上下文；之后接着自己的会话，只给上一轮别人说了什么。
- * 给了 history（接不上自己原来的会话、重新开会话时）：完整上下文加上之前几轮的全部发言。
- */
-export function speechPrompt(input: {
-  context: NodeContext;
-  name: string;
-  stance: string;
-  round: number;
-  rounds: number;
-  others: Speech[];
-  newNotes: string[];
-  history?: Speech[];
-}): string {
-  const ask = [
-    `这是第 ${input.round} 轮（共 ${input.rounds} 轮）。`,
-    '直接在你最后一条消息里说出你的发言，不用写文件，也不用调工具，除非你需要看 in/ 里的材料。',
-  ].join('');
-  const respond = '请回应：同意什么、反对什么、还要补充什么。';
-  if (input.round === 1 || input.history) {
-    return [
-      `你是「${input.name}」，正在参加一场讨论：「${input.context.title}」。`,
-      ...(input.stance.trim() ? [`【你的立场】\n${input.stance}`] : []),
-      ...context(input.context, '讨论的题目'),
-      ...(input.history?.length ? [`【之前的讨论】\n${transcriptText(input.history)}`] : []),
-      `【说明】\n${NO_QUESTIONS}\n- ${ask}${input.round > 1 ? respond : ''}`,
-    ].join('\n\n');
-  }
-  const notes = input.newNotes.length
-    ? `\n\n【用户新追加的要求】\n${input.newNotes.map((n) => `- ${n}`).join('\n')}`
-    : '';
-  return `【上一轮其他人说了】\n${transcriptText(input.others)}${notes}\n\n${ask}${respond}`;
-}
-
-/** 讨论节点：汇总者根据全部发言写出结论 */
-export function summaryPrompt(input: { context: NodeContext; transcript: Speech[] }): string {
-  return [
-    `你负责汇总一场讨论：「${input.context.title}」。`,
-    ...context(input.context, '讨论的题目'),
-    `【讨论记录】\n${transcriptText(input.transcript)}`,
-    [
-      '【说明】',
-      '- 把结论写到 out/（例如 out/讨论结论.md）：共识、分歧、建议怎么做。',
-      NO_QUESTIONS,
-      '- 做完后用一两句话说明结论。',
-    ].join('\n'),
-  ].join('\n\n');
 }
 
 /** 停止后继续：接着原会话做完；停下期间用户追加的要求一起带上 */

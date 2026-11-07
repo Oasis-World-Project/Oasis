@@ -1,5 +1,6 @@
 import { HttpError } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
+import type { DiscussionConfig } from '../src/repo/schema.ts';
 import type { Edge, Node } from '../src/repo/task-store.ts';
 import { findCycle, planToRows, validatePlan } from '../src/service/plan.ts';
 import { decide } from '../src/service/schedule.ts';
@@ -93,7 +94,10 @@ describe('方案校验', () => {
       round: 0,
       transcript: [],
     });
-    expect(row?.config.participants?.map((p) => p.name)).toEqual(['甲', '乙']);
+    expect((row?.config as DiscussionConfig).participants?.map((p) => p.name)).toEqual([
+      '甲',
+      '乙',
+    ]);
   });
 });
 

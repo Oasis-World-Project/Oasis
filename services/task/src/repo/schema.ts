@@ -14,8 +14,11 @@ import type {
 } from '@oasis/contracts/task';
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
-/** 节点配置：自查清单和应有文件；讨论节点还有参与者、轮数、进行到第几轮和讨论记录 */
-export interface NodeConfig {
+/**
+ * 每种节点都有的配置（引擎、关卡、修改流程用）：自查清单、应有文件、交付文件，以及推进中记下的状态。
+ * 各种节点自己的配置在下面，按种类定型（重构阶段 2）：引擎碰不到某种节点特有的字段。
+ */
+interface CommonConfig {
   requires?: string[];
   /** 最终验收退回后，等待上游最新产出再在原会话修复。 */
   repairChecks?: string[];
@@ -26,22 +29,46 @@ export interface NodeConfig {
   checks?: TaskCheck[];
   expects?: ExpectedFile[];
   deliver?: string[];
-  /** 干活节点要用的外部工具（model：规划员按预算选的型号） */
-  tools?: { key: string; uses: number; model?: string }[];
   /** 按用户预算分给这个节点的份额（微美元，ADR 0016 §5）；只是参考，旧节点没有 */
   budgetMicro?: number;
-  /** 运行中已经发过几次「超预算请收尾」的提醒（1.5 倍、2 倍各一次，2026-11-07） */
-  budgetNudges?: number;
-  participants?: { name: string; model: string; stance: string }[];
-  rounds?: number;
-  round?: number;
   /** 用户追加要求的前几条已经交给节点了（讨论在下一轮、停止后在继续时带上之后的新要求） */
   notesSeen?: number;
   /** 节点现在的产出是哪次运行交出来的（下游拿这次运行的产出） */
   outputsRunId?: string;
-  /** 每条发言记下是哪次运行说的，下一轮这位参与者接着那次运行的会话 */
-  transcript?: { round: number; name: string; text: string; runId: string }[];
 }
+
+/** 干活节点：一个 agent 在持续目标里做完一件事 */
+export interface WorkConfig extends CommonConfig {
+  /** 要用的外部工具（model：规划员按预算选的型号） */
+  tools?: { key: string; uses: number; model?: string }[];
+  /** 运行中已经发过几次「超预算请收尾」的提醒（1.5 倍、2 倍各一次，2026-11-07） */
+  budgetNudges?: number;
+}
+
+/** 讨论发言的一条记录：记下是哪次运行说的，下一轮这位参与者接着那次运行的会话 */
+interface TranscriptEntry {
+  round: number;
+  name: string;
+  text: string;
+  runId: string;
+}
+
+/** 讨论节点：几位参与者来回几轮，最后汇总 */
+export interface DiscussionConfig extends CommonConfig {
+  participants?: { name: string; model: string; stance: string }[];
+  rounds?: number;
+  /** 进行到第几轮（还没开始是 0） */
+  round?: number;
+  transcript?: TranscriptEntry[];
+}
+
+/** 各种节点的配置。加一种节点：这里加一行，再在 service/kinds 写它的插件并登记 */
+export interface KindConfigs {
+  work: WorkConfig;
+  discussion: DiscussionConfig;
+}
+export type NodeKind = keyof KindConfigs;
+export type NodeConfig = KindConfigs[NodeKind];
 
 /** 交给 harness 的完整请求（没送到时按原样重交） */
 export interface RunRequestRecord {
@@ -135,7 +162,7 @@ export const nodes = pgTable('nodes', {
   taskId: uuid('task_id').notNull(),
   key: text('key').notNull(),
   title: text('title').notNull(),
-  kind: text('kind').$type<'work' | 'discussion'>().notNull(),
+  kind: text('kind').$type<NodeKind>().notNull(),
   role: text('role').notNull().default(''),
   goal: text('goal').notNull(),
   model: text('model').notNull(),

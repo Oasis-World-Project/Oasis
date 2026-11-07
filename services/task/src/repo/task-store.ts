@@ -6,13 +6,33 @@ import { createEnvelope } from '@oasis/service-kit';
 import { and, asc, desc, eq, inArray, isNull, lt, lte } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { edges, nodeRuns, nodes, outbox, spendRecords, tasks, workflowVersions } from './schema.ts';
+import {
+  edges,
+  nodeRuns,
+  nodes,
+  outbox,
+  spendRecords,
+  tasks,
+  workflowVersions,
+  type KindConfigs,
+  type NodeKind,
+} from './schema.ts';
 
 export type Task = typeof tasks.$inferSelect;
 export type WorkflowVersion = typeof workflowVersions.$inferSelect;
 /** 冻结旧版的概况（快照里带着，给任务详情列出版本） */
 type VersionMeta = Pick<WorkflowVersion, 'version' | 'request' | 'createdAt' | 'frozenAt'>;
-export type Node = typeof nodes.$inferSelect;
+/** 节点表的一行（种类和配置没有对上） */
+type NodeRow = typeof nodes.$inferSelect;
+/** 某种节点：配置按种类定型 */
+export type NodeOf<K extends NodeKind> = Omit<NodeRow, 'kind' | 'config'> & {
+  kind: K;
+  config: KindConfigs[K];
+};
+/** 库里的节点：按 kind 区分，各带各的配置 */
+export type Node = { [K in NodeKind]: NodeOf<K> }[NodeKind];
+/** 库里读出来的行：种类和配置是一起写进去的，读出来照样对得上 */
+const asNodes = (rows: NodeRow[]) => rows as Node[];
 export type Edge = typeof edges.$inferSelect;
 export type NodeRun = typeof nodeRuns.$inferSelect;
 
@@ -94,7 +114,7 @@ export function deletedEvent(task: Task) {
 
 type NodePatch = Partial<
   Pick<
-    Node,
+    NodeRow,
     | 'title'
     | 'role'
     | 'goal'
@@ -119,7 +139,7 @@ type RunPatch = Partial<
   Pick<NodeRun, 'status' | 'summary' | 'error' | 'outputs' | 'finishedAt' | 'meta'>
 >;
 export type NewNode = Pick<
-  Node,
+  NodeRow,
   'id' | 'key' | 'title' | 'kind' | 'role' | 'goal' | 'model' | 'status' | 'config'
 >;
 type EdgeEnds = Pick<Edge, 'fromNodeId' | 'toNodeId'>;
@@ -206,7 +226,7 @@ async function load(db: NodePgDatabase, task: Task): Promise<Snapshot> {
       .where(eq(workflowVersions.taskId, task.id))
       .orderBy(asc(workflowVersions.version)),
   ]);
-  return { task, nodes: taskNodes, edges: taskEdges, activeRuns, versions };
+  return { task, nodes: asNodes(taskNodes), edges: taskEdges, activeRuns, versions };
 }
 
 export function createTaskStore(pool: pg.Pool): TaskStore {
@@ -250,7 +270,10 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
             isNull(nodes.retiredVersion),
           ),
         );
-      return rows.map((task) => ({ task, nodes: all.filter((n) => n.taskId === task.id) }));
+      return rows.map((task) => ({
+        task,
+        nodes: asNodes(all.filter((n) => n.taskId === task.id)),
+      }));
     },
 
     async getVersion(taskId, version) {
@@ -309,7 +332,7 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
               .insert(nodes)
               .values({ ...node, taskId })
               .returning();
-            if (row) snapshot.nodes.push(row);
+            if (row) snapshot.nodes.push(...asNodes([row]));
           },
           async deleteNode(nodeId) {
             // 连线的外键是 on delete set null：删掉节点，连线就留下断开的一端
@@ -402,7 +425,7 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
         .from(nodes)
         .innerJoin(nodeRuns, eq(nodeRuns.id, nodes.currentRunId))
         .where(and(eq(nodes.status, 'checking'), lte(nodeRuns.finishedAt, before)));
-      return rows.map((r) => r.node);
+      return asNodes(rows.map((r) => r.node));
     },
 
     async materialsInUse(ownerId, uploadIds) {
