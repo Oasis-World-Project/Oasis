@@ -429,13 +429,95 @@ def inspect_package(root):
     return {"valid": True, "files": manifest["files"], "unchecked": ["native Blender semantic integrity", "visual quality", "cloud GPU"]}
 
 
+MODEL_FORMATS = (".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".blend")
+SNAPSHOT_VIEWS = ("front3q", "front", "side", "back3q", "top")
+JSON_MARK = "OASIS_JSON:"
+
+
+def blender_run(*command):
+    """在无界面 Blender 里跑本文件的内部命令，取回它打印的 JSON。"""
+    result = subprocess.run(["blender", "--background", "--factory-startup", "--disable-autoexec",
+        "--threads", "2", "--python-exit-code", "1", "--python", str(Path(__file__).resolve()),
+        "--", *command], capture_output=True, timeout=900)
+    out = result.stdout.decode("utf8", "replace")
+    require(result.returncode == 0, "Blender failed: " + (result.stderr.decode("utf8", "replace") + out)[-2000:])
+    lines = [line[len(JSON_MARK):] for line in out.splitlines() if line.startswith(JSON_MARK)]
+    require(lines, "Blender returned no result")
+    return json.loads(lines[-1])
+
+
+def model_input(file):
+    require(file.is_file() and not file.is_symlink(), "A local model file is required")
+    require(file.suffix.lower() in MODEL_FORMATS, "Supported: " + ", ".join(MODEL_FORMATS))
+    require(file.stat().st_size <= 200 * 1024 ** 2, "Model files up to 200 MiB")
+
+
+def contact_sheet(files, target):
+    """几张视角图拼成一张（每格标上视角名），方便一次看完。"""
+    from PIL import Image, ImageDraw
+    images = [Image.open(f).convert("RGB") for f in files]
+    width, height = images[0].size
+    columns = 2 if len(images) > 1 else 1
+    rows = math.ceil(len(images) / columns)
+    sheet = Image.new("RGB", (width * columns, height * rows), (255, 255, 255))
+    draw = ImageDraw.Draw(sheet)
+    for index, (image, file) in enumerate(zip(images, files)):
+        x, y = (index % columns) * width, (index // columns) * height
+        sheet.paste(image, (x, y))
+        draw.text((x + 12, y + 10), Path(file).stem, fill=(40, 40, 52))
+    sheet.save(target)
+
+
+def snapshot(source, folder, views, size):
+    """自动取景出几张视角图和一张拼图（Cycles CPU，几秒到几十秒）。"""
+    model_input(source)
+    require(all(v in SNAPSHOT_VIEWS for v in views), "Views: " + ", ".join(SNAPSHOT_VIEWS))
+    width, height = (int(n) for n in size.lower().split("x"))
+    require(64 <= width <= 1920 and 64 <= height <= 1920, "Size between 64x64 and 1920x1920")
+    folder.mkdir(parents=True, exist_ok=True)
+    result = blender_run("internal-snapshot", str(source.resolve()), str(folder.resolve()), ",".join(views), f"{width}x{height}")
+    contact_sheet(result["views"], folder / "sheet.png")
+    return {"views": [str(Path(folder) / Path(f).name) for f in result["views"]],
+            "sheet": str(folder / "sheet.png"), "size_m": result["size_m"],
+            "note": "视角：front3q 前方 3/4、front 正前（-Y）、side 右侧（+X）、back3q 后方 3/4、top 俯视；地面和灯光是看图用的，不在模型里。"}
+
+
+def check(source):
+    """一次报告尺寸、离地、三角面、材质、焊点后的拓扑问题，以及画布能否直接预览。"""
+    model_input(source)
+    report = blender_run("internal-check", str(source.resolve()))
+    notes = ["拓扑按位置焊点后统计；开口边常见于单面的薄片（窗格、布），不一定是错。"]
+    if source.suffix.lower() == ".glb":
+        try:
+            glb_resources(source)
+            report["preview_problems"] = preview_problems(source)
+        except Exception as error:
+            report["preview_problems"] = [str(error)]
+        notes.append("preview_problems 为空表示画布能直接交互预览；不为空可用 oasis-3d preview 生成配套预览。")
+        if shutil.which("gltf-transform"):
+            result = subprocess.run(["gltf-transform", "validate", str(source)], capture_output=True, timeout=300)
+            report["gltf_validator"] = {"exit_code": result.returncode,
+                "output": (result.stdout + result.stderr).decode("utf8", "replace")[-3000:]}
+    else:
+        notes.append("不是 GLB：画布不能直接预览，要预览请同时交付 GLB（oasis_blender.export_glb）。")
+    report["notes"] = notes
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["build", "inspect", "pack", "preview"])
+    parser.add_argument("command", choices=["build", "inspect", "pack", "preview", "snapshot", "check"])
     parser.add_argument("input", type=Path)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--views", default="front3q,side,front,back3q")
+    parser.add_argument("--size", default="960x720")
     args = parser.parse_args()
-    if args.command == "build":
+    if args.command == "snapshot":
+        require(args.out is not None, "--out <folder> required")
+        result = snapshot(args.input, args.out, args.views.split(","), args.size)
+    elif args.command == "check":
+        result = check(args.input)
+    elif args.command == "build":
         require(args.out is not None, "--out required")
         result = build(args.input, args.out)
     elif args.command == "preview":
@@ -461,5 +543,16 @@ if __name__ == "__main__":
         blender_build(Path(sys.argv[-1]))
     elif command[:1] == ["internal-preview"]:
         blender_preview(Path(command[1]), Path(command[2]), int(command[3]))
+    elif command[:1] in (["internal-snapshot"], ["internal-check"]):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import oasis_blender
+        oasis_blender.load(command[1])
+        if command[0] == "internal-check":
+            print(JSON_MARK + json.dumps(oasis_blender.survey(), ensure_ascii=False))
+        else:
+            report = oasis_blender.survey()
+            width, height = (int(n) for n in command[4].split("x"))
+            views = oasis_blender.render_views(command[2], command[3].split(","), (width, height))
+            print(JSON_MARK + json.dumps({"views": views, "size_m": report["size_m"]}, ensure_ascii=False))
     else:
         main()

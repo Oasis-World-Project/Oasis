@@ -63,10 +63,12 @@ export function ArtifactReview({
 }) {
   const queryClient = useQueryClient();
   const kind = previewKindOf(artifact.path);
-  // 网页和应用在运行；桌面版能截下当前画面来画，浏览器里只能写意见
+  // 网页、应用和 3D 模型在运行；桌面端截下当前画面来画（3D 截的是此刻的视角，ADR 0020），浏览器里只能写意见
   const capturable = !!desktop()?.capturePage;
   const surface =
-    live || kind === 'page' ? liveSurface(capturable) : surfaceOf(kind, !!file.pdfUrl);
+    live || kind === 'page' || kind === 'model'
+      ? liveSurface(capturable)
+      : surfaceOf(kind, !!file.pdfUrl);
   const fields = onRevise ? fieldsFor(kind) : [];
   const [values, setValues] = useState<Values>({});
   /** 参数面板（不在批注模式时） */
@@ -148,7 +150,10 @@ export function ArtifactReview({
     if (!bridge?.capturePage || !target) return;
     setCapturing(true);
     setCaptureError(null);
+    // 截图时藏起画面上浮着的工具（3D 的视角块和工具条），等两帧让画面刷新
+    holder.current?.setAttribute('data-capturing', '');
     try {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const rect = target.getBoundingClientRect();
       const png = await bridge.capturePage({
         x: rect.left,
@@ -163,6 +168,7 @@ export function ArtifactReview({
     } catch (err) {
       setCaptureError(err instanceof ApiError ? err.message : '没截到画面，请重试');
     } finally {
+      holder.current?.removeAttribute('data-capturing');
       setCapturing(false);
       setEntering(false);
     }

@@ -117,6 +117,8 @@ export function runtimeFiles(input: {
             limits: MODEL_PREVIEW_LIMITS,
             otherFormats:
               'blend/obj/fbx/stl/usdz/ply/gltf 不能直接预览；要预览就在同目录放 oasis-model-preview.json，指向同时交付的 GLB、封面图或转台视频。',
+            tools:
+              '3D 沙箱里：oasis-3d snapshot <模型> --out <目录> 自动取景出视角图；oasis-3d check <模型> 查尺寸、拓扑和能否预览；Blender 脚本里 import oasis_blender（导出可预览 GLB、基础材质）。',
             sidecar: {
               schema: ModelPreviewSpec.toJSONSchema(),
               location: '与原件同目录的 oasis-model-preview.json；路径相对该文件，sha256 填实际值',
@@ -272,6 +274,8 @@ export function connectAgent(io: {
 }) {
   let lastError: string | undefined = '运行未收到正常结束通知';
   let pendingTurns = 0;
+  /** 有用户消息进了会话、还没等到它所在那一轮的结束通知 */
+  let awaitingEnd = false;
   let goalPhase: string | undefined;
   let persistent = io.goal ?? false;
   let goalActivation: unknown;
@@ -365,8 +369,14 @@ export function connectAgent(io: {
       const event = translateNotification(method, params);
       if (!event) return;
       if (root) {
-        if (event.kind === 'error' || event.kind === 'turn_end') {
+        // 发出的每条消息进了会话历史就算处理了：运行中的追问可能被插进当前这一轮（node-goal 插件），
+        // 不再单独开一轮，所以不能按轮次结束来数
+        if (event.kind === 'user_message') {
           pendingTurns = Math.max(0, pendingTurns - 1);
+          awaitingEnd = true;
+        }
+        if (event.kind === 'error' || event.kind === 'turn_end') {
+          awaitingEnd = false;
           lastError = event.kind === 'error' ? String(event.data.message) : undefined;
           failureReason = event.data.reason;
         }
@@ -410,7 +420,7 @@ export function connectAgent(io: {
           const seen = revision;
           await rpc.request('session/wait', session);
           if (lastError && !persistent) return lastError;
-          if (pendingTurns > 0) return '运行未收到正常结束通知';
+          if (pendingTurns > 0 || awaitingEnd) return lastError ?? '运行未收到正常结束通知';
           if (!persistent || goalPhase === 'complete') return lastError;
           if (goalPhase !== 'active')
             return goalBlocker ?? '持续目标未完成：' + (goalPhase ?? '没有目标状态');

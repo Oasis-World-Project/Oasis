@@ -202,6 +202,36 @@ width, height = Image.open(root / "draft.png").size
 assert (width, height) == (800, 450), (width, height)
 (root / "draft.png").unlink()
 passed("sandbox CPU render preserves the explicitly requested resolution and sampling")
+toolkit = root / "toolkit"
+toolkit.mkdir()
+script = toolkit / "make.py"
+script.write_text("\n".join([
+    "import bpy, json, oasis_blender as ob",
+    "ob.reset()",
+    "bpy.ops.mesh.primitive_cube_add(size=1, location=(0, 0, 0.5))",
+    "bpy.context.object.data.materials.append(ob.material('wood', '#C89A6B', roughness=0.7))",
+    "bpy.ops.mesh.primitive_cylinder_add(radius=0.3, depth=0.1, location=(0.8, 0, 0.3), rotation=(1.5708, 0, 0))",
+    "bpy.context.object.data.materials.append(ob.material('metal', '#3B2A1D', roughness=0.4, metallic=1.0))",
+    "problems = ob.export_glb(" + repr(str(toolkit / "model.glb")) + ")",
+    "assert problems == [], problems",
+]), "utf8")
+run("blender", "--background", "--factory-startup", "--disable-autoexec", "--python-exit-code", "1", "--python", str(script))
+assert geometry.preview_problems(toolkit / "model.glb") == []
+passed("oasis_blender is importable in Blender; basic materials export as a GLB the canvas previews directly")
+shot = json.loads(run("oasis-3d", "snapshot", str(toolkit / "model.glb"), "--out", str(toolkit / "views"),
+                      "--views", "front3q,side", "--size", "320x240"))
+assert [Path(v).name for v in shot["views"]] == ["front3q.png", "side.png"], shot
+for name in ("front3q.png", "side.png"):
+    image = Image.open(toolkit / "views" / name).convert("L")
+    assert image.size == (320, 240) and max(image.getdata()) - min(image.getdata()) > 30, name
+assert Image.open(toolkit / "views" / "sheet.png").size == (640, 240)
+passed("oasis-3d snapshot frames the model automatically and writes views plus a contact sheet")
+report = json.loads(run("oasis-3d", "check", str(toolkit / "model.glb")))
+assert report["preview_problems"] == [] and report["triangles"] > 0, report
+assert abs(report["lowest_z_m"]) < 1e-3 and report["open_edges"] == 0, report
+assert sorted(report["materials"]) == ["metal", "wood"], report
+assert "gltf_validator" in report and report["gltf_validator"]["exit_code"] == 0, report
+passed("oasis-3d check welds before topology counts (no false open edges) and runs the glTF validator")
 passed("no cloud GPU was requested or claimed")
 (root / "checks.json").write_text(json.dumps({"checks": checks, "paidCalls": 0, "cloudGpu": False,
     "blender": run("blender", "--version").splitlines()[0]}, ensure_ascii=False, indent=2), "utf8")

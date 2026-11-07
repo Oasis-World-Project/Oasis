@@ -217,6 +217,13 @@ describe('根目标与代理树', () => {
       if (request.method === 'session/prompt') {
         send('session.event', {
           sessionId: 'root',
+          event: {
+            type: 'user/message',
+            data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'do work' }] },
+          },
+        });
+        send('session.event', {
+          sessionId: 'root',
           event: { type: 'goal/change', data: { goal: { phase: 'active' } } },
         });
         send('session.event', {
@@ -260,6 +267,41 @@ describe('根目标与代理树', () => {
       kind: 'error',
       data: { message: 'child failed', sessionId: 'child', parentSessionId: 'root' },
     });
+    agent.abort(new Error('test closed'));
+  });
+  it('运行中的追问被插进当前这一轮（不另开一轮）时，这一轮结束就算处理完', async () => {
+    const { connectAgent } = await import('../src/adapter/dsh.ts');
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const send = (method: string, params: unknown) =>
+      input.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n');
+    const user = (text: string) =>
+      send('session.event', {
+        sessionId: 'root',
+        event: {
+          type: 'user/message',
+          data: { source: { kind: 'user' }, content: [{ type: 'text', text }] },
+        },
+      });
+    output.on('data', (line: Buffer) => {
+      const request = JSON.parse(line.toString());
+      input.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {} }) + '\n');
+    });
+    const agent = connectAgent({
+      stdin: output,
+      stdout: input,
+      sessionId: 'root',
+      onEvent: () => {},
+    });
+    await agent.prompt('do work');
+    user('do work');
+    await agent.prompt('【系统提醒】请收尾');
+    user('【系统提醒】请收尾');
+    send('session.event', {
+      sessionId: 'root',
+      event: { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    });
+    expect(await agent.waitIdle()).toBeUndefined();
     agent.abort(new Error('test closed'));
   });
 });

@@ -2,11 +2,14 @@
 import {
   AmbientLight,
   AnimationMixer,
+  AxesHelper,
   Box3,
   BufferGeometry,
   Color,
   DirectionalLight,
   Float32BufferAttribute,
+  GridHelper,
+  Group,
   LoadingManager,
   PerspectiveCamera,
   Scene,
@@ -65,9 +68,15 @@ function run(port: MessagePort) {
   const VIEWS = {
     iso: [1, 0.7, 1.3],
     front: [0, 0, 1],
+    back: [0, 0, -1],
+    left: [-1, 0, 0],
+    right: [1, 0, 0],
     side: [1, 0, 0],
     top: [0, 1, 0.0001],
   } as const;
+  /** 地面网格和坐标轴（只为看图，默认关） */
+  const guides = new Group();
+  let grid: GridHelper | undefined, axes: AxesHelper | undefined;
   function setLight(level: unknown, tone: unknown) {
     if (!ambient || !sun) return;
     const k = LEVELS[level as keyof typeof LEVELS] ?? 1;
@@ -225,6 +234,7 @@ function run(port: MessagePort) {
       mixer?.uncacheRoot(model.scene);
       releaseObjects(model.scenes);
     }
+    releaseObjects([guides]);
     scene?.clear();
     for (const url of urls) revokeUrl(url);
     urls.clear();
@@ -267,7 +277,7 @@ function run(port: MessagePort) {
   }
   async function load(data: {
     bytes: ArrayBuffer;
-    theme: { light: string; ground: string };
+    theme: { light: string; ground: string; line?: string };
     structure: boolean;
     fallbackAvailable: boolean;
   }) {
@@ -372,6 +382,15 @@ function run(port: MessagePort) {
       throw new Error('Model bounds exceed preview limits');
     model.scene.position.sub(center);
     scene.add(model.scene);
+    // 网格铺在模型底面，坐标轴放在底面原点；颜色取主题的次要文字色
+    const line = new Color(data.theme.line || data.theme.light);
+    grid = new GridHelper(radius * 4, 20, line, line);
+    grid.position.y = -size.y / 2;
+    axes = new AxesHelper(radius * 0.5);
+    axes.position.y = -size.y / 2;
+    grid.visible = axes.visible = false;
+    guides.add(grid, axes);
+    scene.add(guides);
     mixer = new AnimationMixer(model.scene);
     if (model.animations[0]) {
       const action = mixer.clipAction(model.animations[0]);
@@ -429,6 +448,8 @@ function run(port: MessagePort) {
       controls.update();
     }
     if (data.type === 'view') setView(data.preset);
+    if (data.type === 'grid' && grid) grid.visible = data.on === true;
+    if (data.type === 'axes' && axes) axes.visible = data.on === true;
     // 结构预览（SVG）没有材质和灯光，只给视角
     if (data.type === 'wireframe' && !structure) setWireframe(data.on === true);
     if (data.type === 'light' && !structure) setLight(data.level, data.tone);

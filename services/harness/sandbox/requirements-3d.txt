@@ -1,0 +1,2 @@
+# 3D 沙箱额外的 Python 包（Python 3.13 / Linux，锁定版本；numpy 由基础镜像提供）。
+trimesh==5.2.0

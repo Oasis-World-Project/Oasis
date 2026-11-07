@@ -41,6 +41,20 @@ export function apply(ctx) {
         });
       });
   });
+  // 运行中的追问和系统提醒：SDK 只会排到下一轮（followup），持续目标下一轮可能就是整个运行，
+  // 消息要等干完才被看到。根会话的这一轮还开着时，把用户消息挪到下一步（steer 的边界）。
+  const open = new WeakSet();
+  ctx.on('agent/inbox/claimed', ({ agent }) => {
+    if (String(agent.session.id) === request.sessionId) open.add(agent);
+  });
+  ctx.on('agent/inbox/inserted', ({ agent, message }) => {
+    if (String(agent.session.id) !== request.sessionId || message.source?.kind !== 'user') return;
+    if (!open.has(agent)) return;
+    defer(agent, () => {
+      if (open.has(agent) && agent.inbox.remove(message.id))
+        agent.inbox.append('next-step', message);
+    });
+  });
   // 原生委派工具会在 agent/created 时捕获授权，须在更早的会话发布边界衔接。
   ctx.on('session/created', (session) => {
     if (
@@ -108,7 +122,10 @@ export function apply(ctx) {
     const agent = ctx.agents.get(session.id);
     if (!agent || agent.session !== session) return;
     // 只能在轮次结束后续期：中途修改 revision 会使本轮的原生目标授权失效。
-    if (event.type === 'turn/end') defer(agent, () => extend(agent));
+    if (event.type === 'turn/end') {
+      open.delete(agent);
+      defer(agent, () => extend(agent));
+    }
     // 物理输出边界结束的是当前调用；已授权的未完成目标仍在同一会话续跑。
     if (event.type === 'turn/end' && event.data.reason.kind === 'max-tokens') truncated.add(agent);
   });
