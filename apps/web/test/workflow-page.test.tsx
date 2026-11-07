@@ -53,6 +53,10 @@ function baseTask(): TaskBody {
     sheet: null,
     materials: [],
     revisionOf: null,
+    version: 1,
+    versions: [],
+    revision: null,
+    revising: false,
     acceptance: null,
     deliverables: [],
     nodes: [
@@ -142,6 +146,25 @@ function fakeWorkflow() {
       }
       if (method === 'POST' && path.endsWith('/messages')) return json(202, { result: 'noted' });
       if (method === 'DELETE' && path === base) return new Response(null, { status: 204 });
+      // 冻结的第 1 版（ADR 0022）：只有 A、B 两个节点
+      if (method === 'GET' && path === `${base}/versions/1`)
+        return json(200, {
+          version: 1,
+          request: null,
+          createdAt: NOW,
+          frozenAt: NOW,
+          nodes: [task.nodes[0], { ...task.nodes[1], status: 'succeeded' }],
+          edges: [task.edges[0]],
+          spentMicro: 1_000,
+        });
+      if (method === 'POST' && path === `${base}/decision`) {
+        task = { ...task, status: 'running', attention: null, revision: null, version: 2 };
+        return json(200, task);
+      }
+      if (method === 'POST' && path === `${base}/cancel`) {
+        task = { ...task, status: 'succeeded', revision: null, revising: false };
+        return json(200, task);
+      }
       if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
       if (method === 'GET' && path === '/canvas/v1/artifacts') return json(200, { artifacts: [] });
       return undefined;
@@ -396,5 +419,83 @@ describe('工作流视图', () => {
     await waitFor(() =>
       expect(within(panel).getByText('没有上游，直接从任务开始做。')).toBeTruthy(),
     );
+  });
+
+  it('修改方案待确认：显示规划员的说明、每个步骤怎么处理和预计花费，确认后才开跑（ADR 0022）', async () => {
+    task = {
+      ...task,
+      status: 'needs_attention',
+      revising: true,
+      attention: { reason: 'revision_plan', nodeId: null, message: '只改网页灯光' },
+      revision: {
+        version: 2,
+        stage: 'confirm',
+        request: '加点光',
+        summary: '只改网页灯光，模型沿用。',
+        estimateMicro: 30_000,
+        changes: [
+          { key: 'research', title: '理清卖点', change: 'reuse' },
+          { key: 'copy', title: '写首页文案', change: 'continue' },
+          { key: 'image', title: '出效果图', change: 'remove' },
+        ],
+      },
+    };
+    const api = fakeWorkflow();
+    await openWorkflow();
+    expect(screen.getByText('修改中')).toBeTruthy();
+    expect(screen.getByText('修改方案待确认')).toBeTruthy();
+    expect(await screen.findByText('只改网页灯光，模型沿用。')).toBeTruthy();
+    const list = screen.getByRole('list', { name: '每个步骤怎么处理' });
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['沿用理清卖点', '接着改写首页文案', '删除出效果图']);
+    expect(screen.getByText(/预计约 \$0\.03/)).toBeTruthy();
+    // 方案按现在的节点排：等确认时不能改工作流
+    expect(screen.queryByRole('button', { name: '加节点' })).toBeNull();
+    expect(screen.getByRole('button', { name: '不改了' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '确认修改' }));
+    await waitFor(() =>
+      expect(api.bodies.find((b) => b.path.endsWith('/decision'))?.body).toEqual({
+        choice: 'continue',
+      }),
+    );
+  });
+
+  it('规划修改时工作流照旧显示，可以不改了；改过的任务能切到旧版只读查看', async () => {
+    task = {
+      ...task,
+      status: 'planning',
+      revising: true,
+      version: 2,
+      versions: [{ version: 1, request: null, createdAt: NOW, frozenAt: NOW }],
+      revision: {
+        version: 3,
+        stage: 'planning',
+        request: '再亮一点',
+        summary: null,
+        estimateMicro: null,
+        changes: [],
+      },
+    };
+    const api = fakeWorkflow();
+    await openWorkflow();
+    expect(screen.getByText('正在规划修改')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('AI 团队在看上一版');
+    expect(await nodeButton(/出效果图/)).toBeTruthy();
+
+    const tabs = screen.getByRole('tablist', { name: '工作流版本' });
+    fireEvent.click(within(tabs).getByRole('tab', { name: '第 1 版' }));
+    expect(await screen.findByText('第 1 版 · 只读')).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /出效果图/, hidden: true })).toBeNull(),
+    );
+    expect(screen.getByText('2 / 2')).toBeTruthy();
+    fireEvent.click(within(tabs).getByRole('tab', { name: '第 2 版（当前）' }));
+    expect(await nodeButton(/出效果图/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '不改了' }));
+    await waitFor(() => expect(api.bodies.some((b) => b.path.endsWith('/cancel'))).toBe(true));
   });
 });

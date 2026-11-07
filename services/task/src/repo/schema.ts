@@ -4,7 +4,10 @@ import type { Material } from '@oasis/contracts/canvas';
 import type {
   Attention,
   ExpectedFile,
+  NodeBody,
   NodeStatus,
+  PlanNode,
+  RevisionChange,
   TaskSheet,
   TaskStatus,
   TaskCheck,
@@ -17,8 +20,10 @@ export interface NodeConfig {
   requires?: string[];
   /** 最终验收退回后，等待上游最新产出再在原会话修复。 */
   repairChecks?: string[];
-  /** 用户看过成果后的修改意见（ADR 0012）：开跑时接着原会话按意见改 */
+  /** 用户看过成果后的修改意见（ADR 0012）：开跑时接着原会话按意见改（ADR 0022 起只用于「接着原会话改」的节点） */
   revision?: string;
+  /** 修改时「重新做」的节点：上一版它交出产出的那次运行，产出放进 in/_previous/（ADR 0022） */
+  previousRunId?: string;
   checks?: TaskCheck[];
   gateChecks?: CheckResult[];
   expects?: ExpectedFile[];
@@ -57,6 +62,28 @@ export interface RunMeta {
   participant?: string;
 }
 
+/** 规划员排的修改方案里一个节点（ADR 0022）：沿用，或完整节点 + 来自哪个旧节点、怎么做 */
+export type RevisionPlanNode =
+  { key: string; reuse: string } | (PlanNode & { from?: string; mode: 'continue' | 'fresh' });
+
+/** 进行中的修改（ADR 0022）：规划中没有 plan；通过规划门后带着方案等用户确认 */
+export interface RevisionState {
+  version: number;
+  request: string;
+  /** 意见针对的节点（批注、参数所在成果的节点） */
+  nodeIds: string[];
+  /** 修改前任务的状态：用户不改了就回到这个状态 */
+  previousStatus: TaskStatus;
+  plan?: {
+    summary: string;
+    nodes: RevisionPlanNode[];
+    edges: { from: string; to: string }[];
+    deliverables: Record<string, string>;
+  };
+  estimateMicro?: number;
+  changes?: { key: string; title: string; change: RevisionChange }[];
+}
+
 /** 一样交付物由哪个节点交出 */
 export interface Deliverable {
   name: string;
@@ -82,8 +109,12 @@ export const tasks = pgTable('tasks', {
   budgetLimitMicro: micro('budget_limit_micro'),
   sheet: jsonb('sheet').$type<TaskSheet>(),
   materials: jsonb('materials').$type<Material[]>().notNull().default([]),
-  /** 修改成果：这是哪个任务的新版（ADR 0012） */
+  /** 修改成果：这是哪个任务的新版（ADR 0012，旧流程） */
   revisionOf: uuid('revision_of'),
+  /** 当前是第几版工作流（ADR 0022） */
+  version: integer('version').notNull().default(1),
+  /** 进行中的修改（规划中 / 待确认） */
+  revision: jsonb('revision').$type<RevisionState>(),
   deliverables: jsonb('deliverables').$type<Deliverable[]>().notNull().default([]),
   plannerRunId: uuid('planner_run_id'),
   planAttempts: integer('plan_attempts').notNull().default(0),
@@ -127,6 +158,8 @@ export const nodes = pgTable('nodes', {
   createdAt: at('created_at').notNull().defaultNow(),
   startedAt: at('started_at'),
   finishedAt: at('finished_at'),
+  /** 修改时被方案删掉：从第几版起不在工作流里（ADR 0022）；在工作流里的为空 */
+  retiredVersion: integer('retired_version'),
 });
 
 export const edges = pgTable('edges', {
@@ -153,6 +186,19 @@ export const nodeRuns = pgTable('node_runs', {
   request: jsonb('request').$type<RunRequestRecord>().notNull(),
   createdAt: at('created_at').notNull().defaultNow(),
   finishedAt: at('finished_at'),
+});
+
+/** 冻结的旧版工作流（ADR 0022）：确认修改时存下，只读查看 */
+export const workflowVersions = pgTable('workflow_versions', {
+  taskId: uuid('task_id').notNull(),
+  version: integer('version').notNull(),
+  request: text('request'),
+  nodes: jsonb('nodes').$type<NodeBody[]>().notNull(),
+  edges: jsonb('edges').$type<{ id: string; from: string | null; to: string | null }[]>().notNull(),
+  deliverables: jsonb('deliverables').$type<Deliverable[]>().notNull().default([]),
+  spentMicro: micro('spent_micro').notNull().default(0),
+  createdAt: at('created_at').notNull(),
+  frozenAt: at('frozen_at').notNull().defaultNow(),
 });
 
 /** 已经计入花费的模型调用（结算事件按调用 ID 只算一次） */

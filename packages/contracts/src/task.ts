@@ -298,6 +298,11 @@ export const TaskRevisionBody = z
     parameters: z.array(RevisionParameter).max(40).default([]),
     /** 先传到 canvas 的文件 id（参考图、标注截图）；和任务素材同一个上限 */
     attachments: z.array(z.uuid()).max(20).default([]),
+    /**
+     * 意见针对的成果是哪些节点交出的（批注所在成果、当前打开的成果；ADR 0021 §7）。
+     * 只让这些交付节点接着改；没给或都不是交付节点时，只改最下游的交付节点。
+     */
+    nodeIds: z.array(z.uuid()).max(50).default([]),
   })
   .refine(
     (body) => body.request.length > 0 || body.annotations.length > 0 || body.parameters.length > 0,
@@ -351,6 +356,8 @@ export const Attention = z.object({
     'plan_failed',
     'over_estimate',
     'checks_incomplete',
+    /** 修改方案排好了，等用户确认（ADR 0022） */
+    'revision_plan',
   ]),
   nodeId: z.uuid().nullable(),
   message: z.string(),
@@ -409,6 +416,35 @@ export const EdgeBody = z.object({
 });
 export type EdgeBody = z.infer<typeof EdgeBody>;
 
+/** 一版工作流的概况（ADR 0022） */
+export const WorkflowVersionMeta = z.object({
+  version: z.number().int().positive(),
+  /** 这一版是按哪条修改意见做出来的；第 1 版为 null */
+  request: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+  /** 被下一版取代、冻结的时间：节点运行记录只显示这之前的 */
+  frozenAt: z.iso.datetime(),
+});
+export type WorkflowVersionMeta = z.infer<typeof WorkflowVersionMeta>;
+
+/** 修改方案里一个节点怎么处理 */
+export const RevisionChange = z.enum(['reuse', 'continue', 'fresh', 'new', 'remove']);
+export type RevisionChange = z.infer<typeof RevisionChange>;
+
+/** 进行中的修改（ADR 0022）：规划员在排方案，或方案排好了等用户确认 */
+export const PendingRevision = z.object({
+  /** 确认后会成为第几版 */
+  version: z.number().int().positive(),
+  stage: z.enum(['planning', 'confirm']),
+  request: z.string(),
+  /** 规划员给用户的一两句说明 */
+  summary: z.string().nullable(),
+  /** 只算要跑的节点 */
+  estimateMicro: z.number().int().nonnegative().nullable(),
+  changes: z.array(z.object({ key: z.string(), title: z.string(), change: RevisionChange })),
+});
+export type PendingRevision = z.infer<typeof PendingRevision>;
+
 export const TaskBody = z.object({
   id: z.uuid(),
   title: z.string(),
@@ -453,10 +489,26 @@ export const TaskBody = z.object({
   ),
   nodes: z.array(NodeBody),
   edges: z.array(EdgeBody),
+  /** 当前是第几版工作流（ADR 0022）；旧版 task 不返回时当作第 1 版 */
+  version: z.number().int().positive().default(1),
+  /** 冻结的旧版工作流（只读查看） */
+  versions: z.array(WorkflowVersionMeta).default([]),
+  /** 进行中的修改：规划中、待确认；没有时为 null */
+  revision: PendingRevision.nullable().default(null),
+  /** 修改中：在排修改方案、等确认，或新版还没做完（含中途停下） */
+  revising: z.boolean().default(false),
   createdAt: z.iso.datetime(),
   finishedAt: z.iso.datetime().nullable(),
 });
 export type TaskBody = z.infer<typeof TaskBody>;
+
+/** 冻结的一版工作流（ADR 0022）：节点和连线照冻结时的样子，只读 */
+export const WorkflowVersionBody = WorkflowVersionMeta.extend({
+  nodes: z.array(NodeBody),
+  edges: z.array(EdgeBody),
+  spentMicro: z.number().int().nonnegative(),
+});
+export type WorkflowVersionBody = z.infer<typeof WorkflowVersionBody>;
 
 export const TaskSummary = z.object({
   id: z.uuid(),

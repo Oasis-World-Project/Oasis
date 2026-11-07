@@ -20,6 +20,7 @@ import type {
   TaskSummary,
   UpdateEdgeBody,
   UpdateNodeBody,
+  WorkflowVersionBody,
 } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import type { Node, NodeRun, Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
@@ -141,7 +142,31 @@ function toRunBody(run: NodeRun): NodeRunBody {
   };
 }
 
-function toTaskBody({ task, nodes, edges }: Snapshot): TaskBody {
+/** 修改中：规划员在排修改方案、等用户确认，或确认后新版还没结束（停下的也算，ADR 0022） */
+const isRevising = (task: Snapshot['task']) =>
+  !!task.revision || (!FINAL.includes(task.status) && !!task.acceptance?.revision);
+
+/** 进行中的修改给前端看的样子（ADR 0022） */
+function toRevisionBody(task: Snapshot['task']): TaskBody['revision'] {
+  const r = task.revision;
+  if (!r) return null;
+  return {
+    version: r.version,
+    stage: r.plan ? 'confirm' : 'planning',
+    request: r.request,
+    summary: r.plan?.summary ?? null,
+    estimateMicro: r.estimateMicro ?? null,
+    changes: r.changes ?? [],
+  };
+}
+
+const toEdgeBody = (e: Snapshot['edges'][number]): EdgeBody => ({
+  id: e.id,
+  from: e.fromNodeId,
+  to: e.toNodeId,
+});
+
+function toTaskBody({ task, nodes, edges, versions }: Snapshot): TaskBody {
   const deliveryFiles = deliveryManifest(task.deliverables, nodes);
   return {
     id: task.id,
@@ -163,7 +188,16 @@ function toTaskBody({ task, nodes, edges }: Snapshot): TaskBody {
     deliverables: task.deliverables,
     ...(deliveryFiles === undefined ? {} : { deliveryFiles }),
     nodes: nodes.map(toNodeBody),
-    edges: edges.map((e): EdgeBody => ({ id: e.id, from: e.fromNodeId, to: e.toNodeId })),
+    edges: edges.map(toEdgeBody),
+    version: task.version,
+    versions: versions.map((v) => ({
+      version: v.version,
+      request: v.request,
+      createdAt: v.createdAt.toISOString(),
+      frozenAt: v.frozenAt.toISOString(),
+    })),
+    revision: toRevisionBody(task),
+    revising: isRevising(task),
     createdAt: task.createdAt.toISOString(),
     finishedAt: iso(task.finishedAt),
   };
@@ -177,6 +211,7 @@ const UNAVAILABLE: Record<Attention['reason'], string> = {
   plan_failed: '工作流没排好时只能重新规划或取消',
   workflow_broken: '工作流的连线断开了：先把线接好再点运行，或者取消任务',
   checks_incomplete: '检查停下了，可以继续、跳过检查或取消',
+  revision_plan: '修改方案只能确认，或者不改了',
 };
 
 const revising = () =>
@@ -798,6 +833,116 @@ export function createWorkflowService(deps: {
     if (await store.findActiveRevision(taskId)) throw revising();
   }
 
+  /**
+   * 用户确认修改方案（ADR 0022）：先把当前工作流冻结成一版，再按方案改——沿用的原样留下，
+   * 带 from 的保留原节点 ID（成果、同步路径、运行记录接得上），新节点新 ID，没出现的移出工作流；然后开跑。
+   */
+  async function applyRevision(snapshot: Snapshot, w: Writer, fx: Effects) {
+    const { task } = snapshot;
+    const revision = task.revision!;
+    const plan = revision.plan!;
+    const before = [...snapshot.nodes];
+    await w.addVersion({
+      version: task.version,
+      request: task.acceptance?.revision ?? null,
+      nodes: before.map(toNodeBody),
+      edges: snapshot.edges.map(toEdgeBody),
+      deliverables: task.deliverables,
+      spentMicro: before.reduce((sum, n) => sum + n.spentMicro, 0),
+      createdAt: snapshot.versions.at(-1)?.frozenAt ?? task.createdAt,
+    });
+    const byKey = new Map(before.map((n) => [n.key, n]));
+    const idOf = new Map<string, string>();
+    for (const entry of plan.nodes) {
+      if ('reuse' in entry) {
+        const node = byKey.get(entry.reuse)!;
+        idOf.set(entry.key, node.id);
+        // 上一轮修改留下的修改意见、修复项不再带着（产出照旧交给下游）
+        const { revision: _revision, repairChecks: _repairs, ...config } = node.config;
+        await w.setNode(node.id, {
+          status: 'succeeded',
+          config,
+          warning: null,
+          finishedAt: node.finishedAt ?? new Date(),
+        });
+        continue;
+      }
+      const { from, mode, ...planNode } = entry;
+      const source = from ? byKey.get(from) : undefined;
+      const row = nodeRow(planNode as PlanNode, source?.id ?? randomUUID(), 'waiting');
+      idOf.set(entry.key, row.id);
+      if (!source) {
+        await w.addNode(row);
+        continue;
+      }
+      const outputsRunId = source.config.outputsRunId;
+      await w.setNode(source.id, {
+        key: row.key,
+        title: row.title,
+        role: row.role,
+        goal: row.goal,
+        model: row.model,
+        // 接着改：接着上一版的会话，按意见和这次的安排改；重新做：新会话，上一版产出放进 in/_previous/
+        config:
+          mode === 'continue'
+            ? {
+                ...row.config,
+                ...(outputsRunId ? { outputsRunId } : {}),
+                revision: revision.request,
+              }
+            : { ...row.config, ...(outputsRunId ? { previousRunId: outputsRunId } : {}) },
+        status: 'waiting',
+        attempts: 0,
+        reworks: 0,
+        userNotes: [],
+        warning: null,
+        spentMicro: 0,
+        startedAt: null,
+        finishedAt: null,
+        ...(mode === 'continue' ? {} : { currentRunId: null, outputs: [], summary: null }),
+      });
+    }
+    const kept = new Set(idOf.values());
+    for (const edge of [...snapshot.edges]) await w.deleteEdge(edge.id);
+    for (const node of before.filter((n) => !kept.has(n.id)))
+      await w.retireNode(node.id, revision.version);
+    for (const edge of plan.edges)
+      await w.addEdge({
+        id: randomUUID(),
+        fromNodeId: idOf.get(edge.from)!,
+        toNodeId: idOf.get(edge.to)!,
+      });
+    await w.setTask({
+      version: revision.version,
+      revision: null,
+      deliverables: task.sheet!.deliverables.map((d) => ({
+        name: d.name,
+        form: d.form,
+        nodeId: idOf.get(plan.deliverables[d.name] ?? '') ?? null,
+      })),
+      // 这一轮按修改意见验收（只查意见改好没有，ADR 0012）
+      acceptance: { unmet: [], revision: revision.request },
+      status: 'running',
+      attention: null,
+      finishedAt: null,
+    });
+    logger.info({ taskId: task.id, version: revision.version }, '用户确认了修改方案，开跑');
+    await schedule(snapshot, w, fx);
+  }
+
+  /** 用户不改了（规划中或待确认）：回到修改前的样子，成果不变（ADR 0022） */
+  async function cancelRevision(snapshot: Snapshot, w: Writer, fx: Effects) {
+    const { task } = snapshot;
+    if (task.status === 'planning' && task.plannerRunId) fx.cancel.push(task.plannerRunId);
+    await w.setTask({
+      status: task.revision!.previousStatus,
+      attention: null,
+      revision: null,
+      plannerRunId: null,
+    });
+    logger.info({ taskId: task.id }, '用户不改了');
+  }
+
   /** 取消整个任务（在事务里） */
   async function cancelAll(snapshot: Snapshot, w: Writer, fx: Effects) {
     fx.abortChecks.push({ taskId: snapshot.task.id });
@@ -970,7 +1115,8 @@ export function createWorkflowService(deps: {
         nodesTotal: nodes.length,
         spentMicro: task.spentMicro,
         revisionOf: task.revisionOf,
-        revising: !FINAL.includes(task.status) && !!task.acceptance?.revision,
+        // 从发出修改到新版交付（或不改了）都算修改中（ADR 0022）
+        revising: isRevising(task),
         createdAt: task.createdAt.toISOString(),
       }));
     },
@@ -1008,20 +1154,21 @@ export function createWorkflowService(deps: {
      * 已经删过的直接返回（事件重投时会再调一次）。
      */
     /**
-     * 修改成果（ADR 0012，2026-11-05 用户决定在原任务里接着做）：不新建任务、不重新规划。
-     * 交付节点带着修改意见接着原会话改，下游基于新产出跟着更新；附件并进任务素材，每次运行都能看到。
+     * 修改成果（ADR 0022，取代 0012 的「交付节点接着原会话改」）：在原任务里改，但先交给规划员看上一版
+     * 决定怎么改（沿用 / 接着改 / 重新做 / 加减节点），排好后等用户确认才开跑；附件并进任务素材。
      * 新版交付后 canvas 原地更新成果，链接不变。
      */
     async revise(
       taskId: string,
-      body: { ownerId: string; request: string; materials: Material[] },
+      body: { ownerId: string; request: string; materials: Material[]; nodeIds?: string[] },
     ): Promise<TaskBody> {
       await transact(taskId, async (snapshot, w, fx) => {
         const { task } = snapshot;
         if (task.ownerId !== body.ownerId)
           throw new HttpError(404, 'task_not_found', '没有这个任务');
-        // 已结束的任务都能接着改（修改中途取消后，成果还是上一版，可以再发起一次）
-        if (!FINAL.includes(task.status))
+        if (task.revision) throw revising();
+        // 已结束或已停下的任务都能接着改（修改中途停下、取消后，成果还是上一版）
+        if (!FINAL.includes(task.status) && task.status !== 'stopped')
           throw new HttpError(
             409,
             'task_not_delivered',
@@ -1029,33 +1176,23 @@ export function createWorkflowService(deps: {
           );
         // 旧流程建的修订任务还没结束（2026-11-05 之前发起的）
         if (await store.findActiveRevision(taskId)) throw revising();
-        const owners = new Set(
-          selectDeliverables(task.deliverables, snapshot.nodes).map((d) => d.nodeId),
-        );
-        const targets = snapshot.nodes.filter((n) => owners.has(n.id) && n.currentRunId);
-        if (!targets.length)
-          throw new HttpError(409, 'task_not_revisable', '这个任务没有可以接着改的交付节点');
+        if (!task.sheet || snapshot.nodes.length === 0)
+          throw new HttpError(409, 'task_not_revisable', '这个任务没有可以接着改的工作流');
         const known = new Set(task.materials.map((m) => m.uploadId));
         await w.setTask({
-          status: 'running',
-          attention: null,
-          finishedAt: null,
-          // 记下这轮的修改意见：完成前不显示上一轮的验收记录
-          acceptance: { unmet: [], revision: body.request },
           materials: [...task.materials, ...body.materials.filter((m) => !known.has(m.uploadId))],
+          revision: {
+            version: task.version + 1,
+            request: body.request,
+            nodeIds: body.nodeIds ?? [],
+            previousStatus: task.status,
+          },
+          planAttempts: 0,
         });
-        const affected = withDownstream(snapshot, targets);
-        for (const node of snapshot.nodes.filter((n) => affected.has(n.id)))
-          await w.setNode(node.id, {
-            status: 'waiting',
-            finishedAt: null,
-            reworks: 0,
-            warning: null,
-            config: { ...node.config, revision: body.request },
-          });
-        await schedule(snapshot, w, fx);
+        // 交给规划员看上一版决定怎么改，排好后先给用户确认（ADR 0022）
+        await planning.begin(snapshot, w, fx);
       });
-      logger.info({ taskId }, '在原任务里接着改');
+      logger.info({ taskId }, '修改交给规划员');
       return toTaskBody(await owned(body.ownerId, taskId));
     },
 
@@ -1070,8 +1207,25 @@ export function createWorkflowService(deps: {
     /** 节点的运行过程：转发它最近一次运行的事件 */
     /** 节点的全部运行（第一次、重做、关卡退回修改、停止后继续、讨论的每次发言） */
     async nodeRuns(ownerId: string, taskId: string, nodeId: string): Promise<NodeRunBody[]> {
-      nodeOf(await owned(ownerId, taskId), nodeId);
+      // 修改时移出工作流的节点也能看（旧版查看，ADR 0022）：运行按任务过滤，归属已经核对
+      await owned(ownerId, taskId);
       return (await store.listNodeRuns(taskId, nodeId)).map(toRunBody);
+    },
+
+    /** 冻结的某一版工作流（ADR 0022） */
+    async version(ownerId: string, taskId: string, version: number): Promise<WorkflowVersionBody> {
+      await owned(ownerId, taskId);
+      const row = await store.getVersion(taskId, version);
+      if (!row) throw new HttpError(404, 'version_not_found', '没有这一版');
+      return {
+        version: row.version,
+        request: row.request,
+        createdAt: row.createdAt.toISOString(),
+        frozenAt: row.frozenAt.toISOString(),
+        nodes: row.nodes,
+        edges: row.edges,
+        spentMicro: row.spentMicro,
+      };
     },
 
     /** 一次运行的过程（按序号增量拉取）；不指定运行时看节点当前这次 */
@@ -1082,8 +1236,9 @@ export function createWorkflowService(deps: {
       after: number,
       runId?: string,
     ) {
-      const node = nodeOf(await owned(ownerId, taskId), nodeId);
-      const target = runId ?? node.currentRunId;
+      const snapshot = await owned(ownerId, taskId);
+      // 指定了运行时（旧版查看）不要求节点还在工作流里，下面核对运行属于这个节点
+      const target = runId ?? nodeOf(snapshot, nodeId).currentRunId;
       if (!target) return { events: [] };
       if (runId) {
         const run = await store.findRun(runId);
@@ -1185,7 +1340,9 @@ export function createWorkflowService(deps: {
     async cancel(ownerId: string, taskId: string): Promise<TaskBody> {
       await owned(ownerId, taskId);
       await transact(taskId, async (snapshot, w, fx) => {
-        if (!FINAL.includes(snapshot.task.status)) await cancelAll(snapshot, w, fx);
+        // 修改还在规划或等确认：取消的是这次修改，不是整个任务（ADR 0022）
+        if (snapshot.task.revision) await cancelRevision(snapshot, w, fx);
+        else if (!FINAL.includes(snapshot.task.status)) await cancelAll(snapshot, w, fx);
       });
       return toTaskBody(await owned(ownerId, taskId));
     },
@@ -1197,8 +1354,12 @@ export function createWorkflowService(deps: {
         if (task.status !== 'needs_attention' || !task.attention) {
           throw new HttpError(409, 'nothing_to_decide', '这个任务现在不需要你处理');
         }
+        // 修改方案等确认、或修改没排出方案时：「不改了」只取消这次修改；「确认修改」按方案开跑（ADR 0022）
+        if (task.revision && choice === 'cancel') return cancelRevision(snapshot, w, fx);
         if (choice === 'cancel') return cancelAll(snapshot, w, fx);
         const { reason, nodeId } = task.attention;
+        if (reason === 'revision_plan' && choice === 'continue' && task.revision?.plan)
+          return applyRevision(snapshot, w, fx);
         // 「继续」：从停下的地方接着检查——记下的检查结果和已保存的浏览器报告接着用（2026-11-05 用户决定）
         if (reason === 'checks_incomplete' && choice === 'retry') {
           await w.setTask({ status: nodeId ? 'running' : 'accepting', attention: null });

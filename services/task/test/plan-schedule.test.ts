@@ -120,6 +120,7 @@ const node = (key: string, status: Node['status'] = 'waiting'): Node => ({
   createdAt: new Date(),
   startedAt: null,
   finishedAt: null,
+  retiredVersion: null,
 });
 const edge = (from: Node | null, to: Node | null): Edge => ({
   id: `e-${from?.key}-${to?.key}`,

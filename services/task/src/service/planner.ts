@@ -38,10 +38,8 @@ export const PLAN_FILE = 'plan.json';
 /** 每个节点最多几条自查（2026-11-05 用户：小任务十几条检查不合理） */
 const MAX_NODE_CHECKS = 5;
 
-/** 给规划员的说明：只讲清任务、资源和方案格式，怎么排由规划员自己判断（用户 2026-11-07：规则只留最重要的） */
-export function plannerPrompt(input: {
-  brief: string;
-  sheet: TaskSheet;
+/** 规划员能用的资源：模型、工具、沙箱环境、经验手册（第一次规划和修改规划共用） */
+export interface PlannerResources {
   catalog: PricedModel[];
   /** 现在能用的外部工具 */
   tools: ToolEntry[];
@@ -49,7 +47,9 @@ export function plannerPrompt(input: {
   playbooks: Pick<Playbook, 'key' | 'name' | 'when'>[];
   defaultModel: string;
   environment?: ExecutionEnvironment;
-}): string {
+}
+
+export function resourceSections(input: PlannerResources): string[] {
   const TIER = { flagship: '旗舰', strong: '强力', fast: '快速' } as const;
   const models = input.catalog
     .map((m) => {
@@ -82,30 +82,67 @@ export function plannerPrompt(input: {
         })
         .join('\n')
     : '（现在没有可用的工具）';
+  return [
+    `【可以用的模型】\n${models}`,
+    `【可以用的工具】（节点里用 oasis-tool 调用；方案里写成 {"key":"image.generate","uses":预计计费单位数,"model":"型号"}）\n${tools}`,
+    ...(input.environment
+      ? [
+          `【沙箱环境】${JSON.stringify(input.environment)}\n节点依赖的本地能力写进 requires（只能填 capabilities 里有的）。`,
+        ]
+      : []),
+    ...(input.playbooks.length
+      ? [
+          `【经验手册】（需要时读；节点看不到手册，节点要用的命令和格式写进它的 goal）\n${input.playbooks.map((p) => `- in/playbooks/${p.key}.md：${p.name}（${p.when}）`).join('\n')}`,
+        ]
+      : []),
+  ];
+}
+
+/** 节点字段的说明（第一次规划和修改规划共用） */
+export const NODE_FORMAT_RULES = [
+  '- kind：work 是一个 AI 在独立容器里做一件事，成果写到 out/；discussion 是几位参与者（各自的模型和立场）讨论几轮、由 model 汇总，只在真要权衡取舍时用。',
+  '- 连线 from → to：上游的 out/ 放进下游的 in/<上游 key>/；没有连线的节点同时开跑。',
+  `- deliverables：任务单上每样交付物都指定由哪个节点交出；那个节点要写 deliver（最终交付的文件路径，可用 * 通配，* 只匹配一层，** 递归）。deliver 只放任务单上的交付物；为做它产生的预览图、参考图、草稿只在节点之间传递，不写进 deliver。`,
+  '- expects：节点必须产出的文件（可写 {"pattern":"图/*.png","minCount":4} 这类数量要求），系统会核对。checks：可选，节点交付前自己看一眼的几件事，最多 5 条。',
+  '- goal 只写这个节点要做什么、交出什么文件，不写检查流程，检查交给节点自己判断；节点不能再问用户。key 只用英文字母、数字、下划线、短横线。',
+];
+
+/** 方案示例里的一个干活节点 */
+export function exampleNode(key: string, title: string, goal: string, file: string, model: string) {
+  return {
+    key,
+    title,
+    kind: 'work',
+    role: '',
+    goal,
+    model,
+    tools: [],
+    checks: [],
+    expects: [file],
+  };
+}
+
+/** 给规划员的说明：只讲清任务、资源和方案格式，怎么排由规划员自己判断（用户 2026-11-07：规则只留最重要的） */
+export function plannerPrompt(
+  input: PlannerResources & { brief: string; sheet: TaskSheet },
+): string {
   const deliverable = input.sheet.deliverables[0]?.name ?? '交付物';
   const example = {
     nodes: [
       {
-        key: 'draft',
-        title: '写初稿',
-        kind: 'work',
+        ...exampleNode('draft', '写初稿', '……写成 out/初稿.md', '初稿.md', input.defaultModel),
         role: '资深文案',
-        goal: '……写成 out/初稿.md',
-        model: input.defaultModel,
-        tools: [],
         checks: ['开头一句话点明卖点'],
-        expects: ['初稿.md'],
       },
       {
-        key: 'final',
-        title: '定稿',
-        kind: 'work',
+        ...exampleNode(
+          'final',
+          '定稿',
+          '按 in/draft/初稿.md ……改成 out/成稿.md',
+          '成稿.md',
+          input.defaultModel,
+        ),
         role: '主编',
-        goal: '按 in/draft/初稿.md ……改成 out/成稿.md',
-        model: input.defaultModel,
-        tools: [],
-        checks: [],
-        expects: ['成稿.md'],
         deliver: ['成稿.md'],
       },
     ],
@@ -119,26 +156,11 @@ export function plannerPrompt(input: {
     `【任务】\n${input.brief}`,
     `【任务单】\n${JSON.stringify(input.sheet)}`,
     budgetPart(input.sheet),
-    `【可以用的模型】\n${models}`,
-    `【可以用的工具】（节点里用 oasis-tool 调用；方案里写成 {"key":"image.generate","uses":预计计费单位数,"model":"型号"}）\n${tools}`,
-    ...(input.environment
-      ? [
-          `【沙箱环境】${JSON.stringify(input.environment)}\n节点依赖的本地能力写进 requires（只能填 capabilities 里有的）。`,
-        ]
-      : []),
-    ...(input.playbooks.length
-      ? [
-          `【经验手册】（需要时读；节点看不到手册，节点要用的命令和格式写进它的 goal）\n${input.playbooks.map((p) => `- in/playbooks/${p.key}.md：${p.name}（${p.when}）`).join('\n')}`,
-        ]
-      : []),
+    ...resourceSections(input),
     [
       '【方案格式】写成 out/' + PLAN_FILE + '（只放 JSON），例如：',
       JSON.stringify(example, null, 2),
-      '- kind：work 是一个 AI 在独立容器里做一件事，成果写到 out/；discussion 是几位参与者（各自的模型和立场）讨论几轮、由 model 汇总，只在真要权衡取舍时用。',
-      '- 连线 from → to：上游的 out/ 放进下游的 in/<上游 key>/；没有连线的节点同时开跑。',
-      `- deliverables：任务单上每样交付物都指定由哪个节点交出；那个节点要写 deliver（最终交付的文件路径，可用 * 通配，* 只匹配一层，** 递归）。deliver 只放任务单上的交付物；为做它产生的预览图、参考图、草稿只在节点之间传递，不写进 deliver。`,
-      '- expects：节点必须产出的文件（可写 {"pattern":"图/*.png","minCount":4} 这类数量要求），系统会核对。checks：可选，节点交付前自己看一眼的几件事，最多 5 条。',
-      '- goal 只写这个节点要做什么、交出什么文件，不写检查流程，检查交给节点自己判断；节点不能再问用户。key 只用英文字母、数字、下划线、短横线。',
+      ...NODE_FORMAT_RULES,
     ].join('\n'),
     '写完用一两句话说明你的安排。',
   ].join('\n\n');
@@ -154,6 +176,20 @@ export function revisePrompt(problems: string[]): string {
   ].join('\n');
 }
 
+/** 读出规划员写的 JSON；不存在、不是 JSON 时给出问题 */
+export function readPlanJson(text: string | undefined): { raw: unknown } | { problems: string[] } {
+  if (text === undefined) return { problems: [`没有找到 out/${PLAN_FILE}`] };
+  try {
+    return { raw: JSON.parse(text) };
+  } catch {
+    return { problems: [`out/${PLAN_FILE} 不是合法的 JSON`] };
+  }
+}
+
+/** zod 的问题 → 交回给规划员的话 */
+export const issuesOf = (error: z.ZodError) =>
+  error.issues.slice(0, 8).map((i) => `${i.path.join('.') || '整体'}：${i.message}`);
+
 /** 规划门：检查规划员写的方案。返回方案，或者问题清单（普通话，会原样交回给规划员） */
 export function checkPlan(
   text: string | undefined,
@@ -162,30 +198,35 @@ export function checkPlan(
   tools: ToolEntry[],
   environment?: ExecutionEnvironment,
 ): { plan: PlannerPlan } | { problems: string[] } {
-  if (text === undefined) return { problems: [`没有找到 out/${PLAN_FILE}`] };
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    return { problems: [`out/${PLAN_FILE} 不是合法的 JSON`] };
-  }
-  const parsed = PlannerPlan.safeParse(raw);
-  if (!parsed.success) {
-    return {
-      problems: parsed.error.issues
-        .slice(0, 8)
-        .map((i) => `${i.path.join('.') || '整体'}：${i.message}`),
-    };
-  }
-  const plan = parsed.data;
+  const read = readPlanJson(text);
+  if ('problems' in read) return read;
+  const parsed = PlannerPlan.safeParse(read.raw);
+  if (!parsed.success) return { problems: issuesOf(parsed.error) };
+  const problems = workflowProblems(parsed.data, sheet, catalog, tools, environment);
+  return problems.length > 0 ? { problems } : { plan: parsed.data };
+}
+
+/**
+ * 方案本身的问题：结构（重名、环、连线）、模型和工具能不能用、交付物有没有人交。
+ * fixed 里的节点照搬上一版（修改时沿用的，ADR 0022），不再查模型、工具和自查条数。
+ */
+export function workflowProblems(
+  plan: PlannerPlan,
+  sheet: TaskSheet,
+  catalog: CatalogEntry[],
+  tools: ToolEntry[],
+  environment?: ExecutionEnvironment,
+  fixed: ReadonlySet<string> = new Set(),
+): string[] {
   const problems: string[] = [];
   try {
     validatePlan(plan);
   } catch (err) {
     problems.push(err instanceof HttpError ? err.message : String(err));
   }
+  const checked = plan.nodes.filter((n) => !fixed.has(n.key));
   const usable = new Set(catalog.map((m) => m.providerModel));
-  const used = plan.nodes.flatMap((n) => [
+  const used = checked.flatMap((n) => [
     n.model,
     ...(n.kind === 'discussion' ? n.participants.map((p) => p.model) : []),
   ]);
@@ -193,7 +234,7 @@ export function checkPlan(
     if (!usable.has(model)) problems.push(`模型 ${model} 不在可以用的模型里`);
   }
   const usableTools = new Map(tools.map((t) => [t.key, t]));
-  for (const node of plan.nodes) {
+  for (const node of checked) {
     for (const required of node.requires ?? [])
       if (environment && !environment.capabilities.includes(required))
         problems.push(`节点「${node.key}」要求的本地能力 ${required} 在当前环境不可用`);
@@ -221,7 +262,7 @@ export function checkPlan(
     else if (!plan.nodes.find((n) => n.key === owner)?.deliver?.length)
       problems.push(`交付物「${d.name}」的节点「${owner}」没有指定最终 deliver 文件`);
   }
-  return problems.length > 0 ? { problems } : { plan };
+  return problems;
 }
 
 /**

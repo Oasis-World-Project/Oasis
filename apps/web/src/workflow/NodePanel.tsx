@@ -225,9 +225,12 @@ export function NodePanel({
   onEdit,
   onClose,
   onPick,
+  before,
 }: {
   task: TaskBody;
   node: NodeBody;
+  /** 看旧版工作流：只读，运行记录只列这一版冻结之前的（ADR 0022） */
+  before?: string;
   speakers: ReturnType<typeof useSpeakers>;
   actions: WorkflowActions;
   onEdit: () => void;
@@ -532,7 +535,13 @@ export function NodePanel({
           </Section>
         )}
         <Section title="运行过程">
-          <RunHistory taskId={task.id} nodeId={node.id} live={live} toolName={speakers.toolName} />
+          <RunHistory
+            taskId={task.id}
+            nodeId={node.id}
+            live={live}
+            toolName={speakers.toolName}
+            {...(before ? { before } : {})}
+          />
         </Section>
       </div>
       {allowed.message && <Ask task={task} node={node} actions={actions} />}

@@ -4,14 +4,12 @@ import type {
   NodeBody,
   NodeRunBody,
   NodeStatus,
+  RevisionChange,
   TaskBody,
   TaskStatus,
 } from '@oasis/contracts/task';
 
-export const TASK_STATUS: Record<
-  TaskStatus,
-  { label: string; tone: 'muted' | 'accent' | 'solid' }
-> = {
+const TASK_STATUS: Record<TaskStatus, { label: string; tone: 'muted' | 'accent' | 'solid' }> = {
   planning: { label: '正在搭建工作流', tone: 'muted' },
   running: { label: '进行中', tone: 'muted' },
   accepting: { label: '正在验收', tone: 'muted' },
@@ -74,7 +72,28 @@ const ACTIVE: NodeStatus[] = ['running', 'checking'];
 /** 任务这几个状态下工作流不能动 */
 const FROZEN: TaskBody['status'][] = ['planning', 'accepting', 'succeeded', 'failed', 'cancelled'];
 
-export const canEditWorkflow = (task: TaskBody) => !FROZEN.includes(task.status);
+/** 修改方案在排、等确认时不能动工作流：方案按现在的节点排（ADR 0022） */
+export const canEditWorkflow = (task: TaskBody) => !FROZEN.includes(task.status) && !task.revision;
+
+/** 任务状态的叫法：修改时规划员在排方案叫「正在规划修改」，等确认叫「修改方案待确认」 */
+export function taskStatusOf(
+  task: Pick<TaskBody, 'status' | 'revising'> & { revision?: TaskBody['revision'] },
+) {
+  if (task.revising && task.status === 'planning')
+    return { label: '正在规划修改', tone: 'muted' as const };
+  if (task.revision?.stage === 'confirm')
+    return { label: '修改方案待确认', tone: 'accent' as const };
+  return TASK_STATUS[task.status];
+}
+
+/** 修改方案里每个节点怎么处理（ADR 0022） */
+export const REVISION_CHANGE: Record<RevisionChange, string> = {
+  reuse: '沿用',
+  continue: '接着改',
+  fresh: '重新做',
+  new: '新增',
+  remove: '删除',
+};
 
 /** 单独运行要求上游都已完成（停止后继续除外），和 task 的 runNode 一致 */
 function upstreamReady(task: TaskBody, node: NodeBody): boolean {

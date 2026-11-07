@@ -196,6 +196,14 @@ export function registerRoutes(
       .headers(fileResponseHeaders('application/json', 'application-check.json', true))
       .send(await workflows.applicationReport(requireUserId(request), taskId, nodeId));
   });
+  /** 冻结的某一版工作流（ADR 0022），只读 */
+  app.get('/v1/tasks/:taskId/versions/:version', async (request) => {
+    const { taskId, version } = parseWith(
+      TaskParams.extend({ version: z.coerce.number().int().positive() }),
+      request.params,
+    );
+    return workflows.version(requireUserId(request), taskId, version);
+  });
   app.get('/v1/tasks/:taskId/nodes/:nodeId/runs', async (request) => {
     const { taskId, nodeId } = parseWith(NodeParams, request.params);
     return { runs: await workflows.nodeRuns(requireUserId(request), taskId, nodeId) };

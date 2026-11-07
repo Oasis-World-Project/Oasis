@@ -12,6 +12,7 @@ import {
   speechPrompt,
   summaryPrompt,
   workPrompt,
+  PREVIOUS_DIR,
   type NodeContext,
   type Speech,
 } from './prompt.ts';
@@ -59,6 +60,7 @@ function contextOf(snapshot: Snapshot, node: Node): NodeContext {
     materials: materialPaths(snapshot.task.materials).map((m) => m.path),
     ...(node.config.deliver === undefined ? {} : { deliver: node.config.deliver }),
     checks: (node.config.checks ?? []).map((c) => (typeof c === 'string' ? c : c.text)),
+    ...(node.config.previousRunId ? { previous: true } : {}),
     budget: {
       ...(node.config.budgetMicro ? { nodeMicro: node.config.budgetMicro } : {}),
       ...(snapshot.task.sheet?.budget
@@ -76,11 +78,16 @@ function contextOf(snapshot: Snapshot, node: Node): NodeContext {
   };
 }
 
-/** 上游节点交出的产出（交出它们的那次运行），放进 in/<上游节点名>/；没有产出的上游不放 */
-const inputsOf = (snapshot: Snapshot, node: Node) =>
-  upstreamOf(snapshot, node)
+/**
+ * 上游节点交出的产出（交出它们的那次运行），放进 in/<上游节点名>/；没有产出的上游不放。
+ * 修改时重新做的节点再带上上一版自己交出的文件（in/_previous/，ADR 0022）。
+ */
+const inputsOf = (snapshot: Snapshot, node: Node) => [
+  ...upstreamOf(snapshot, node)
     .filter((u) => u.config.outputsRunId && u.outputs.length > 0)
-    .map((u) => ({ runId: u.config.outputsRunId as string, as: u.key }));
+    .map((u) => ({ runId: u.config.outputsRunId as string, as: u.key })),
+  ...(node.config.previousRunId ? [{ runId: node.config.previousRunId, as: PREVIOUS_DIR }] : []),
+];
 
 const speechesOf = (config: NodeConfig): Speech[] =>
   (config.transcript ?? []).map(({ round, name, text }) => ({ round, name, text }));
@@ -211,7 +218,7 @@ export function reworkStep(node: Node, unmet: string[], revision?: string): Step
         purpose: 'rework',
         goal: revision !== undefined,
         model: node.model,
-        prompt: revision !== undefined ? revisionPrompt(revision) : reworkPrompt(unmet),
+        prompt: revision !== undefined ? revisionPrompt(revision, node.goal) : reworkPrompt(unmet),
         inputsFrom: [],
         continueFrom: node.currentRunId ?? undefined,
         meta: {},

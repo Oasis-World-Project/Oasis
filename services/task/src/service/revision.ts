@@ -65,6 +65,7 @@ export function createRevisions(deps: {
         ownerId,
         request: revisionText(body.request, body.annotations, body.parameters),
         materials: uploads.map(({ id, name, size }) => ({ uploadId: id, name, size })),
+        nodeIds: body.nodeIds,
       });
     },
   };

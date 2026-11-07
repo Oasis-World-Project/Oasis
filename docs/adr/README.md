@@ -17,7 +17,7 @@ ADR 记下「为什么这么做」。代码注释里大量引用「ADR 00xx §y�
 | [0009](0009-runnable-artifacts.md) | 可运行成果与独立预览 | 现行；节点自查 app.check 见 0017；平台容器预览已被 0021 删除 |
 | [0010](0010-media-artifacts.md) | 音频、视频成品与可编辑工程 | 现行；视频黑屏/静音提醒已被 0017 删除 |
 | [0011](0011-3d-and-cloud-rendering.md) | 3D 与云端渲染 | 现行；沙箱 3D 工具补充见 0020 |
-| [0012](0012-revise-results.md) | 修改成果 | 现行；2026-11-05 起在原任务里接着改 |
+| [0012](0012-revise-results.md) | 修改成果 | 现行；2026-11-05 起在原任务里接着改，怎么改由规划员定见 0022 |
 | [0013](0013-digital-human.md) | 实时数字人 | 现行 |
 | [0014](0014-group-chat-and-ai-settings.md) | 群聊、@、AI 设置与自带 Key | 6.1 已实施，6.2–6.4 为设计稿 |
 | [0015](0015-persistent-node-execution.md) | 节点作为持续子任务执行 | 现行；修复改单轮（0017），规划员单轮（0018） |
@@ -27,3 +27,4 @@ ADR 记下「为什么这么做」。代码注释里大量引用「ADR 00xx §y�
 | [0019](0019-desktop-first.md) | 以桌面端为准 | 现行 |
 | [0020](0020-3d-toolkit-and-steering.md) | 3D 工具、运行中消息即时送达、3D 导演台 | 现行 |
 | [0021](0021-canvas-runs-what-checks-pass.md) | 检查过的网页，画布里一定打得开 | 现行 |
+| [0022](0022-revisions-planned-by-team.md) | 修改交给 AI 团队规划、工作流分版本、先确认再跑 | 现行 |

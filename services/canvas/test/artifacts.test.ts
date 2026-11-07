@@ -106,12 +106,15 @@ let finalFiles: { deliverable: string; nodeId: string; path: string; size: numbe
 const revisionOf = new Map<string, string>();
 /** 任务最近一次交付的时间（修改后再次交付时比成果登记得晚） */
 const finishedAt = new Map<string, string>();
+/** 任务的工作流版本（修改确认过几次，ADR 0022） */
+const versions = new Map<string, number>();
 const retired: { taskId: string; replacedBy: string }[] = [];
 task.get('/internal/tasks/:id', async (request) => {
   const { id } = request.params as { id: string };
   return {
     ...taskBody(id),
     revisionOf: revisionOf.get(id) ?? null,
+    version: versions.get(id) ?? 1,
     ...(finishedAt.has(id) ? { finishedAt: finishedAt.get(id) } : {}),
     ...(finalFiles === undefined ? {} : { deliveryFiles: finalFiles }),
   };
@@ -150,6 +153,7 @@ beforeEach(async () => {
   fileFailures = 0;
   revisionOf.clear();
   finishedAt.clear();
+  versions.clear();
   retired.length = 0;
   gatewayCalls.length = 0;
   uploadRows = memoryUploads();
@@ -541,6 +545,27 @@ describe('修改成果：原地换新版、旧式修订替换、删除（ADR 001
     expect(same.sha256).toBe(heroSha);
     expect(same.replacesSha256).toBeNull();
     expect(retired).toEqual([]);
+  });
+
+  it('修改后的新版不再交付的旧成果从画布删掉（ADR 0022 §5）；新版什么也没交出时保留', async () => {
+    await service.onTaskStatus(event(T1));
+    expect(
+      repo.rows
+        .filter((r) => r.taskId === T1)
+        .map((r) => r.path)
+        .sort(),
+    ).toEqual(['hero.png', '首页文案.md']);
+    const hero = repo.rows.find((r) => r.taskId === T1 && r.path === 'hero.png')!;
+    versions.set(T1, 2);
+    finishedAt.set(T1, new Date(Date.now() + 1000).toISOString());
+    finalFiles = [];
+    await service.onTaskStatus(event(T1));
+    expect(repo.rows.filter((r) => r.taskId === T1)).toHaveLength(2);
+    finalFiles = [{ deliverable: '首页文案', nodeId: COPY, path: '首页文案.md', size: 1 }];
+    await service.onTaskStatus(event(T1));
+    await service.onTaskStatus(event(T1));
+    expect(repo.rows.filter((r) => r.taskId === T1).map((r) => r.path)).toEqual(['首页文案.md']);
+    expect(objects.objects.has(hero.objectKey)).toBe(false);
   });
 
   it('旧式修订任务交付后整体替换上一版：沿用同步路径、记下旧摘要、删旧对象和修订素材，再让 task 删上一版；重投幂等', async () => {

@@ -24,10 +24,13 @@ export function RevisePanel({
   taskId,
   taskTitle,
   parameters = [],
+  nodeId,
   onClose,
 }: {
   taskId: string;
   taskTitle: string;
+  /** 当前打开的成果是哪个节点交出的（从成果页发起时才有） */
+  nodeId?: string;
   /** 从参数面板来的成品参数（ADR 0012 §12） */
   parameters?: RevisionParameter[];
   onClose: () => void;
@@ -66,11 +69,17 @@ export function RevisePanel({
         annotations = toRevisionNotes(noted, built.nameOf);
       }
       setStage(null);
+      // 意见针对哪些节点（ADR 0021 §7）：批注所在成果的节点；参数来自当前成果，或者没批注时意见针对的就是当前成果
+      const nodeIds = new Set(
+        annotations.length ? noted.flatMap((a) => (a.nodeId ? [a.nodeId] : [])) : ([] as string[]),
+      );
+      if (nodeId && (parameters.length > 0 || nodeIds.size === 0)) nodeIds.add(nodeId);
       await reviseTask(taskId, {
         request: request.trim(),
         annotations,
         parameters,
         attachments: [...files.ids, ...shots],
+        nodeIds: [...nodeIds],
       });
     },
     onSettled: () => setStage(null),

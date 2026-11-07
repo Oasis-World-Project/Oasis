@@ -76,14 +76,18 @@ export function RunHistory({
   nodeId,
   live,
   toolName,
+  before,
 }: {
   taskId: string;
   nodeId: string;
+  /** 看旧版工作流时只列这一版冻结之前的运行（ADR 0022） */
+  before?: string;
   /** 节点在动：运行列表跟着刷新 */
   live: boolean;
   toolName: (key: string) => string;
 }) {
-  const { data: runs = [], isPending } = useQuery(nodeRunsQuery(taskId, nodeId, live));
+  const { data: all = [], isPending } = useQuery(nodeRunsQuery(taskId, nodeId, live));
+  const runs = before ? all.filter((run) => run.createdAt <= before) : all;
   // 默认展开最近一次；用户点过的按用户的来
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const last = runs.at(-1)?.id;

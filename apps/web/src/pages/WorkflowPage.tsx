@@ -1,5 +1,6 @@
 // 任务的工作流（照原型 ⑬）：节点图 + 单个节点的详情。可以整体运行或停止、单独运行或停止一个节点，
 // 加节点、删节点、接线、改节点；节点详情里看运行过程、追问、补要求（ADR 0007 §6）。
+import type { TaskBody } from '@oasis/contracts/task';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useRouter } from '@tanstack/react-router';
 import { ReactFlowProvider } from '@xyflow/react';
@@ -14,17 +15,18 @@ import {
   runTask,
   stopTask,
   taskQuery,
+  taskVersionQuery,
   updateEdge,
   updateNode,
 } from '../api/queries.ts';
 import { ApiError } from '../api/client.ts';
-import { ConfirmButton } from '../chat/parts.tsx';
+import { ConfirmButton, RevisingTag } from '../chat/parts.tsx';
 import { TaskDecisions } from '../chat/TaskCard.tsx';
 import { ChatActionsContext } from '../chat/use-chat-actions.ts';
 import { formatCost } from '../ui/format.ts';
 import { NodeEditor, type EditorResult } from '../workflow/NodeEditor.tsx';
 import { NodePanel } from '../workflow/NodePanel.tsx';
-import { canEditWorkflow, checkSummary, TASK_STATUS } from '../workflow/rules.ts';
+import { canEditWorkflow, checkSummary, taskStatusOf } from '../workflow/rules.ts';
 import { useSpeakers } from '../workflow/use-speakers.ts';
 import { useWorkflowActions } from '../workflow/use-workflow-actions.ts';
 import { WorkflowGraph, type GraphHandlers } from '../workflow/WorkflowGraph.tsx';
@@ -55,6 +57,9 @@ export function WorkflowPage() {
   });
   const [selected, setSelected] = useState<string | null | undefined>(undefined);
   const [editing, setEditing] = useState<'new' | string | null>(null);
+  // 看冻结的旧版工作流（ADR 0022）：null 是当前这一版
+  const [viewing, setViewing] = useState<number | null>(null);
+  const frozen = useQuery({ ...taskVersionQuery(taskId, viewing ?? 1), enabled: viewing !== null });
 
   const handlers = useMemo<GraphHandlers>(
     () => ({
@@ -88,19 +93,43 @@ export function WorkflowPage() {
     );
   }
 
-  const selectedId = selected === undefined ? (task.attention?.nodeId ?? null) : selected;
-  const node = task.nodes.find((n) => n.id === selectedId);
-  const issues = task.nodes.filter(
+  // 旧版只读：照冻结时的节点和连线，按已结束的任务显示（不能运行、编辑、处理）
+  const old = viewing !== null ? frozen.data : undefined;
+  const shown: TaskBody = old
+    ? {
+        ...task,
+        status: 'succeeded',
+        attention: null,
+        revision: null,
+        revising: false,
+        acceptance: null,
+        nodes: old.nodes,
+        edges: old.edges,
+        spentMicro: old.spentMicro,
+      }
+    : task;
+  const graphHandlers: GraphHandlers = old
+    ? { onPick: setSelected, onConnect: () => undefined, onDeleteEdge: () => undefined }
+    : handlers;
+  const pickVersion = (version: number | null) => {
+    setViewing(version);
+    setSelected(null);
+    setEditing(null);
+  };
+  const selectedId = selected === undefined ? (shown.attention?.nodeId ?? null) : selected;
+  const node = shown.nodes.find((n) => n.id === selectedId);
+  const issues = shown.nodes.filter(
     (n) =>
       (n.status !== 'succeeded' && n.gateChecks?.some((c) => c.status !== 'passed')) ||
       n.status === 'failed' ||
       n.status === 'stopped' ||
-      task.attention?.nodeId === n.id,
+      shown.attention?.nodeId === n.id,
   );
   const editingNode =
     editing && editing !== 'new' ? task.nodes.find((n) => n.id === editing) : undefined;
-  const done = task.nodes.filter((n) => n.status === 'succeeded').length;
-  const open = canEditWorkflow(task);
+  const done = shown.nodes.filter((n) => n.status === 'succeeded').length;
+  const open = canEditWorkflow(shown);
+  const status = taskStatusOf(task);
   const busy = actions.busy !== null;
   const hasDrafts = task.nodes.some((n) => n.status === 'draft');
   const back = () =>
@@ -141,7 +170,13 @@ export function WorkflowPage() {
         aria-label="工作流"
         className="relative h-[calc(100vh-44px)] min-h-[560px] overflow-hidden rounded-panel bg-glass-strong shadow-[var(--oasis-glass-edge),var(--oasis-shadow-panel)]"
       >
-        {task.status === 'planning' ? (
+        {viewing !== null && !old ? (
+          <div className="flex h-full items-center justify-center">
+            <p className="m-0 text-sm text-ink-muted">
+              {frozen.isError ? '这一版没能加载。' : '正在加载这一版…'}
+            </p>
+          </div>
+        ) : task.status === 'planning' && task.nodes.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2">
             <p className="m-0 text-[15px] font-medium">AI 团队正在搭建工作流</p>
             <p className="m-0 text-sm text-ink-muted">排好分工和顺序后，节点会出现在这里。</p>
@@ -149,10 +184,10 @@ export function WorkflowPage() {
         ) : (
           <ReactFlowProvider>
             <WorkflowGraph
-              task={task}
+              task={shown}
               selected={selectedId}
               speakers={speakers}
-              handlers={handlers}
+              handlers={graphHandlers}
             />
           </ReactFlowProvider>
         )}
@@ -168,8 +203,9 @@ export function WorkflowPage() {
             <ArrowLeft size={16} aria-hidden="true" />
           </button>
           <h1 className="m-0 min-w-0 truncate text-[15px] font-medium">{task.title} 的工作流</h1>
+          {task.revising && !old && <RevisingTag />}
           <span className="shrink-0 text-[12.5px] text-ink-muted">
-            {TASK_STATUS[task.status].label}
+            {old ? `第 ${old.version} 版 · 只读` : status.label}
           </span>
         </div>
 
@@ -177,10 +213,10 @@ export function WorkflowPage() {
         <div className="absolute right-4 top-4 z-10 flex flex-wrap items-center justify-end gap-1.5">
           <span className="inline-flex h-10 items-center gap-2 rounded-full bg-glass-active px-4 text-[13px] shadow-edge-strong backdrop-blur-xl">
             <span className="font-display">
-              {done} / {task.nodes.length}
+              {done} / {shown.nodes.length}
             </span>
             完成
-            <span className="text-ink-muted">· 已花 {formatCost(task.spentMicro)}</span>
+            <span className="text-ink-muted">· 已花 {formatCost(shown.spentMicro)}</span>
           </span>
           {open && (
             <>
@@ -255,9 +291,61 @@ export function WorkflowPage() {
           )}
         </div>
 
+        {/* 修改时规划员在看上一版排方案：工作流照旧显示，可以不改了（ADR 0022） */}
+        {task.revision?.stage === 'planning' && !old && (
+          <div className="absolute left-1/2 top-20 z-10 flex w-[min(440px,calc(100%-32px))] -translate-x-1/2 items-center gap-3 rounded-item bg-glass-active px-4 py-3 shadow-edge-strong backdrop-blur-xl">
+            <p role="status" className="m-0 min-w-0 flex-1 text-[13px] leading-relaxed">
+              AI 团队在看上一版，决定这次怎么改。排好后先给你确认再开跑。
+            </p>
+            <button
+              type="button"
+              onClick={() => void actions.run('cancel', () => cancelTask(taskId))}
+              disabled={busy}
+              className={`${pill} shrink-0 bg-track text-ink`}
+            >
+              不改了
+            </button>
+          </div>
+        )}
+
+        {/* 版本切换：改过的任务能回看之前的工作流（只读） */}
+        {task.versions.length > 0 && (
+          <div
+            role="tablist"
+            aria-label="工作流版本"
+            className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-glass-strong p-1 shadow-edge-strong backdrop-blur-xl"
+          >
+            {[...task.versions.map((v) => v.version), null].map((version) => {
+              const active = viewing === version;
+              return (
+                <button
+                  key={version ?? 'current'}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => pickVersion(version)}
+                  title={
+                    version === null
+                      ? undefined
+                      : (task.versions.find((v) => v.version === version)?.request ??
+                        '最初的工作流')
+                  }
+                  className={`h-8 rounded-full border-0 px-3.5 text-[12.5px] ${
+                    active
+                      ? 'bg-solid font-medium text-on-solid'
+                      : 'bg-transparent text-ink-muted hover:text-ink'
+                  }`}
+                >
+                  第 {version ?? task.version} 版{version === null ? '（当前）' : ''}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* 需要处理 / 出错提示 */}
         {(issues.length > 0 ||
-          task.status === 'needs_attention' ||
+          shown.status === 'needs_attention' ||
           (actions.error && editing === null)) && (
           <div className="absolute left-4 top-20 z-10 max-h-[calc(100%-112px)] w-[min(280px,calc(100%-32px))] overflow-y-auto overscroll-contain">
             {actions.error && editing === null && (
@@ -274,7 +362,7 @@ export function WorkflowPage() {
                 className="mb-2 flex flex-col gap-2 rounded-item bg-glass-active p-3 shadow-edge-strong"
               >
                 <h2 className="m-0 text-[13px] font-medium">
-                  {task.status === 'cancelled' ? '取消前的检查记录' : '需要查看的节点'}
+                  {shown.status === 'cancelled' ? '取消前的检查记录' : '需要查看的节点'}
                 </h2>
                 {issues.map((n) => (
                   <button
@@ -296,21 +384,22 @@ export function WorkflowPage() {
                   </button>
                 ))}
                 <p className="m-0 text-[12px] text-ink-muted">
-                  {task.status === 'cancelled'
+                  {shown.status === 'cancelled'
                     ? '任务已取消，检查记录仍可查看。'
                     : '后续节点需等待上游完成，并非每个节点都检查失败。'}
                 </p>
               </section>
             )}
             {/* 节点上的事在节点里处理：点开停下的节点才有「继续」（2026-11-05 用户要求） */}
-            {!task.attention?.nodeId && <TaskDecisions task={task} compact />}
+            {!shown.attention?.nodeId && <TaskDecisions task={shown} compact />}
           </div>
         )}
 
         {node && (
           <NodePanel
-            task={task}
+            task={shown}
             node={node}
+            {...(old ? { before: old.frozenAt } : {})}
             speakers={speakers}
             actions={actions}
             onPick={setSelected}

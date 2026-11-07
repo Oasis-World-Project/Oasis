@@ -13,6 +13,7 @@ import {
   type Snapshot,
   type Task,
   type TaskStore,
+  type WorkflowVersion,
   type Writer,
 } from '../src/repo/task-store.ts';
 import type { Gate, GateResult } from '../src/service/gate.ts';
@@ -35,6 +36,7 @@ const newNode = (n: NewNode, taskId: string): Node => ({
   createdAt: new Date(),
   startedAt: null,
   finishedAt: null,
+  retiredVersion: null,
 });
 
 /** 内存版 TaskStore：同一个任务的事务排队执行，和行锁的效果一样 */
@@ -47,14 +49,23 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
   const edges = new Map<string, Edge>();
   const runs = new Map<string, NodeRun>();
   const spends = new Set<string>();
+  const versions: WorkflowVersion[] = [];
   const locks = new Map<string, Promise<unknown>>();
   const snapshot = (task: Task): Snapshot => ({
     task,
-    nodes: [...nodes.values()].filter((n) => n.taskId === task.id),
+    nodes: [...nodes.values()].filter((n) => n.taskId === task.id && n.retiredVersion === null),
     edges: [...edges.values()].filter((e) => e.taskId === task.id),
     activeRuns: [...runs.values()].filter(
       (r) => r.taskId === task.id && (r.status === 'pending' || r.status === 'running'),
     ),
+    versions: versions
+      .filter((v) => v.taskId === task.id)
+      .map(({ version, request, createdAt, frozenAt }) => ({
+        version,
+        request,
+        createdAt,
+        frozenAt,
+      })),
   });
   return {
     runs,
@@ -71,6 +82,8 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
         finishedAt: null,
         spentMicro: 0,
         attention: null,
+        version: 1,
+        revision: null,
       });
       for (const n of input.nodes) nodes.set(n.id, newNode(n, input.task.id));
       for (const e of input.edges) edges.set(e.id, { ...e, taskId: input.task.id });
@@ -84,6 +97,8 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
         .filter((t) => t.ownerId === ownerId)
         .map((task) => ({ task, nodes: snapshot(task).nodes }));
     },
+    getVersion: async (taskId, version) =>
+      versions.find((v) => v.taskId === taskId && v.version === version),
     findRun: async (runId) => runs.get(runId),
     listNodeRuns: async (taskId, nodeId) =>
       [...runs.values()]
@@ -127,6 +142,20 @@ function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
               if (!e.fromNodeId && !e.toNodeId) edges.delete(e.id);
             }
             snap.edges = [...edges.values()].filter((e) => e.taskId === taskId);
+          },
+          async retireNode(id, version) {
+            (nodes.get(id) as Node).retiredVersion = version;
+            snap.nodes = snap.nodes.filter((n) => n.id !== id);
+          },
+          async addVersion(row) {
+            const saved = { ...structuredClone(row), taskId, frozenAt: new Date() };
+            versions.push(saved);
+            snap.versions.push({
+              version: saved.version,
+              request: saved.request,
+              createdAt: saved.createdAt,
+              frozenAt: saved.frozenAt,
+            });
           },
           async addEdge(edge) {
             const row = { ...edge, taskId };
@@ -1384,61 +1413,128 @@ describe('整体验收（从任务单来的任务）', () => {
     expect(gateCalls).toHaveLength(3);
   });
 
-  it('修改在原任务里接着原会话做：不新建任务、不重新规划，附件并进素材，下游跟着更新', async () => {
-    const task = await start(['语气温馨'], [{ from: 'home', to: 'poster' }]);
+  const plannerRuns = () => submitted.filter((s) => !s.nodeId) as unknown as Submitted[];
+  /** 发起修改后等规划员交到 harness（ADR 0022） */
+  const reviseAndWait = async (taskId: string, body: Parameters<typeof service.revise>[1]) => {
+    const before = plannerRuns().length;
+    const task = await service.revise(taskId, body);
+    await vi.waitFor(() => expect(plannerRuns().length).toBe(before + 1));
+    return task;
+  };
+  const planned = async (plan: unknown) => {
+    const run = plannerRuns().at(-1)!;
+    plans.set(run.runId, JSON.stringify(plan));
+    await finish(run.runId, 'succeeded');
+    return run;
+  };
+  const delivered = async (edges: { from: string; to: string }[] = []) => {
+    const task = await start(['语气温馨'], edges);
     for (const key of ['home', 'poster'])
       await finish(runOf(key, task).runId, 'succeeded', {
         outputs: [{ path: key + '.md', size: 9 }],
       });
     expect((await service.get(OWNER, task.id)).status).toBe('succeeded');
+    return task;
+  };
+
+  it('修改交给规划员看上一版决定怎么改，用户确认后才开跑：接着原会话改、重新做（上一版产出在 in/_previous/）', async () => {
+    const task = await delivered([{ from: 'home', to: 'poster' }]);
     const firstHome = runOf('home', task).runId;
     const firstPoster = runOf('poster', task).runId;
-    const planners = submitted.filter((s) => !s.nodeId).length;
     const SHOT = '7a7a7a7a-7a7a-4a7a-8a7a-7a7a7a7a7a7a';
-    const revised = await service.revise(task.id, {
+    const homeId = keyOf(task, 'home');
+    const revised = await reviseAndWait(task.id, {
       ownerId: OWNER,
       request: '标题改短\n批注：\n1.「home.md」画面右上：去掉这句（见截图 批注-home-截图1.png）',
       materials: [{ uploadId: SHOT, name: '批注-home-截图1.png', size: 4 }],
+      nodeIds: [homeId],
     });
-    expect(revised).toMatchObject({ id: task.id, status: 'running', finishedAt: null });
+    expect(revised).toMatchObject({
+      id: task.id,
+      status: 'planning',
+      version: 1,
+      revision: { version: 2, stage: 'planning', request: expect.stringContaining('标题改短') },
+    });
     expect(revised.materials).toEqual([{ uploadId: SHOT, name: '批注-home-截图1.png', size: 4 }]);
-    // 任务列表标出「正在改」（私聊里的 AI 被问起时据此回答）；修改附件算任务素材，删私聊时留着
+    // 规划中工作流还是上一版
+    expect(revised.nodes.map((n) => `${n.key}=${n.status}`)).toEqual([
+      'home=succeeded',
+      'poster=succeeded',
+    ]);
+    // 任务列表标出「修改中」；修改附件算任务素材，删私聊时留着
     expect((await service.list(OWNER))[0]).toMatchObject({ id: task.id, revising: true });
     expect(
       await service.materialsInUse(OWNER, [SHOT, '6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b']),
     ).toEqual([SHOT]);
-    expect(await service.materialsInUse('8c8c8c8c-8c8c-4c8c-8c8c-8c8c8c8c8c8c', [SHOT])).toEqual(
-      [],
-    );
-    // 交付节点接着原会话，按修改意见改
-    const home = runOf('home', task) as unknown as {
-      continueFrom: string;
-      prompt: string;
+    const planner = plannerRuns().at(-1)!;
+    expect(planner.prompt).toContain('【修改意见】\n标题改短');
+    expect(planner.prompt).toContain('是这些节点交出的：home');
+    expect(planner.prompt).toContain('"home.md"');
+    expect(planner.prompt).toContain('"home → poster"');
+
+    await planned({
+      summary: '首页接着原会话改标题，海报按新首页重新写。',
+      nodes: [
+        { ...work('home'), from: 'home', mode: 'continue' },
+        { ...work('poster'), from: 'poster' },
+      ],
+      edges: [{ from: 'home', to: 'poster' }],
+      deliverables: { 首页文案: 'home', 海报文案: 'poster' },
+    });
+    const pending = await service.get(OWNER, task.id);
+    expect(pending).toMatchObject({
+      status: 'needs_attention',
+      attention: { reason: 'revision_plan', message: '首页接着原会话改标题，海报按新首页重新写。' },
+      revision: {
+        stage: 'confirm',
+        estimateMicro: 6_000,
+        changes: [
+          { key: 'home', change: 'continue' },
+          { key: 'poster', change: 'fresh' },
+        ],
+      },
+    });
+    // 确认前不跑任何节点
+    expect(runsOf('home', task)).toHaveLength(1);
+    expect(runsOf('poster', task)).toHaveLength(1);
+
+    const running = await service.decide(OWNER, task.id, { choice: 'continue' });
+    expect(running).toMatchObject({ status: 'running', version: 2, revision: null });
+    expect(running.versions).toMatchObject([{ version: 1, request: null }]);
+    // 节点 ID 不变（成果和运行记录接得上）
+    expect(keyOf(running, 'home')).toBe(homeId);
+    const home = runOf('home', task) as Submitted & {
       materials: { uploadId: string; path: string }[];
     };
     expect(home.continueFrom).toBe(firstHome);
-    expect(home.prompt).toContain('用户看了成果，提出修改意见');
     expect(home.prompt).toContain('标题改短');
-    expect(home.materials).toEqual([{ uploadId: SHOT, path: 'materials/批注-home-截图1.png' }]);
-    expect(submitted.filter((s) => !s.nodeId)).toHaveLength(planners);
-    await finish(runOf('home', task).runId, 'succeeded', {
-      outputs: [{ path: 'home.md', size: 10 }],
+    expect(home.materials).toContainEqual({
+      uploadId: SHOT,
+      path: 'materials/批注-home-截图1.png',
     });
-    // 下游接着自己的会话，拿到上游最新产出
-    expect(runOf('poster', task)).toMatchObject({
-      continueFrom: firstPoster,
-      inputsFrom: [{ runId: runOf('home', task).runId, as: 'home' }],
-    });
-    await finish(runOf('poster', task).runId, 'succeeded', {
-      outputs: [{ path: 'poster.md', size: 10 }],
-    });
-    expect(await service.get(OWNER, task.id)).toMatchObject({ status: 'succeeded' });
+    expect(runsOf('poster', task)).toHaveLength(1);
+    await finish(home.runId, 'succeeded', { outputs: [{ path: 'home.md', size: 10 }] });
+    // 重新做：新会话，拿上游新产出，上一版自己的产出放在 in/_previous/
+    const poster = runOf('poster', task);
+    expect(poster.continueFrom).toBeUndefined();
+    expect(poster.inputsFrom).toEqual(
+      expect.arrayContaining([
+        { runId: home.runId, as: 'home' },
+        { runId: firstPoster, as: '_previous' },
+      ]),
+    );
+    expect(poster.prompt).toContain('【上一版】');
+    await finish(poster.runId, 'succeeded', { outputs: [{ path: 'poster.md', size: 10 }] });
+    expect(await service.get(OWNER, task.id)).toMatchObject({ status: 'succeeded', version: 2 });
     expect((await service.list(OWNER)).map((t) => [t.id, t.revising])).toEqual([[task.id, false]]);
-    // 用户的修改是一轮新工作，照常用持续目标
-    expect(runsOf('home', task).find((r) => r.continueFrom === firstHome)?.goal).toBe(true);
-    expect((await service.get(OWNER, task.id)).acceptance).not.toHaveProperty('revision');
-    // 正在改的时候不能再发起修改
-    await service.revise(task.id, { ownerId: OWNER, request: '再改', materials: [] });
+    // 冻结的第 1 版能看，节点和线照旧
+    const first = await service.version(OWNER, task.id, 1);
+    expect(first.nodes.map((n) => n.key)).toEqual(['home', 'poster']);
+    expect(first.edges).toHaveLength(1);
+    expect((await errorOf(() => service.version(OWNER, task.id, 2))).status).toBe(404);
+
+    // 规划中不能再发起修改；「不改了」回到修改前的样子
+    await reviseAndWait(task.id, { ownerId: OWNER, request: '再改', materials: [] });
     expect(
       (
         await errorOf(() =>
@@ -1446,6 +1542,84 @@ describe('整体验收（从任务单来的任务）', () => {
         )
       ).status,
     ).toBe(409);
+    // 规划中「不改了」走取消：只撤掉这次修改，任务不取消
+    const restored = await service.cancel(OWNER, task.id);
+    expect(restored).toMatchObject({ status: 'succeeded', version: 2, revision: null });
+    expect(cancelled).toContain(plannerRuns().at(-1)!.runId);
+  });
+
+  it('沿用、新增、删除节点；规划门挡住拿不到新产出的沿用，退回规划员', async () => {
+    const task = await delivered();
+    await reviseAndWait(task.id, { ownerId: OWNER, request: '海报换成一句宣传语', materials: [] });
+    const planners = plannerRuns().length;
+    // 沿用的节点的上游要重新做：它拿不到新产出
+    await planned({
+      summary: 's',
+      nodes: [{ key: 'home', reuse: 'home' }, { ...work('slogan') }],
+      edges: [{ from: 'slogan', to: 'home' }],
+      deliverables: { 首页文案: 'home', 海报文案: 'slogan' },
+    });
+    await vi.waitFor(() => expect(plannerRuns()).toHaveLength(planners + 1));
+    expect(plannerRuns().at(-1)!.prompt).toContain('沿用的「home」的上游「slogan」要重新做');
+    expect((await service.get(OWNER, task.id)).status).toBe('planning');
+    await planned({
+      summary: '首页不动，海报换成宣传语。',
+      nodes: [{ key: 'home', reuse: 'home' }, { ...work('slogan') }],
+      edges: [],
+      deliverables: { 首页文案: 'home', 海报文案: 'slogan' },
+    });
+    expect((await service.get(OWNER, task.id)).revision).toMatchObject({
+      estimateMicro: 3_000,
+      changes: [
+        { key: 'home', change: 'reuse' },
+        { key: 'slogan', change: 'new' },
+        { key: 'poster', change: 'remove' },
+      ],
+    });
+    const posterId = keyOf(task, 'poster');
+    const running = await service.decide(OWNER, task.id, { choice: 'continue' });
+    expect(running.nodes.map((n) => `${n.key}=${n.status}`)).toEqual([
+      'home=succeeded',
+      'slogan=running',
+    ]);
+    expect(running.deliverables.map((d) => d.nodeId)).toEqual([
+      keyOf(task, 'home'),
+      keyOf(running, 'slogan'),
+    ]);
+    expect(runsOf('home', task)).toHaveLength(1);
+    await finish(runOf('slogan', running).runId, 'succeeded', {
+      outputs: [{ path: 'slogan.md', size: 9 }],
+    });
+    expect(await service.get(OWNER, task.id)).toMatchObject({ status: 'succeeded' });
+    // 删掉的节点留在第 1 版里，运行记录还能看
+    expect((await service.version(OWNER, task.id, 1)).nodes.map((n) => n.key)).toEqual([
+      'home',
+      'poster',
+    ]);
+    expect(await service.nodeRuns(OWNER, task.id, posterId)).toHaveLength(1);
+  });
+
+  it('修改方案确认前不改了：回到修改前的状态；停下的任务也能改', async () => {
+    const task = await start();
+    await service.stop(OWNER, task.id);
+    expect((await service.get(OWNER, task.id)).status).toBe('stopped');
+    await reviseAndWait(task.id, { ownerId: OWNER, request: '换个语气', materials: [] });
+    await planned({
+      summary: '都重新写。',
+      nodes: [
+        { ...work('home'), from: 'home' },
+        { ...work('poster'), from: 'poster' },
+      ],
+      edges: [],
+      deliverables: { 首页文案: 'home', 海报文案: 'poster' },
+    });
+    expect((await service.get(OWNER, task.id)).status).toBe('needs_attention');
+    expect(await service.decide(OWNER, task.id, { choice: 'cancel' })).toMatchObject({
+      status: 'stopped',
+      revision: null,
+      attention: null,
+      version: 1,
+    });
   });
 
   it('交付文件补过一次仍不齐：带着记录交付，不再退回、不停下', async () => {

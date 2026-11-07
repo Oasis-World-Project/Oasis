@@ -26,6 +26,8 @@ export interface NodeContext {
   deliver?: string[];
   /** 交付前的自查清单（方案里的 checks；ADR 0017：节点自己对照，系统不再逐条打分） */
   checks?: string[];
+  /** 修改时重新做：上一版这个节点交出的文件在 in/_previous/（ADR 0022） */
+  previous?: boolean;
   /** 预算和进度（ADR 0016 §5）：只是参考，节点自己决定做几版、什么时候停手 */
   budget?: {
     /** 分给这个节点的份额；旧节点没有 */
@@ -38,6 +40,9 @@ export interface NodeContext {
     elapsedMinutes: number;
   };
 }
+
+/** 修改时「重新做」的节点：上一版它交出的文件放在 in/ 下的这个目录（ADR 0022） */
+export const PREVIOUS_DIR = '_previous';
 
 export interface Speech {
   round: number;
@@ -65,6 +70,11 @@ function context(c: NodeContext, goalLabel: string): string[] {
       return `- 「${u.title}」交来的文件：${files}${said}`;
     });
     parts.push(`【上游交给你的东西】\n${lines.join('\n')}`);
+  }
+  if (c.previous) {
+    parts.push(
+      `【上一版】用户看过上一版成果要修改，这一步上一版交出的文件在 in/${PREVIOUS_DIR}/，在它的基础上改，没要求改的地方保持不变。`,
+    );
   }
   if (c.materials.length > 0) {
     parts.push(
@@ -179,12 +189,13 @@ export function resumePrompt(newNotes: string[], interrupted = false): string {
  * 用户看过成果后的修改（ADR 0012，2026-11-05 改为在原任务里接着原会话改）：
  * 交付节点和它的下游都接着自己上次的会话，只改修改意见涉及的地方。
  */
-export function revisionPrompt(request: string): string {
+export function revisionPrompt(request: string, plan?: string): string {
   return [
     '用户看了成果，提出修改意见（批注截图在 materials/ 下，编号与批注一致）：',
     '',
     request,
     '',
+    ...(plan ? ['AI 团队给你这一步的安排：', plan, ''] : []),
     '在上次成果的基础上改：只动意见涉及的地方；上游有更新以 in/ 里最新的为准；和你无关的意见不用管。改完在 out/ 交齐全部成果（没改的也要在），update_goal complete，用一两句话说明改了什么。',
   ].join('\n');
 }

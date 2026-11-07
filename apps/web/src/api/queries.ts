@@ -17,6 +17,7 @@ import {
   TaskBody,
   TaskList,
   WorkflowOptions,
+  WorkflowVersionBody,
   type DecisionBody,
   type PlanNode,
   type TaskRevisionBody,
@@ -162,6 +163,14 @@ export const taskQuery = (taskId: string) =>
       const status = query.state.data?.status;
       return status && SETTLED_STATUSES.has(status) ? false : 2_500;
     },
+  });
+
+/** 冻结的某一版工作流（ADR 0022）：不会再变，不用刷新 */
+export const taskVersionQuery = (taskId: string, version: number) =>
+  queryOptions({
+    queryKey: [...taskKey(taskId), 'version', version],
+    queryFn: () => api(`/task/v1/tasks/${taskId}/versions/${version}`, WorkflowVersionBody),
+    staleTime: Infinity,
   });
 
 const taskCall = (taskId: string, action: string, body: object = {}) =>

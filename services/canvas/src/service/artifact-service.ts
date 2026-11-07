@@ -347,6 +347,23 @@ export function createArtifactService(deps: {
         });
         if (inserted) logger.info({ taskId: event.taskId, path: file.path }, '成果已登记进画布');
       }
+      // 修改后的新版不再交付的旧成果（节点删了、文件改名了）从画布删掉（ADR 0022 §5）；
+      // 新版什么也没交出时保留上一版
+      if (detail.version > 1 && delivered.length) {
+        const keep = new Set(delivered.map((f) => `${f.nodeId}/${f.path}`));
+        const stale = existing.filter(
+          (a) => a.ownerId === event.ownerId && !keep.has(`${a.nodeId}/${a.path}`),
+        );
+        for (const row of stale) await store.delete(row.objectKey);
+        if (stale.length) {
+          await repo.removeRows(
+            stale.map((a) => a.id),
+            [],
+          );
+          await dropFrames(event.ownerId, framesOf(stale));
+          logger.info({ taskId: event.taskId, files: stale.length }, '新版不再交付的旧成果已删除');
+        }
+      }
       await registerApplications(event.taskId);
     },
 

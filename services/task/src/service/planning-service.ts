@@ -21,6 +21,7 @@ import {
   type PlannerPlan,
 } from './planner.ts';
 import type { Fallback, PricedModel } from './quote.ts';
+import { checkRevisionPlan, estimateRevision, revisionPlannerPrompt } from './revision-planner.ts';
 
 export interface PlanningConfig {
   /** 规划员型号：不分档，一律最强型号（用户 2026-11-07 决定） */
@@ -105,24 +106,52 @@ export function createPlanning(deps: {
     fx.plan.push({ task: snapshot.task, runId, ...(revise ? { revise } : {}) });
   }
 
+  /** 上一版工作流：修改的规划要看（ADR 0022） */
+  async function previous(taskId: string) {
+    const snapshot = await store.get(taskId);
+    if (!snapshot) throw new HttpError(404, 'task_not_found', '没有这个任务');
+    const keyOf = new Map(snapshot.nodes.map((n) => [n.id, n.key]));
+    return {
+      nodes: snapshot.nodes,
+      edges: snapshot.edges,
+      deliverables: Object.fromEntries(
+        snapshot.task.deliverables.flatMap((d) =>
+          d.nodeId && keyOf.has(d.nodeId) ? [[d.name, keyOf.get(d.nodeId)!]] : [],
+        ),
+      ),
+    };
+  }
+
   /** 交给 harness（事务外）。harness 明确拒绝时按规划员失败处理。 */
   async function submit(job: PlannerJob): Promise<void> {
     const { task } = job;
     try {
       const guides = job.revise ? [] : await playbooks(task.id);
-      const prompt = job.revise
-        ? revisePrompt(job.revise.problems)
-        : plannerPrompt({
-            brief: task.brief,
-            sheet: task.sheet!,
-            catalog: await catalog(),
-            tools: await tools(),
-            playbooks: guides,
-            defaultModel: config.defaultModel,
-            environment: await harness.json('GET', '/internal/execution/environment', {
-              schema: ExecutionEnvironment,
-            }),
-          });
+      const resources = async () => ({
+        catalog: await catalog(),
+        tools: await tools(),
+        playbooks: guides,
+        defaultModel: config.defaultModel,
+        environment: await harness.json('GET', '/internal/execution/environment', {
+          schema: ExecutionEnvironment,
+        }),
+      });
+      const revision = task.revision;
+      let prompt: string;
+      if (job.revise) prompt = revisePrompt(job.revise.problems);
+      else if (revision) {
+        const before = await previous(task.id);
+        const keyOf = new Map(before.nodes.map((n) => [n.id, n.key]));
+        prompt = revisionPlannerPrompt({
+          ...(await resources()),
+          ...before,
+          brief: task.brief,
+          sheet: task.sheet!,
+          request: revision.request,
+          targets: revision.nodeIds.flatMap((id) => (keyOf.has(id) ? [keyOf.get(id)!] : [])),
+        });
+      } else
+        prompt = plannerPrompt({ ...(await resources()), brief: task.brief, sheet: task.sheet! });
       await harness.json('POST', '/internal/runs', {
         body: {
           runId: job.runId,
@@ -209,17 +238,64 @@ export function createPlanning(deps: {
     // 事务外读方案、查模型和工具目录，事务里只做决定
     const toolList = result.status === 'succeeded' ? await tools() : [];
     const models = result.status === 'succeeded' ? await catalog() : [];
+    const environment =
+      result.status === 'succeeded'
+        ? await harness.json('GET', '/internal/execution/environment', {
+            schema: ExecutionEnvironment,
+          })
+        : undefined;
+    if (task.revision) {
+      const before = await previous(task.id);
+      const revised =
+        result.status === 'succeeded'
+          ? checkRevisionPlan(await readPlan(result.runId), {
+              sheet: task.sheet!,
+              catalog: models,
+              tools: toolList,
+              ...(environment ? { environment } : {}),
+              nodes: before.nodes,
+            })
+          : { problems: [`规划员没跑完：${result.error ?? result.status}`] };
+      return engine.transact(task.id, async (snapshot, w, fx) => {
+        const current = snapshot.task;
+        if (current.status !== 'planning' || current.plannerRunId !== result.runId) return;
+        if (!current.revision) return;
+        if ('plan' in revised) {
+          // 修改方案排好了：先给用户看，确认了才开跑（ADR 0022）
+          logger.info({ taskId: current.id, changes: revised.changes }, '修改方案通过规划门');
+          await w.setTask({
+            revision: {
+              ...current.revision,
+              plan: revised.plan,
+              changes: revised.changes,
+              estimateMicro: estimateRevision(
+                revised.plan,
+                revised.workflow,
+                models,
+                toolList,
+                config.fallback,
+              ),
+            },
+            status: 'needs_attention',
+            attention: { reason: 'revision_plan', nodeId: null, message: revised.plan.summary },
+          });
+          return;
+        }
+        if (result.status === 'succeeded')
+          return open(snapshot, w, fx, { continueFrom: result.runId, problems: revised.problems });
+        await w.setTask({
+          status: 'needs_attention',
+          attention: {
+            reason: 'plan_failed',
+            nodeId: null,
+            message: `AI 团队没能排出修改方案：${revised.problems.slice(0, 3).join('；')}`,
+          },
+        });
+      });
+    }
     const checked =
       result.status === 'succeeded'
-        ? checkPlan(
-            await readPlan(result.runId),
-            task.sheet!,
-            models,
-            toolList,
-            await harness.json('GET', '/internal/execution/environment', {
-              schema: ExecutionEnvironment,
-            }),
-          )
+        ? checkPlan(await readPlan(result.runId), task.sheet!, models, toolList, environment)
         : { problems: [`规划员没跑完：${result.error ?? result.status}`] };
     await engine.transact(task.id, async (snapshot, w, fx) => {
       const current = snapshot.task;

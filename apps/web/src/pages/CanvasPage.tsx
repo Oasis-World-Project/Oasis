@@ -9,10 +9,11 @@ import { useMemo, useState } from 'react';
 import { ApiError } from '../api/client.ts';
 import { artifactsQuery, deleteTask, taskArchiveUrl, tasksQuery } from '../api/queries.ts';
 import { ArtifactCard } from '../canvas/ArtifactCard.tsx';
+import { RevisingTag } from '../chat/parts.tsx';
 import { DesktopSyncBar } from '../desktop/DesktopSync.tsx';
 import { EmptyHint } from '../ui/Panel.tsx';
 import { formatCost } from '../ui/format.ts';
-import { TASK_STATUS } from '../workflow/rules.ts';
+import { taskStatusOf } from '../workflow/rules.ts';
 import { useSpeakers } from '../workflow/use-speakers.ts';
 
 const route = getRouteApi('/shell/canvas');
@@ -53,8 +54,11 @@ function TaskTile({ task: t }: { task: TaskSummary }) {
       >
         <div className="flex items-center justify-between gap-2 text-[12px] text-ink-muted">
           <Workflow size={18} aria-hidden="true" />
-          <span className={TASK_STATUS[t.status].tone === 'accent' ? 'text-accent' : ''}>
-            {TASK_STATUS[t.status].label}
+          <span className="flex items-center gap-1.5">
+            {t.revising && <RevisingTag />}
+            <span className={taskStatusOf(t).tone === 'accent' ? 'text-accent' : ''}>
+              {taskStatusOf(t).label}
+            </span>
           </span>
         </div>
         <h3 className="m-0 line-clamp-2 text-[15px] font-medium leading-relaxed">{t.title}</h3>

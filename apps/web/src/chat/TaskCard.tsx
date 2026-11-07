@@ -16,13 +16,14 @@ import {
   taskQuery,
 } from '../api/queries.ts';
 import { formatCost } from '../ui/format.ts';
-import { TASK_STATUS } from '../workflow/rules.ts';
+import { REVISION_CHANGE, taskStatusOf } from '../workflow/rules.ts';
 import {
   CardActions,
   CardButton,
   CardFrame,
   CardHeading,
   ConfirmButton,
+  RevisingTag,
   StatusTag,
   type Speaker,
 } from './parts.tsx';
@@ -128,6 +129,8 @@ const DECISIONS: Record<
   over_budget: [{ choice: 'continue', label: '解除预算继续' }],
   over_estimate: [{ choice: 'continue', label: '解除预算继续' }],
   plan_failed: [{ choice: 'retry', label: '重新规划' }],
+  // 修改方案排好了：确认才开跑；「不改了」见下面（ADR 0022）
+  revision_plan: [{ choice: 'continue', label: '确认修改' }],
   workflow_broken: [],
   // 检查中途停下：「继续」从停下的地方接着检查，「跳过检查」不再检查直接往下（2026-11-05 用户要求）
   checks_incomplete: [
@@ -135,6 +138,43 @@ const DECISIONS: Record<
     { choice: 'continue', label: '跳过检查' },
   ],
 };
+
+/** 修改方案（ADR 0022）：规划员的说明、每个节点怎么处理、预计花费（只算要跑的） */
+function RevisionPlan({ revision }: { revision: NonNullable<TaskBody['revision']> }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p role="status" className="m-0 text-[14px] font-medium leading-relaxed">
+        修改方案排好了，确认后开始改
+      </p>
+      {revision.summary && (
+        <p className="m-0 whitespace-pre-wrap text-[13px] leading-relaxed">{revision.summary}</p>
+      )}
+      <ul aria-label="每个步骤怎么处理" className="m-0 flex list-none flex-col gap-1 p-0">
+        {revision.changes.map((c) => (
+          <li key={`${c.change}-${c.key}`} className="flex items-baseline gap-2 text-[12.5px]">
+            <span
+              className={`shrink-0 rounded-full px-2 py-0.5 ${
+                c.change === 'reuse' ? 'bg-track text-ink-muted' : 'bg-accent/15 text-accent'
+              }`}
+            >
+              {REVISION_CHANGE[c.change]}
+            </span>
+            <span
+              className={`min-w-0 truncate ${c.change === 'remove' ? 'line-through text-ink-muted' : ''}`}
+            >
+              {c.title}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {revision.estimateMicro !== null && (
+        <p className="m-0 text-[12.5px] text-ink-muted">
+          预计约 {formatCost(revision.estimateMicro)}（只算要重跑的步骤，沿用的不花钱）
+        </p>
+      )}
+    </div>
+  );
+}
 
 /** 处理卡片上直接显示的原因最多这么多字，再长折叠起来 */
 const BRIEF_CHARS = 120;
@@ -156,9 +196,12 @@ export function TaskDecisions({
   const long = attention.message.includes('\n') || first.length > BRIEF_CHARS;
   const brief = first.length > BRIEF_CHARS ? `${first.slice(0, BRIEF_CHARS)}…` : first;
   const busy = actions.busy !== null;
+  const plan = attention.reason === 'revision_plan' ? task.revision : null;
   return (
     <div className="flex flex-col gap-2.5 rounded-item bg-glass-active px-4 py-3 shadow-edge-strong">
-      {compact ? (
+      {plan ? (
+        <RevisionPlan revision={plan} />
+      ) : compact ? (
         <>
           <p role="status" className="m-0 text-[14px] font-medium leading-relaxed">
             {attention.reason === 'checks_incomplete' ? '检查停下了' : '任务需要处理'}
@@ -193,13 +236,23 @@ export function TaskDecisions({
             {label}
           </CardButton>
         ))}
-        <ConfirmButton
-          label="取消任务"
-          question="取消后不能恢复，确定吗？"
-          confirmLabel="取消任务"
-          onConfirm={() => void actions.run('decide-cancel', () => decideTask(task.id, 'cancel'))}
-          disabled={busy}
-        />
+        {task.revision ? (
+          // 不改了：撤掉这次修改，回到修改前的样子，成果不变
+          <CardButton
+            onClick={() => void actions.run('decide-cancel', () => decideTask(task.id, 'cancel'))}
+            disabled={busy}
+          >
+            不改了
+          </CardButton>
+        ) : (
+          <ConfirmButton
+            label="取消任务"
+            question="取消后不能恢复，确定吗？"
+            confirmLabel="取消任务"
+            onConfirm={() => void actions.run('decide-cancel', () => decideTask(task.id, 'cancel'))}
+            disabled={busy}
+          />
+        )}
       </CardActions>
     </div>
   );
@@ -244,6 +297,8 @@ function Progress({ task }: { task: TaskBody }) {
   const total = task.nodes.length;
   const done = task.nodes.filter((n) => n.status === 'succeeded').length;
   const planning = task.status === 'planning';
+  // 修改时规划员看着上一版排方案：工作流还在，进度照旧显示
+  const replanning = planning && !!task.revision;
   return (
     <div className="flex items-center gap-3.5">
       <span className="relative flex size-[52px] shrink-0 items-center justify-center">
@@ -258,20 +313,26 @@ function Progress({ task }: { task: TaskBody }) {
       </span>
       <div className="flex min-w-0 flex-col gap-0.5">
         <span className="text-[14px] font-medium">
-          {planning
-            ? '正在搭建工作流'
-            : task.status === 'accepting'
-              ? '都做完了，正在对照任务单验收'
-              : `${total} 个步骤，完成了 ${done} 个`}
+          {replanning
+            ? '正在规划修改'
+            : planning
+              ? '正在搭建工作流'
+              : task.status === 'accepting'
+                ? '都做完了，正在对照任务单验收'
+                : `${total} 个步骤，完成了 ${done} 个`}
         </span>
         <span className="text-[12.5px] text-ink-muted">
-          {planning
-            ? 'AI 团队在排分工和顺序，需要一点时间'
-            : task.status === 'needs_attention'
-              ? '有待处理项，请到工作流查看'
-              : task.status === 'stopped'
-                ? '已停止，可到工作流查看进度'
-                : 'AI 团队按分工在做'}
+          {replanning
+            ? 'AI 团队在看上一版，决定这次怎么改'
+            : planning
+              ? 'AI 团队在排分工和顺序，需要一点时间'
+              : task.revision?.stage === 'confirm'
+                ? '修改方案排好了，请确认'
+                : task.status === 'needs_attention'
+                  ? '有待处理项，请到工作流查看'
+                  : task.status === 'stopped'
+                    ? '已停止，可到工作流查看进度'
+                    : 'AI 团队按分工在做'}
         </span>
       </div>
     </div>
@@ -334,7 +395,7 @@ export function TaskCard({
     );
   }
 
-  const status = TASK_STATUS[task.status];
+  const status = taskStatusOf(task);
   const busy = actions.busy !== null;
   const settled = SETTLED_STATUSES.has(task.status);
   const moving = ['planning', 'running', 'accepting'].includes(task.status);
@@ -344,7 +405,12 @@ export function TaskCard({
       <CardHeading
         kind={kind}
         title={task.title}
-        status={<StatusTag tone={status.tone}>{status.label}</StatusTag>}
+        status={
+          <span className="flex shrink-0 items-center gap-1.5">
+            {task.revising && <RevisingTag />}
+            <StatusTag tone={status.tone}>{status.label}</StatusTag>
+          </span>
+        }
       />
       {!settled && <Progress task={task} />}
       {task.nodes.length > 0 && !settled && (
@@ -354,9 +420,11 @@ export function TaskCard({
           ))}
         </ul>
       )}
-      {task.status === 'needs_attention' && (
+      {task.status === 'needs_attention' && !task.revision && (
         <p className="m-0 text-[13.5px] text-ink-muted">有待处理项，请到工作流查看对应节点。</p>
       )}
+      {/* 修改方案在私聊里就能确认，不用跳到工作流 */}
+      {task.revision?.stage === 'confirm' && <TaskDecisions task={task} compact />}
       <Spend task={task} />
       <CardActions>
         <Link
@@ -382,6 +450,14 @@ export function TaskCard({
             disabled={busy}
           >
             继续
+          </CardButton>
+        )}
+        {task.revision?.stage === 'planning' && (
+          <CardButton
+            onClick={() => void actions.run('cancel-task', () => cancelTask(task.id))}
+            disabled={busy}
+          >
+            不改了
           </CardButton>
         )}
         {(task.status === 'running' || task.status === 'stopped') && (

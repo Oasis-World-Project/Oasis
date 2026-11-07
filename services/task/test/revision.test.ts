@@ -7,6 +7,7 @@ import { createRevisions, revisionText } from '../src/service/revision.ts';
 const OWNER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 const TASK = '5e5e5e5e-5e5e-4e5e-8e5e-5e5e5e5e5e5e';
 const SHOT = 'cccccccc-0000-4000-8000-000000000001';
+const NODE = 'cccccccc-0000-4000-8000-000000000002';
 
 const notes = [
   { file: 'hero.png', number: 2, where: '画面右下', note: '换成夜景', snapshot: '批注-hero.png' },
@@ -41,7 +42,13 @@ describe('修改成果', () => {
     await revisions.revise(
       OWNER,
       TASK,
-      { request: '整体再温馨一点', annotations: notes, parameters: [], attachments: [SHOT] },
+      {
+        request: '整体再温馨一点',
+        annotations: notes,
+        parameters: [],
+        attachments: [SHOT],
+        nodeIds: [NODE],
+      },
       'r',
     );
     expect(looked).toEqual([{ ownerId: OWNER, ids: [SHOT], claim: true }]);
@@ -52,6 +59,7 @@ describe('修改成果', () => {
           ownerId: OWNER,
           request: revisionText('整体再温馨一点', notes),
           materials: [{ uploadId: SHOT, name: '批注-hero.png', size: 3 }],
+          nodeIds: [NODE],
         },
       },
     ]);
@@ -62,7 +70,7 @@ describe('修改成果', () => {
     await plain.revisions.revise(
       OWNER,
       TASK,
-      { request: '改短', annotations: [], parameters: [], attachments: [] },
+      { request: '改短', annotations: [], parameters: [], attachments: [], nodeIds: [] },
       'r',
     );
     expect(plain.looked).toEqual([]);
@@ -73,7 +81,7 @@ describe('修改成果', () => {
       missing.revisions.revise(
         OWNER,
         TASK,
-        { request: '改短', annotations: [], parameters: [], attachments: [SHOT] },
+        { request: '改短', annotations: [], parameters: [], attachments: [SHOT], nodeIds: [] },
         'r',
       ),
     ).rejects.toMatchObject({ statusCode: 400, code: 'attachment_not_found' });

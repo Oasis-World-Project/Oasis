@@ -676,6 +676,7 @@ describe('修改成果（ADR 0012）', () => {
       annotations: [],
       parameters: [],
       attachments: [],
+      nodeIds: [],
     });
     expect(api.bodies.some((b) => b.path.includes('/conversation/'))).toBe(false);
   });

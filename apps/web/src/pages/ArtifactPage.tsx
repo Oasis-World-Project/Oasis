@@ -147,6 +147,7 @@ export function ArtifactPage() {
           taskId={artifact.taskId}
           taskTitle={artifact.taskTitle}
           parameters={parameters}
+          nodeId={artifact.nodeId}
           onClose={() => setReviseOpen(false)}
         />
       )}

@@ -6,9 +6,12 @@ import { createEnvelope } from '@oasis/service-kit';
 import { and, asc, desc, eq, inArray, isNull, lt, lte, notInArray } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { edges, nodeRuns, nodes, outbox, spendRecords, tasks } from './schema.ts';
+import { edges, nodeRuns, nodes, outbox, spendRecords, tasks, workflowVersions } from './schema.ts';
 
 export type Task = typeof tasks.$inferSelect;
+export type WorkflowVersion = typeof workflowVersions.$inferSelect;
+/** 冻结旧版的概况（快照里带着，给任务详情列出版本） */
+type VersionMeta = Pick<WorkflowVersion, 'version' | 'request' | 'createdAt' | 'frozenAt'>;
 export type Node = typeof nodes.$inferSelect;
 export type Edge = typeof edges.$inferSelect;
 export type NodeRun = typeof nodeRuns.$inferSelect;
@@ -19,6 +22,8 @@ export interface Snapshot {
   nodes: Node[];
   edges: Edge[];
   activeRuns: NodeRun[];
+  /** 冻结的旧版（ADR 0022），按版本号排 */
+  versions: VersionMeta[];
 }
 
 type TaskPatch = Partial<
@@ -36,6 +41,9 @@ type TaskPatch = Partial<
     | 'acceptance'
     // 修改成果时附件并进任务素材（ADR 0012）
     | 'materials'
+    // 修改交给规划员、工作流分版本（ADR 0022）
+    | 'version'
+    | 'revision'
   >
 >;
 type NewTask = Omit<
@@ -49,6 +57,8 @@ type NewTask = Omit<
   | 'plannerRunId'
   | 'planAttempts'
   | 'acceptance'
+  | 'version'
+  | 'revision'
 >;
 
 /** 状态或「需要处理」的原因变了：要发的事件；没变返回 undefined */
@@ -104,6 +114,8 @@ type NodePatch = Partial<
     | 'currentRunId'
     | 'startedAt'
     | 'finishedAt'
+    // 修改方案可以给沿用旧 ID 的节点改名（ADR 0022）
+    | 'key'
   >
 >;
 type RunPatch = Partial<
@@ -126,9 +138,13 @@ export interface Writer {
   addNode(node: NewNode): Promise<void>;
   /** 删除节点：它的进出连线留下断开的一端；两端都空了的连线一起删掉 */
   deleteNode(nodeId: string): Promise<void>;
+  /** 修改方案删掉的节点：移出工作流但保留（运行记录还在，旧版能查看；ADR 0022） */
+  retireNode(nodeId: string, version: number): Promise<void>;
   addEdge(edge: Pick<Edge, 'id'> & EdgeEnds): Promise<void>;
   setEdge(edgeId: string, ends: EdgeEnds): Promise<void>;
   deleteEdge(edgeId: string): Promise<void>;
+  /** 冻结一版工作流（ADR 0022） */
+  addVersion(row: Omit<WorkflowVersion, 'taskId' | 'frozenAt'>): Promise<void>;
   /** 记一笔花费；这次调用已经记过时返回 false */
   addSpend(record: {
     callId: string;
@@ -146,6 +162,8 @@ export interface TaskStore {
   /** 读快照（不加锁，给查询接口用） */
   get(taskId: string): Promise<Snapshot | undefined>;
   listByOwner(ownerId: string, limit: number): Promise<{ task: Task; nodes: Node[] }[]>;
+  /** 冻结的某一版工作流（ADR 0022） */
+  getVersion(taskId: string, version: number): Promise<WorkflowVersion | undefined>;
   findRun(runId: string): Promise<NodeRun | undefined>;
   /** 一个节点的全部运行，按开始时间排 */
   listNodeRuns(taskId: string, nodeId: string): Promise<NodeRun[]>;
@@ -171,19 +189,29 @@ export interface TaskStore {
 }
 
 async function load(db: NodePgDatabase, task: Task): Promise<Snapshot> {
-  const [taskNodes, taskEdges, activeRuns] = await Promise.all([
+  const [taskNodes, taskEdges, activeRuns, versions] = await Promise.all([
     db
       .select()
       .from(nodes)
-      .where(eq(nodes.taskId, task.id))
+      .where(and(eq(nodes.taskId, task.id), isNull(nodes.retiredVersion)))
       .orderBy(asc(nodes.createdAt), asc(nodes.key)),
     db.select().from(edges).where(eq(edges.taskId, task.id)),
     db
       .select()
       .from(nodeRuns)
       .where(and(eq(nodeRuns.taskId, task.id), inArray(nodeRuns.status, ['pending', 'running']))),
+    db
+      .select({
+        version: workflowVersions.version,
+        request: workflowVersions.request,
+        createdAt: workflowVersions.createdAt,
+        frozenAt: workflowVersions.frozenAt,
+      })
+      .from(workflowVersions)
+      .where(eq(workflowVersions.taskId, task.id))
+      .orderBy(asc(workflowVersions.version)),
   ]);
-  return { task, nodes: taskNodes, edges: taskEdges, activeRuns };
+  return { task, nodes: taskNodes, edges: taskEdges, activeRuns, versions };
 }
 
 export function createTaskStore(pool: pg.Pool): TaskStore {
@@ -219,12 +247,23 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
         .select()
         .from(nodes)
         .where(
-          inArray(
-            nodes.taskId,
-            rows.map((t) => t.id),
+          and(
+            inArray(
+              nodes.taskId,
+              rows.map((t) => t.id),
+            ),
+            isNull(nodes.retiredVersion),
           ),
         );
       return rows.map((task) => ({ task, nodes: all.filter((n) => n.taskId === task.id) }));
+    },
+
+    async getVersion(taskId, version) {
+      const [row] = await db
+        .select()
+        .from(workflowVersions)
+        .where(and(eq(workflowVersions.taskId, taskId), eq(workflowVersions.version, version)));
+      return row;
     },
 
     async findRun(runId) {
@@ -292,6 +331,10 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
             }
             snapshot.edges = snapshot.edges.filter((e) => e.fromNodeId || e.toNodeId);
           },
+          async retireNode(nodeId, version) {
+            await tx.update(nodes).set({ retiredVersion: version }).where(eq(nodes.id, nodeId));
+            snapshot.nodes = snapshot.nodes.filter((n) => n.id !== nodeId);
+          },
           async addEdge(edge) {
             const [row] = await tx
               .insert(edges)
@@ -307,6 +350,19 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
           async deleteEdge(edgeId) {
             await tx.delete(edges).where(eq(edges.id, edgeId));
             snapshot.edges = snapshot.edges.filter((e) => e.id !== edgeId);
+          },
+          async addVersion(row) {
+            const [saved] = await tx
+              .insert(workflowVersions)
+              .values({ ...row, taskId })
+              .returning();
+            if (saved)
+              snapshot.versions.push({
+                version: saved.version,
+                request: saved.request,
+                createdAt: saved.createdAt,
+                frozenAt: saved.frozenAt,
+              });
           },
           async addSpend(record) {
             const rows = await tx
