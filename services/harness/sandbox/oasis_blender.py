@@ -104,8 +104,10 @@ def stage(objects=None, background="#E6E6EA", ground="#D2D2D8"):
     floor = bpy.context.object
     floor.name = "oasis_ground"
     floor.data.materials.append(material("oasis_ground", ground, roughness=1.0))
+    # 地面只接影子（Cycles 阴影捕捉），配合透明背景，出图是干净的「影棚」效果
+    floor.is_shadow_catcher = True
     for name, energy, rotation in (
-        ("oasis_key", 3.0, (50, 0, -35)),
+        ("oasis_key", 2.5, (50, 0, -35)),
         ("oasis_fill", 1.0, (65, 0, 60)),
         ("oasis_rim", 1.6, (35, 0, 160)),
     ):
@@ -140,11 +142,11 @@ def aim(camera, view="front3q", objects=None, margin=1.15):
     camera.location = center + direction * distance
     camera.rotation_euler = (center - camera.location).to_track_quat("-Z", "Y").to_euler()
     camera.data.clip_start = distance / 100
-    camera.data.clip_end = distance * 10
+    camera.data.clip_end = distance * 100
 
 
 def render_views(folder, views=("front3q", "side", "front", "back3q"), size=(960, 720), samples=24):
-    """在当前场景加地面和灯光，按各视角用 Cycles CPU 渲图，返回写出的文件。"""
+    """在当前场景加地面和灯光，按各视角用 Cycles CPU 渲图（背景透明，只留地面上的影子），返回写出的文件。"""
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     subjects = meshes()
@@ -159,6 +161,8 @@ def render_views(folder, views=("front3q", "side", "front", "back3q"), size=(960
     scene.render.resolution_x, scene.render.resolution_y = size
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_mode = "RGBA"
+    scene.render.film_transparent = True
     data = bpy.data.cameras.new("oasis_camera")
     data.lens = 50
     data.sensor_fit = "AUTO"

@@ -223,7 +223,8 @@ shot = json.loads(run("oasis-3d", "snapshot", str(toolkit / "model.glb"), "--out
 assert [Path(v).name for v in shot["views"]] == ["front3q.png", "side.png"], shot
 for name in ("front3q.png", "side.png"):
     image = Image.open(toolkit / "views" / name).convert("L")
-    assert image.size == (320, 240) and max(image.getdata()) - min(image.getdata()) > 30, name
+    low, high = image.getextrema()
+    assert image.size == (320, 240) and high - low > 30, name
 assert Image.open(toolkit / "views" / "sheet.png").size == (640, 240)
 passed("oasis-3d snapshot frames the model automatically and writes views plus a contact sheet")
 report = json.loads(run("oasis-3d", "check", str(toolkit / "model.glb")))

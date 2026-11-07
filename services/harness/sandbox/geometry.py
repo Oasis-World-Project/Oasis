@@ -452,6 +452,17 @@ def model_input(file):
     require(file.stat().st_size <= 200 * 1024 ** 2, "Model files up to 200 MiB")
 
 
+BACKDROP = (233, 233, 238)
+
+
+def flatten(file):
+    """透明背景的视角图铺到中性浅灰底上（影子保留），存回原文件。"""
+    from PIL import Image
+    image = Image.open(file).convert("RGBA")
+    flat = Image.new("RGBA", image.size, BACKDROP + (255,))
+    Image.alpha_composite(flat, image).convert("RGB").save(file)
+
+
 def contact_sheet(files, target):
     """几张视角图拼成一张（每格标上视角名），方便一次看完。"""
     from PIL import Image, ImageDraw
@@ -476,6 +487,8 @@ def snapshot(source, folder, views, size):
     require(64 <= width <= 1920 and 64 <= height <= 1920, "Size between 64x64 and 1920x1920")
     folder.mkdir(parents=True, exist_ok=True)
     result = blender_run("internal-snapshot", str(source.resolve()), str(folder.resolve()), ",".join(views), f"{width}x{height}")
+    for file in result["views"]:
+        flatten(file)
     contact_sheet(result["views"], folder / "sheet.png")
     return {"views": [str(Path(folder) / Path(f).name) for f in result["views"]],
             "sheet": str(folder / "sheet.png"), "size_m": result["size_m"],
