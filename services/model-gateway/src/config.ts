@@ -163,8 +163,8 @@ export const modelGatewayEnv = {
     .default('false')
     .transform((v) => v === 'true'),
   /** 不看记录时，一个干活节点按这么多 token 乘型号单价估 */
-  ESTIMATE_NODE_PROMPT_TOKENS: z.coerce.number().int().positive().default(300_000),
-  ESTIMATE_NODE_COMPLETION_TOKENS: z.coerce.number().int().positive().default(20_000),
+  ESTIMATE_NODE_PROMPT_TOKENS: z.coerce.number().int().positive().default(600_000),
+  ESTIMATE_NODE_COMPLETION_TOKENS: z.coerce.number().int().positive().default(40_000),
   COMPUTE_PRICE_MICRO_PER_CORE_HOUR: z.coerce.number().int().nonnegative().default(15_000),
   /** 实时数字人（LiveAvatar，ADR 0013）；没配置时开数字人会话返回 503 */
   LIVEAVATAR_API_KEY: z

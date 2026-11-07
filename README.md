@@ -12,11 +12,11 @@
 pnpm install        # 安装依赖，同时装好 git 钩子
 pnpm env:init       # 生成根目录和每个服务的 .env（随机密码）
 pnpm infra:up       # 启动 PostgreSQL、Valkey、NATS、SeaweedFS、Mailpit，等到全部健康
-pnpm dev            # 9 个服务 + Web 端在本机运行，改代码自动重启 / 热更新
-pnpm desktop        # （可选）另开一个终端，打开 Electron 桌面窗口
+pnpm dev            # 9 个服务 + 前端开发服务器在本机运行，改代码自动重启 / 热更新
+pnpm desktop        # 另开一个终端，打开 Electron 桌面窗口（产品以桌面端为准）
 ```
 
-打开 http://127.0.0.1:5173 就是 Web 端；gateway 在 http://127.0.0.1:8080 。
+产品以桌面窗口为准（ADR 0019）；http://127.0.0.1:5173 用浏览器也能打开，只保证能用。gateway 在 http://127.0.0.1:8080 。
 
 停止：在跑 `pnpm dev` 的终端按 `Ctrl + C`（服务会优雅退出）；中间件用 `pnpm infra:down` 停掉，数据保留在 Docker 数据卷里，下次 `pnpm infra:up` 接着用。
 

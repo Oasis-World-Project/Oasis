@@ -67,30 +67,20 @@ export function tierToolRate(tool: ToolEntry, tier: BudgetTier): ToolRate {
   return tier === 'economy' ? sorted[0]! : sorted[Math.floor((sorted.length - 1) / 2)]!;
 }
 
-/** 报价草案：大概几步、每步干什么、在哪几步之后、要调哪些工具（每档大约几个计费单位） */
+/** 报价草案：只估要调哪些工具（每档大约几个计费单位）；节点数按交付物定，不让模型拆步骤（2026-11-07） */
 export const Draft = z.object({
-  steps: z
+  tools: z
     .array(
       z.object({
-        key: z.string().min(1).max(40),
-        title: z.string().min(1).max(300),
-        after: z.array(z.string()).default([]),
-        tools: z
-          .array(
-            z.object({
-              key: z.string(),
-              uses: z.object({
-                economy: z.number().int().min(0),
-                standard: z.number().int().min(0),
-                premium: z.number().int().min(0),
-              }),
-            }),
-          )
-          .default([]),
+        key: z.string(),
+        uses: z.object({
+          economy: z.number().int().min(0),
+          standard: z.number().int().min(0),
+          premium: z.number().int().min(0),
+        }),
       }),
     )
-    .min(1)
-    .max(12),
+    .default([]),
 });
 export type Draft = z.infer<typeof Draft>;
 
@@ -100,15 +90,14 @@ function draftPrompt(brief: string, sheet: TaskSheet, tools: ToolEntry[]): strin
     .map((t) => `- ${t.key}（${t.name}，计费单位：${t.unit}）：${t.description}`)
     .join('\n');
   return [
-    '你在为一项交给 AI 团队的任务做报价草案。只列大概的步骤，不排具体型号，不写提示词。',
+    '你在为一项交给 AI 团队的任务估工具用量。只估要调哪些付费工具、各用多少，不排步骤、不写提示词。',
     `【任务】\n${brief}`,
     `【任务单】\n${JSON.stringify({ title: sheet.title, deliverables: sheet.deliverables, criteria: sheet.criteria, style: sheet.style })}`,
     `【可以用的工具】\n${catalog || '（没有）'}`,
     [
       '【要求】',
-      '- steps：完成这项任务要几步。简单任务一步就够（一个 AI 从头做到尾），确实需要分工或并行时才拆，能并行的不要串起来。key 用英文短名，title 一句话说清这步做什么，after 填它要等的前几步的 key。',
-      '- 每步要调用的工具写进 tools：uses 是计费单位的数量（视频按秒，图片按张），分三档估：economy 只做一次、刚好满足要求；standard 正常质量；premium 允许多做几版挑最好的。不用工具的步骤 tools 留空。',
-      '- 只输出一个 JSON 对象：{"steps":[{"key":"…","title":"…","after":[],"tools":[{"key":"…","uses":{"economy":1,"standard":1,"premium":2}}]}]}',
+      '- uses 是计费单位的数量（视频按秒，图片按张），分三档估：economy 只做一次、刚好满足要求；standard 正常质量；premium 允许多做几版挑最好的。用不到付费工具就留空数组。',
+      '- 只输出一个 JSON 对象：{"tools":[{"key":"…","uses":{"economy":1,"standard":1,"premium":2}}]}',
     ].join('\n'),
   ].join('\n\n');
 }
@@ -129,59 +118,42 @@ function nodeCost(model: PricedModel | undefined, fallback: Fallback) {
   };
 }
 
-/** 按档给草案定价、估时：用时取依赖链上最长的一条（并行的步骤同时做），加上规划这一步 */
+/**
+ * 按档定价、估时（2026-11-07）：规划员 + 每样交付物一个节点（并行），加上草案估的工具；
+ * 用时 = 规划 + 一个节点 + 最慢的那个工具。
+ */
 function priceDraft(
   draft: Draft,
+  nodes: number,
   tier: BudgetTier,
   models: PricedModel[],
   tools: ToolEntry[],
   fallback: Fallback,
   planner: PricedModel | undefined,
 ): Priced {
-  const model = tierModel(models, tier);
-  const byKey = new Map(tools.map((t) => [t.key, t]));
-  let rough = false;
-  const steps = new Map(
-    draft.steps.map((step) => {
-      const node = nodeCost(model, fallback);
-      rough ||= node.rough;
-      let micro = node.micro;
-      let seconds = node.seconds;
-      for (const use of step.tools) {
-        const tool = byKey.get(use.key);
-        if (!tool || use.uses[tier] === 0) continue;
-        const rate = tierToolRate(tool, tier);
-        rough ||= rate.basis === 'fallback';
-        micro += rate.costMicro * use.uses[tier];
-        // 同一工具的多次调用并行发出（ADR 0016 §7），按一次的用时算
-        seconds += rate.seconds ?? 0;
-      }
-      return [step.key, { micro, seconds, after: step.after }];
-    }),
-  );
-  const finish = new Map<string, number>();
-  const finishOf = (key: string, seen: Set<string>): number => {
-    const known = finish.get(key);
-    if (known !== undefined) return known;
-    const step = steps.get(key);
-    if (!step || seen.has(key)) return 0;
-    seen.add(key);
-    const start = Math.max(0, ...step.after.map((k) => finishOf(k, seen)));
-    finish.set(key, start + step.seconds);
-    return start + step.seconds;
-  };
-  const longest = Math.max(...draft.steps.map((s) => finishOf(s.key, new Set())));
+  const node = nodeCost(tierModel(models, tier), fallback);
   const plan = nodeCost(planner, fallback);
-  return {
-    micro: plan.micro + [...steps.values()].reduce((sum, s) => sum + s.micro, 0),
-    seconds: plan.seconds + longest,
-    rough: rough || plan.rough,
-  };
+  const byKey = new Map(tools.map((t) => [t.key, t]));
+  let rough = node.rough || plan.rough;
+  let micro = plan.micro + node.micro * nodes;
+  let toolSeconds = 0;
+  for (const use of draft.tools) {
+    const tool = byKey.get(use.key);
+    if (!tool || use.uses[tier] === 0) continue;
+    const rate = tierToolRate(tool, tier);
+    rough ||= rate.basis === 'fallback';
+    micro += rate.costMicro * use.uses[tier];
+    // 同一工具的多次调用并行发出（ADR 0016 §7），按一次的用时算
+    toolSeconds = Math.max(toolSeconds, rate.seconds ?? 0);
+  }
+  return { micro, seconds: plan.seconds + node.seconds + toolSeconds, rough };
 }
 
 /** 草案 → 三档报价 */
 export function quoteOf(
   draft: Draft,
+  /** 任务单上的交付物：每样一个节点 */
+  deliverables: string[],
   models: PricedModel[],
   tools: ToolEntry[],
   fallback: Fallback,
@@ -189,7 +161,7 @@ export function quoteOf(
 ): BudgetQuote {
   const tiers = (['economy', 'standard', 'premium'] as const).map((tier) => ({
     tier,
-    ...priceDraft(draft, tier, models, tools, fallback, planner),
+    ...priceDraft(draft, Math.max(1, deliverables.length), tier, models, tools, fallback, planner),
   }));
   // 档位之间不倒挂：更高档至少和低一档一样多
   for (let i = 1; i < tiers.length; i++)
@@ -201,7 +173,7 @@ export function quoteOf(
       minutes: Math.max(1, Math.ceil(t.seconds / 60)),
     })),
     minimumMicro: Math.max(1, Math.ceil(tiers[0]!.micro)),
-    steps: draft.steps.map((s) => s.title),
+    steps: deliverables.map((name) => `做出「${name}」`),
     rough: tiers.some((t) => t.rough),
   };
 }
@@ -255,9 +227,10 @@ export function createQuotes(deps: {
           throw new Error(`草案没写完：${choice.finish_reason}`);
         const draft = Draft.parse(JSON.parse(choice.message.content ?? ''));
         const known = new Set(tools.map((t) => t.key));
-        for (const step of draft.steps) step.tools = step.tools.filter((t) => known.has(t.key));
+        draft.tools = draft.tools.filter((t) => known.has(t.key));
         return quoteOf(
           draft,
+          input.sheet.deliverables.map((d) => d.name),
           models,
           tools,
           deps.fallback,

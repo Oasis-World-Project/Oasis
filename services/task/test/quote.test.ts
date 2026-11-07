@@ -49,16 +49,7 @@ const image = {
 };
 const fallback = { workRun: 300_000, speechRun: 50_000, computeRun: 0, nodeSeconds: 600 };
 const draft: Draft = {
-  steps: [
-    { key: 'brief', title: '定角色和分镜', after: [], tools: [] },
-    {
-      key: 'frame',
-      title: '出首帧',
-      after: ['brief'],
-      tools: [{ key: 'image.generate', uses: { economy: 1, standard: 2, premium: 4 } }],
-    },
-    { key: 'copy', title: '写字幕', after: ['brief'], tools: [] },
-  ],
+  tools: [{ key: 'image.generate', uses: { economy: 1, standard: 2, premium: 4 } }],
 };
 
 describe('报价（ADR 0016 §4）', () => {
@@ -75,23 +66,25 @@ describe('报价（ADR 0016 §4）', () => {
     expect(tierToolRate(image, 'premium').model).toBe('img/best');
   });
 
-  it('按档定价；用时取依赖链最长的一条加规划；最低预算就是省钱档', () => {
+  it('按档定价：规划员 + 每样交付物一个节点（并行）+ 工具；最低预算就是省钱档', () => {
     const planner = models[1];
-    const quote = quoteOf(draft, models, [image], fallback, planner);
-    // 省钱：规划一律用最强型号 100000 + 三步各 100000（不换弱模型）+ 1 张 × 20000
-    expect(quote.tiers[0]).toEqual({ tier: 'economy', micro: 420_000, minutes: 16 });
-    // 标准：规划 100000 + 三步各 100000 + 2 张 × 40000；用时 300 + 300 + (300 + 40)
-    expect(quote.tiers[1]).toEqual({ tier: 'standard', micro: 480_000, minutes: 16 });
-    expect(quote.tiers[2]!.micro).toBe(100_000 + 3 * 400_000 + 4 * 90_000);
-    expect(quote.minimumMicro).toBe(420_000);
-    expect(quote.steps).toEqual(['定角色和分镜', '出首帧', '写字幕']);
+    const quote = quoteOf(draft, ['视频', '字幕'], models, [image], fallback, planner);
+    // 省钱：规划 100000 + 两个节点各 100000（强力档最便宜的）+ 1 张 × 20000；用时 300 + 300 + 20
+    expect(quote.tiers[0]).toEqual({ tier: 'economy', micro: 320_000, minutes: 11 });
+    // 标准：规划 100000 + 两个节点各 100000 + 2 张 × 40000；用时 300 + 300 + 40
+    expect(quote.tiers[1]).toEqual({ tier: 'standard', micro: 380_000, minutes: 11 });
+    // 精细：规划 100000 + 两个节点各 400000（旗舰）+ 4 张 × 90000；用时 300 + 600 + 60
+    expect(quote.tiers[2]).toEqual({ tier: 'premium', micro: 1_260_000, minutes: 16 });
+    expect(quote.minimumMicro).toBe(320_000);
+    expect(quote.steps).toEqual(['做出「视频」', '做出「字幕」']);
     expect(quote.rough).toBe(false);
   });
 
   it('没有任何记录时用兜底并标成粗估', () => {
-    const quote = quoteOf(draft, [], [{ ...image, rates: [] }], fallback, undefined);
+    const quote = quoteOf(draft, ['视频'], [], [{ ...image, rates: [] }], fallback, undefined);
     expect(quote.rough).toBe(true);
-    expect(quote.minimumMicro).toBe(4 * 300_000 + 150_000);
+    // 规划 300000 + 一个节点 300000 + 1 张 × 150000
+    expect(quote.minimumMicro).toBe(750_000);
   });
 
   it('列草案调一次快速模型、不开深度思考，按草案给出三档', async () => {
