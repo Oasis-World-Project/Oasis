@@ -62,8 +62,8 @@ const draft: Draft = {
 };
 
 describe('报价（ADR 0016 §4）', () => {
-  it('各档挑节点型号：省钱取快速档最便宜的，标准取强力档，精细取旗舰', () => {
-    expect(tierModel(models, 'economy')?.providerModel).toBe('v/flash');
+  it('各档挑节点型号：省钱取强力档最便宜的（不靠换弱模型省钱），标准取强力档，精细取旗舰', () => {
+    expect(tierModel(models, 'economy')?.providerModel).toBe('v/strong');
     expect(tierModel(models, 'standard')?.providerModel).toBe('v/strong');
     expect(tierModel(models, 'premium')?.providerModel).toBe('v/flagship');
     expect(tierModel([], 'standard')).toBeUndefined();
@@ -78,12 +78,12 @@ describe('报价（ADR 0016 §4）', () => {
   it('按档定价；用时取依赖链最长的一条加规划；最低预算就是省钱档', () => {
     const planner = models[1];
     const quote = quoteOf(draft, models, [image], fallback, planner);
-    // 省钱：规划一律用最强型号 100000 + 三步各 10000 + 1 张 × 20000
-    expect(quote.tiers[0]).toEqual({ tier: 'economy', micro: 150_000, minutes: 10 });
+    // 省钱：规划一律用最强型号 100000 + 三步各 100000（不换弱模型）+ 1 张 × 20000
+    expect(quote.tiers[0]).toEqual({ tier: 'economy', micro: 420_000, minutes: 16 });
     // 标准：规划 100000 + 三步各 100000 + 2 张 × 40000；用时 300 + 300 + (300 + 40)
     expect(quote.tiers[1]).toEqual({ tier: 'standard', micro: 480_000, minutes: 16 });
     expect(quote.tiers[2]!.micro).toBe(100_000 + 3 * 400_000 + 4 * 90_000);
-    expect(quote.minimumMicro).toBe(150_000);
+    expect(quote.minimumMicro).toBe(420_000);
     expect(quote.steps).toEqual(['定角色和分镜', '出首帧', '写字幕']);
     expect(quote.rough).toBe(false);
   });

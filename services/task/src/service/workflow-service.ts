@@ -44,6 +44,33 @@ import { decide } from './schedule.ts';
 import { afterRound, firstStep, resumeStep, retryStep, reworkStep, type Step } from './steps.ts';
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
+
+/** 节点花费到份额的这些倍数时各提醒一次收尾（用户 2026-11-07 同意 1.5 倍、2 倍） */
+const NUDGE_AT = [1.5, 2];
+
+/**
+ * 运行中的干活节点花费刚越过一个提醒线：返回要发的提醒。节点只在开工时看到一次预算，
+ * 之后看不到花了多少、跑了多久，靠这条消息知道该收手了。
+ */
+export function budgetNudge(
+  node: Pick<Node, 'kind' | 'status' | 'currentRunId' | 'config' | 'startedAt'>,
+  spentMicro: number,
+  now = new Date(),
+): { count: number; text: string } | undefined {
+  const share = node.config.budgetMicro;
+  if (node.kind !== 'work' || node.status !== 'running' || !node.currentRunId || !share) return;
+  const sent = node.config.budgetNudges ?? 0;
+  const crossed = NUDGE_AT.filter((times) => spentMicro >= share * times).length;
+  if (crossed <= sent) return;
+  const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
+  const minutes = node.startedAt
+    ? Math.max(0, Math.round((now.getTime() - node.startedAt.getTime()) / 60_000))
+    : undefined;
+  return {
+    count: crossed,
+    text: `【系统提醒】这一步已花 ${usd(spentMicro)}（分到约 ${usd(share)}）${minutes === undefined ? '' : `，已经跑了 ${minutes} 分钟`}。请收尾：把现有成果整理好交出来，别再打磨。`,
+  };
+}
 /** 任务、节点不会再变的状态 */
 const FINAL = ['succeeded', 'failed', 'cancelled'];
 /** 运行已经结束的状态 */
@@ -832,6 +859,7 @@ export function createWorkflowService(deps: {
       // 成果预览在任务完成后单独付费；账单保留 taskId 关联，但不回写生成任务的花费。
       if (data.model === 'preview') return;
       if (!(await store.get(data.taskId))) return;
+      let nudge: { runId: string; text: string } | undefined;
       await transact(data.taskId, async (snapshot, w) => {
         const node = data.nodeId ? snapshot.nodes.find((n) => n.id === data.nodeId) : undefined;
         const counted = await w.addSpend({
@@ -842,9 +870,23 @@ export function createWorkflowService(deps: {
         if (!counted) return;
         const { task } = snapshot;
         await w.setTask({ spentMicro: task.spentMicro + data.chargedMicro });
-        if (node) await w.setNode(node.id, { spentMicro: node.spentMicro + data.chargedMicro });
-        // 预算只是参考，花完照样做（ADR 0016 §2）；只有账户余额用完时由 billing 拒绝冻结
+        if (!node) return;
+        const spent = node.spentMicro + data.chargedMicro;
+        await w.setNode(node.id, { spentMicro: spent });
+        // 预算只是参考，花完照样做（ADR 0016 §2）；但节点在运行中看不到花费，超过份额时提醒它收尾
+        const due = budgetNudge(node, spent);
+        if (due) {
+          await w.setNode(node.id, { config: { ...node.config, budgetNudges: due.count } });
+          nudge = { runId: node.currentRunId!, text: due.text };
+        }
       });
+      if (nudge)
+        await harness
+          .json('POST', `/internal/runs/${nudge.runId}/messages`, { body: { text: nudge.text } })
+          .catch((err: unknown) =>
+            // 运行正在启动或收尾：这次提醒就不发了，不影响记账
+            logger.warn({ err, runId: nudge!.runId }, '超预算提醒没发出去'),
+          );
     },
 
     /**

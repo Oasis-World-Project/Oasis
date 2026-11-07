@@ -27,6 +27,8 @@ export interface NodeConfig {
   tools?: { key: string; uses: number; model?: string }[];
   /** 按用户预算分给这个节点的份额（微美元，ADR 0016 §5）；只是参考，旧节点没有 */
   budgetMicro?: number;
+  /** 运行中已经发过几次「超预算请收尾」的提醒（1.5 倍、2 倍各一次，2026-11-07） */
+  budgetNudges?: number;
   participants?: { name: string; model: string; stance: string }[];
   rounds?: number;
   round?: number;

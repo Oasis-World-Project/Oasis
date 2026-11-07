@@ -1110,6 +1110,50 @@ describe('规划（从任务单开始）', () => {
     return run;
   };
 
+  it('节点花费越过份额的 1.5 倍、2 倍时各提醒一次收尾，之后不再重复', async () => {
+    const task = await createPlanned({
+      ownerId: OWNER,
+      materials: [],
+      payerId: OWNER,
+      title: '小木屋首页',
+      brief: 'b',
+      sheet: {
+        ...sheetOf(),
+        budget: { tier: 'standard', micro: 100_000, minutes: 5, steps: [] },
+      },
+    });
+    await plannerDone(
+      JSON.stringify({
+        nodes: [work('write', '写文案')],
+        edges: [],
+        deliverables: { 首页文案: 'write' },
+      }),
+    );
+    const detail = await service.get(OWNER, task.id);
+    const node = detail.nodes[0]!;
+    const run = runOf('write', detail).runId;
+    const settle = (n: number, micro: number) =>
+      service.onCallSettled({
+        callId: `00000000-0000-4000-8000-00000000010${n}`,
+        taskId: task.id,
+        nodeId: node.id,
+        chargedMicro: micro,
+      });
+    await settle(1, 120_000);
+    expect(messages).toEqual([]);
+    await settle(2, 40_000);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ runId: run });
+    expect(messages[0]?.text).toContain('已花 $0.16（分到约 $0.10）');
+    expect(messages[0]?.text).toContain('请收尾');
+    await settle(3, 10_000);
+    expect(messages).toHaveLength(1);
+    await settle(4, 50_000);
+    expect(messages).toHaveLength(2);
+    await settle(5, 100_000);
+    expect(messages).toHaveLength(2);
+  });
+
   it('建任务后先规划；方案过了规划门就建节点、算预估和上限、开跑，并发出状态事件', async () => {
     const task = await fromSheet();
     expect(task).toMatchObject({ status: 'planning', nodes: [], sheet: { title: '小木屋首页' } });
@@ -1117,6 +1161,8 @@ describe('规划（从任务单开始）', () => {
     expect(planner?.model).toBe('deepseek/planner');
     // 规划员不分档：一律最强型号、最高思考档
     expect((planner as unknown as { reasoningEffort?: string }).reasoningEffort).toBe('max');
+    // 规划员只写方案交给规划门：单轮，不用持续目标
+    expect((planner as unknown as { goal?: boolean }).goal).toBeFalsy();
     expect(planner?.prompt).toContain('首页文案');
     expect(planner?.prompt).toContain('deepseek/x（DeepSeek');
     expect(planner?.prompt).not.toContain('最多 4 个节点');

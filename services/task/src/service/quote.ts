@@ -21,9 +21,12 @@ export interface Fallback {
   nodeSeconds: number;
 }
 
-/** 各档挑节点型号的档次：省钱多用快速型号，标准用性价比强模型，精细用旗舰 */
+/**
+ * 各档挑节点型号的档次：省钱靠少排节点、少做几版，不靠换弱模型（2026-11-07），所以省钱档也按强力型号算
+ * （取其中最便宜的）；精细用旗舰
+ */
 const TIER_MODELS: Record<BudgetTier, ModelTier> = {
-  economy: 'fast',
+  economy: 'strong',
   standard: 'strong',
   premium: 'flagship',
 };

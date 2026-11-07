@@ -129,9 +129,8 @@ export function createPlanning(deps: {
           payerId: task.payerId,
           taskId: task.id,
           model: config.planner,
-          // 规划员一律用最高思考档
+          // 规划员一律用最高思考档；只需写出方案交给规划门，单轮就够，不用持续目标（2026-11-07）
           reasoningEffort: 'max',
-          goal: true,
           prompt,
           inputs: guides.map((p) => ({
             path: `playbooks/${p.key}.md`,

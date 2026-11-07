@@ -115,6 +115,7 @@ export function plannerPrompt(input: {
   return [
     '你是 Oasis 的规划员。用户确认了下面的任务单，你来安排 AI 团队怎么做。',
     '用最简单、能把交付物做好的方案：简单任务一个节点就够，确实需要分工或并行才拆。你只排方案，不要动手做或试跑实现，那是节点的事。',
+    '省钱靠少排节点、少做几版，不靠换弱模型：写代码、做 3D、做网页这类难活用旗舰或强力档模型。',
     `【任务】\n${input.brief}`,
     `【任务单】\n${JSON.stringify(input.sheet)}`,
     budgetPart(input.sheet),
