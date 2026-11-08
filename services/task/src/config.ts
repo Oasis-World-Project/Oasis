@@ -31,6 +31,11 @@ export const taskEnv = {
     .default(3600_000),
   /** 一个任务同时最多跑几个节点（ADR 0004：3） */
   MAX_PARALLEL_NODES: z.coerce.number().int().positive().max(20).default(3),
+  /**
+   * 展开、做几版开出来的工具子节点另算一个池，同时最多跑几个（ADR 0026，用户 2026-11-08 定 6）：
+   * 它们只是等外部工具（生图、生视频），不占 AI 的名额。
+   */
+  MAX_PARALLEL_TOOL_CHILDREN: z.coerce.number().int().positive().max(24).default(6),
   /** 规划员查模型目录 */
   AGENT_URL: z.url(),
   /** 修改成果时核对用户附的文件（参考图、标注截图），并标成已用上 */

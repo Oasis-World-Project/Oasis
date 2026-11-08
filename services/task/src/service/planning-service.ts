@@ -10,6 +10,7 @@ import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
 import type { Effects, Engine, PlannerJob } from './effects.ts';
+import { isRoot } from './groups.ts';
 import { materialPaths } from './materials.ts';
 import { planToRows } from './plan.ts';
 import {
@@ -110,9 +111,11 @@ export function createPlanning(deps: {
   async function previous(taskId: string) {
     const snapshot = await store.get(taskId);
     if (!snapshot) throw new HttpError(404, 'task_not_found', '没有这个任务');
-    const keyOf = new Map(snapshot.nodes.map((n) => [n.id, n.key]));
+    // 只看工作流图里的节点：展开出来的条目、各版跟着父节点（ADR 0026）
+    const roots = snapshot.nodes.filter(isRoot);
+    const keyOf = new Map(roots.map((n) => [n.id, n.key]));
     return {
-      nodes: snapshot.nodes,
+      nodes: roots,
       edges: snapshot.edges,
       deliverables: Object.fromEntries(
         snapshot.task.deliverables.flatMap((d) =>

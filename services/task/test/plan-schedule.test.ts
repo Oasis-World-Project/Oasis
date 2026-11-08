@@ -125,6 +125,8 @@ const node = (key: string, status: Node['status'] = 'waiting'): Node => ({
   startedAt: null,
   finishedAt: null,
   retiredVersion: null,
+  parentId: null,
+  slot: null,
 });
 const edge = (from: Node | null, to: Node | null): Edge => ({
   id: `e-${from?.key}-${to?.key}`,
@@ -141,6 +143,7 @@ describe('调度决定', () => {
       nodes: [a, b, c, d],
       edges: [edge(a, d)],
       maxParallel: 2,
+      maxToolChildren: 6,
     });
     expect(result.start.map((n) => n.key)).toEqual(['A', 'B']);
     expect(result.task).toBeUndefined();
@@ -149,13 +152,20 @@ describe('调度决定', () => {
   it('上游都完成才开跑下游；全部完成则任务完成', () => {
     const [a, b] = [node('A', 'succeeded'), node('B')];
     expect(
-      decide({ taskStatus: 'running', nodes: [a, b], edges: [edge(a, b)], maxParallel: 3 }).start,
+      decide({
+        taskStatus: 'running',
+        nodes: [a, b],
+        edges: [edge(a, b)],
+        maxParallel: 3,
+        maxToolChildren: 6,
+      }).start,
     ).toEqual([b]);
     const done = decide({
       taskStatus: 'running',
       nodes: [a, node('B', 'succeeded')],
       edges: [],
       maxParallel: 3,
+      maxToolChildren: 6,
     });
     expect(done.task?.status).toBe('succeeded');
   });
@@ -167,6 +177,7 @@ describe('调度决定', () => {
       nodes: [a, c],
       edges: [edge(a, null), edge(null, c)],
       maxParallel: 3,
+      maxToolChildren: 6,
     });
     expect(result.blocked).toEqual([c]);
     expect(result.start).toEqual([]);
@@ -183,14 +194,20 @@ describe('调度决定', () => {
       nodes: [a, b],
       edges: [edge(a, b)],
       maxParallel: 3,
+      maxToolChildren: 6,
     });
     expect(stuck.task).toMatchObject({
       status: 'needs_attention',
       attention: { reason: 'node_failed' },
     });
     expect(
-      decide({ taskStatus: 'needs_attention', nodes: [node('X')], edges: [], maxParallel: 3 })
-        .start,
+      decide({
+        taskStatus: 'needs_attention',
+        nodes: [node('X')],
+        edges: [],
+        maxParallel: 3,
+        maxToolChildren: 6,
+      }).start,
     ).toEqual([]);
   });
 });

@@ -10,7 +10,7 @@
 // 镜像里按仓库的相对位置放（infra/images/harness-sandbox-base/Dockerfile），import 路径两边一致。
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { argValue } from '../../../packages/contracts/src/tool-args.ts';
 
@@ -49,6 +49,67 @@ const TEXT_OUT = /\.(?:txt|md|json|jsonl|csv)$/i;
 const PENDING = /还没做好（任务号 ([a-f0-9-]{36})）/;
 /** oasis-tool 的结果行，不算工具给的文字 */
 const TOOL_LINES = /^(?:花费：|已保存|还没做好|沿用任务号|注意：返回的图片)/;
+
+const GLOB_PATH = /^(?:in|materials|out)\/[^\0\r\n]*\*/;
+
+/** 一段路径里的 *：任意几个字符（不跨 /） */
+const segmentPattern = (segment: string) =>
+  new RegExp(`^${segment.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}$`, 'u');
+
+/** 按 * 找文件（排好序）；找不到返回空数组 */
+export async function globFiles(root: string, pattern: string): Promise<string[]> {
+  let found = [''];
+  const parts = pattern.split('/');
+  for (const [i, part] of parts.entries()) {
+    const last = i === parts.length - 1;
+    const next: string[] = [];
+    for (const base of found) {
+      if (!part.includes('*')) {
+        next.push(base ? `${base}/${part}` : part);
+        continue;
+      }
+      const entries = await readdir(join(root, base), { withFileTypes: true }).catch(() => []);
+      for (const entry of entries)
+        if (segmentPattern(part).test(entry.name) && (last ? entry.isFile() : entry.isDirectory()))
+          next.push(base ? `${base}/${entry.name}` : entry.name);
+    }
+    found = next;
+  }
+  const existing: string[] = [];
+  for (const path of found) if (await exists(join(root, path))) existing.push(path);
+  return existing.sort();
+}
+
+/**
+ * 参数里带 * 的文件路径（如 in/clips/*\/clip.mp4，展开节点每条交来的文件，ADR 0026）运行时换成找到的文件，
+ * 按路径排序（01、02……就是条目顺序）；一个也没找到算这一步失败。
+ */
+export async function expandGlobs(
+  root: string,
+  args: Record<string, unknown> = {},
+): Promise<Record<string, unknown> | string> {
+  const out: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(args)) {
+    const items = Array.isArray(value) ? value : [value];
+    if (!items.some((v) => typeof v === 'string' && GLOB_PATH.test(v))) {
+      out[name] = value;
+      continue;
+    }
+    const files: unknown[] = [];
+    for (const item of items) {
+      if (typeof item !== 'string' || !GLOB_PATH.test(item)) {
+        files.push(item);
+        continue;
+      }
+      const matched = await globFiles(root, item);
+      if (!matched.length) return `没找到符合 ${item} 的文件`;
+      files.push(...matched);
+    }
+    // 单个路径的参数只找到一个文件：照旧写成一个路径
+    out[name] = !Array.isArray(value) && files.length === 1 ? files[0] : files;
+  }
+  return out;
+}
 
 /** 一步要运行的命令：oasis-tool <工具> --参数 值 … [--out 路径]；op.* 交给 oasis-op */
 export function commandOf(step: Step, extra: string[] = []): string[] {
@@ -130,8 +191,11 @@ export async function settleOut(
 }
 
 /** 执行一步（含自动重试）；做不成返回原因 */
-async function runStep(runner: Runner, step: Step, index: number): Promise<string | undefined> {
-  const label = `第 ${index + 1} 步（${step.tool}）`;
+async function runStep(runner: Runner, original: Step, index: number): Promise<string | undefined> {
+  const label = `第 ${index + 1} 步（${original.tool}）`;
+  const args = await expandGlobs(runner.root, original.args);
+  if (typeof args === 'string') return `${label}没做成：${args}`;
+  const step = { ...original, args };
   let extra: string[] = [];
   let error = '';
   for (let tried = 1; tried <= ATTEMPTS; tried += 1) {

@@ -26,6 +26,8 @@ export interface Effects {
   stop: string[];
   cancel: string[];
   abortChecks: { taskId: string; nodeId?: string }[];
+  /** 要读清单、展开的展开节点（ADR 0026） */
+  expand: { taskId: string; nodeId: string }[];
 }
 
 export const noEffects = (): Effects => ({
@@ -36,6 +38,7 @@ export const noEffects = (): Effects => ({
   stop: [],
   cancel: [],
   abortChecks: [],
+  expand: [],
 });
 
 /** 工作流引擎给规划模块用的两件事：在事务里做决定，以及找出能跑的节点开跑 */

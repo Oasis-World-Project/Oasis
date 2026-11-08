@@ -231,6 +231,9 @@ export const updateEdge = (taskId: string, edgeId: string, body: UpdateEdgeBody)
   taskChange(`${taskPath(taskId)}/edges/${edgeId}`, 'PATCH', body);
 export const deleteEdge = (taskId: string, edgeId: string) =>
   taskChange(`${taskPath(taskId)}/edges/${edgeId}`, 'DELETE');
+/** 做几版的节点改用第 version 版（ADR 0026）：下游做完了的会排成修改，等确认 */
+export const pickVersion = (taskId: string, nodeId: string, version: number) =>
+  taskChange(`${nodePath(taskId, nodeId)}/pick`, 'POST', { version });
 
 /** 追问 / 补充要求：运行中的直接送达，还没开始、已停止的记下来，开跑时带上 */
 export const messageNode = (taskId: string, nodeId: string, text: string) =>

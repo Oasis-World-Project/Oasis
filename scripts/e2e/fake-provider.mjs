@@ -4,6 +4,18 @@
 // 不联网、不花钱；行为照真实供应商：输出上限超过型号能力时拒单（2026-11-06 的 93 万 token 事故）。
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
+import {
+  GOAL_TOOLS,
+  MODEL_MAX_TOKENS,
+  parseJson,
+  planContext,
+  segmentsOf,
+  textOf,
+  writeFiles,
+} from './fake-dsh.mjs';
+import { pickAnswer, VIDEO_MODELS } from './fake-media.mjs';
+
+export { writeFiles } from './fake-dsh.mjs';
 
 /**
  * 场景标记：用户原话里写 [[e2e:场景@本轮编号]]，假规划员把 [[e2e:场景@本轮编号/节点]] 写进每个节点的目标。
@@ -16,114 +28,6 @@ export const setRun = (id) => {
 export const marker = (scenario, node) => `[[e2e:${scenario}@${RUN}${node ? `/${node}` : ''}]]`;
 const TASK_MARK = /\[\[e2e:([\w-]+)@(\w+)\]\]/;
 const NODE_MARK = /\[\[e2e:([\w-]+)@(\w+)\/([\w-]+)\]\]/;
-
-/** 平台发给 dsh 的几种提示（task 的 prompt.ts、planner.ts、harness 的接管提示）：每种开启一段 */
-const PROMPTS = [
-  ['plan', '你是 Oasis 的规划员。用户确认了下面的任务单'],
-  ['replan', '你是 Oasis 的规划员。用户看了上一版成果'],
-  ['planfix', '你写的 out/plan.json 有问题'],
-  ['work', '你是 Oasis 工作流里的一个节点'],
-  ['resume', '你刚才被用户停下了'],
-  ['resume', '上次执行中断了，已有会话和产物已恢复'],
-  ['recover', '服务连接中断后已恢复原工作目录和原会话'],
-  ['revision', '用户看了成果，提出修改意见'],
-  ['rework', '系统检查发现这些问题：'],
-];
-const GOAL_TOOLS = new Set(['get_goal', 'update_goal', 'create_goal']);
-/** 假型号的输出上限：model-gateway 应把 dsh 要的上限压到它以内 */
-const MODEL_MAX_TOKENS = 65_536;
-
-const textOf = (content) =>
-  typeof content === 'string'
-    ? content
-    : Array.isArray(content)
-      ? content.map((b) => (b?.type === 'text' ? b.text : '')).join('')
-      : '';
-
-/** 一条消息里的每段文字 */
-const blocksOf = (content) =>
-  typeof content === 'string'
-    ? [content]
-    : Array.isArray(content)
-      ? content.filter((b) => b?.type === 'text').map((b) => b.text)
-      : [];
-
-/**
- * 把 dsh 发来的对话按平台提示切段：每段对应一次运行（开跑、继续、修复、修改、接管）里的往来。
- * 只认以提示开头的那段文字：持续目标的续跑消息会整段引用目标（也就是开跑提示），不算新的一段。
- */
-function segmentsOf(messages) {
-  const segments = [];
-  const calls = new Map();
-  for (const message of messages) {
-    if (message.role === 'user') {
-      const blocks = blocksOf(message.content);
-      const text = blocks.join('');
-      const found = PROMPTS.find(([, sign]) => blocks.some((b) => b.trimStart().startsWith(sign)));
-      if (found) segments.push({ kind: found[0], text, calls: [], notices: [] });
-      else segments.at(-1)?.notices.push(text);
-    } else if (message.role === 'assistant') {
-      for (const call of message.tool_calls ?? []) {
-        let args = {};
-        try {
-          args = JSON.parse(call.function?.arguments || '{}');
-        } catch {
-          // 参数不是 JSON：照样记下这次调用
-        }
-        const entry = { id: call.id, name: call.function?.name, args, result: undefined };
-        calls.set(call.id, entry);
-        segments.at(-1)?.calls.push(entry);
-      }
-    } else if (message.role === 'tool') {
-      const entry = calls.get(message.tool_call_id);
-      if (entry) entry.result = textOf(message.content);
-    }
-  }
-  return segments;
-}
-
-/** 写文件的 bash 命令：内容走 base64，路径里可以有中文和空格 */
-export function writeFiles(files) {
-  const parts = [];
-  for (const [file, content] of Object.entries(files)) {
-    const dir = file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : '';
-    const b64 = Buffer.from(content).toString('base64');
-    parts.push(`${dir ? `mkdir -p '${dir}' && ` : ''}printf %s '${b64}' | base64 -d > '${file}'`);
-  }
-  return parts.join(' && ');
-}
-
-const parseJson = (text) => {
-  try {
-    return JSON.parse(text ?? '');
-  } catch {
-    return undefined;
-  }
-};
-
-/** 规划员提示里的可用模型、任务单、修改意见、上一版工作流 */
-function planContext(text) {
-  const section = (name) => {
-    const start = text.indexOf(`【${name}】`);
-    if (start < 0) return '';
-    const rest = text.slice(start + name.length + 2);
-    const end = rest.search(/\n\n【/);
-    return (end < 0 ? rest : rest.slice(0, end)).replace(/^[^\n]*\n/, '');
-  };
-  const models = [...section('可以用的模型').matchAll(/^- ([^\s（]+)（/gm)].map((m) => m[1]);
-  const sheetLine = text.slice(text.indexOf('【任务单】') + 6).split('\n')[0];
-  const previousStart = text.indexOf('【上一版工作流】');
-  const previous =
-    previousStart < 0
-      ? undefined
-      : parseJson(text.slice(text.indexOf('\n', previousStart) + 1).split(/\n\n【/)[0] ?? '');
-  return {
-    models,
-    sheet: parseJson(sheetLine) ?? { deliverables: [] },
-    request: text.includes('【修改意见】') ? section('修改意见') : undefined,
-    previous,
-  };
-}
 
 /**
  * @param {{
@@ -459,6 +363,12 @@ export function createFakeProvider(options) {
       record({ kind: 'checkpoint', model: body.model });
       return answer(res, body, { text: 'CHECKPOINT：接着做完当前目标。' });
     }
+    const picked = pickAnswer(messages, firstUser);
+    if (picked) {
+      const { choice, reason, images } = picked;
+      record({ kind: 'inspect', model: body.model, choice, images });
+      return answer(res, body, { text: JSON.stringify({ choice, reason }), cost: 0.002 });
+    }
     if (body.tools?.length) {
       const segments = segmentsOf(messages);
       if (!segments.length) {
@@ -524,18 +434,7 @@ export function createFakeProvider(options) {
       return sendJson(res, 200, {
         endpoints: [{ supported_parameters: { input_references: { type: 'range', max: 4 } } }],
       });
-    if (route === 'GET /api/v1/videos/models')
-      return sendJson(res, 200, {
-        data: ['fake/video-1'].map((id) => ({
-          id,
-          supported_durations: [4, 5, 6, 8, 10],
-          supported_resolutions: ['480p', '720p', '1080p'],
-          supported_aspect_ratios: ['16:9', '9:16', '1:1'],
-          supported_frame_images: ['first_frame'],
-          // 每秒 $0.05：5 秒 $0.25，和生成完成时报的花费一致
-          pricing_skus: { duration_seconds: '0.05' },
-        })),
-      });
+    if (route === 'GET /api/v1/videos/models') return sendJson(res, 200, VIDEO_MODELS);
     if (route === 'POST /api/v1/videos') {
       const id = randomUUID();
       videos.set(id, { at: Date.now() });

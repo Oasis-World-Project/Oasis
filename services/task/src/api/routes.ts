@@ -4,6 +4,7 @@ import {
   CreateTaskBody,
   DecisionBody,
   NodeMessageBody,
+  PickVersionBody,
   PlanNode,
   QuoteBody,
   TaskRevisionBody,
@@ -146,6 +147,13 @@ export function registerRoutes(
   app.post('/v1/tasks/:taskId/nodes/:nodeId/stop', async (request) => {
     const { taskId, nodeId } = parseWith(NodeParams, request.params);
     return workflows.stopNode(requireUserId(request), taskId, nodeId);
+  });
+
+  /** 做几版的节点改用另一版（ADR 0026）：下游没开始就直接换，做完了的排成修改等确认 */
+  app.post('/v1/tasks/:taskId/nodes/:nodeId/pick', async (request) => {
+    const { taskId, nodeId } = parseWith(NodeParams, request.params);
+    const { version } = parseWith(PickVersionBody, request.body);
+    return workflows.pickVersion(requireUserId(request), taskId, nodeId, version);
   });
 
   // ---- 连线：新建、接上线头 / 改一端、删除 ----

@@ -55,6 +55,8 @@ const old = (key: string, deliver: string, extra: Partial<Node> = {}): Node => (
   summary: null,
   outputs: [{ path: deliver.replace('**', 'index.html'), size: 9 }],
   currentRunId: `run-${key}`,
+  parentId: null,
+  slot: null,
   spentMicro: 2_500_000,
   createdAt: new Date(0),
   startedAt: new Date(0),

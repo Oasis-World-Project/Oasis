@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { PlanNode, WorkflowPlan } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
 import type { NodeConfig } from '../repo/schema.ts';
-import { kindOf } from './kinds/index.ts';
+import { GROUP_KEY_MAX } from './groups.ts';
+import { kindOf, listSource } from './kinds/index.ts';
 
 /** 找环：返回环上的一个节点名，没有环返回 undefined（Kahn 拓扑排序剩下的就是环上的） */
 export function findCycle(
@@ -26,6 +27,34 @@ export function findCycle(
   return visited === keys.length ? undefined : keys.find((k) => (indegree.get(k) ?? 0) > 0);
 }
 
+/**
+ * 展开节点、做几版的节点（ADR 0026）：名字后面要接 -01、-v1，留出长度、别和别的节点撞名；
+ * 清单要从普通节点来（展开节点交的是一个个目录）；一次最多开 48 个子节点。
+ */
+function groupProblems(plan: WorkflowPlan): string[] {
+  const problems: string[] = [];
+  const byKey = new Map(plan.nodes.map((n) => [n.key, n]));
+  for (const node of plan.nodes) {
+    const variants =
+      node.kind === 'foreach' ? node.each.variants : 'variants' in node ? node.variants : undefined;
+    if (node.kind !== 'foreach' && !variants) continue;
+    if (node.key.length > GROUP_KEY_MAX)
+      problems.push(`节点「${node.key}」要开子节点，名字最长 ${GROUP_KEY_MAX} 个字符`);
+    const clash = plan.nodes.find((n) => n.key.startsWith(`${node.key}-`));
+    if (clash)
+      problems.push(`节点名「${clash.key}」会和「${node.key}」开出来的子节点撞名，换个名字`);
+    if (node.kind !== 'foreach') continue;
+    const source = byKey.get(listSource(node.over).from);
+    if (source?.kind === 'foreach')
+      problems.push(`节点「${node.key}」的清单要由普通节点交出，不能来自展开节点「${source.key}」`);
+    if (node.count * (variants?.n ?? 1) > 48)
+      problems.push(
+        `节点「${node.key}」预计 ${node.count} 条 × ${variants?.n ?? 1} 版，太多了（最多 48 个）`,
+      );
+  }
+  return problems;
+}
+
 /** 校验方案；有问题时抛 400，并把所有问题一起列出来 */
 export function validatePlan(plan: WorkflowPlan): void {
   const problems: string[] = [];
@@ -46,6 +75,7 @@ export function validatePlan(plan: WorkflowPlan): void {
         problems.push(`节点「${node.key}」用到的 in/${from}/ 不是任何节点交来的`);
       else if (!plan.edges.some((e) => e.from === from && e.to === node.key))
         problems.push(`节点「${node.key}」用到 in/${from}/ 里的文件，要连线 ${from} → ${node.key}`);
+  problems.push(...groupProblems(plan));
   const pairs = plan.edges.map((e) => `${e.from}→${e.to}`);
   if (new Set(pairs).size !== pairs.length) problems.push('有重复的连线');
   if (problems.length === 0) {
@@ -61,9 +91,12 @@ export function validatePlan(plan: WorkflowPlan): void {
  */
 export function withInputExpects<P extends WorkflowPlan>(plan: P): P {
   const wanted = new Map<string, Set<string>>();
+  const foreach = new Set(plan.nodes.filter((n) => n.kind === 'foreach').map((n) => n.key));
   for (const node of plan.nodes)
     for (const file of kindOf(node).inputFiles?.(node) ?? [])
-      wanted.set(file.from, (wanted.get(file.from) ?? new Set()).add(file.path));
+      // 带 {{…}} 模板的路径、展开节点交的条目（ADR 0026）事先定不下来，不加
+      if (!file.path.includes('{{') && !foreach.has(file.from))
+        wanted.set(file.from, (wanted.get(file.from) ?? new Set()).add(file.path));
   if (!wanted.size) return plan;
   return {
     ...plan,

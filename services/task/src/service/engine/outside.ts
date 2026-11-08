@@ -54,6 +54,11 @@ export function createOutside(
           .runGate(g.taskId, g.nodeId, g.runId)
           .catch((err: unknown) => logger.error({ err, ...g }, '关卡检查失败，等对账重试'));
       }
+      for (const e of fx.expand) {
+        await engine
+          .expand(e)
+          .catch((err: unknown) => logger.error({ err, ...e }, '展开失败，等对账重试'));
+      }
     },
 
     /** 网络问题时留在 pending，等对账重交；harness 明确拒绝时按运行失败处理 */

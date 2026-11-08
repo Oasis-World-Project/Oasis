@@ -10,8 +10,6 @@ import tseslint from 'typescript-eslint';
 const LONG_FILES = {
   'apps/web/src/canvas/ModelPreview.tsx': 614,
   'apps/web/test/task-cards.test.tsx': 684,
-  'scripts/e2e/fake-provider.mjs': 597,
-  'scripts/e2e/scenarios.mjs': 1029,
   'services/canvas/test/artifacts.test.ts': 659,
   'services/conversation/src/service/dm-service.ts': 790,
   'services/conversation/src/service/intake-service.ts': 831,

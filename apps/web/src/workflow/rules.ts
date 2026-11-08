@@ -86,25 +86,37 @@ function upstreamReady(task: TaskBody, node: NodeBody): boolean {
     .every((e) => task.nodes.find((n) => n.id === e.from)?.status === 'succeeded');
 }
 
+/** 展开节点、做几版的节点（ADR 0026）：自己不跑，开子节点去做 */
+const isGroup = (node: NodeBody) => node.kind === 'foreach' || (node.variants?.n ?? 0) > 1;
+
+/** 某个节点的子节点（展开出来的条目、各版），按顺序 */
+export const childrenOf = (task: TaskBody, node: NodeBody) =>
+  task.nodes.filter((n) => n.parentId === node.id).sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
+
 export function nodeActions(task: TaskBody, node: NodeBody) {
   const open = canEditWorkflow(task);
   const notStarted = NOT_STARTED.includes(node.status);
+  // 子节点跟着父节点（ADR 0026）：不能单独改、删、接线；父节点在跑时可以单独再跑它
+  const parent = node.parentId ? task.nodes.find((n) => n.id === node.parentId) : undefined;
+  const root = !node.parentId;
   return {
-    edit: open && notStarted,
-    remove: open && notStarted,
+    // 展开节点的做法写在方案里，编辑窗不管它；要改请提修改意见
+    edit: open && notStarted && root && node.kind !== 'foreach',
+    remove: open && notStarted && root,
     run:
       open &&
       ['draft', 'waiting', 'stopped', 'failed'].includes(node.status) &&
-      upstreamReady(task, node),
+      (root ? upstreamReady(task, node) : parent?.status === 'running'),
     stop: open && ACTIVE.includes(node.status),
     /** 能往这个节点里接线 */
-    acceptsInput: open && notStarted,
+    acceptsInput: open && notStarted && root,
     /** 能从这个节点往外接线 */
-    givesOutput: open && node.status !== 'cancelled',
+    givesOutput: open && node.status !== 'cancelled' && root,
     /** 追问（运行中的干活节点直接送达）或补要求（开跑、继续时带上）；工具节点没有 AI，不收 */
     message:
       open &&
       node.kind !== 'tool' &&
+      !isGroup(node) &&
       (['draft', 'waiting', 'blocked', 'stopped'].includes(node.status) ||
         node.status === 'running'),
   };
@@ -123,6 +135,7 @@ export function stepArgs(step: { args: Record<string, unknown> }): string {
 export function runLabel(run: NodeRunBody): string {
   if (run.purpose === 'speech') return `第 ${run.round ?? 1} 轮 · ${run.participant ?? '发言'}`;
   if (run.purpose === 'summary') return '汇总结论';
+  if (run.purpose === 'pick') return '挑一版';
   if (run.purpose === 'rework') return '关卡没过，接着改';
   if (run.continued) return '停止后继续';
   return run.attempt > 1 ? `第 ${run.attempt} 次（重做）` : '第 1 次';

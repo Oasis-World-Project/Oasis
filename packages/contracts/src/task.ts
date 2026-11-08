@@ -3,12 +3,11 @@
 import { z } from 'zod';
 import { Material } from './canvas.ts';
 import { RunOutputFile } from './harness.ts';
-import { ToolStep, ToolSteps } from './tool-step.ts';
+import { ToolStep } from './tool-step.ts';
 import {
   ExpectedFile,
   NodeCommon,
   NodeTool,
-  NodeTools,
   OutputPattern,
   Participant,
   TaskCheck,
@@ -16,6 +15,7 @@ import {
   WorkflowPlan,
 } from './workflow-plan.ts';
 
+export * from './workflow-edit.ts';
 export * from './workflow-plan.ts';
 
 /**
@@ -230,7 +230,33 @@ export const NodeBody = z.object({
   id: z.uuid(),
   key: z.string(),
   title: z.string(),
-  kind: z.enum(['work', 'discussion', 'tool']),
+  kind: z.enum(['work', 'discussion', 'tool', 'foreach']),
+  /**
+   * 子节点（ADR 0026）：展开出来的一条、或做几版里的一版，属于哪个节点、第几条 / 第几版；
+   * 工作流图里的节点为 null（旧版 task 不返回时当作 null）
+   */
+  parentId: z.uuid().nullable().optional(),
+  slot: z.number().int().positive().nullable().optional(),
+  /** 展开节点：按哪份清单、预计几条、实际几条（还没展开为 null）、每条做什么 */
+  foreach: z
+    .object({
+      over: z.string(),
+      count: z.number().int(),
+      items: z.number().int().nullable(),
+      each: z.object({ kind: z.enum(['work', 'tool']), title: z.string() }),
+    })
+    .nullable()
+    .optional(),
+  /** 做几版挑一版：几版、按什么挑、选了第几版和理由（还没挑为 null） */
+  variants: z
+    .object({
+      n: z.number().int(),
+      pick: z.string(),
+      chosen: z.number().int().nullable(),
+      reason: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
   role: z.string(),
   goal: z.string(),
   /** 用的模型；工具节点不用模型，为空字符串 */
@@ -388,59 +414,14 @@ export type TaskSummary = z.infer<typeof TaskSummary>;
 
 export const TaskList = z.object({ tasks: z.array(TaskSummary) });
 
-/** 对节点追问 / 补充要求 */
-export const NodeMessageBody = z.object({ text: z.string().trim().min(1).max(20_000) });
-
-/**
- * 修改还没开始的节点：只改给出的字段；类型不能改。参与者和轮数只对讨论节点有效，工具只对干活节点有效，
- * 步骤只对工具节点有效。
- */
-export const UpdateNodeBody = z
-  .object({
-    title: NodeCommon.title,
-    role: z.string().max(2000),
-    goal: NodeCommon.goal,
-    model: z.string().min(1).max(200),
-    checks: z.array(TaskCheck),
-    expects: z.array(ExpectedFile),
-    requires: NodeCommon.requires,
-    deliver: z.array(OutputPattern),
-    participants: z.array(Participant).min(2),
-    rounds: z.number().int().min(1),
-    tools: NodeTools,
-    steps: ToolSteps,
-  })
-  .partial()
-  .refine((body) => Object.keys(body).length > 0, '至少要改一项');
-export type UpdateNodeBody = z.infer<typeof UpdateNodeBody>;
-
-/** 新建连线：from 的产出交给 to */
-export const CreateEdgeBody = z.object({ from: z.uuid(), to: z.uuid() });
-
-/** 接上线头 / 改连线的一端 */
-export const UpdateEdgeBody = z
-  .object({ from: z.uuid(), to: z.uuid() })
-  .partial()
-  .refine((body) => body.from !== undefined || body.to !== undefined, '要给出起点或终点');
-export type UpdateEdgeBody = z.infer<typeof UpdateEdgeBody>;
-
-/**
- * 任务「需要处理」时用户的选择：
- * - continue：用现在的结果继续往下做（节点失败时跳过它；花费超限时提高上限接着做）
- * - retry：让失败的节点再试（重做次数重新算）
- * - cancel：取消任务
- */
-export const DecisionBody = z.object({ choice: z.enum(['continue', 'retry', 'cancel']) });
-export type DecisionBody = z.infer<typeof DecisionBody>;
-
 /**
  * 节点的一次运行（ADR 0007 §6）：节点详情里按时间列出，点开看这次的运行过程。
- * work 第一次做或失败后重做；rework 关卡没过后接着原会话改；speech 讨论里一位参与者的一次发言；summary 汇总。
- * 停止后继续也是一次新运行（接着原会话）。
+ * work 第一次做或失败后重做；rework 关卡没过后接着原会话改；speech 讨论里一位参与者的一次发言；summary 汇总；
+ * pick 做几版挑一版时挑选的那次（ADR 0026）。停止后继续也是一次新运行（接着原会话）。
  */
 export const NodeRunBody = z.object({
   id: z.uuid(),
-  purpose: z.enum(['work', 'rework', 'speech', 'summary']),
+  purpose: z.enum(['work', 'rework', 'speech', 'summary', 'pick']),
   status: z.enum(['pending', 'running', 'succeeded', 'failed', 'cancelled', 'stopped']),
   /** 第几次（含重做） */
   attempt: z.number().int().nonnegative(),
@@ -456,27 +437,3 @@ export const NodeRunBody = z.object({
 });
 export type NodeRunBody = z.infer<typeof NodeRunBody>;
 export const NodeRunList = z.object({ runs: z.array(NodeRunBody) });
-
-/** 编辑节点时能选的模型和工具（ADR 0007 §6）：和规划员看到的一样，只列现在能用的 */
-export const WorkflowOptions = z.object({
-  models: z.array(
-    z.object({
-      /** 模型目录里的 key，如 deepseek（前端用它找头像） */
-      key: z.string(),
-      name: z.string(),
-      vendor: z.string(),
-      /** 节点里写的供应商型号 */
-      providerModel: z.string(),
-    }),
-  ),
-  tools: z.array(
-    z.object({
-      key: z.string(),
-      name: z.string(),
-      description: z.string(),
-      unit: z.string(),
-      estimateMicro: z.number().int().nonnegative(),
-    }),
-  ),
-});
-export type WorkflowOptions = z.infer<typeof WorkflowOptions>;

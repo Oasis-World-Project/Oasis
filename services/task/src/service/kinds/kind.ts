@@ -1,5 +1,6 @@
 // 节点种类插件的接口（重构方案阶段 2）：工作流引擎只通过这组接口和节点打交道，不认识具体种类。
 // 加一种节点：schema.ts 的 KindConfigs 加一行配置类型，写一个实现 NodeKindPlugin 的模块，在 kinds/index.ts 登记。
+import type { RunInputFile } from '@oasis/contracts/harness';
 import type { NodeBody, PlanNode, UpdateNodeBody } from '@oasis/contracts/task';
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import type { ToolStep } from '@oasis/contracts/tool-step';
@@ -13,6 +14,11 @@ export interface RunRequest {
   model: string;
   prompt: string;
   inputsFrom: { runId: string; as: string }[];
+  /**
+   * 直接放进 in/ 的小文件；不写时开新会话（或换了上游产出）的运行由引擎补上展开节点的清单索引、
+   * 这一条的内容（ADR 0026）
+   */
+  inputs?: RunInputFile[];
   /** 接着哪次运行的会话和工作区 */
   continueFrom?: string;
   /** 工具运行（ADR 0025）：不起 AI，按顺序执行这些步骤 */

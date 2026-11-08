@@ -24,8 +24,10 @@ import {
   nodeOf,
   requireNotStarted,
 } from './graph.ts';
+import { childrenOf, isGroup, isToolChild, pad2 } from './groups.ts';
 import { kindOf } from './kinds/index.ts';
 import { nodeRow } from './plan.ts';
+import { poolUse } from './schedule.ts';
 
 export function createNodeApi(api: {
   engine: Engine;
@@ -39,11 +41,31 @@ export function createNodeApi(api: {
   ): Promise<TaskBody>;
 }) {
   const { engine, owned, change } = api;
-  const { store, harness, maxParallel } = engine.deps;
+  const { store, harness, maxParallel, maxToolChildren } = engine.deps;
+
+  /** 子节点（ADR 0026）跟着父节点：不能单独改、删 */
+  function requireRoot(snapshot: Snapshot, node: Snapshot['nodes'][number], action: string) {
+    const parent = snapshot.nodes.find((n) => n.id === node.parentId);
+    if (parent)
+      throw new HttpError(
+        409,
+        'node_is_child',
+        `「${node.title}」是「${parent.title}」开出来的，不能单独${action}`,
+      );
+  }
 
   /** 节点交出的一个文件：只能是它产出清单里有的（经 harness 读对象存储） */
   async function readFile(snapshot: Snapshot, nodeId: string, path: string) {
-    const node = nodeOf(snapshot, nodeId);
+    let node = nodeOf(snapshot, nodeId);
+    // 展开节点的产出是各条的（ADR 0026）：NN/… 到第 NN 条交出的那次运行里取
+    if (node.kind === 'foreach') {
+      const [slot, ...rest] = path.split('/');
+      const child = childrenOf(snapshot.nodes, node).find((c) => pad2(c.slot ?? 0) === slot);
+      if (!child || !node.outputs.some((f) => f.path === path))
+        throw new HttpError(404, 'file_not_found', '没有这个文件');
+      node = child;
+      path = rest.join('/');
+    }
     const runId = node.config.outputsRunId;
     if (!runId || !node.outputs.some((f) => f.path === path)) {
       throw new HttpError(404, 'file_not_found', '没有这个文件');
@@ -173,6 +195,7 @@ export function createNodeApi(api: {
     updateNode: (ownerId: string, taskId: string, nodeId: string, body: UpdateNodeBody) =>
       change(ownerId, taskId, async (snapshot, w) => {
         const node = nodeOf(snapshot, nodeId);
+        requireRoot(snapshot, node, '修改');
         requireNotStarted(node, '修改');
         await w.setNode(node.id, nodeChanges(node, body));
       }),
@@ -181,6 +204,7 @@ export function createNodeApi(api: {
     deleteNode: (ownerId: string, taskId: string, nodeId: string) =>
       change(ownerId, taskId, async (snapshot, w, fx) => {
         const node = nodeOf(snapshot, nodeId);
+        requireRoot(snapshot, node, '删除');
         requireNotStarted(node, '删除');
         await w.deleteNode(node.id);
         await engine.schedule(snapshot, w, fx);
@@ -199,7 +223,15 @@ export function createNodeApi(api: {
               : `「${node.title}」现在不能运行`,
           );
         }
-        if (node.status !== 'stopped') {
+        const parent = snapshot.nodes.find((n) => n.id === node.parentId);
+        // 子节点（ADR 0026）跟着父节点跑：父节点在跑时才能单独再跑它
+        if (parent && parent.status !== 'running')
+          throw new HttpError(
+            409,
+            'parent_not_running',
+            `「${node.title}」属于「${parent.title}」，先运行「${parent.title}」`,
+          );
+        if (node.status !== 'stopped' && !parent) {
           const byId = new Map(snapshot.nodes.map((n) => [n.id, n]));
           const notReady = snapshot.edges
             .filter((e) => e.toNodeId === node.id)
@@ -208,18 +240,24 @@ export function createNodeApi(api: {
             throw new HttpError(409, 'upstream_not_ready', `「${node.title}」的上游还没完成`);
           }
         }
-        const active = snapshot.nodes.filter((n) => ACTIVE.includes(n.status)).length;
-        if (active >= maxParallel) {
+        // 组节点不占名额；工具子节点、其他节点各有上限（挑选运行也算在里面）
+        const use = poolUse(snapshot.nodes);
+        const pool = isToolChild(node)
+          ? { used: use.tools, max: maxToolChildren ?? maxParallel }
+          : { used: use.others, max: maxParallel };
+        if (!isGroup(node) && pool.used >= pool.max) {
           throw new HttpError(
             409,
             'too_many_running',
-            `一个任务同时最多跑 ${maxParallel} 个节点，请等一会儿`,
+            `一个任务同时最多跑 ${pool.max} 个${isToolChild(node) ? '工具子节点' : '节点'}，请等一会儿`,
           );
         }
         if (snapshot.task.status === 'needs_attention') {
           await w.setTask({ status: 'stopped', attention: null });
         }
         await engine.startNode(snapshot, w, node, fx);
+        // 组节点（ADR 0026）：把它开出的子节点排上（只跑它下面的，工作流图里的节点不往下跑）
+        if (isGroup(node)) await engine.schedule(snapshot, w, fx);
       }),
 
     /** 停止一个节点；其他支路照常跑 */

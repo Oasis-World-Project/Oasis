@@ -279,9 +279,13 @@ function useRefreshMessagesOnChange(conversationId: string, status: TaskStatus |
   }, [conversationId, queryClient, status]);
 }
 
+/** 工作流图里的步骤：展开出来的条目、各版算在父节点里（ADR 0026） */
+const stepsOf = (task: TaskBody) => task.nodes.filter((n) => !n.parentId);
+
 function Progress({ task }: { task: TaskBody }) {
-  const total = task.nodes.length;
-  const done = task.nodes.filter((n) => n.status === 'succeeded').length;
+  const steps = stepsOf(task);
+  const total = steps.length;
+  const done = steps.filter((n) => n.status === 'succeeded').length;
   const planning = task.status === 'planning';
   // 修改时规划员看着上一版排方案：工作流还在，进度照旧显示
   const replanning = planning && !!task.revision;
@@ -362,7 +366,7 @@ export function TaskCard({ taskId, speaker }: { taskId: string; speaker: Speaker
       {!settled && <Progress task={task} />}
       {task.nodes.length > 0 && !settled && (
         <ul aria-label="步骤" className="m-0 flex list-none flex-wrap gap-1.5 p-0">
-          {task.nodes.map((node) => (
+          {stepsOf(task).map((node) => (
             <NodeChip key={node.id} title={node.title} status={node.status} />
           ))}
         </ul>

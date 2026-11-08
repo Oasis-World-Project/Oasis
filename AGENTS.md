@@ -23,12 +23,12 @@
 | `pnpm browser:build` · `browser:smoke` | 构建 inspector 的检查浏览器镜像 `oasis/inspector-browser:<Playwright 版本>`；本机烟测（静态网页、Node 应用按交付关卡的路子各查一遍，外站测一次） |
 | `pnpm lint` · `pnpm typecheck` · `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、服务调用无环、依赖方向、死代码、重复率、迁移检查 |
-| `pnpm e2e` | 全链路回归：假模型、真容器、真画布，从私聊发任务跑到桌面端画布里打开成果（先停 `pnpm dev`；`--keep` 跑完不停服务；`--real` 真模型、每场景 ≤ $1，生视频的 `real-tool` ≤ $2）。见 `docs/engineering/回归测试.md` |
+| `pnpm e2e` | 全链路回归：假模型、真容器、真画布，从私聊发任务跑到桌面端画布里打开成果（先停 `pnpm dev`；`--keep` 跑完不停服务；`--real` 真模型、每场景 ≤ $1，生视频的 `real-tool` ≤ $2、6 镜头短片 `real-shots` ≤ $4.5）。见 `docs/engineering/回归测试.md` |
 | `pnpm trace <任务 ID>` | 一个任务的运行、调用、费用来源和画布成果，标出异常（按估算扣费、卡住的调用、没退回的冻结、遗留容器） |
 | `pnpm accept` | 验收模式：服务从当前代码起、不随改动重启，Web 用构建版（先停 `pnpm dev`） |
 | `pnpm cleanup` | 任务收尾清理并报告释放空间：删 `.tmp`、日志、根目录的 `out/` 和 7 天前的构建缓存（`--dry-run` 只列出不删；`--build`、`--docker` 可选） |
 
-- **回归规矩（2026-11-08）**：改了 task、harness、model-gateway、inspector、canvas、conversation 的行为，提交前跑一次 `pnpm e2e`，全绿再提交；验收失败先写成回归场景（`scripts/e2e/scenarios.mjs`）再修。
+- **回归规矩（2026-11-08）**：改了 task、harness、model-gateway、inspector、canvas、conversation 的行为，提交前跑一次 `pnpm e2e`，全绿再提交；验收失败先写成回归场景（`scripts/e2e/scenarios/` 下按类分的文件，在 `scripts/e2e/scenarios.mjs` 登记）再修。
 
 ## B. 架构约定
 
@@ -37,7 +37,7 @@
 2. **共享包**：`packages/*` 只放契约（contracts）、基础设施库（service-kit）、画布运行网页的组装规则（live-page，画布和检查共用，ADR 0021）、设计令牌和 tsconfig，不放业务逻辑。
 3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness（含 `profile/` 下 Oasis 自己的 dsh 组合）；dsh 版本精确锁定在沙箱镜像里。沙箱只能经入口代理访问 model-gateway 的 `/run/v1/*`，以及经出口代理访问明确放行的软件包仓库；不得直连外网、宿主机或内部服务，不得开放其他网络通路（ADR 0003、ADR 0006 §7）。
 4. **模型调用**：所有模型调用（聊天、Jev、dsh 里的 agent）都经过 `services/model-gateway`，由它计量并上报 billing。
-5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。全仓库的 TS/JS 文件（含测试和脚本）不超过 500 行，ESLint `max-lines` 拦截（2026-11-08 从四个服务扩到全仓库）；当时已经超长的文件在 `eslint.config.mjs` 的 `LONG_FILES` 里按当时的行数封顶、只许变短，要往里加东西先拆开，拆到 500 行以内就从表里删掉；task 的每种节点是一个插件（`src/service/kinds/`），引擎不认识具体种类，加新种类不改引擎（ADR 0023）。工具节点（`kind: tool`，ADR 0025）不用 AI：harness 起工具运行（`model: oasis/tool` + `steps`），沙箱里跑步骤执行器 `oasis-steps` 而不是 dsh；工具参数的定义只有 `packages/contracts/src/tool-args.ts`、`ops.ts` 一份，网关目录、规划门、沙箱里的 `oasis-op` 共用。
+5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。全仓库的 TS/JS 文件（含测试和脚本）不超过 500 行，ESLint `max-lines` 拦截（2026-11-08 从四个服务扩到全仓库）；当时已经超长的文件在 `eslint.config.mjs` 的 `LONG_FILES` 里按当时的行数封顶、只许变短，要往里加东西先拆开，拆到 500 行以内就从表里删掉；task 的每种节点是一个插件（`src/service/kinds/`），引擎不认识具体种类，加新种类不改引擎（ADR 0023）。工具节点（`kind: tool`，ADR 0025）不用 AI：harness 起工具运行（`model: oasis/tool` + `steps`），沙箱里跑步骤执行器 `oasis-steps` 而不是 dsh；工具参数的定义只有 `packages/contracts/src/tool-args.ts`、`ops.ts` 一份，网关目录、规划门、沙箱里的 `oasis-op` 共用。展开节点（`kind: foreach`）和做几版挑一版（`variants`）开子节点（ADR 0026）：节点表的 `parent_id`、`slot`；组节点自己不跑、不占名额，引擎在 `engine/groups.ts`、`expand.ts`；并发分两个池（`schedule.ts` 的 `poolUse`）：AI 和工作流图里的节点 ≤ `MAX_PARALLEL_NODES`（3），工具子节点和看图挑选 ≤ `MAX_PARALLEL_TOOL_CHILDREN`（6）。
 6. **配置外置**：配置全部来自环境变量，每个服务提供 `.env.example`；禁止硬编码地址、端口、密钥；禁止 `if (env === 'local')` 一类分支。
 7. **运行时**：结构化 JSON 日志输出到 stdout；每个服务暴露 `/health` 和 `/ready`；收到 SIGTERM 后处理完在途请求再退出。
 8. **数据库迁移**：dbmate 纯 SQL。文件头写 `-- phase: expand|migrate|contract`，必须有 `-- migrate:down`；expand 迁移必须写 `-- contract-plan:`。`pnpm check:engineering` 会检查这几项。

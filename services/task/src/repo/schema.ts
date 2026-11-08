@@ -1,9 +1,10 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
-import type { RunOutputFile } from '@oasis/contracts/harness';
+import type { RunInputFile, RunOutputFile } from '@oasis/contracts/harness';
 import type { Material } from '@oasis/contracts/canvas';
 import type {
   Attention,
   ExpectedFile,
+  ForeachBranch,
   NodeBody,
   NodeStatus,
   PlanNode,
@@ -11,6 +12,7 @@ import type {
   TaskSheet,
   TaskStatus,
   TaskCheck,
+  Variants,
 } from '@oasis/contracts/task';
 import type { ToolStep } from '@oasis/contracts/tool-step';
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
@@ -36,6 +38,29 @@ interface CommonConfig {
   notesSeen?: number;
   /** 节点现在的产出是哪次运行交出来的（下游拿这次运行的产出） */
   outputsRunId?: string;
+  /** 做几版挑一版（ADR 0026）：这样的节点不自己跑，开 n 个版本子节点，都做完后挑一版 */
+  variants?: Variants;
+  /** 挑中了第几版、理由（没能按标准挑时给第 1 版，原因写在 warning 里） */
+  chosen?: number;
+  pickReason?: string;
+  /**
+   * 正在挑：挑选运行已经开出，占哪个并发池（看图的工具运行占工具子节点的池，AI 比较占 AI 的池）；
+   * 没在挑为空或 false
+   */
+  picking?: 'tool' | 'ai' | false;
+  /** 版本子节点：第几版、共几版（AI 版本要走不同的方向） */
+  version?: { k: number; n: number };
+  /**
+   * 展开出来的一条（ADR 0026）：这一条的内容，和它的指纹（内容、做法、用到的上游产出）。
+   * 重新展开时指纹没变、上次做成了的沿用，不重做。
+   */
+  item?: unknown;
+  itemHash?: string;
+  /**
+   * 停下的子节点重新排队等名额（ADR 0026）：轮到它时接着停下前的运行做，而不是从头做。
+   * 工作流图里的节点停下后继续时直接开跑，不用这个。
+   */
+  resumeOnStart?: boolean;
 }
 
 /** 干活节点：一个 agent 在持续目标里做完一件事 */
@@ -68,11 +93,23 @@ export interface ToolConfig extends CommonConfig {
   steps?: ToolStep[];
 }
 
+/** 展开节点（ADR 0026）：按上游的清单每条开一个子节点 */
+export interface ForeachConfig extends CommonConfig {
+  over?: string;
+  count?: number;
+  each?: ForeachBranch;
+  /** 实际展开了几条；还没展开（或修改时要重新展开）为空 */
+  items?: number;
+  /** 清单格式不对、让上游改过几次（最多一次） */
+  listRepairs?: number;
+}
+
 /** 各种节点的配置。加一种节点：这里加一行，再在 service/kinds 写它的插件并登记 */
 export interface KindConfigs {
   work: WorkConfig;
   discussion: DiscussionConfig;
   tool: ToolConfig;
+  foreach: ForeachConfig;
 }
 export type NodeKind = keyof KindConfigs;
 export type NodeConfig = KindConfigs[NodeKind];
@@ -84,6 +121,8 @@ export interface RunRequestRecord {
   model: string;
   prompt: string;
   inputsFrom: { runId: string; as: string }[];
+  /** 直接放进 in/ 的小文件（展开节点的 index.json、这一条的 _item.json，ADR 0026） */
+  inputs?: RunInputFile[];
   continueFrom?: string;
   /** 工具运行的步骤（ADR 0025） */
   steps?: ToolStep[];
@@ -116,6 +155,8 @@ export interface RevisionState {
   };
   estimateMicro?: number;
   changes?: { key: string; title: string; change: RevisionChange }[];
+  /** 用户在做几版的节点上「改用这一版」（ADR 0026）：确认后先换成这一版，再重做受影响的下游 */
+  pick?: { nodeId: string; version: number };
 }
 
 /** 一样交付物由哪个节点交出 */
@@ -190,6 +231,9 @@ export const nodes = pgTable('nodes', {
   finishedAt: at('finished_at'),
   /** 修改时被方案删掉：从第几版起不在工作流里（ADR 0022）；在工作流里的为空 */
   retiredVersion: integer('retired_version'),
+  /** 子节点（ADR 0026）：属于哪个展开节点 / 做几版的节点，排第几 */
+  parentId: uuid('parent_id'),
+  slot: integer('slot'),
 });
 
 export const edges = pgTable('edges', {
@@ -201,7 +245,8 @@ export const edges = pgTable('edges', {
 
 export type NodeRunStatus =
   'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'stopped';
-export type NodeRunPurpose = 'work' | 'rework' | 'speech' | 'summary';
+/** pick：做几版的节点挑一版（ADR 0026） */
+export type NodeRunPurpose = 'work' | 'rework' | 'speech' | 'summary' | 'pick';
 export const nodeRuns = pgTable('node_runs', {
   id: uuid('id').primaryKey(),
   taskId: uuid('task_id').notNull(),

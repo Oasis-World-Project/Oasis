@@ -18,7 +18,7 @@ import { Minus, Plus, Scan } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
 import { NodeCard, StubCard, type FlowNode, type StubNode } from './NodeCard.tsx';
 import { layout, NODE_H, NODE_W } from './layout.ts';
-import { nodeActions, nodeState } from './rules.ts';
+import { childrenOf, nodeActions, nodeState } from './rules.ts';
 import type { useSpeakers } from './use-speakers.ts';
 
 type FlowEdge = Edge<{ deletable: boolean; onDelete: (edgeId: string) => void }, 'flow'>;
@@ -116,15 +116,17 @@ export function WorkflowGraph({
   speakers: ReturnType<typeof useSpeakers>;
   handlers: GraphHandlers;
 }) {
+  // 图上只有工作流图里的节点：展开出来的条目、各版叠在父节点的卡片里（ADR 0026）
+  const roots = useMemo(() => task.nodes.filter((n) => !n.parentId), [task]);
   const { nodes, edges } = useMemo(() => {
     const links = task.edges
       .filter((e) => e.from && e.to)
       .map((e) => ({ from: e.from as string, to: e.to as string }));
     const positions = layout(
-      task.nodes.map((n) => n.id),
+      roots.map((n) => n.id),
       links,
     );
-    const flowNodes: (FlowNode | StubNode)[] = task.nodes.map((node) => {
+    const flowNodes: (FlowNode | StubNode)[] = roots.map((node) => {
       const actions = nodeActions(task, node);
       return {
         id: node.id,
@@ -132,6 +134,7 @@ export function WorkflowGraph({
         position: positions.get(node.id) ?? { x: 0, y: 0 },
         data: {
           node,
+          children: childrenOf(task, node),
           state: nodeState(node),
           speakers: speakers.speakersOf(node),
           toolName: speakers.toolName,
@@ -189,7 +192,7 @@ export function WorkflowGraph({
       });
     }
     return { nodes: flowNodes, edges: flowEdges };
-  }, [task, selected, speakers, handlers]);
+  }, [task, roots, selected, speakers, handlers]);
 
   const isValidConnection = (connection: Connection | Edge) => {
     if (connection.source === connection.target) return false;
@@ -225,7 +228,7 @@ export function WorkflowGraph({
           color="var(--oasis-hairline)"
         />
         <ZoomControls />
-        <FitOnChange count={task.nodes.length} />
+        <FitOnChange count={roots.length} />
       </ReactFlow>
     </div>
   );

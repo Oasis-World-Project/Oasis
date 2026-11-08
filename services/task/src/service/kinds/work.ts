@@ -9,6 +9,13 @@ import type { NodeOf, NodeRun, Snapshot } from '../../repo/task-store.ts';
 import { contextParts, NO_QUESTIONS, resumePrompt, type NodeContext } from '../prompt.ts';
 import { contextOf, inputsOf, redoOf } from './common.ts';
 import type { NodeKindPlugin, Step } from './kind.ts';
+import {
+  branchParts,
+  variantsConfig,
+  variantsEdit,
+  variantsPlan,
+  withVariants,
+} from './variants.ts';
 
 type WorkNode = NodeOf<'work'>;
 
@@ -39,11 +46,12 @@ function toolsPart(tools: string[]): string {
   ].join('\n');
 }
 
-/** 干活节点的说明（tools：分给它的外部工具名） */
-function workPrompt(c: NodeContext, tools: string[]): string {
+/** 干活节点的说明（tools：分给它的外部工具名；branch：展开出来的一条、做几版里的一版） */
+function workPrompt(c: NodeContext, tools: string[], branch: string[] = []): string {
   return [
     `你是 Oasis 工作流里的一个节点，负责「${c.title}」。`,
     ...contextParts(c, '你要做的事'),
+    ...branch,
     ...(c.budget ? [budgetPart(c.budget)] : []),
     toolsPart(tools),
     [
@@ -56,6 +64,13 @@ function workPrompt(c: NodeContext, tools: string[]): string {
   ].join('\n\n');
 }
 
+/** 展开出来的一条排第几（某一版的节点看它的父节点） */
+function itemIndex(snapshot: Snapshot, node: WorkNode): number | undefined {
+  if (node.config.item === undefined) return undefined;
+  const owner = node.config.version ? snapshot.nodes.find((n) => n.id === node.parentId) : node;
+  return owner?.slot ?? undefined;
+}
+
 function start(snapshot: Snapshot, node: WorkNode): Step {
   return {
     requests: [
@@ -66,6 +81,7 @@ function start(snapshot: Snapshot, node: WorkNode): Step {
         prompt: workPrompt(
           contextOf(snapshot, node),
           (node.config.tools ?? []).map((t) => t.key),
+          branchParts(node, itemIndex(snapshot, node)),
         ),
         inputsFrom: inputsOf(snapshot, node),
         meta: {},
@@ -113,16 +129,25 @@ export const work: NodeKindPlugin<'work'> = {
     return problems;
   },
   estimate: (plan, rates) =>
-    rates.node(plan.model) +
-    rates.compute +
-    plan.tools.reduce((sum, t) => sum + t.uses * rates.tool(t.key, t.model), 0),
-  config: (plan): WorkConfig => ({ tools: plan.tools }),
-  plan: (node, common) => ({ ...common, kind: 'work', tools: node.config.tools ?? [] }),
+    withVariants(
+      rates.node(plan.model) +
+        rates.compute +
+        plan.tools.reduce((sum, t) => sum + t.uses * rates.tool(t.key, t.model), 0),
+      plan.variants,
+      rates,
+    ),
+  config: (plan): WorkConfig => ({ tools: plan.tools, ...variantsConfig(plan.variants) }),
+  plan: (node, common) => ({
+    ...common,
+    kind: 'work',
+    tools: node.config.tools ?? [],
+    ...variantsPlan(node),
+  }),
   edit(_node, body) {
     if (body.participants !== undefined || body.rounds !== undefined)
       throw new HttpError(400, 'invalid_node', '只有讨论节点有参与者和轮数');
     if (body.steps !== undefined) throw new HttpError(400, 'invalid_node', '只有工具节点有步骤');
-    return body.tools ? { tools: body.tools } : {};
+    return { ...(body.tools ? { tools: body.tools } : {}), ...variantsEdit(body) };
   },
   body: (node) => ({ tools: node.config.tools ?? [], discussion: null, steps: null }),
   continuable: true,

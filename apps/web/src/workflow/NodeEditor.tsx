@@ -89,7 +89,10 @@ export function NodeEditor({
   }, []);
 
   const defaultModel = options.models[0]?.providerModel ?? '';
-  const [kind, setKind] = useState<NodeBody['kind']>(node?.kind ?? 'work');
+  // 编辑窗只管干活、讨论、工具三种；展开节点（ADR 0026）不在这里改
+  const [kind, setKind] = useState<Exclude<NodeBody['kind'], 'foreach'>>(
+    node && node.kind !== 'foreach' ? node.kind : 'work',
+  );
   const [stepsText, setStepsText] = useState(
     node?.steps ? JSON.stringify(node.steps, null, 2) : STEPS_EXAMPLE,
   );
@@ -178,7 +181,8 @@ export function NodeEditor({
     });
   }
 
-  const sources = task.nodes.filter((n) => n.status !== 'cancelled');
+  // 只能接工作流图里的节点：展开出来的条目、各版不能单独接线（ADR 0026）
+  const sources = task.nodes.filter((n) => n.status !== 'cancelled' && !n.parentId);
 
   return (
     <dialog

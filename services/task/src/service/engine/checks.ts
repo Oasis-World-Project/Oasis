@@ -1,5 +1,6 @@
 // 关卡和整体验收（ADR 0017：检查只提醒、不拦截）。检查在事务外跑，结果回到事务里推进：
 // 明确没满足的接着原会话改一次（MAX_REWORKS），改过仍没满足、没检查到的都带着提醒往下走。
+import { isGroup } from '../groups.ts';
 import { kindOf, reworkStep } from '../kinds/index.ts';
 import { missingDeliveryFiles, selectDeliverables } from '../output-files.ts';
 import type { Engine } from './shared.ts';
@@ -124,8 +125,9 @@ export function createChecks(
       });
       // 交付文件不齐：缺文件的交付节点接着原会话补一次；补过之后照常交付，缺的记在验收记录里。
       // 工具节点自己补不了（同样的步骤再跑一遍还是缺），只在下游跟着上游的新产出重跑
+      // 做几版的节点（ADR 0026）也补不了：交的是挑中的那一版
       const targets = fresh.nodes.filter(
-        (n) => short.has(n.id) && n.currentRunId && kindOf(n).reworkable,
+        (n) => short.has(n.id) && n.currentRunId && kindOf(n).reworkable && !isGroup(n),
       );
       if (missing.length && repairs < MAX_REWORKS && targets.length) {
         await w.setTask({

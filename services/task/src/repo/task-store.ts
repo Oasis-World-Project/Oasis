@@ -3,7 +3,7 @@
 // 任务的状态或「需要处理」的原因变了，就在同一个事务里往发件箱写 task.task.status_changed。
 import { TaskDeleted, TaskStatusChanged } from '@oasis/contracts/events';
 import { createEnvelope } from '@oasis/service-kit';
-import { and, asc, desc, eq, inArray, isNull, lt, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, lte, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import {
@@ -133,6 +133,8 @@ type NodePatch = Partial<
     | 'finishedAt'
     // 修改方案可以给沿用旧 ID 的节点改名（ADR 0022）
     | 'key'
+    // 重新展开时沿用的子节点换到新的位置（ADR 0026）
+    | 'slot'
   >
 >;
 type RunPatch = Partial<
@@ -141,7 +143,8 @@ type RunPatch = Partial<
 export type NewNode = Pick<
   NodeRow,
   'id' | 'key' | 'title' | 'kind' | 'role' | 'goal' | 'model' | 'status' | 'config'
->;
+> &
+  Partial<Pick<NodeRow, 'parentId' | 'slot'>>;
 type EdgeEnds = Pick<Edge, 'fromNodeId' | 'toNodeId'>;
 
 /** 事务里能做的写操作（写进去的同时也更新快照，后面的判断看到的是最新状态） */
@@ -155,7 +158,10 @@ export interface Writer {
   addNode(node: NewNode): Promise<void>;
   /** 删除节点：它的进出连线留下断开的一端；两端都空了的连线一起删掉 */
   deleteNode(nodeId: string): Promise<void>;
-  /** 修改方案删掉的节点：移出工作流但保留（运行记录还在，旧版能查看；ADR 0022） */
+  /**
+   * 修改方案删掉的节点：移出工作流但保留（运行记录还在，旧版能查看；ADR 0022）。
+   * 它的子节点（ADR 0026）一起移出。
+   */
   retireNode(nodeId: string, version: number): Promise<void>;
   addEdge(edge: Pick<Edge, 'id'> & EdgeEnds): Promise<void>;
   setEdge(edgeId: string, ends: EdgeEnds): Promise<void>;
@@ -194,6 +200,8 @@ export interface TaskStore {
   listStale(status: 'planning' | 'accepting', before: Date): Promise<Task[]>;
   /** 正在过关卡、且交出产出的那次运行结束早于 before 的节点（关卡中途断了，对账时重做） */
   listCheckingNodes(before: Date): Promise<Node[]>;
+  /** 开始早于 before、还没展开的展开节点（读清单中途断了，对账时重读；ADR 0026） */
+  listExpanding(before: Date): Promise<Node[]>;
   /** 这些上传文件里，哪些是这个人某个任务的素材（删私聊时这些文件要留着） */
   materialsInUse(ownerId: string, uploadIds: string[]): Promise<string[]>;
   /**
@@ -342,6 +350,9 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
               .where(
                 and(eq(edges.taskId, taskId), isNull(edges.fromNodeId), isNull(edges.toNodeId)),
               );
+            // 子节点随父节点级联删除（ADR 0026）
+            for (const child of snapshot.nodes.filter((n) => n.parentId === nodeId))
+              await writer.deleteNode(child.id);
             snapshot.nodes = snapshot.nodes.filter((n) => n.id !== nodeId);
             for (const e of snapshot.edges) {
               if (e.fromNodeId === nodeId) e.fromNodeId = null;
@@ -350,8 +361,21 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
             snapshot.edges = snapshot.edges.filter((e) => e.fromNodeId || e.toNodeId);
           },
           async retireNode(nodeId, version) {
-            await tx.update(nodes).set({ retiredVersion: version }).where(eq(nodes.id, nodeId));
-            snapshot.nodes = snapshot.nodes.filter((n) => n.id !== nodeId);
+            // 连同子节点、子节点的子节点（最多两层，ADR 0026）
+            const gone = new Set([nodeId]);
+            for (let grew = true; grew;) {
+              grew = false;
+              for (const n of snapshot.nodes)
+                if (n.parentId && gone.has(n.parentId) && !gone.has(n.id)) {
+                  gone.add(n.id);
+                  grew = true;
+                }
+            }
+            await tx
+              .update(nodes)
+              .set({ retiredVersion: version })
+              .where(inArray(nodes.id, [...gone]));
+            snapshot.nodes = snapshot.nodes.filter((n) => !gone.has(n.id));
           },
           async addEdge(edge) {
             const [row] = await tx
@@ -426,6 +450,22 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
         .innerJoin(nodeRuns, eq(nodeRuns.id, nodes.currentRunId))
         .where(and(eq(nodes.status, 'checking'), lte(nodeRuns.finishedAt, before)));
       return asNodes(rows.map((r) => r.node));
+    },
+
+    async listExpanding(before) {
+      const rows = await db
+        .select()
+        .from(nodes)
+        .where(
+          and(
+            eq(nodes.kind, 'foreach'),
+            eq(nodes.status, 'running'),
+            isNull(nodes.retiredVersion),
+            lte(nodes.startedAt, before),
+            sql`${nodes.config}->'items' is null`,
+          ),
+        );
+      return asNodes(rows);
     },
 
     async materialsInUse(ownerId, uploadIds) {

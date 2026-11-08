@@ -1,15 +1,30 @@
 // 运行结束：记下结局，再按结局推进节点——交出了产出去过关卡，这一步还没完（讨论发言）交给种类插件，
 // 失败了能换模型就换、否则节点失败交给用户处理，不是这里发起的停止或取消就让整个节点跟着停。
+import { HttpError } from '@oasis/service-kit';
 import type { Node, NodeRun, Snapshot, Writer } from '../../repo/task-store.ts';
 import type { Effects } from '../effects.ts';
+import { childrenOf } from '../groups.ts';
 import { kindOf, openRuns } from '../kinds/index.ts';
+import { PICK_FILE } from '../pick.ts';
 import type { Engine } from './shared.ts';
 
 /** 上游拒绝「地区不可用」时运行的错误里带的代码（model-gateway 给的） */
 const REGION_UNAVAILABLE = 'provider_region_unavailable';
 
 export function createFinish(engine: Engine): Pick<Engine, 'onRunFinished'> {
-  const { store, logger } = engine.deps;
+  const { store, harness, logger } = engine.deps;
+
+  /** 挑选运行写的结果（没写出来为 undefined） */
+  async function readPick(runId: string): Promise<string | undefined> {
+    try {
+      return await (
+        await harness.stream('GET', `/internal/runs/${runId}/files/${PICK_FILE}`)
+      ).text();
+    } catch (err) {
+      if (err instanceof HttpError && err.statusCode === 404) return undefined;
+      throw err;
+    }
+  }
 
   /** 把这次运行用的模型换掉（讨论发言换那位参与者的，其余换节点的）；节点上留一条提醒 */
   async function switchModel(w: Writer, node: Node, run: NodeRun, model: string) {
@@ -45,6 +60,15 @@ export function createFinish(engine: Engine): Pick<Engine, 'onRunFinished'> {
     }
     // 讨论里其他人还在说：一起停掉
     await engine.endRuns(w, openRuns(snapshot, node.id), 'cancel', fx);
+    // 做几版里的一版没做成（ADR 0026）：不打扰用户，各版都结束后用做成的那几版挑
+    if (node.config.version) {
+      await w.setNode(node.id, {
+        status: 'failed',
+        finishedAt: new Date(),
+        warning: error ?? '执行器未能完成任务',
+      });
+      return;
+    }
     await w.setNode(node.id, { status: 'failed', finishedAt: new Date() });
     await w.setTask({
       status: 'needs_attention',
@@ -60,6 +84,11 @@ export function createFinish(engine: Engine): Pick<Engine, 'onRunFinished'> {
     async onRunFinished(result) {
       const found = await store.findRun(result.runId);
       if (!found) return engine.planning.onFinished(result); // 不是节点的运行：可能是规划员
+      // 挑选运行（ADR 0026）：事务外先读它写的结果；读的时候连不上就等对账再来
+      const pickText =
+        found.purpose === 'pick' && result.status === 'succeeded' && found.status !== 'succeeded'
+          ? await readPick(result.runId)
+          : undefined;
       await engine.transact(found.taskId, async (snapshot, w, fx) => {
         const run = snapshot.activeRuns.find((r) => r.id === result.runId);
         if (!run) return; // 已经处理过
@@ -73,6 +102,12 @@ export function createFinish(engine: Engine): Pick<Engine, 'onRunFinished'> {
         });
         const node = snapshot.nodes.find((n) => n.id === run.nodeId);
         if (node?.status !== 'running') return; // 节点已停止、已取消、已失败等：不再推进
+        if (run.purpose === 'pick') {
+          if (node.currentRunId === run.id && node.config.picking)
+            await engine.finishPick(w, node, childrenOf(snapshot.nodes, node), result, pickText);
+          await engine.schedule(snapshot, w, fx);
+          return;
+        }
         const kind = kindOf(node);
         if (!kind.current(node, run)) return; // 过期的运行
 

@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   commandOf,
   errorOf,
+  expandGlobs,
+  globFiles,
   main,
   nextTry,
   runSteps,
@@ -211,5 +213,39 @@ describe('工具步骤执行器', () => {
     await main(changed.runner);
     expect(changed.calls).toHaveLength(1);
     expect(changed.events.at(-1)).toEqual({ type: 'done', ok: true });
+  });
+
+  it('参数里带 * 的路径按条目顺序展开成文件（ADR 0026）；一个也没找到这一步失败', async () => {
+    for (const slot of ['02', '01', '10'])
+      await mkdir(join(root, `in/clips/${slot}`), { recursive: true });
+    for (const slot of ['02', '01', '10'])
+      await writeFile(join(root, `in/clips/${slot}/clip.mp4`), 'v');
+    await writeFile(join(root, 'in/clips/index.json'), '[]');
+    expect(await globFiles(root, 'in/clips/*/clip.mp4')).toEqual([
+      'in/clips/01/clip.mp4',
+      'in/clips/02/clip.mp4',
+      'in/clips/10/clip.mp4',
+    ]);
+    expect(await expandGlobs(root, { in: 'in/clips/*/clip.mp4', fps: 24 })).toEqual({
+      in: ['in/clips/01/clip.mp4', 'in/clips/02/clip.mp4', 'in/clips/10/clip.mp4'],
+      fps: 24,
+    });
+    expect(await expandGlobs(root, { in: 'in/clips/0*/clip.mp4' })).toEqual({
+      in: ['in/clips/01/clip.mp4', 'in/clips/02/clip.mp4'],
+    });
+    expect(await expandGlobs(root, { in: 'in/clips/1*/clip.mp4' })).toEqual({
+      in: 'in/clips/10/clip.mp4',
+    });
+
+    const steps = [{ tool: 'op.video.concat', args: { in: 'in/shots/*/a.mp4' }, out: 'out/f.mp4' }];
+    await writeFile(join(root, 'in/.oasis-steps.json'), JSON.stringify(steps));
+    const missing = fake([]);
+    await main(missing.runner);
+    expect(missing.calls).toEqual([]);
+    expect(missing.events.at(-1)).toMatchObject({
+      type: 'done',
+      ok: false,
+      error: expect.stringContaining('没找到符合 in/shots/*/a.mp4 的文件'),
+    });
   });
 });

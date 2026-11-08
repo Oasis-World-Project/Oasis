@@ -103,6 +103,17 @@ export const NodeTool = z.object({
 export type NodeTool = z.infer<typeof NodeTool>;
 export const NodeTools = z.array(NodeTool);
 
+/**
+ * 做 N 版挑 1 版（ADR 0026）：同一个节点同时做 n 版，都做完后按 pick 挑一版交给下游，落选的留着，
+ * 用户可以改用另一版。生图、关键帧这类看运气的步骤用。
+ */
+export const Variants = z.object({
+  n: z.number().int().min(2).max(4),
+  /** 按什么挑（普通话），如「构图最接近分镜描述、人物没有畸变」 */
+  pick: z.string().trim().min(1).max(500),
+});
+export type Variants = z.infer<typeof Variants>;
+
 /** 干活节点：一个 agent 完成一件事 */
 export const WorkPlanNode = z.object({
   ...NodeCommon,
@@ -111,6 +122,7 @@ export const WorkPlanNode = z.object({
   model: z.string().min(1).max(200),
   /** 生图、联网搜索之类的外部工具；节点说明里只列这些 */
   tools: NodeTools.default([]),
+  variants: Variants.optional(),
 });
 
 export const Participant = z.object({
@@ -141,6 +153,44 @@ export const ToolPlanNode = z.object({
   /** 工具节点不用 AI，不写模型；工具自己的型号写在步骤参数 model 里 */
   model: z.string().max(200).default(''),
   steps: ToolSteps,
+  variants: Variants.optional(),
+});
+
+/** 一个展开节点最多展开几条（ADR 0026） */
+export const FOREACH_MAX = 24;
+
+const branchTitle = { title: z.string().trim().min(1).max(60).optional() };
+/**
+ * 展开的每一条做什么：一个干活节点或工具节点，不写 key（title 可以不写，用展开节点的）。
+ * 字符串里的 {{index}} 换成两位数的条目号（01、02……，和下游目录名一致），{{item}} 换成这一条，
+ * {{item.字段}} 换成这一条的某个字段。可以加 variants：每一条做几版挑一版。
+ */
+export const ForeachBranch = z.discriminatedUnion('kind', [
+  WorkPlanNode.omit({ key: true }).extend(branchTitle),
+  ToolPlanNode.omit({ key: true }).extend(branchTitle),
+]);
+export type ForeachBranch = z.infer<typeof ForeachBranch>;
+
+/**
+ * 动态展开（ADR 0026）：上游交出一份 JSON 清单（如 shots.json），有几条就开几个分支，每条一个节点，
+ * 同时跑；下游拿到每条的产出 in/<key>/01/…、02/…，和一份按顺序排好的 in/<key>/index.json。
+ * 条数要等上游定的时候用（按分镜逐个出镜头、按大纲逐章写）。
+ */
+export const ForeachPlanNode = z.object({
+  ...NodeCommon,
+  kind: z.literal('foreach'),
+  /** 展开节点自己不用 AI，不写模型 */
+  model: z.string().max(200).default(''),
+  /** 清单：上游交来的 JSON 数组，写成 in/<上游 key>/<文件>.json */
+  over: z
+    .string()
+    .regex(
+      /^in\/[\p{L}\p{N}_-]{1,40}\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\\\0\r\n*]{1,200}\.json$/u,
+      'over 写上游交来的 JSON 清单的路径：in/<上游 key>/<文件>.json',
+    ),
+  /** 预计几条（估价用；实际按清单） */
+  count: z.number().int().min(1).max(FOREACH_MAX),
+  each: ForeachBranch,
 });
 
 /** 方案里的节点；用户新建节点也用它（节点名在任务里不能重复，新建的节点不会自动开跑） */
@@ -148,6 +198,7 @@ export const PlanNode = z.discriminatedUnion('kind', [
   WorkPlanNode,
   DiscussionPlanNode,
   ToolPlanNode,
+  ForeachPlanNode,
 ]);
 export type PlanNode = z.infer<typeof PlanNode>;
 

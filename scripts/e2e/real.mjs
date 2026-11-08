@@ -4,6 +4,7 @@
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { literal, query } from './db.mjs';
+import { realShots } from './real-shots.mjs';
 import { PAGE_TEST } from './scenarios.mjs';
 
 export const REAL_BUDGET_MICRO = 1_000_000;
@@ -247,13 +248,19 @@ export const REAL_SCENARIOS = {
         writeFileSync(path.join(t.outDir, 'real-tool-成片.mp4'), bytes);
         t.log(`成片 ${film.path}：${(bytes.length / 1024).toFixed(0)} KB，已存到回归目录`);
       }
-      const bill = query(
-        'model_gateway',
-        `select kind, model, count(*)::int as n, coalesce(sum(charged_micro), 0)::bigint as micro from calls where payer_id = ${literal(t.user.userId)} group by kind, model order by micro desc`,
-      );
-      t.log(
-        `花费明细：${bill.map((r) => `${r.kind}/${r.model}×${r.n} ${usd(r.micro)}`).join('，')}`,
-      );
+      logBill(t);
     },
   },
+
+  // 展开和做几版挑一版（ADR 0026）：6 个镜头的短片
+  'real-shots': realShots({ waitFiles, logBill, CHEAP_VIDEO, LONG }),
 };
+
+/** 这个回归用户的花费明细（按类型、型号） */
+function logBill(t) {
+  const bill = query(
+    'model_gateway',
+    `select kind, model, count(*)::int as n, coalesce(sum(charged_micro), 0)::bigint as micro from calls where payer_id = ${literal(t.user.userId)} group by kind, model order by micro desc`,
+  );
+  t.log(`花费明细：${bill.map((r) => `${r.kind}/${r.model}×${r.n} ${usd(r.micro)}`).join('，')}`);
+}

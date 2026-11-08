@@ -71,6 +71,7 @@ await startService({
         logger,
       }),
       maxParallel: config.MAX_PARALLEL_NODES,
+      maxToolChildren: config.MAX_PARALLEL_TOOL_CHILDREN,
       agent: createServiceClient('agent', config.AGENT_URL, { timeoutMs: 5_000 }),
       modelGateway,
       planning: {

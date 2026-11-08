@@ -17,6 +17,7 @@ import { ConfirmButton } from '../chat/parts.tsx';
 import { TaskDecisions } from '../chat/TaskCard.tsx';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
+import { GroupSections, ParentLink } from './group-sections.tsx';
 import { ToolMark } from './NodeCard.tsx';
 import { Ask, Links, Section, smallButton } from './node-panel-parts.tsx';
 import { RunHistory } from './RunHistory.tsx';
@@ -72,7 +73,7 @@ export function NodePanel({
     >
       <div className="flex flex-col gap-3 px-4 pb-3 pt-4">
         <div className="flex items-start gap-3">
-          {node.kind === 'tool' ? (
+          {node.kind === 'tool' || node.kind === 'foreach' ? (
             <ToolMark size={40} />
           ) : (
             <span
@@ -89,11 +90,13 @@ export function NodePanel({
           <div className="min-w-0 flex-1">
             <h2 className="m-0 text-[17px] font-medium leading-snug">{node.title}</h2>
             <p className="m-0 truncate text-[12.5px] text-ink-muted">
-              {node.steps
-                ? `工具节点 · 不用 AI，按 ${node.steps.length} 步执行`
-                : node.discussion
-                  ? `${who.map((s) => s.name).join('、')} 讨论 ${node.discussion.rounds} 轮`
-                  : `${who[0]?.name ?? node.model}${node.role ? ` · ${node.role}` : ''}`}
+              {node.foreach
+                ? `展开节点 · 每条${node.foreach.each.kind === 'tool' ? '按工具步骤' : '由 AI'}做`
+                : node.steps
+                  ? `工具节点 · 不用 AI，按 ${node.steps.length} 步执行`
+                  : node.discussion
+                    ? `${who.map((s) => s.name).join('、')} 讨论 ${node.discussion.rounds} 轮`
+                    : `${who[0]?.name ?? node.model}${node.role ? ` · ${node.role}` : ''}`}
             </p>
           </div>
           <button
@@ -171,6 +174,8 @@ export function NodePanel({
           </p>
         </Section>
         {task.attention?.nodeId === node.id && <TaskDecisions task={task} compact />}
+        <ParentLink task={task} node={node} onPick={onPick} />
+        <GroupSections task={task} node={node} actions={actions} onPick={onPick} />
         {blockers.length > 0 && (
           <Section title={task.status === 'cancelled' ? '取消前的上游依赖' : '等待哪些上游'}>
             <p className="m-0 text-[13px] text-ink-muted">

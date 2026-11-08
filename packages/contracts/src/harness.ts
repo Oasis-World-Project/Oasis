@@ -37,6 +37,7 @@ export const RunInputFile = z.object({
     .regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$)).+$/, '必须是不含 .. 的相对路径'),
   contentBase64: z.string(),
 });
+export type RunInputFile = z.infer<typeof RunInputFile>;
 
 export const StartRunBody = z
   .object({
@@ -58,6 +59,7 @@ export const StartRunBody = z
     inputs: z.array(RunInputFile).default([]),
     /**
      * 把之前某次运行的产出放进本次沙箱的 in/<as>/ 下（工作流里上游节点交给下游）。
+     * as 可以是两层（展开节点每一条的产出放在 in/<节点>/01/，ADR 0026）。
      * 只能引用同一付费人、已成功的运行。
      */
     inputsFrom: z
@@ -67,8 +69,8 @@ export const StartRunBody = z
           as: z
             .string()
             .regex(
-              /^[\p{L}\p{N}_.-]{1,64}$/u,
-              '只能用字母、数字、下划线、点和短横线，最长 64 个字符',
+              /^[\p{L}\p{N}_-][\p{L}\p{N}_.-]{0,63}(?:\/[\p{L}\p{N}_-][\p{L}\p{N}_.-]{0,63})?$/u,
+              '一层或两层目录名：字母、数字、下划线、点和短横线，不能以点开头，每层最长 64 个字符',
             ),
         }),
       )

@@ -1,19 +1,55 @@
 // 库里的任务、节点、运行 → 给前端和其他服务看的样子（契约见 @oasis/contracts/task）。
 import type { EdgeBody, NodeBody, NodeRunBody, TaskBody } from '@oasis/contracts/task';
 import type { Node, NodeRun, Snapshot } from '../../repo/task-store.ts';
+import { descendantsOf, isGroup } from '../groups.ts';
 import { kindOf } from '../kinds/index.ts';
 import { deliveryManifest } from '../output-files.ts';
 import { FINAL } from './shared.ts';
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
 
-export function toNodeBody(node: Node): NodeBody {
+/** 展开节点、做几版的节点给前端看的部分（ADR 0026） */
+function groupParts(node: Node): Pick<NodeBody, 'parentId' | 'slot' | 'foreach' | 'variants'> {
   const c = node.config;
+  return {
+    parentId: node.parentId,
+    slot: node.slot,
+    foreach:
+      node.kind === 'foreach'
+        ? {
+            over: node.config.over ?? '',
+            count: node.config.count ?? 0,
+            items: node.config.items ?? null,
+            each: {
+              kind: node.config.each?.kind ?? 'work',
+              title: node.config.each?.title ?? node.title,
+            },
+          }
+        : null,
+    variants: c.variants
+      ? {
+          n: c.variants.n,
+          pick: c.variants.pick,
+          chosen: c.chosen ?? null,
+          reason: c.pickReason ?? null,
+        }
+      : null,
+  };
+}
+
+/** nodes：同一个任务的全部节点（组节点的花费算上子节点的）；冻结旧版时不给 */
+export function toNodeBody(node: Node, nodes?: Node[]): NodeBody {
+  const c = node.config;
+  const spent =
+    nodes && isGroup(node)
+      ? descendantsOf(nodes, node).reduce((sum, n) => sum + n.spentMicro, node.spentMicro)
+      : node.spentMicro;
   return {
     id: node.id,
     key: node.key,
     title: node.title,
     kind: node.kind,
+    ...groupParts(node),
     role: node.role,
     goal: node.goal,
     model: node.model,
@@ -29,7 +65,7 @@ export function toNodeBody(node: Node): NodeBody {
     warning: node.warning,
     summary: node.summary,
     outputs: node.outputs,
-    spentMicro: node.spentMicro,
+    spentMicro: spent,
     startedAt: iso(node.startedAt),
     finishedAt: iso(node.finishedAt),
   };
@@ -95,7 +131,7 @@ export function toTaskBody({ task, nodes, edges, versions }: Snapshot): TaskBody
         revision !== undefined && !FINAL.includes(task.status) ? null : rest)(task.acceptance),
     deliverables: task.deliverables,
     ...(deliveryFiles === undefined ? {} : { deliveryFiles }),
-    nodes: nodes.map(toNodeBody),
+    nodes: nodes.map((n) => toNodeBody(n, nodes)),
     edges: edges.map(toEdgeBody),
     version: task.version,
     versions: versions.map((v) => ({

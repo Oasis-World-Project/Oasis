@@ -10,6 +10,8 @@ import type { Speaker } from './use-speakers.ts';
 
 type FlowNodeData = {
   node: NodeBody;
+  /** 展开出来的条目、各版（ADR 0026）：叠在卡片后面，数做完了几个 */
+  children: NodeBody[];
   state: ReturnType<typeof nodeState>;
   speakers: Speaker[];
   /** 工具名 → 给人看的名字（如 image.generate → 生成图片） */
@@ -20,6 +22,25 @@ type FlowNodeData = {
   onPick: (id: string) => void;
 };
 export type FlowNode = Node<FlowNodeData, 'step'>;
+
+/** 展开节点、做几版的节点的那行说明，如「镜头 × 12（7 完成）」「2 版 · 用了第 2 版」 */
+function groupMeta(node: NodeBody, children: NodeBody[]): string | undefined {
+  const done = children.filter((c) => c.status === 'succeeded').length;
+  if (node.foreach) {
+    const name = node.foreach.each.title.replace(/\s*\{\{[^}]*\}\}\s*/g, '').trim() || '条目';
+    const total = node.foreach.items ?? node.foreach.count;
+    return node.foreach.items === null && !children.length
+      ? `${name} × 约 ${total}（等清单）`
+      : `${name} × ${total}（${done} 完成）`;
+  }
+  if (node.variants && node.variants.n > 1) {
+    if (node.variants.chosen) return `${node.variants.n} 版 · 用了第 ${node.variants.chosen} 版`;
+    return children.length
+      ? `${node.variants.n} 版（${done} 完成）`
+      : `做 ${node.variants.n} 版挑 1 版`;
+  }
+  return undefined;
+}
 
 /** 卡片下面那行说明：讨论几轮、几步工具、用什么工具、花了多少、关卡提醒 */
 function metaOf(node: NodeBody, toolName: (key: string) => string): string {
@@ -80,6 +101,7 @@ const handleClass =
 export function NodeCard({ data }: NodeProps<FlowNode>) {
   const { node, speakers, selected } = data;
   const status = data.state;
+  const group = groupMeta(node, data.children);
   const trouble = node.status !== 'succeeded' && !!node.warning;
   const quiet = ['draft', 'waiting', 'blocked', 'cancelled'].includes(node.status);
   const ring = selected
@@ -95,18 +117,32 @@ export function NodeCard({ data }: NodeProps<FlowNode>) {
         isConnectable={data.acceptsInput}
         className={handleClass}
       />
+      {/* 展开节点、做几版的节点：后面叠两层，看得出是一叠（ADR 0026） */}
+      {group &&
+        [8, 4].map((offset) => (
+          <span
+            key={offset}
+            aria-hidden="true"
+            style={{
+              width: NODE_W,
+              height: NODE_H,
+              transform: `translate(${offset}px, ${offset}px)`,
+            }}
+            className="absolute left-0 top-0 rounded-[20px] bg-glass-strong shadow-edge-strong"
+          />
+        ))}
       <button
         type="button"
         onClick={() => data.onPick(node.id)}
         aria-pressed={selected}
         aria-label={`${node.title}，${status.label}`}
         style={{ width: NODE_W, height: NODE_H }}
-        className={`flex flex-col justify-between rounded-[20px] border-0 p-3 text-left text-ink ${
+        className={`relative flex flex-col justify-between rounded-[20px] border-0 p-3 text-left text-ink ${
           quiet ? 'bg-glass-strong' : 'bg-glass-active'
         } ${ring} ${node.status === 'cancelled' ? 'opacity-55' : ''}`}
       >
         <span className="flex items-center gap-2">
-          {node.kind === 'tool' ? (
+          {node.kind === 'tool' || node.kind === 'foreach' ? (
             <ToolMark size={26} />
           ) : (
             <span
@@ -125,7 +161,7 @@ export function NodeCard({ data }: NodeProps<FlowNode>) {
           <StatusMark node={node} tone={status.tone} />
         </span>
         <span className={`truncate text-[11.5px] ${trouble ? 'text-accent' : 'text-ink-muted'}`}>
-          {metaOf(node, data.toolName)}
+          {group ?? metaOf(node, data.toolName)}
         </span>
         <span
           className={`flex items-center gap-1.5 text-[11.5px] ${
@@ -137,6 +173,9 @@ export function NodeCard({ data }: NodeProps<FlowNode>) {
           )}
           {node.kind === 'tool' && (
             <span className="rounded-full bg-track px-1.5 text-ink-muted">工具</span>
+          )}
+          {node.kind === 'foreach' && (
+            <span className="rounded-full bg-track px-1.5 text-ink-muted">展开</span>
           )}
           {status.label}
           {status.tone === 'active' && (

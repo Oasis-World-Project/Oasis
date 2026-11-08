@@ -15,6 +15,8 @@ import {
 } from '../../src/repo/task-store.ts';
 
 const newNode = (n: NewNode, taskId: string): Node => ({
+  parentId: null,
+  slot: null,
   ...n,
   taskId,
   attempts: 0,
@@ -126,6 +128,8 @@ export function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
             snap.nodes.push(row);
           },
           async deleteNode(id) {
+            for (const child of snap.nodes.filter((n) => n.parentId === id))
+              await w.deleteNode(child.id);
             nodes.delete(id);
             snap.nodes = snap.nodes.filter((n) => n.id !== id);
             for (const e of [...edges.values()].filter((x) => x.taskId === taskId)) {
@@ -136,6 +140,8 @@ export function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
             snap.edges = [...edges.values()].filter((e) => e.taskId === taskId);
           },
           async retireNode(id, version) {
+            for (const child of snap.nodes.filter((n) => n.parentId === id))
+              await w.retireNode(child.id, version);
             (nodes.get(id) as Node).retiredVersion = version;
             snap.nodes = snap.nodes.filter((n) => n.id !== id);
           },
@@ -186,6 +192,16 @@ export function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
         const run = n.currentRunId ? runs.get(n.currentRunId) : undefined;
         return n.status === 'checking' && run?.finishedAt && run.finishedAt <= before;
       }),
+    listExpanding: async (before) =>
+      [...nodes.values()].filter(
+        (n) =>
+          n.kind === 'foreach' &&
+          n.status === 'running' &&
+          n.retiredVersion === null &&
+          n.startedAt !== null &&
+          n.startedAt <= before &&
+          n.config.items === undefined,
+      ),
     materialsInUse: async (ownerId, uploadIds) =>
       [...tasks.values()]
         .filter((t) => t.ownerId === ownerId)

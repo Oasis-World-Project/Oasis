@@ -69,6 +69,10 @@ function checkLink(
   from: string | null,
   to: string | null,
 ) {
+  // 子节点（ADR 0026）跟着父节点，不能单独连线
+  for (const id of [from, to])
+    if (id && nodeOf(snapshot, id).parentId)
+      throw new HttpError(400, 'invalid_edge', '展开出来的条目、做几版里的一版不能单独连线');
   if (!from || !to) return;
   if (from === to) throw new HttpError(400, 'invalid_edge', '节点不能连向自己');
   const others = snapshot.edges.filter((e) => e.id !== edgeId);

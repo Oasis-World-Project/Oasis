@@ -118,16 +118,21 @@ export function WorkflowPage() {
   };
   const selectedId = selected === undefined ? (shown.attention?.nodeId ?? null) : selected;
   const node = shown.nodes.find((n) => n.id === selectedId);
+  // 已经挑好一版的节点下面没做成的那几版不算问题；展开出来的条目、各版算在父节点里（ADR 0026）
+  const settledUnder = (n: (typeof shown.nodes)[number]) =>
+    shown.nodes.find((p) => p.id === n.parentId)?.status === 'succeeded';
   const issues = shown.nodes.filter(
     (n) =>
-      (n.status !== 'succeeded' && n.warning) ||
-      n.status === 'failed' ||
-      n.status === 'stopped' ||
-      shown.attention?.nodeId === n.id,
+      !settledUnder(n) &&
+      ((n.status !== 'succeeded' && n.warning) ||
+        n.status === 'failed' ||
+        n.status === 'stopped' ||
+        shown.attention?.nodeId === n.id),
   );
+  const steps = shown.nodes.filter((n) => !n.parentId);
   const editingNode =
     editing && editing !== 'new' ? task.nodes.find((n) => n.id === editing) : undefined;
-  const done = shown.nodes.filter((n) => n.status === 'succeeded').length;
+  const done = steps.filter((n) => n.status === 'succeeded').length;
   const open = canEditWorkflow(shown);
   const status = taskStatusOf(task);
   const busy = actions.busy !== null;
@@ -213,7 +218,7 @@ export function WorkflowPage() {
         <div className="absolute right-4 top-4 z-10 flex flex-wrap items-center justify-end gap-1.5">
           <span className="inline-flex h-10 items-center gap-2 rounded-full bg-glass-active px-4 text-[13px] shadow-edge-strong backdrop-blur-xl">
             <span className="font-display">
-              {done} / {shown.nodes.length}
+              {done} / {steps.length}
             </span>
             完成
             <span className="text-ink-muted">· 已花 {formatCost(shown.spentMicro)}</span>

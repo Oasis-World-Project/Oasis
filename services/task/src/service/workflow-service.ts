@@ -24,9 +24,11 @@ import {
   toTaskBody,
   type EngineDeps,
 } from './engine/index.ts';
+import { isRoot } from './groups.ts';
 import { kindOf } from './kinds/index.ts';
 import { planToRows, validatePlan } from './plan.ts';
 import { createNodeApi } from './workflow-nodes.ts';
+import { createPickApi } from './workflow-pick.ts';
 
 /** 「需要处理」时某个选择不适用的说明 */
 const UNAVAILABLE: Record<Attention['reason'], string> = {
@@ -200,8 +202,9 @@ export function createWorkflowService(deps: EngineDeps) {
         id: task.id,
         title: task.title,
         status: task.status,
-        nodesDone: nodes.filter((n) => n.status === 'succeeded').length,
-        nodesTotal: nodes.length,
+        // 只数工作流图里的节点：展开出来的条目、各版算在父节点里（ADR 0026）
+        nodesDone: nodes.filter((n) => isRoot(n) && n.status === 'succeeded').length,
+        nodesTotal: nodes.filter(isRoot).length,
         spentMicro: task.spentMicro,
         // 从发出修改到新版交付（或不改了）都算修改中（ADR 0022）
         revising: isRevising(task),
@@ -365,6 +368,7 @@ export function createWorkflowService(deps: EngineDeps) {
       }),
 
     ...createNodeApi({ engine, owned, change }),
+    ...createPickApi({ engine, owned }),
 
     /**
      * 对账（启动时和每分钟）：防止 harness 的结束事件丢了、运行没提交出去、关卡检查中途断了。
@@ -389,6 +393,12 @@ export function createWorkflowService(deps: EngineDeps) {
         await engine
           .runGate(node.taskId, node.id, node.currentRunId)
           .catch((err: unknown) => logger.warn({ err, nodeId: node.id }, '关卡重试失败，下次再试'));
+      }
+      // 展开节点读清单中途断了（ADR 0026）：再读一次
+      for (const node of await store.listExpanding(before)) {
+        await engine
+          .expand({ taskId: node.taskId, nodeId: node.id })
+          .catch((err: unknown) => logger.warn({ err, nodeId: node.id }, '展开重试失败，下次再试'));
       }
     },
   };

@@ -81,7 +81,10 @@ function problemOf(spec: ToolArgSpec, value: unknown, anyPath: boolean): string 
       const items = listOf(value);
       if (!items?.length)
         return spec.kind === 'paths' ? '要写一个或几个文件路径' : '要写一项或几项';
-      if (!inRange(items.length)) return `要写 ${range} 项`;
+      // 文件路径里有 *（如 in/clips/*/clip.mp4）时，运行时才展开成几个文件，个数到时再查
+      const globbed =
+        spec.kind === 'paths' && items.some((p) => typeof p === 'string' && p.includes('*'));
+      if (!globbed && !inRange(items.length)) return `要写 ${range} 项`;
       if (spec.kind === 'paths' && items.some((p) => typeof p !== 'string' || !file.test(p)))
         return '每一项都要是沙箱里的文件路径（in/上游节点/…、materials/… 或 out/…）';
       return items.some(

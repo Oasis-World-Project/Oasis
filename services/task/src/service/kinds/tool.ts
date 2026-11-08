@@ -12,6 +12,7 @@ import type { ToolConfig } from '../../repo/schema.ts';
 import type { NodeOf, Snapshot } from '../../repo/task-store.ts';
 import { inputsOf, redoOf } from './common.ts';
 import type { NodeKindPlugin, Step } from './kind.ts';
+import { variantsConfig, variantsEdit, variantsPlan, withVariants } from './variants.ts';
 
 type ToolNode = NodeOf<'tool'>;
 
@@ -109,23 +110,33 @@ export const tool: NodeKindPlugin<'tool'> = {
     return problems;
   },
   estimate: (plan, rates) =>
-    rates.compute +
-    plan.steps.reduce(
-      (sum, step) =>
-        sum + unitsOf(step, rates.per(step.tool)) * rates.tool(step.tool, modelOf(step), step.args),
-      0,
+    withVariants(
+      rates.compute +
+        plan.steps.reduce(
+          (sum, step) =>
+            sum +
+            unitsOf(step, rates.per(step.tool)) * rates.tool(step.tool, modelOf(step), step.args),
+          0,
+        ),
+      plan.variants,
+      rates,
     ),
-  config: (plan): ToolConfig => ({ steps: plan.steps }),
-  plan: (node, common) => ({ ...common, kind: 'tool', steps: node.config.steps ?? [] }),
+  config: (plan): ToolConfig => ({ steps: plan.steps, ...variantsConfig(plan.variants) }),
+  plan: (node, common) => ({
+    ...common,
+    kind: 'tool',
+    steps: node.config.steps ?? [],
+    ...variantsPlan(node),
+  }),
   edit(node, body) {
     if (body.participants !== undefined || body.rounds !== undefined)
       throw new HttpError(400, 'invalid_node', '只有讨论节点有参与者和轮数');
     if (body.tools !== undefined)
       throw new HttpError(400, 'invalid_node', '工具节点用的工具写在步骤里');
-    if (!body.steps) return {};
+    if (!body.steps) return variantsEdit(body);
     const problems = stepProblems(node.key, body.steps);
     if (problems.length) throw new HttpError(400, 'invalid_node', problems.join('；'));
-    return { steps: body.steps };
+    return { steps: body.steps, ...variantsEdit(body) };
   },
   body(node) {
     const steps = node.config.steps ?? [];

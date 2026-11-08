@@ -2,7 +2,9 @@
 import { createPlanning } from '../planning-service.ts';
 import { createAdvance } from './advance.ts';
 import { createChecks } from './checks.ts';
+import { createExpand } from './expand.ts';
 import { createFinish } from './finish.ts';
+import { createGroups } from './groups.ts';
 import { createOutside } from './outside.ts';
 import { createRevisions } from './revisions.ts';
 import type { Engine, EngineDeps } from './shared.ts';
@@ -28,6 +30,8 @@ export function createEngine(deps: EngineDeps): Engine {
     createFinish(engine),
     createChecks(engine),
     createRevisions(engine),
+    createGroups(engine),
+    createExpand(engine),
   );
 }
 

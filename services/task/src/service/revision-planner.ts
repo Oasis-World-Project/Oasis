@@ -5,6 +5,7 @@ import type { ExecutionEnvironment } from '@oasis/contracts/harness';
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import {
   DiscussionPlanNode,
+  ForeachPlanNode,
   NodeKey,
   PlanEdge,
   ToolPlanNode,
@@ -47,6 +48,7 @@ const RevisionPlanFile = z.object({
           WorkPlanNode.extend(origin),
           DiscussionPlanNode.extend(origin),
           ToolPlanNode.extend(origin),
+          ForeachPlanNode.extend(origin),
         ]),
       ]),
     )
@@ -59,7 +61,7 @@ export type RevisionPlan = NonNullable<RevisionState['plan']>;
 const isReuse = (n: RevisionPlanNode): n is { key: string; reuse: string } => 'reuse' in n;
 
 /** 上一版的节点 → 方案里的完整节点（沿用的节点照搬，规划门和估价用） */
-function asPlanNode(node: Node): PlanNode {
+export function asPlanNode(node: Node): PlanNode {
   const c = node.config;
   return kindOf(node).plan(node, {
     key: node.key,
@@ -98,6 +100,13 @@ function previousWorkflow(nodes: Node[], edges: Edge[], deliverables: Record<str
         status: n.status,
         goal: n.goal.length > 800 ? `${n.goal.slice(0, 800)}…` : n.goal,
         ...toolsOf(n),
+        // 展开节点、做几版的节点（ADR 0026）：展开了几条、挑了第几版
+        ...(n.kind === 'foreach'
+          ? { foreach: { over: n.config.over, items: n.config.items ?? null } }
+          : {}),
+        ...(n.config.variants
+          ? { variants: { n: n.config.variants.n, chosen: n.config.chosen ?? null } }
+          : {}),
         ...(n.config.deliver ? { deliver: n.config.deliver } : {}),
         outputs: n.outputs.slice(0, 40).map((f) => f.path),
         ...(n.summary ? { said: n.summary.slice(0, 300) } : {}),
@@ -212,7 +221,12 @@ export function checkRevisionPlan(
         continue;
       }
       if (entry.key !== entry.reuse) problems.push(`沿用的节点 key 要和旧节点一样：${entry.reuse}`);
-      if (!source.config.outputsRunId || source.outputs.length === 0)
+      // 展开节点没有单独交出产出的运行，看它是不是每一条都做完了（ADR 0026）
+      const hasOutputs =
+        source.kind === 'foreach'
+          ? source.status === 'succeeded'
+          : Boolean(source.config.outputsRunId);
+      if (!hasOutputs || source.outputs.length === 0)
         problems.push(`「${entry.reuse}」上一版没有可沿用的产出，要重新做`);
       reused.add(entry.key);
       nodes.push(asPlanNode(source));

@@ -9,7 +9,10 @@ import { z } from 'zod';
 import { validatePlan, withInputExpects } from './plan.ts';
 import type { ExecutionEnvironment } from '@oasis/contracts/harness';
 import { kindOf, type Rates } from './kinds/index.ts';
+import { NODE_FORMAT_RULES } from './planner-rules.ts';
 import { argRate, toolRate, type Fallback, type PricedModel } from './quote.ts';
+
+export { NODE_FORMAT_RULES };
 
 const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro < 10_000 ? 4 : 2)}`;
 
@@ -136,31 +139,6 @@ export function resourceSections(input: PlannerResources): string[] {
       : []),
   ];
 }
-
-/** 节点字段的说明（第一次规划和修改规划共用） */
-export const NODE_FORMAT_RULES = [
-  '- kind：work 是一个 AI 在独立容器里做一件事，成果写到 out/；discussion 是几位参与者（各自的模型和立场）讨论几轮、由 model 汇总，只在真要权衡取舍时用。',
-  `- kind：tool 不用 AI，在容器里按顺序执行 steps，每步 {"tool":"工具名","args":{参数},"out":"out/结果路径"}（参数按工具的「参数」写；文件写容器里的路径：上游交来的 in/<上游 key>/…，用户素材 materials/…，前面步骤的结果 out/…），每步失败自动重试 2 次，不写 model。步骤和参数事先定得下来的机械活用 tool（按分镜生成视频再拼成片、转格式、抽帧、配音轨），便宜也不会跑偏；要看了内容才知道怎么做的用 work。例：${JSON.stringify(
-    {
-      key: 'cut',
-      title: '拼成片',
-      kind: 'tool',
-      goal: '把两段镜头拼成成片',
-      steps: [
-        {
-          tool: 'op.video.concat',
-          args: { in: ['in/shots/1.mp4', 'in/shots/2.mp4'] },
-          out: 'out/成片.mp4',
-        },
-      ],
-      expects: ['成片.mp4'],
-    },
-  )}`,
-  '- 连线 from → to：上游的 out/ 放进下游的 in/<上游 key>/；没有连线的节点同时开跑。',
-  `- deliverables：任务单上每样交付物都指定由哪个节点交出；那个节点要写 deliver（最终交付的文件路径，可用 * 通配，* 只匹配一层，** 递归）。deliver 只放任务单上的交付物；为做它产生的预览图、参考图、草稿只在节点之间传递，不写进 deliver。`,
-  '- expects：节点必须产出的文件（可写 {"pattern":"图/*.png","minCount":4} 这类数量要求），系统会核对。checks：可选，节点交付前自己看一眼的几件事，最多 5 条。',
-  '- goal 只写这个节点要做什么、交出什么文件，不写检查流程，检查交给节点自己判断；节点不能再问用户。key 只用英文字母、数字、下划线、短横线。',
-];
 
 /** 方案示例里的一个干活节点 */
 export function exampleNode(key: string, title: string, goal: string, file: string, model: string) {
@@ -302,6 +280,10 @@ export function workflowProblems(
     const owner = plan.deliverables[d.name];
     if (!owner) problems.push(`交付物「${d.name}」没有指定由哪个节点交出`);
     else if (!keys.has(owner)) problems.push(`交付物「${d.name}」指定的节点「${owner}」不存在`);
+    else if (plan.nodes.find((n) => n.key === owner)?.kind === 'foreach')
+      problems.push(
+        `交付物「${d.name}」不能由展开节点「${owner}」直接交出：在后面加一个节点把各条汇总（拼接、整理）后交付`,
+      );
     else if (!plan.nodes.find((n) => n.key === owner)?.deliver?.length)
       problems.push(`交付物「${d.name}」的节点「${owner}」没有指定最终 deliver 文件`);
   }

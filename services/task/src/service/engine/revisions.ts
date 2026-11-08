@@ -1,6 +1,7 @@
 // 修改（ADR 0022）：用户确认规划员排的修改方案后按方案改工作流再开跑；用户不改了就回到修改前的样子。
 import { randomUUID } from 'node:crypto';
 import type { PlanNode } from '@oasis/contracts/task';
+import { childrenOf, isGroup, isRoot } from '../groups.ts';
 import { nodeRow } from '../plan.ts';
 import { toEdgeBody, toNodeBody } from './bodies.ts';
 import type { Engine } from './shared.ts';
@@ -16,16 +17,30 @@ export function createRevisions(engine: Engine): Pick<Engine, 'applyRevision' | 
       const { task } = snapshot;
       const revision = task.revision!;
       const plan = revision.plan!;
-      const before = [...snapshot.nodes];
+      const all = [...snapshot.nodes];
       await w.addVersion({
         version: task.version,
         request: task.acceptance?.revision ?? null,
-        nodes: before.map(toNodeBody),
+        nodes: all.map((n) => toNodeBody(n, all)),
         edges: snapshot.edges.map(toEdgeBody),
         deliverables: task.deliverables,
-        spentMicro: before.reduce((sum, n) => sum + n.spentMicro, 0),
+        spentMicro: all.reduce((sum, n) => sum + n.spentMicro, 0),
         createdAt: snapshot.versions.at(-1)?.frozenAt ?? task.createdAt,
       });
+      // 用户在做几版的节点上改用了另一版（ADR 0026）：先换成那一版，下游再按方案重做
+      if (revision.pick) {
+        const picked = snapshot.nodes.find((n) => n.id === revision.pick!.nodeId);
+        if (picked)
+          await engine.useVersion(
+            snapshot,
+            w,
+            picked,
+            revision.pick.version,
+            `你改用了第 ${revision.pick.version} 版`,
+          );
+      }
+      // 方案只排工作流图里的节点；子节点跟着父节点（展开节点重新展开时指纹没变的沿用）
+      const before = snapshot.nodes.filter(isRoot);
       const byKey = new Map(before.map((n) => [n.key, n]));
       const idOf = new Map<string, string>();
       for (const entry of plan.nodes) {
@@ -50,6 +65,10 @@ export function createRevisions(engine: Engine): Pick<Engine, 'applyRevision' | 
           await w.addNode(row);
           continue;
         }
+        // 做几版的节点要重做：旧的各版移出，开跑时重新开
+        if (source.kind !== 'foreach' && isGroup(source))
+          for (const child of childrenOf(snapshot.nodes, source))
+            await w.retireNode(child.id, revision.version);
         const outputsRunId = source.config.outputsRunId;
         await w.setNode(source.id, {
           key: row.key,
@@ -90,11 +109,14 @@ export function createRevisions(engine: Engine): Pick<Engine, 'applyRevision' | 
       await w.setTask({
         version: revision.version,
         revision: null,
-        deliverables: task.sheet!.deliverables.map((d) => ({
-          name: d.name,
-          form: d.form,
-          nodeId: idOf.get(plan.deliverables[d.name] ?? '') ?? null,
-        })),
+        // 直接给方案建的任务没有任务单：交付物照旧（「改用这一版」也能用在这种任务上，ADR 0026）
+        deliverables: task.sheet
+          ? task.sheet.deliverables.map((d) => ({
+              name: d.name,
+              form: d.form,
+              nodeId: idOf.get(plan.deliverables[d.name] ?? '') ?? null,
+            }))
+          : task.deliverables,
         // 这一轮按修改意见验收（只查意见改好没有，ADR 0012）
         acceptance: { unmet: [], revision: revision.request },
         status: 'running',

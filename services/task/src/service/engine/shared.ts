@@ -14,6 +14,8 @@ export interface EngineDeps {
   harness: ServiceClient;
   gate: Gate;
   maxParallel: number;
+  /** 工具子节点的并发池（ADR 0026）；不给时同 maxParallel */
+  maxToolChildren?: number;
   /** 规划员要查模型目录 */
   agent: ServiceClient;
   /** 规划员要排除在当前网络用不了的模型 */
@@ -79,6 +81,24 @@ export interface Engine {
   // ---- 修改（revisions.ts，ADR 0022）
   applyRevision: Decision;
   cancelRevision: Decision;
+
+  // ---- 子节点（groups.ts、expand.ts，ADR 0026）
+  /** 组节点开跑：展开节点去读清单，做几版的节点开出各版；停下、失败过的子节点重新排队 */
+  startGroup(snapshot: Snapshot, w: Writer, node: Node, fx: Effects): Promise<void>;
+  /** 子节点都结束了：展开节点汇总，做几版的节点开挑选运行（每次调度前做） */
+  settleGroups: Decision;
+  /** 读清单、开出每一条（事务外读文件，事务里改图） */
+  expand(intent: { taskId: string; nodeId: string }): Promise<void>;
+  /** 挑选运行结束（text：它写的 pick.txt，读不到为 undefined） */
+  finishPick(
+    w: Writer,
+    node: Node,
+    children: Node[],
+    result: RunResult,
+    text: string | undefined,
+  ): Promise<void>;
+  /** 做几版的节点用第 k 版：产出换成那一版的；在展开里时展开节点重新汇总 */
+  useVersion(snapshot: Snapshot, w: Writer, node: Node, k: number, reason: string): Promise<void>;
 }
 
 /** 任务、节点不会再变的状态 */

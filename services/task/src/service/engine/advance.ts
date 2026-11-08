@@ -4,9 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { HttpError } from '@oasis/service-kit';
 import type { Node } from '../../repo/task-store.ts';
 import { graphProblems } from '../graph.ts';
-import { inputsOf, isOpen, kindOf, openRuns, reworkStep } from '../kinds/index.ts';
+import { childrenOf, isGroup } from '../groups.ts';
+import { inlineInputsOf, inputsOf, isOpen, kindOf, openRuns, reworkStep } from '../kinds/index.ts';
 import { decide } from '../schedule.ts';
-import { FINAL, type Engine } from './shared.ts';
+import { ACTIVE, FINAL, type Engine } from './shared.ts';
 
 type Advance = Pick<
   Engine,
@@ -21,18 +22,25 @@ type Advance = Pick<
 >;
 
 export function createAdvance(engine: Engine): Advance {
-  const { store, maxParallel } = engine.deps;
+  const { store, maxParallel, maxToolChildren } = engine.deps;
   return {
     async openStep(snapshot, w, node, step, fx) {
       let lastRunId: string | undefined;
       for (const request of step.requests) {
         const runId = randomUUID();
+        // 开新会话、或拿上游最新产出的运行：带上展开节点的清单索引和这一条的内容（ADR 0026）
+        const inputs =
+          request.inputs ??
+          (request.continueFrom && !request.inputsFrom.length
+            ? []
+            : inlineInputsOf(snapshot, node));
         const record = {
           ...(node.config.requires ? { requires: node.config.requires } : {}),
           ...(request.goal ? { goal: true } : {}),
           model: request.model,
           prompt: request.prompt,
           inputsFrom: request.inputsFrom,
+          ...(inputs.length ? { inputs } : {}),
           ...(request.continueFrom ? { continueFrom: request.continueFrom } : {}),
           ...(request.steps ? { steps: request.steps } : {}),
         };
@@ -74,12 +82,26 @@ export function createAdvance(engine: Engine): Advance {
     },
 
     async halt(snapshot, w, node, fx) {
+      if (!ACTIVE.includes(node.status)) return;
+      // 组节点（ADR 0026）：在跑的子节点一起停下，挑到一半的挑选也停
+      if (isGroup(node))
+        for (const child of childrenOf(snapshot.nodes, node))
+          await engine.halt(snapshot, w, child, fx);
       fx.abortChecks.push({ taskId: snapshot.task.id, nodeId: node.id });
       await engine.endRuns(w, openRuns(snapshot, node.id), 'stop', fx);
-      await w.setNode(node.id, { status: 'stopped' });
+      await w.setNode(node.id, {
+        status: 'stopped',
+        ...(node.config.picking ? { config: { ...node.config, picking: false } } : {}),
+      });
     },
 
     async startNode(snapshot, w, node, fx) {
+      if (isGroup(node)) return engine.startGroup(snapshot, w, node, fx);
+      // 停下后重新排队的子节点（ADR 0026）：轮到它时接着停下前的运行做
+      if (node.config.resumeOnStart) {
+        const { resumeOnStart: _resume, ...rest } = node.config;
+        await w.setNode(node.id, { status: 'stopped', config: rest as Node['config'] });
+      }
       const kind = kindOf(node);
       // 整体验收退回补文件、或修改时接着原会话改：能接着上次的会话就接着改，否则重做这一步
       if (node.config.repairChecks?.length || node.config.revision) {
@@ -131,15 +153,20 @@ export function createAdvance(engine: Engine): Advance {
     },
 
     async schedule(snapshot, w, fx) {
+      // 子节点都结束了的组节点先汇总或开挑选（ADR 0026），再按图找能跑的
+      await engine.settleGroups(snapshot, w, fx);
       const decision = decide({
         taskStatus: snapshot.task.status,
         nodes: snapshot.nodes,
         edges: snapshot.edges,
         maxParallel,
+        maxToolChildren: maxToolChildren ?? maxParallel,
       });
       for (const node of decision.blocked) await w.setNode(node.id, { status: 'blocked' });
       for (const node of decision.unblocked) await w.setNode(node.id, { status: 'waiting' });
       for (const node of decision.start) await engine.startNode(snapshot, w, node, fx);
+      // 开了组节点（ADR 0026）：它刚开出的子节点这一轮就能排上
+      if (decision.start.some(isGroup)) return engine.schedule(snapshot, w, fx);
       if (decision.task?.status === 'succeeded' && snapshot.task.sheet) {
         // 从任务单来的任务：先对照任务单整体验收，再算完成
         await w.setTask({ status: 'accepting', attention: null });
@@ -160,12 +187,22 @@ export function createAdvance(engine: Engine): Advance {
         throw new HttpError(409, 'workflow_invalid', `工作流有错误：${problems.join('；')}`);
       }
       await w.setTask({ status: 'running', attention: null, finishedAt: null });
-      for (const node of snapshot.nodes) {
+      const byId = new Map(snapshot.nodes.map((n) => [n.id, n]));
+      for (const node of [...snapshot.nodes]) {
+        const parent = node.parentId ? byId.get(node.parentId) : undefined;
         if (node.status === 'draft') await w.setNode(node.id, { status: 'waiting' });
-        if (node.status === 'failed') {
+        // 已经挑好一版的节点下面没做成的那几版不再做（ADR 0026）
+        if (node.status === 'failed' && parent?.status !== 'succeeded') {
           await w.setNode(node.id, { status: 'waiting', attempts: 0, reworks: 0, warning: null });
         }
-        if (node.status === 'stopped') await engine.startNode(snapshot, w, node, fx);
+        if (node.status !== 'stopped') continue;
+        // 子节点重新排队等名额（工具子节点、AI 各有上限），轮到时接着停下前的运行做
+        if (parent)
+          await w.setNode(node.id, {
+            status: 'waiting',
+            config: { ...node.config, resumeOnStart: true },
+          });
+        else await engine.startNode(snapshot, w, node, fx);
       }
       await engine.schedule(snapshot, w, fx);
     },

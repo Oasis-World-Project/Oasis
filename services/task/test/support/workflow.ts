@@ -14,6 +14,8 @@ export const fake = {
   unavailable: [] as string[],
   gateResults: [] as (string[] | GateResult | 'throw')[],
   gateWaits: [] as (Promise<void> | undefined)[],
+  /** 工具目录里另加的工具（带参数定义；同名的盖过默认的） */
+  tools: [] as Record<string, unknown>[],
 };
 
 export const OWNER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
@@ -140,7 +142,11 @@ export const toolEntry = (key: string, estimateMicro: number, available: boolean
   defaultModel: null,
 });
 harness.get('/internal/v1/tools', async () => ({
-  tools: [toolEntry('image.generate', 40_000, true), toolEntry('web.search', 8_000, false)],
+  tools: [
+    toolEntry('image.generate', 40_000, true),
+    toolEntry('web.search', 8_000, false),
+    ...fake.tools,
+  ],
 }));
 /** 假 harness：运行过程（记下问的是哪次运行） */
 export const eventRequests: string[] = [];
@@ -218,6 +224,7 @@ beforeEach(() => {
   lostWorkspaces = new Set();
   plans = new Map();
   fake.unavailable = [];
+  fake.tools = [];
   events.length = 0;
   fake.gateResults = [];
   fake.gateWaits = [];
@@ -229,6 +236,7 @@ beforeEach(() => {
     harness: createServiceClient('harness', harnessUrl),
     gate: gate as unknown as Gate,
     maxParallel: 3,
+    maxToolChildren: 6,
     agent: createServiceClient('agent', harnessUrl),
     modelGateway: createServiceClient('model-gateway', harnessUrl),
     planning: {
