@@ -2,7 +2,7 @@
 // 工程规范 §7 的确定性检查入口：命名、镜像命名、依赖方向、死代码/未用依赖、重复率、数据库迁移。
 // 用法：node scripts/check-engineering.mjs [--only naming,images,tokens,deps,dead,dup,migrations]
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
@@ -38,7 +38,11 @@ function listRepoFiles() {
     capture: true,
   });
   if (!ok) throw new Error('git ls-files 执行失败');
-  return stdout.split('\n').filter(Boolean);
+  // 已在工作区删除、还没暂存的文件不再检查
+  return stdout
+    .split('\n')
+    .filter(Boolean)
+    .filter((f) => existsSync(path.join(ROOT, f)));
 }
 
 const files = listRepoFiles();

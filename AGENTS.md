@@ -35,7 +35,7 @@
 2. **共享包**：`packages/*` 只放契约（contracts）、基础设施库（service-kit）、画布运行网页的组装规则（live-page，画布和检查共用，ADR 0021）、设计令牌和 tsconfig，不放业务逻辑。
 3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness（含 `profile/` 下 Oasis 自己的 dsh 组合）；dsh 版本精确锁定在沙箱镜像里。沙箱只能经入口代理访问 model-gateway 的 `/run/v1/*`，以及经出口代理访问明确放行的软件包仓库；不得直连外网、宿主机或内部服务，不得开放其他网络通路（ADR 0003、ADR 0006 §7）。
 4. **模型调用**：所有模型调用（聊天、Jev、dsh 里的 agent）都经过 `services/model-gateway`，由它计量并上报 billing。
-5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。
+5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。task、harness、model-gateway 的单个文件（含测试）不超过 500 行，ESLint `max-lines` 拦截；task 的每种节点是一个插件（`src/service/kinds/`），引擎不认识具体种类，加新种类不改引擎（ADR 0023）。
 6. **配置外置**：配置全部来自环境变量，每个服务提供 `.env.example`；禁止硬编码地址、端口、密钥；禁止 `if (env === 'local')` 一类分支。
 7. **运行时**：结构化 JSON 日志输出到 stdout；每个服务暴露 `/health` 和 `/ready`；收到 SIGTERM 后处理完在途请求再退出。
 8. **数据库迁移**：dbmate 纯 SQL。文件头写 `-- phase: expand|migrate|contract`，必须有 `-- migrate:down`；expand 迁移必须写 `-- contract-plan:`。`pnpm check:engineering` 会检查这几项。

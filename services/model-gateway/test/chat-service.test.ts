@@ -1,257 +1,23 @@
-import { createHttpServer, createServiceClient, HttpError } from '@oasis/service-kit';
-import Fastify from 'fastify';
-import { pino } from 'pino';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+// 一次模型调用：冻结、调用、转发、结算，以及流中断和上游出错时怎么收场。
+import { createServiceClient, HttpError } from '@oasis/service-kit';
+import { describe, expect, it } from 'vitest';
 import { createOpenRouterClient } from '../src/adapters/openrouter.ts';
-import type { CallOutcome, CallsRepo } from '../src/repo/calls-repo.ts';
 import { createChatService } from '../src/service/chat-service.ts';
 import { createMeter } from '../src/service/metering.ts';
-import { registerRoutes } from '../src/api/routes.ts';
-import { modelGatewayEnv } from '../src/config.ts';
-import type { createDecisionService } from '../src/service/decision-service.ts';
-
-const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
-const HOLD = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
-const RUN = '3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b9a';
-
-/** 假的 billing：记录冻结、结算、退回。 */
-const billingCalls: { path: string; body: Record<string, unknown> }[] = [];
-let balanceEnough = true;
-const billing = Fastify();
-billing.post('/internal/holds', async (request, reply) => {
-  billingCalls.push({ path: '/internal/holds', body: request.body as Record<string, unknown> });
-  if (!balanceEnough)
-    return reply
-      .code(402)
-      .send({ error: { code: 'insufficient_balance', message: '额度不够了', requestId: 'r' } });
-  return reply.code(201).send({ holdId: HOLD, heldMicro: 1000 });
-});
-billing.post('/internal/holds/:id/settle', async (request) => {
-  billingCalls.push({ path: 'settle', body: request.body as Record<string, unknown> });
-  return { chargedMicro: (request.body as { costMicro: number }).costMicro };
-});
-billing.post('/internal/holds/:id/release', async (_request, reply) => {
-  billingCalls.push({ path: 'release', body: {} });
-  return reply.code(204).send();
-});
-
-/** 假的 OpenRouter：流式返回两段内容和最后的用量。 */
-let upstreamStatus = 200;
-let upstreamMessage = 'boom';
-let upstreamBodies: Record<string, unknown>[] = [];
-const openrouter = Fastify({ bodyLimit: 4 * 1024 ** 2 });
-openrouter.post('/chat/completions', async (request, reply) => {
-  upstreamBodies.push(request.body as Record<string, unknown>);
-  if (upstreamStatus !== 200)
-    return reply.code(upstreamStatus).send({ error: { message: upstreamMessage } });
-  reply.header('content-type', 'text/event-stream');
-  return [
-    ': OPENROUTER PROCESSING\n\n',
-    `data: ${JSON.stringify({ choices: [{ delta: { content: '你好' } }] })}\n\n`,
-    `data: ${JSON.stringify({ choices: [{ delta: { content: '呀' } }] })}\n\n`,
-    `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 3, cost: 0.000042 } })}\n\n`,
-    'data: [DONE]\n\n',
-  ].join('');
-});
-
-/** 假的生成记录：中断后按生成 ID 查实际花费（美元） */
-const generationCosts = new Map<string, number>();
-const generationLookups: string[] = [];
-openrouter.get('/generation', async (request, reply) => {
-  const { id } = request.query as { id: string };
-  generationLookups.push(id);
-  const cost = generationCosts.get(id);
-  if (cost === undefined) return reply.code(404).send({ error: { message: 'not found' } });
-  return { data: { id, total_cost: cost } };
-});
-
-const started: Parameters<CallsRepo['start']>[0][] = [];
-const finished: CallOutcome[] = [];
-const repo: CallsRepo = {
-  start: async (call) => void started.push(call),
-  get: async () => undefined,
-  computeForRun: async () => [],
-  regionBlockedModels: async () => [],
-  staleRunning: async () => [],
-  typicalUsage: async () => ({ tools: new Map(), nodes: new Map(), nodeTokens: null }),
-  finish: async (_id, outcome) => void finished.push(outcome),
-};
-const silent = pino({ level: 'silent' });
-
-let chat: ReturnType<typeof createChatService>;
-beforeAll(async () => {
-  const billingUrl = await billing.listen({ port: 0, host: '127.0.0.1' });
-  const openrouterUrl = await openrouter.listen({ port: 0, host: '127.0.0.1' });
-  chat = createChatService({
-    provider: createOpenRouterClient({
-      baseUrl: openrouterUrl,
-      decisionsUrl: `${openrouterUrl}/decisions`,
-      apiKey: 'test-key',
-    }),
-    meter: createMeter({
-      billing: createServiceClient('billing', billingUrl),
-      repo,
-      logger: silent,
-    }),
-    prices: () => new Map([['vendor/model', { prompt: 0.0000001, completion: 0.0000005 }]]),
-    defaultMaxTokens: 1000,
-    maxOutputTokens: 100_000,
-    fallbackHoldMicro: 200_000,
-    generationLookupDelaysMs: [0, 0],
-  });
-});
-afterAll(async () => {
-  await billing.close();
-  await openrouter.close();
-});
-beforeEach(() => {
-  billingCalls.length = 0;
-  started.length = 0;
-  finished.length = 0;
-  upstreamBodies = [];
-  generationCosts.clear();
-  generationLookups.length = 0;
-  upstreamStatus = 200;
-  upstreamMessage = 'boom';
-  balanceEnough = true;
-});
-
-const request = {
-  model: 'vendor/model',
-  messages: [{ role: 'user' as const, content: '在吗' }],
-  stream: true,
-};
-
-describe('模型 HTTP 入口', () => {
-  const limit = 2 * 1024 ** 2;
-  function routes() {
-    const app = createHttpServer({
-      service: 'model-gateway',
-      version: 'test',
-      commit: 'test',
-      logger: silent,
-      resources: [],
-      isShuttingDown: () => false,
-    });
-    registerRoutes(app, {
-      modelRequestMaxBytes: limit,
-      chat,
-      decisions: {
-        decide: async ({
-          body,
-        }: Parameters<ReturnType<typeof createDecisionService>['decide']>[0]) => ({
-          state: body.state,
-        }),
-      },
-      runKeys: {
-        authenticate: async (authorization: string) => {
-          if (authorization !== 'Bearer offline-key')
-            throw new HttpError(401, 'invalid_run_key', '无效运行凭据');
-          return { payerId: PAYER, runId: RUN };
-        },
-      },
-    } as unknown as Parameters<typeof registerRoutes>[1]);
-    return app;
-  }
-  const headers = { authorization: 'Bearer offline-key', 'x-oasis-payer-id': PAYER };
-
-  it('模型请求配置默认与入口代理的 50 MiB 一致，并拒绝超出代理容量的配置', () => {
-    expect(modelGatewayEnv.MODEL_REQUEST_MAX_BYTES.parse(undefined)).toBe(50 * 1024 ** 2);
-    expect(() => modelGatewayEnv.MODEL_REQUEST_MAX_BYTES.parse(50 * 1024 ** 2 + 1)).toThrow();
-  });
-
-  it.each(['/internal/v1/chat/completions', '/run/v1/chat/completions'])(
-    '%s 接受超过 1 MiB 的历史和内嵌图片，完整透传并结算一次',
-    async (url) => {
-      const app = routes();
-      const body = {
-        ...request,
-        messages: [
-          { role: 'user', content: 'historical context '.repeat(60_000) },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'image_url',
-                image_url: {
-                  url: `data:image/png;base64,${Buffer.alloc(150_000).toString('base64')}`,
-                },
-              },
-            ],
-          },
-        ],
-      };
-      expect(Buffer.byteLength(JSON.stringify(body))).toBeGreaterThan(1024 ** 2);
-      try {
-        const response = await app.inject({ method: 'POST', url, headers, payload: body });
-        expect(response.statusCode).toBe(200);
-        expect(response.body).toContain('data: [DONE]');
-        expect(upstreamBodies).toEqual([expect.objectContaining({ messages: body.messages })]);
-        expect(billingCalls.map((call) => call.path)).toEqual(['/internal/holds', 'settle']);
-        expect(finished).toHaveLength(1);
-      } finally {
-        await app.close();
-      }
-    },
-  );
-
-  it.each(['/internal/v1/decisions', '/run/v1/decisions'])(
-    '%s 同样允许大材料，避免压缩或验收再次撞上默认限制',
-    async (url) => {
-      const app = routes();
-      const state = 'evidence '.repeat(130_000);
-      try {
-        const response = await app.inject({
-          method: 'POST',
-          url,
-          headers,
-          payload: { model: 'test', state, questions: {} },
-        });
-        expect(response.statusCode).toBe(200);
-        expect(response.json()).toEqual({ state });
-      } finally {
-        await app.close();
-      }
-    },
-  );
-
-  it.each(['chat/completions', 'decisions'])(
-    '超出配置容量的 %s 在调用和冻结前拒绝',
-    async (route) => {
-      const app = routes();
-      try {
-        const response = await app.inject({
-          method: 'POST',
-          url: `/run/v1/${route}`,
-          headers,
-          payload: { padding: 'x'.repeat(limit) },
-        });
-        expect(response.statusCode).toBe(413);
-        expect(started).toHaveLength(0);
-        expect(billingCalls).toHaveLength(0);
-        expect(upstreamBodies).toHaveLength(0);
-      } finally {
-        await app.close();
-      }
-    },
-  );
-
-  it('扩大容量后仍须验证运行凭据，未授权的大请求不冻结费用', async () => {
-    const app = routes();
-    try {
-      const response = await app.inject({
-        method: 'POST',
-        url: '/run/v1/chat/completions',
-        payload: { ...request, messages: [{ role: 'user', content: 'x'.repeat(1024 ** 2 + 1) }] },
-      });
-      expect(response.statusCode).toBe(401);
-      expect(started).toHaveLength(0);
-      expect(billingCalls).toHaveLength(0);
-    } finally {
-      await app.close();
-    }
-  });
-});
+import {
+  fake,
+  PAYER,
+  RUN,
+  billingCalls,
+  generationCosts,
+  generationLookups,
+  started,
+  finished,
+  repo,
+  silent,
+  chat,
+  request,
+} from './support/chat-fixture.ts';
 
 describe('一次模型调用', () => {
   it('后台执行的传输中断先结算再交还原生重试，不改写为普通 SSE 模型错误', async () => {
@@ -445,7 +211,7 @@ describe('一次模型调用', () => {
       path: '/internal/holds',
       body: { userId: PAYER, reason: 'model_call' },
     });
-    expect(upstreamBodies[0]).toMatchObject({
+    expect(fake.upstreamBodies[0]).toMatchObject({
       model: 'vendor/model',
       max_tokens: 1000,
       usage: { include: true },
@@ -463,15 +229,15 @@ describe('一次模型调用', () => {
   });
 
   it('额度不够时返回 402，不会调用上游', async () => {
-    balanceEnough = false;
+    fake.balanceEnough = false;
     await expect(
       chat.prepare({ caller: { payerId: PAYER }, requestId: 'req-2', body: request }),
     ).rejects.toMatchObject({ statusCode: 402, code: 'insufficient_balance' });
-    expect(upstreamBodies).toHaveLength(0);
+    expect(fake.upstreamBodies).toHaveLength(0);
   });
 
   it('上游出错时退回冻结，不扣钱', async () => {
-    upstreamStatus = 500;
+    fake.upstreamStatus = 500;
     const call = await chat.prepare({
       caller: { payerId: PAYER },
       requestId: 'req-3',
@@ -485,8 +251,8 @@ describe('一次模型调用', () => {
   });
 
   it('平台在供应商那边额度不够（402）：单独的错误码，说明不是用户余额，退回冻结', async () => {
-    upstreamStatus = 402;
-    upstreamMessage = 'This request requires more credits, or fewer max_tokens.';
+    fake.upstreamStatus = 402;
+    fake.upstreamMessage = 'This request requires more credits, or fewer max_tokens.';
     const call = await chat.prepare({
       caller: { payerId: PAYER },
       requestId: 'r402',
@@ -497,8 +263,8 @@ describe('一次模型调用', () => {
     expect((err as HttpError).message).toContain('不是你的余额');
     expect(billingCalls.map((c) => c.path)).toEqual(['/internal/holds', 'release']);
     // API Key 的花费上限用完时 OpenRouter 回 403，同样归为平台额度不够
-    upstreamStatus = 403;
-    upstreamMessage = 'Key limit exceeded (total limit). limit_source: openrouter_key_limit';
+    fake.upstreamStatus = 403;
+    fake.upstreamMessage = 'Key limit exceeded (total limit). limit_source: openrouter_key_limit';
     const limited = await chat.prepare({
       caller: { payerId: PAYER },
       requestId: 'r403',
@@ -518,14 +284,14 @@ describe('一次模型调用', () => {
     expect(call.maxOutputTokens).toBe(100_000);
     const response = await chat.open(call, new AbortController().signal);
     await chat.pump(call, response, () => {});
-    expect(upstreamBodies[0]).toMatchObject({ max_tokens: 100_000 });
+    expect(fake.upstreamBodies[0]).toMatchObject({ max_tokens: 100_000 });
     // 100000 × 0.5 = 50000 微美元，再加一点输入
     expect(billingCalls[0]?.body.amountMicro).toBeLessThan(51_000);
   });
 
   it('上游的地区限制和限流给出对应的错误码', async () => {
-    upstreamStatus = 403;
-    upstreamMessage = 'This model is not available in your region.';
+    fake.upstreamStatus = 403;
+    fake.upstreamMessage = 'This model is not available in your region.';
     const blocked = await chat.prepare({
       caller: { payerId: PAYER },
       requestId: 'req-4',
@@ -536,8 +302,8 @@ describe('一次模型调用', () => {
       .catch((e: unknown) => e);
     expect((regionErr as HttpError).code).toBe('provider_region_unavailable');
 
-    upstreamStatus = 429;
-    upstreamMessage = 'Provider returned error';
+    fake.upstreamStatus = 429;
+    fake.upstreamMessage = 'Provider returned error';
     const busy = await chat.prepare({
       caller: { payerId: PAYER },
       requestId: 'req-5',
@@ -597,12 +363,12 @@ describe('一次模型调用', () => {
     const response = await chat.open(call, new AbortController().signal);
     await chat.pump(call, response, () => {});
 
-    expect(upstreamBodies[0]).toMatchObject({
+    expect(fake.upstreamBodies[0]).toMatchObject({
       max_completion_tokens: 4000,
       tools: agentRequest.tools,
     });
-    expect(upstreamBodies[0]).not.toHaveProperty('max_tokens');
-    expect((upstreamBodies[0]?.messages as unknown[])[1]).toMatchObject({
+    expect(fake.upstreamBodies[0]).not.toHaveProperty('max_tokens');
+    expect((fake.upstreamBodies[0]?.messages as unknown[])[1]).toMatchObject({
       tool_calls: [{ id: 'call_1' }],
     });
     // 冻结按 4000 个输出 token 估算（4000 × 0.5 = 2000 微美元，再加输入）

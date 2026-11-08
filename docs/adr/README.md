@@ -28,3 +28,4 @@ ADR 记下「为什么这么做」。代码注释里大量引用「ADR 00xx §y�
 | [0020](0020-3d-toolkit-and-steering.md) | 3D 工具、运行中消息即时送达、3D 导演台 | 现行 |
 | [0021](0021-canvas-runs-what-checks-pass.md) | 检查过的网页，画布里一定打得开 | 现行 |
 | [0022](0022-revisions-planned-by-team.md) | 修改交给 AI 团队规划、工作流分版本、先确认再跑 | 现行 |
+| [0023](0023-node-kind-plugins.md) | task 引擎按节点种类拆成插件，大文件按职责拆开（单文件 ≤ 500 行） | 现行 |
