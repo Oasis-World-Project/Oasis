@@ -4,6 +4,7 @@ import {
   estimateHoldMicro,
   estimateInputTokens,
   MEDIA_TOKENS,
+  videoCatalogRate,
   videoSecondRate,
   withNodeRate,
 } from '../src/service/pricing.ts';
@@ -143,5 +144,21 @@ describe('估价用的典型单价（ADR 0016 §4）', () => {
       ),
     ).toBe(0.15);
     expect(videoSecondRate({}, '720p', false)).toBeNaN();
+  });
+
+  it('目录里的视频单价：默认按 720p，清晰度价格不同的再列一张表（2026-11-08 wan-3.0 实价）', () => {
+    const wan = {
+      duration_seconds_480p: '0.05',
+      duration_seconds_720p: '0.1',
+      duration_seconds_1080p: '0.2',
+    };
+    expect(videoCatalogRate(wan, ['480p', '720p', '1080p'])).toEqual({
+      costMicro: 100_000,
+      by: { arg: 'resolution', costMicro: { '480p': 50_000, '720p': 100_000, '1080p': 200_000 } },
+    });
+    // 各清晰度一个价（带声音的取较高档）：不列表
+    const kling = { duration_seconds: '0.084', duration_seconds_with_audio: '0.126' };
+    expect(videoCatalogRate(kling, ['720p'])).toEqual({ costMicro: 126_000 });
+    expect(videoCatalogRate({}, ['720p'])).toBeUndefined();
   });
 });

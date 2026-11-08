@@ -94,6 +94,7 @@ function node(id: string, key: string, title: string, status: string) {
     expects: [],
     tools: [],
     discussion: null,
+    steps: null,
     status,
     attempts: 1,
     userNotes: [],

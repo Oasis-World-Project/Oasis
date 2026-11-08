@@ -121,10 +121,14 @@ export const work: NodeKindPlugin<'work'> = {
   edit(_node, body) {
     if (body.participants !== undefined || body.rounds !== undefined)
       throw new HttpError(400, 'invalid_node', '只有讨论节点有参与者和轮数');
+    if (body.steps !== undefined) throw new HttpError(400, 'invalid_node', '只有工具节点有步骤');
     return body.tools ? { tools: body.tools } : {};
   },
-  body: (node) => ({ tools: node.config.tools ?? [], discussion: null }),
+  body: (node) => ({ tools: node.config.tools ?? [], discussion: null, steps: null }),
   continuable: true,
+  reworkable: true,
+  switchable: true,
+  listens: true,
 
   start,
   resume(snapshot, node, last) {

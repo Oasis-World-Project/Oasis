@@ -113,13 +113,14 @@ docs/       工程方向、架构决策记录（ADR）
 |---|---|
 | `pnpm lint` / `pnpm typecheck` / `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、依赖方向、死代码、重复率、数据库迁移检查 |
-| `pnpm e2e` | 全链路回归（假模型、真容器、真画布，约 2 分钟，先停 `pnpm dev`）；`--real` 用真模型跑 3 个小场景，每场景 ≤ $1。见 `docs/engineering/回归测试.md` |
+| `pnpm e2e` | 全链路回归（假模型、真容器、真画布，约 2 分钟，先停 `pnpm dev`）；`--real` 用真模型跑 4 个小场景，每场景 ≤ $1（生视频的 `real-tool` ≤ $2）。见 `docs/engineering/回归测试.md` |
 | `pnpm trace <任务 ID>` | 查一个任务的运行、调用、费用来源和画布成果，并标出异常 |
 | `pnpm accept` | 验收模式：服务从当前代码启动、不随改动重启，Web 用构建版 |
 | `pnpm cleanup` | 清理临时产物并报告释放的空间 |
 | `pnpm infra:ps` / `pnpm infra:down` | 查看 / 停止全部容器 |
 | `pnpm sandbox:build` | 构建 agent 沙箱镜像（dsh 版本锁定在镜像标签里） |
 | `pnpm sandbox:check` | 在断网、2 核、2 GB 临时容器中验收文档转换、公式重算和软件清单，不调用模型 |
+| `pnpm sandbox:check:ops` | 离线验收沙箱里的本地操作 `oasis-op`（拼接、截取、抽帧、配音轨、转格式）和工具节点的步骤执行器，不调用模型 |
 | `pnpm media:smoke` / `pnpm video:smoke` | 免费验证大文件传输 / 视频剪辑、MLT 渲染、工程移动与打包；均不调用模型供应商 |
 | `pnpm model:smoke` | 免费验证真实 WebGL、图片/视频降级和生产 Electron 壳；自动构建相关服务，使用内存数据与隔离配置，不调用云。需已有沙箱基础镜像；`--serve` 留下本地 Web 验证页 |
 | `pnpm stack:up` / `pnpm stack:logs` | 容器里跑全套 / 看日志 |

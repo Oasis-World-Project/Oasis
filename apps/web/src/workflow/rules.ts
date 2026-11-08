@@ -101,12 +101,22 @@ export function nodeActions(task: TaskBody, node: NodeBody) {
     acceptsInput: open && notStarted,
     /** 能从这个节点往外接线 */
     givesOutput: open && node.status !== 'cancelled',
-    /** 追问（运行中的干活节点直接送达）或补要求（开跑、继续时带上） */
+    /** 追问（运行中的干活节点直接送达）或补要求（开跑、继续时带上）；工具节点没有 AI，不收 */
     message:
       open &&
+      node.kind !== 'tool' &&
       (['draft', 'waiting', 'blocked', 'stopped'].includes(node.status) ||
         node.status === 'running'),
   };
+}
+
+/** 工具节点一步的参数写成一行给人看：名字=值，太长的截断 */
+export function stepArgs(step: { args: Record<string, unknown> }): string {
+  const parts = Object.entries(step.args).map(([name, value]) => {
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    return `${name}=${text.length > 60 ? `${text.slice(0, 60)}…` : text}`;
+  });
+  return parts.join('，') || '（没有参数）';
 }
 
 /** 一次运行叫什么 */
@@ -158,12 +168,16 @@ function parseArgs(raw: unknown): Record<string, unknown> {
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 
-/** 一次工具调用写成一步：用了外部工具（oasis-tool）的单独标出来 */
+/**
+ * 一次工具调用写成一步：用了外部工具（oasis-tool）或沙箱里的本地操作（oasis-op，工具目录里叫 op.*）的
+ * 单独标出来
+ */
 function describeCall(data: Record<string, unknown>): Extract<Step, { kind: 'did' }> {
   const name = text(data.name);
   const args = parseArgs(data.arguments);
   const command = text(args.command) || text(args.cmd) || text(args.script);
-  const tool = /oasis-tool\s+(?:wait\s+)?([a-z0-9]+(?:\.[a-z0-9_-]+)+)/.exec(command)?.[1];
+  const match = /oasis-(tool|op)\s+(?:wait\s+)?([a-z0-9]+(?:\.[a-z0-9_-]+)+)/.exec(command);
+  const tool = match ? (match[1] === 'op' ? `op.${match[2]}` : match[2]) : undefined;
   if (tool) return { kind: 'did', text: '调用工具', tool, detail: command };
   const path = text(args.path) || text(args.file_path) || text(args.filePath);
   return {

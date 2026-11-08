@@ -40,6 +40,23 @@ export const webSearch: ToolDef = {
   provider: 'tavily',
   models: () => [],
   args: SearchArgs,
+  cli: [
+    { name: 'query', kind: 'text', required: true, description: '搜索词' },
+    { name: 'max_results', kind: 'number', min: 1, max: 10, description: '要几条结果（默认 5）' },
+    { name: 'depth', kind: 'choice', choices: ['basic', 'advanced'], description: '搜索深度' },
+    {
+      name: 'topic',
+      kind: 'choice',
+      choices: ['general', 'news', 'finance'],
+      description: '类别（默认 general）',
+    },
+    {
+      name: 'time_range',
+      kind: 'choice',
+      choices: ['day', 'week', 'month', 'year'],
+      description: '只要这段时间内的',
+    },
+  ],
   modelOf: () => 'tavily/search',
   async run(deps, args) {
     const a = SearchArgs.parse(args);
@@ -84,6 +101,17 @@ export const webFetch: ToolDef = {
   provider: 'tavily',
   models: () => [],
   args: FetchArgs,
+  cli: [
+    {
+      name: 'urls',
+      kind: 'list',
+      required: true,
+      min: 1,
+      max: 5,
+      description: '网页地址（1–5 个）',
+    },
+    { name: 'depth', kind: 'choice', choices: ['basic', 'advanced'], description: '读取深度' },
+  ],
   modelOf: () => 'tavily/extract',
   async run(deps, args) {
     const a = FetchArgs.parse(args);

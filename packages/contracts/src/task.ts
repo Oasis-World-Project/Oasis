@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import { Material } from './canvas.ts';
 import { RunOutputFile } from './harness.ts';
+import { ToolStep, ToolSteps } from './tool-step.ts';
 
 /** 节点名：方案里引用它，也用作下游沙箱里的目录名 in/<节点名>/ */
 export const NodeKey = z
@@ -132,8 +133,24 @@ export const DiscussionPlanNode = z.object({
   model: z.string().min(1).max(200),
 });
 
+/**
+ * 工具节点（ADR 0025）：不带 AI，在沙箱里按顺序执行写好的工具步骤（外部工具或本地操作 op.*），
+ * 适合参数都能事先写死的机械步骤；每步失败自动重试 2 次。
+ */
+export const ToolPlanNode = z.object({
+  ...NodeCommon,
+  kind: z.literal('tool'),
+  /** 工具节点不用 AI，不写模型；工具自己的型号写在步骤参数 model 里 */
+  model: z.string().max(200).default(''),
+  steps: ToolSteps,
+});
+
 /** 方案里的节点；用户新建节点也用它（节点名在任务里不能重复，新建的节点不会自动开跑） */
-export const PlanNode = z.discriminatedUnion('kind', [WorkPlanNode, DiscussionPlanNode]);
+export const PlanNode = z.discriminatedUnion('kind', [
+  WorkPlanNode,
+  DiscussionPlanNode,
+  ToolPlanNode,
+]);
 export type PlanNode = z.infer<typeof PlanNode>;
 
 /** 连线：from 的产出交给 to */
@@ -357,16 +374,19 @@ export const NodeBody = z.object({
   id: z.uuid(),
   key: z.string(),
   title: z.string(),
-  kind: z.enum(['work', 'discussion']),
+  kind: z.enum(['work', 'discussion', 'tool']),
   role: z.string(),
   goal: z.string(),
+  /** 用的模型；工具节点不用模型，为空字符串 */
   model: z.string(),
   checks: z.array(TaskCheck),
   expects: z.array(ExpectedFile),
   requires: NodeCommon.requires,
   deliver: z.array(OutputPattern).optional(),
-  /** 要用的外部工具（讨论节点没有；旧版 task 不返回时当作没有） */
+  /** 要用的外部工具（讨论节点没有；工具节点按步骤列出；旧版 task 不返回时当作没有） */
   tools: z.array(NodeTool).default([]),
+  /** 工具节点要执行的步骤（ADR 0025）；其他节点为 null */
+  steps: z.array(ToolStep).nullable().default(null),
   /** 讨论节点的参与者、轮数和讨论记录；干活节点为 null */
   discussion: z
     .object({
@@ -515,7 +535,10 @@ export const TaskList = z.object({ tasks: z.array(TaskSummary) });
 /** 对节点追问 / 补充要求 */
 export const NodeMessageBody = z.object({ text: z.string().trim().min(1).max(20_000) });
 
-/** 修改还没开始的节点：只改给出的字段；类型不能改，参与者和轮数只对讨论节点有效，工具只对干活节点有效 */
+/**
+ * 修改还没开始的节点：只改给出的字段；类型不能改。参与者和轮数只对讨论节点有效，工具只对干活节点有效，
+ * 步骤只对工具节点有效。
+ */
 export const UpdateNodeBody = z
   .object({
     title: NodeCommon.title,
@@ -529,6 +552,7 @@ export const UpdateNodeBody = z
     participants: z.array(Participant).min(2),
     rounds: z.number().int().min(1),
     tools: NodeTools,
+    steps: ToolSteps,
   })
   .partial()
   .refine((body) => Object.keys(body).length > 0, '至少要改一项');

@@ -46,6 +46,8 @@ const image = {
     { model: 'img/mid', costMicro: 40_000, seconds: 40, basis: 'history' as const },
     { model: 'img/cheap', costMicro: 20_000, seconds: 20, basis: 'history' as const },
   ],
+  args: [],
+  local: false,
 };
 const fallback = { workRun: 300_000, speechRun: 50_000, computeRun: 0, nodeSeconds: 600 };
 const draft: Draft = {

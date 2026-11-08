@@ -178,6 +178,7 @@ export const discussion: NodeKindPlugin<'discussion'> = {
   }),
   edit(node, body) {
     if (body.tools !== undefined) throw new HttpError(400, 'invalid_node', '只有干活节点能用工具');
+    if (body.steps !== undefined) throw new HttpError(400, 'invalid_node', '只有工具节点有步骤');
     const problems = body.participants
       ? duplicateNames(body.title ?? node.title, body.participants)
       : [];
@@ -195,9 +196,14 @@ export const discussion: NodeKindPlugin<'discussion'> = {
       round: node.config.round ?? 0,
       transcript: speechesOf(node.config),
     },
+    steps: null,
   }),
   // 汇总的会话不接着改：要改就重新讨论
   continuable: false,
+  // 关卡没过时让汇总的 AI 接着改
+  reworkable: true,
+  switchable: true,
+  listens: true,
 
   start,
   resume: (snapshot, node) => resume(snapshot, node),

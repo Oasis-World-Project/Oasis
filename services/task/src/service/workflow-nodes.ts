@@ -107,6 +107,12 @@ export function createNodeApi(api: {
       let deliverTo: string | undefined;
       await store.transact(taskId, async (snapshot, w) => {
         const node = nodeOf(snapshot, nodeId);
+        if (!kindOf(node).listens)
+          throw new HttpError(
+            409,
+            'node_not_listening',
+            '工具节点没有 AI，不读留言；要改做法，在它开跑前编辑步骤',
+          );
         const notable =
           ['draft', 'waiting', 'blocked', 'stopped'].includes(node.status) ||
           (node.status === 'running' && !kindOf(node).live);

@@ -1,6 +1,8 @@
-// 加节点 / 改还没开始的节点：名字、要做的事、角色、模型、关卡、工具（干活节点）或参与者和轮数（讨论节点）。
+// 加节点 / 改还没开始的节点：名字、要做的事、角色、模型、关卡、工具（干活节点）、参与者和轮数（讨论节点）
+// 或步骤（工具节点，ADR 0025）。
 // 新节点先是「新建」状态，不会自动开跑：点节点上的「运行」或工作流的「全部运行」才加入。
 import type { NodeBody, PlanNode, TaskBody, UpdateNodeBody } from '@oasis/contracts/task';
+import { ToolSteps, type ToolStep } from '@oasis/contracts/tool-step';
 import { Plus, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { useSpeakers } from './use-speakers.ts';
@@ -33,6 +35,34 @@ export function keyFor(title: string, taken: Set<string>): string {
   for (let n = 2; taken.has(key); n += 1) key = `${base}-${n}`;
   return key;
 }
+
+/** 工具节点的步骤：JSON 数组，按契约检查；返回步骤或问题 */
+export function parseSteps(text: string): { steps: ToolStep[] } | { problem: string } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { problem: '步骤要写成 JSON 数组' };
+  }
+  const parsed = ToolSteps.safeParse(raw);
+  if (parsed.success) return { steps: parsed.data };
+  const issue = parsed.error.issues[0];
+  return {
+    problem: `步骤有问题：${issue?.path.join('.') ? `${issue.path.join('.')} ` : ''}${issue?.message ?? ''}`,
+  };
+}
+
+const STEPS_EXAMPLE = JSON.stringify(
+  [
+    {
+      tool: 'op.video.concat',
+      args: { in: ['in/镜头/1.mp4', 'in/镜头/2.mp4'] },
+      out: 'out/成片.mp4',
+    },
+  ],
+  null,
+  2,
+);
 
 /** 输入框的样子（不含宽度）；一般占满一行，参与者那一行里另给宽度 */
 const fieldLook =
@@ -107,7 +137,10 @@ export function NodeEditor({
   }, []);
 
   const defaultModel = options.models[0]?.providerModel ?? '';
-  const [kind, setKind] = useState<'work' | 'discussion'>(node?.kind ?? 'work');
+  const [kind, setKind] = useState<NodeBody['kind']>(node?.kind ?? 'work');
+  const [stepsText, setStepsText] = useState(
+    node?.steps ? JSON.stringify(node.steps, null, 2) : STEPS_EXAMPLE,
+  );
   const [title, setTitle] = useState(node?.title ?? '');
   const [goal, setGoal] = useState(node?.goal ?? '');
   const [role, setRole] = useState(node?.role ?? '');
@@ -132,6 +165,7 @@ export function NodeEditor({
     .map((c) => c.trim())
     .filter(Boolean);
   const names = participants.map((p) => p.name.trim());
+  const steps = kind === 'tool' ? parseSteps(stepsText) : undefined;
   const problem = !title.trim()
     ? '先写个名字'
     : !goal.trim()
@@ -140,7 +174,9 @@ export function NodeEditor({
         ? '关卡最多 5 条'
         : kind === 'discussion' && (names.some((n) => !n) || new Set(names).size !== names.length)
           ? '参与者要有名字，而且不能重名'
-          : null;
+          : steps && 'problem' in steps
+            ? steps.problem
+            : null;
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -156,12 +192,25 @@ export function NodeEditor({
     };
     const toolList = Object.entries(tools).map(([key, uses]) => ({ key, uses }));
     const cleanParticipants = participants.map((p) => ({ ...p, name: p.name.trim() }));
+    const toolSteps = steps && 'steps' in steps ? steps.steps : [];
     if (node) {
       onSave({
-        changes: {
-          ...common,
-          ...(kind === 'work' ? { tools: toolList } : { participants: cleanParticipants, rounds }),
-        },
+        changes:
+          kind === 'tool'
+            ? // 工具节点不用模型：不改模型
+              {
+                title: common.title,
+                goal: common.goal,
+                role: common.role,
+                checks: common.checks,
+                steps: toolSteps,
+              }
+            : {
+                ...common,
+                ...(kind === 'work'
+                  ? { tools: toolList }
+                  : { participants: cleanParticipants, rounds }),
+              },
       });
       return;
     }
@@ -170,7 +219,9 @@ export function NodeEditor({
       node:
         kind === 'work'
           ? { ...common, key, kind, expects: [], tools: toolList }
-          : { ...common, key, kind, expects: [], participants: cleanParticipants, rounds },
+          : kind === 'tool'
+            ? { ...common, model: '', key, kind, expects: [], steps: toolSteps }
+            : { ...common, key, kind, expects: [], participants: cleanParticipants, rounds },
       after: after || undefined,
     });
   }
@@ -208,6 +259,7 @@ export function NodeEditor({
                 [
                   ['work', '干活', '一个 AI 完成一件事'],
                   ['discussion', '讨论', '几个 AI 来回几轮，再写结论'],
+                  ['tool', '工具', '不用 AI，按步骤调用工具'],
                 ] as const
               ).map(([value, label, desc]) => (
                 <label
@@ -262,9 +314,25 @@ export function NodeEditor({
               />
             </Field>
           )}
-          <Field label={kind === 'discussion' ? '谁来写结论' : '用哪个模型'}>
-            <ModelSelect value={model} onChange={setModel} options={options} />
-          </Field>
+          {kind !== 'tool' && (
+            <Field label={kind === 'discussion' ? '谁来写结论' : '用哪个模型'}>
+              <ModelSelect value={model} onChange={setModel} options={options} />
+            </Field>
+          )}
+          {kind === 'tool' && (
+            <Field
+              label="步骤"
+              hint="JSON 数组，按顺序执行；参数见工具目录，上游的文件在 in/<上游节点名>/"
+            >
+              <textarea
+                value={stepsText}
+                onChange={(e) => setStepsText(e.target.value)}
+                rows={8}
+                spellCheck={false}
+                className={`${field} resize-y font-mono text-[12.5px]`}
+              />
+            </Field>
+          )}
           {kind === 'discussion' && (
             <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
               <legend className="mb-1.5 p-0 text-[13px] font-medium">参与者（2–5 位）</legend>

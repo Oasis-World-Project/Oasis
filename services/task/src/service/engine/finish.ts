@@ -29,7 +29,11 @@ export function createFinish(engine: Engine): Pick<Engine, 'onRunFinished'> {
     fx: Effects,
   ) {
     const fallback = engine.deps.planning.defaultModel;
-    if (error?.includes(REGION_UNAVAILABLE) && run.request.model !== fallback) {
+    if (
+      kindOf(node).switchable &&
+      error?.includes(REGION_UNAVAILABLE) &&
+      run.request.model !== fallback
+    ) {
       // 重试也没用，换默认模型接着做，不算一次重做
       logger.info(
         { nodeId: node.id, model: run.request.model },

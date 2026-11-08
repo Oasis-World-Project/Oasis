@@ -44,10 +44,15 @@ type Status = RunBody['status'];
 
 /** 放进 out/ 的占位文件：保证目录存在且属于沙箱用户，不算产出 */
 export const KEEP_FILE = '.oasis-keep';
-/** 批次恢复状态和工具的中间文件在 out/ 里，会随产出包存下，但不是成果，也不传给下游节点。 */
+/**
+ * 批次恢复状态、工具的中间文件和工具步骤的进度在 out/ 里，会随产出包存下，但不是成果，
+ * 也不传给下游节点。
+ */
 export const isPrivateOutput = (path: string) =>
   path === KEEP_FILE ||
-  ['.oasis-batches', '.oasis-tools'].some((dir) => path === dir || path.startsWith(`${dir}/`));
+  ['.oasis-batches', '.oasis-tools', '.oasis-steps'].some(
+    (dir) => path === dir || path.startsWith(`${dir}/`),
+  );
 
 /** 这个进程里正在执行的一次运行 */
 export interface LiveRun {
@@ -179,7 +184,8 @@ export interface RunContext {
     inputs: { path: string; content: Buffer }[],
     materials: Material[],
     run: LiveRun,
-    mode: { goal: boolean; reasoningEffort?: 'max' },
+    /** steps：工具运行（ADR 0025）要执行的步骤，不起 AI */
+    mode: { goal: boolean; reasoningEffort?: 'max'; steps?: StartRunBody['steps'] },
     catalog: Catalog,
     recovering?: boolean,
   ): Promise<void>;

@@ -33,6 +33,8 @@ const tools = [
     models: [],
     defaultModel: null,
     rates: [],
+    args: [],
+    local: false,
   },
 ];
 const fallback = { workRun: 1_000, speechRun: 1_000, computeRun: 0, nodeSeconds: 600 };

@@ -1,6 +1,14 @@
 // 图片工具：生成图片、看图回答问题。
 import { z } from 'zod';
-import { estimate, InputImages, optionalModel, pickModel, provider, type ToolDef } from './kit.ts';
+import {
+  estimate,
+  InputImages,
+  MODEL_ARG,
+  optionalModel,
+  pickModel,
+  provider,
+  type ToolDef,
+} from './kit.ts';
 
 /**
  * 按文件头认出图片的真实格式；认不出返回 undefined。供应商声明的格式不可靠（2026-11-05：
@@ -66,6 +74,20 @@ export const imageGenerate: ToolDef = {
   provider: 'openrouter',
   models: (config) => config.imageModels,
   args: ImageArgs,
+  cli: [
+    { name: 'prompt', kind: 'text', required: true, description: '画面描述' },
+    { name: 'ref', kind: 'paths', min: 1, max: 4, description: '参考图（1–4 张 PNG/JPEG/WebP）' },
+    {
+      name: 'aspect_ratio',
+      kind: 'choice',
+      choices: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9'],
+      description: '画面比例',
+    },
+    { name: 'resolution', kind: 'choice', choices: ['1K', '2K', '4K'], description: '清晰度档位' },
+    { name: 'n', kind: 'number', min: 1, max: 4, description: '张数（默认 1，几张同时生成）' },
+    MODEL_ARG,
+  ],
+  per: { arg: 'n', default: 1 },
   modelOf: pickModel,
   async run(deps, args, model) {
     const a = ImageArgs.parse(args);
@@ -129,6 +151,18 @@ export const imageInspect: ToolDef = {
   provider: 'openrouter',
   models: (config) => config.visionModels,
   args: InspectArgs,
+  cli: [
+    {
+      name: 'images',
+      kind: 'paths',
+      required: true,
+      min: 1,
+      max: 4,
+      description: '要看的图片（1–4 张）',
+    },
+    { name: 'question', kind: 'text', required: true, description: '要回答的问题' },
+    MODEL_ARG,
+  ],
   modelOf: pickModel,
   async run(deps, args, model) {
     const a = InspectArgs.parse(args);

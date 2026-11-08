@@ -34,6 +34,7 @@ export function createAdvance(engine: Engine): Advance {
           prompt: request.prompt,
           inputsFrom: request.inputsFrom,
           ...(request.continueFrom ? { continueFrom: request.continueFrom } : {}),
+          ...(request.steps ? { steps: request.steps } : {}),
         };
         await w.addRun({
           id: runId,
@@ -84,6 +85,12 @@ export function createAdvance(engine: Engine): Advance {
       if (node.config.repairChecks?.length || node.config.revision) {
         const { repairChecks = [], revision, ...config } = node.config;
         const clean = { ...node, config } as Node;
+        // 没有 AI 能接着改的节点（工具节点）：拿上游最新的产出重新跑一遍
+        if (!kind.reworkable) {
+          await w.setNode(node.id, { config, reworks: node.reworks + 1 });
+          await engine.openStep(snapshot, w, clean, kind.start(snapshot, clean), fx);
+          return;
+        }
         const previous = node.currentRunId ? await store.findRun(node.currentRunId) : undefined;
         const canResume = previous && (previous.status === 'succeeded' || previous.meta.resumable);
         const step = canResume

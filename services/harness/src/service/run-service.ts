@@ -138,6 +138,7 @@ export function createRunService(deps: RunDeps) {
             {
               goal: body.goal ?? false,
               ...(body.reasoningEffort ? { reasoningEffort: body.reasoningEffort } : {}),
+              ...(body.steps ? { steps: body.steps } : {}),
             },
             catalog,
           )

@@ -80,6 +80,10 @@ export const websiteTest: ToolDef = {
   models: () => ['oasis/browser'],
   modelOf: () => 'oasis/browser',
   args: WebsiteTestArgs,
+  cli: [
+    { name: 'url', kind: 'text', required: true, description: '要测的 HTTPS 网址（须已放行）' },
+    { name: 'plan', kind: 'json', required: true, description: '测试步骤 {version:1,steps:[…]}' },
+  ],
   long: false,
   run: async (deps, args) => {
     if (!deps.taskId) throw new HttpError(400, 'task_required', '网站测试需要所属任务');
@@ -123,6 +127,14 @@ export const appCheck: ToolDef = {
   models: () => ['oasis/browser'],
   modelOf: () => 'oasis/browser',
   args: AppCheckArgs,
+  cli: [
+    {
+      name: 'dir',
+      kind: 'text',
+      required: true,
+      description: 'oasis-app.json 所在目录，如 out/site',
+    },
+  ],
   long: false,
   run: async (deps, args) => {
     if (!deps.taskId) throw new HttpError(400, 'task_required', '网页应用自查只能在任务节点里用');
@@ -170,6 +182,12 @@ export const androidTest: ToolDef = {
   models: () => ['browserstack/android-free'],
   modelOf: () => 'browserstack/android-free',
   args: AndroidTestArgs,
+  cli: [
+    { name: 'uploadId', kind: 'text', required: true, description: '已上传 APK 的 uploadId' },
+    { name: 'device', kind: 'text', required: true, description: '设备型号' },
+    { name: 'osVersion', kind: 'text', required: true, description: 'Android 版本' },
+    { name: 'steps', kind: 'json', required: true, description: '最多 10 步的声明式测试' },
+  ],
   long: true,
   start: (deps, args) => deps.browserstack!.start(args, deps.payerId!, deps.signal),
   check: (deps, id) => deps.browserstack!.check(id, deps.receipt!, deps.signal),

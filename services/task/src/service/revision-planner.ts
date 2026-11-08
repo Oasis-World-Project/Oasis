@@ -7,6 +7,7 @@ import {
   DiscussionPlanNode,
   NodeKey,
   PlanEdge,
+  ToolPlanNode,
   WorkPlanNode,
   type PlanNode,
   type RevisionChange,
@@ -16,6 +17,7 @@ import { z } from 'zod';
 import type { RevisionPlanNode, RevisionState } from '../repo/schema.ts';
 import type { Edge, Node } from '../repo/task-store.ts';
 import { kindOf } from './kinds/index.ts';
+import { withInputExpects } from './plan.ts';
 import {
   estimatePlan,
   exampleNode,
@@ -44,6 +46,7 @@ const RevisionPlanFile = z.object({
         z.discriminatedUnion('kind', [
           WorkPlanNode.extend(origin),
           DiscussionPlanNode.extend(origin),
+          ToolPlanNode.extend(origin),
         ]),
       ]),
     )
@@ -245,7 +248,17 @@ export function checkRevisionPlan(
       reused,
     ),
   );
+  // 工具节点直接用的上游文件（ADR 0025）：沿用的上游要已经交出过它；重新做的上游由下面补成必须交出的文件
+  for (const node of nodes)
+    for (const file of kindOf(node).inputFiles?.(node) ?? []) {
+      const source = reused.has(file.from) ? old.get(file.from) : undefined;
+      if (source && !source.outputs.some((o) => o.path === file.path))
+        problems.push(
+          `沿用的「${file.from}」上一版没有交出 ${file.path}，节点「${node.key}」要用它`,
+        );
+    }
   if (problems.length) return { problems };
+  const expected = new Map(withInputExpects(workflow).nodes.map((n) => [n.key, n.expects]));
   const kept = new Set(referenced);
   const changes = [
     ...plan.nodes.map((n) => ({
@@ -257,7 +270,22 @@ export function checkRevisionPlan(
       .filter((n) => !kept.has(n.key))
       .map((n) => ({ key: n.key, title: n.title, change: 'remove' as const })),
   ];
-  return { plan, workflow, changes };
+  const withExpects: RevisionPlan = {
+    ...plan,
+    nodes: plan.nodes.map((n) =>
+      isReuse(n) ? n : { ...n, expects: expected.get(n.key) ?? n.expects },
+    ),
+  };
+  return {
+    plan: withExpects,
+    workflow: {
+      ...workflow,
+      nodes: workflow.nodes.map((n) =>
+        reused.has(n.key) ? n : { ...n, expects: expected.get(n.key) ?? n.expects },
+      ),
+    },
+    changes,
+  };
 }
 
 /** 修改的预估：只算要跑的节点（沿用的不花钱） */

@@ -39,6 +39,13 @@ export function validatePlan(plan: WorkflowPlan): void {
     if (edge.from === edge.to) problems.push(`节点「${edge.from}」不能连向自己`);
   }
   for (const node of plan.nodes) problems.push(...kindOf(node).problems(node));
+  // 工具节点参数里直接写的上游文件 in/<上游>/…：上游要存在，还要有连线把它的产出交过来
+  for (const node of plan.nodes)
+    for (const from of new Set((kindOf(node).inputFiles?.(node) ?? []).map((f) => f.from)))
+      if (!known.has(from))
+        problems.push(`节点「${node.key}」用到的 in/${from}/ 不是任何节点交来的`);
+      else if (!plan.edges.some((e) => e.from === from && e.to === node.key))
+        problems.push(`节点「${node.key}」用到 in/${from}/ 里的文件，要连线 ${from} → ${node.key}`);
   const pairs = plan.edges.map((e) => `${e.from}→${e.to}`);
   if (new Set(pairs).size !== pairs.length) problems.push('有重复的连线');
   if (problems.length === 0) {
@@ -46,6 +53,28 @@ export function validatePlan(plan: WorkflowPlan): void {
     if (cycle) problems.push(`工作流里有环（经过「${cycle}」）`);
   }
   if (problems.length > 0) throw new HttpError(400, 'invalid_plan', problems.join('；'));
+}
+
+/**
+ * 下游工具节点直接用到的上游文件，成为上游必须交出的文件（ADR 0025）：上游没交出来时关卡让它改一次，
+ * 免得工具节点开跑才发现缺文件。已经写了的不重复加。
+ */
+export function withInputExpects<P extends WorkflowPlan>(plan: P): P {
+  const wanted = new Map<string, Set<string>>();
+  for (const node of plan.nodes)
+    for (const file of kindOf(node).inputFiles?.(node) ?? [])
+      wanted.set(file.from, (wanted.get(file.from) ?? new Set()).add(file.path));
+  if (!wanted.size) return plan;
+  return {
+    ...plan,
+    nodes: plan.nodes.map((node) => {
+      const paths = wanted.get(node.key);
+      if (!paths) return node;
+      const listed = new Set(node.expects.map((e) => (typeof e === 'string' ? e : e.pattern)));
+      const added = [...paths].filter((p) => !listed.has(p));
+      return added.length ? { ...node, expects: [...node.expects, ...added] } : node;
+    }),
+  };
 }
 
 /** 方案里的一个节点 → 库里的一行（status 由调用方定：方案里的是等待，用户新建的是新建） */

@@ -1,7 +1,15 @@
 // 视频工具：按文字或首帧生成短视频（长任务：提交 → 查进度 → 取结果）。
 import { Readable } from 'node:stream';
 import { z } from 'zod';
-import { estimate, InputImages, optionalModel, pickModel, provider, type ToolDef } from './kit.ts';
+import {
+  estimate,
+  InputImages,
+  MODEL_ARG,
+  optionalModel,
+  pickModel,
+  provider,
+  type ToolDef,
+} from './kit.ts';
 
 const VideoArgs = z.object({
   prompt: z.string().trim().min(1).max(4000),
@@ -33,6 +41,25 @@ export const videoGenerate: ToolDef = {
   provider: 'openrouter',
   models: (config) => config.videoModels,
   args: VideoArgs,
+  cli: [
+    { name: 'prompt', kind: 'text', required: true, description: '画面描述' },
+    { name: 'first_frame', kind: 'path', description: '首帧图片（PNG/JPEG/WebP）' },
+    { name: 'duration', kind: 'number', min: 1, max: 20, description: '秒数（默认 5）' },
+    {
+      name: 'resolution',
+      kind: 'choice',
+      choices: ['480p', '720p', '768p', '1080p'],
+      description: '清晰度（默认 720p）',
+    },
+    {
+      name: 'aspect_ratio',
+      kind: 'choice',
+      choices: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+      description: '画面比例',
+    },
+    MODEL_ARG,
+  ],
+  per: { arg: 'duration', default: 5 },
   modelOf: pickModel,
   async start(deps, args, model) {
     const a = VideoArgs.parse(args);

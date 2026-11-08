@@ -12,6 +12,7 @@ import type {
   TaskStatus,
   TaskCheck,
 } from '@oasis/contracts/task';
+import type { ToolStep } from '@oasis/contracts/tool-step';
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
@@ -62,10 +63,16 @@ export interface DiscussionConfig extends CommonConfig {
   transcript?: TranscriptEntry[];
 }
 
+/** 工具节点（ADR 0025）：不起 AI，在沙箱里按顺序执行这些工具步骤 */
+export interface ToolConfig extends CommonConfig {
+  steps?: ToolStep[];
+}
+
 /** 各种节点的配置。加一种节点：这里加一行，再在 service/kinds 写它的插件并登记 */
 export interface KindConfigs {
   work: WorkConfig;
   discussion: DiscussionConfig;
+  tool: ToolConfig;
 }
 export type NodeKind = keyof KindConfigs;
 export type NodeConfig = KindConfigs[NodeKind];
@@ -78,6 +85,8 @@ export interface RunRequestRecord {
   prompt: string;
   inputsFrom: { runId: string; as: string }[];
   continueFrom?: string;
+  /** 工具运行的步骤（ADR 0025） */
+  steps?: ToolStep[];
 }
 
 /** 讨论发言的轮次和发言人 */

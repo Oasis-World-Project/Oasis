@@ -2,7 +2,8 @@
 // 全链路回归（docs/engineering/回归测试.md）：本机起全部服务，模型换成按脚本回复的假供应商，
 // 沙箱容器、浏览器检查、对象存储、画布都是真的。从「用户在私聊里发任务」一直跑到「画布里打开成果」。
 // 用法：pnpm e2e [场景名…] [--keep]   （先停掉 pnpm dev；--keep 跑完不停服务，方便排查）
-//      pnpm e2e --real [场景名…]      真模型、真工具，每个场景花费上限 $1（要花真钱，按需跑）
+//      pnpm e2e --real [场景名…]      真模型、真工具，每个场景花费上限 $1（视频等场景在 e2e/real.mjs
+//                                    里单独放宽；要花真钱，按需跑）
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -126,7 +127,12 @@ try {
   await stack.startAll(FIRST);
   if (real) {
     // 真模型：模型网关照 .env 连真的供应商和工具
-    log(`真模型回归：${names.join('、')}，每个场景花费上限 ${usd(REAL_BUDGET_MICRO)}`);
+    const raised = names
+      .filter((name) => catalogue[name].budgetMicro)
+      .map((name) => `${name} ${usd(catalogue[name].budgetMicro)}`);
+    log(
+      `真模型回归：${names.join('、')}，每个场景花费上限 ${usd(REAL_BUDGET_MICRO)}${raised.length ? `（${raised.join('、')}）` : ''}`,
+    );
   } else {
     const catalog = await (
       await fetch(`http://127.0.0.1:${portOf('agent')}/internal/models/catalog`)
@@ -184,6 +190,7 @@ try {
       provider,
       stack,
       fixtures,
+      outDir,
       log: (line) => log(`[${name}] ${line}`),
       check(condition, message) {
         if (!condition) {
@@ -204,12 +211,13 @@ try {
       t.user = await signIn({ gateway: gatewayUrl, mailpit, origin });
       if (real) {
         // 花费看门狗：超过上限就取消这个用户的任务，场景判失败（模型绕圈也烧不了多少钱）
+        const budget = scenario.budgetMicro ?? REAL_BUDGET_MICRO;
         let over = false;
         watchdog = setInterval(() => {
           const micro = charged(t.user.userId);
-          if (micro <= REAL_BUDGET_MICRO || over) return;
+          if (micro <= budget || over) return;
           over = true;
-          t.check(false, `花费 ${usd(micro)} 超过上限 ${usd(REAL_BUDGET_MICRO)}，已取消任务`);
+          t.check(false, `花费 ${usd(micro)} 超过上限 ${usd(budget)}，已取消任务`);
           for (const taskId of t.tasks)
             t.user.api.post(`/task/v1/tasks/${taskId}/cancel`).catch(() => {});
         }, 10_000);

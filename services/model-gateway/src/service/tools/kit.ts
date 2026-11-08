@@ -1,5 +1,6 @@
 // 工具定义共用的部分（ADR 0006）：每个工具 = 参数校验 + 目录信息 + 怎么调供应商、怎么算钱。
 import type { Readable } from 'node:stream';
+import type { ToolArgSpec } from '@oasis/contracts/tool-args';
 import type { Logger, ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { BrowserStackClient } from '../../adapters/browserstack.ts';
@@ -93,9 +94,23 @@ interface ToolBase {
   /** 可以选的模型；不需要模型的工具返回空 */
   models: (config: ToolConfig) => string[];
   args: z.ZodType<Record<string, unknown>>;
+  /**
+   * 命令行参数（ADR 0025）：`oasis-tool <工具> --名字 值` 能写哪些。沙箱里的 oasis-tool 把文件参数
+   * （path、paths）读成内容再交给 args 校验；规划门按它校验工具节点，工作流页按它展示。
+   */
+  cli: ToolArgSpec[];
+  /** 计费单位数写在哪个参数里（视频的秒数、生图的张数）；估价用 */
+  per?: { arg: string; default: number };
   /** 这次调用记在哪个模型名下（调用记录、地区检查用） */
   modelOf: (args: Record<string, unknown>, models: string[]) => string;
 }
+
+/** 选型号的参数：各个按型号计价的工具都有 */
+export const MODEL_ARG: ToolArgSpec = {
+  name: 'model',
+  kind: 'text',
+  description: '型号（不写用目录里的第一个）',
+};
 
 /** 马上出结果的工具 */
 interface QuickTool extends ToolBase {

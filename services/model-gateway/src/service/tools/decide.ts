@@ -31,6 +31,19 @@ export const decide: ToolDef = {
   provider: 'openrouter',
   models: (config) => [config.jevModel],
   args: DecideArgs,
+  cli: [
+    { name: 'question', kind: 'text', description: '要判断的问题（批量时用 in）' },
+    { name: 'options', kind: 'list', min: 2, max: 10, description: '从这几个里选一个' },
+    { name: 'scale', kind: 'list', min: 2, max: 10, description: '按这个刻度打分（从低到高）' },
+    { name: 'context', kind: 'text', description: '要判断的材料' },
+    {
+      name: 'in',
+      kind: 'path',
+      description: '批量：每行 {id,question,context?,options?,scale?} 的 JSONL，结果写到 out',
+    },
+    { name: 'budget_micro', kind: 'number', min: 1, description: '批量的花费上限（微美元）' },
+    { name: 'resume', kind: 'flag', description: '批量中断后接着做' },
+  ],
   modelOf: (_args, models) => models[0] ?? '',
   async run(deps, args, model) {
     const a = DecideArgs.parse(args);

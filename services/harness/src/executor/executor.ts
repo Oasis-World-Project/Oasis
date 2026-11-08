@@ -11,6 +11,8 @@ export interface SandboxSpec {
   workspaceId: string;
   /** 接着原会话或接管：持久工作目录必须已经在，不能新建空目录冒充恢复 */
   restore?: boolean;
+  /** 不跑镜像默认的 dsh，改跑这个命令（工具运行的步骤执行器，ADR 0025） */
+  command?: string[];
   /** 沙箱里的环境变量（含临时 Key，不得写进日志） */
   env: Record<string, string>;
   /** 启动前解到沙箱里的文件：目录 → tar 包 */
@@ -45,6 +47,11 @@ export interface Executor {
   readStoredArchive?(runId: string, path: string): Promise<Readable | undefined>;
 }
 
+/** 工具运行的步骤执行器在镜像里的位置；探测到它，执行环境才有 tool-steps 能力（ADR 0025） */
+export const STEPS_RUNNER = '/opt/oasis/services/harness/sandbox/oasis-steps.ts';
+/** 工具运行要的执行环境能力：旧镜像没有步骤执行器时准入就拒绝，不起沙箱 */
+export const TOOL_STEPS_CAPABILITY = 'tool-steps';
+
 const LABEL_COMPONENT = 'oasis.component=harness-sandbox';
 const LABEL_RUN = 'oasis.run-id';
 const volumeNames = (id: string) => {
@@ -67,7 +74,7 @@ export function createDockerExecutor(deps: {
   const instanceId = randomUUID();
   let detected: { imageId: string; value: Promise<ExecutionEnvironment> } | undefined;
   async function probe(imageId: string): Promise<ExecutionEnvironment> {
-    const script = `const {spawnSync}=require('node:child_process');const fs=require('node:fs');const software={};for(const [key,bin,args] of [['node','node',['--version']],['python','python3',['--version']],['blender','blender',['--version']],['ffmpeg','ffmpeg',['-version']],['libreoffice','libreoffice',['--version']],['pdf','pdftoppm',['-v']]]){const r=spawnSync(bin,args,{encoding:'utf8',timeout:15000});if(r.status===0)software[key]=(r.stdout||r.stderr).split('\\n')[0]}process.stdout.write(JSON.stringify({software,capabilities:Object.keys(software),notes:['沙箱仅经代理访问模型、工具和获准的软件包源。','本地没有浏览器；可运行应用应交齐 oasis-app.json 与配套文件，交付前用 oasis-tool app.check --dir out/<应用目录> 在独立浏览器里自查（交付后关卡复跑同一套检查）；外站测试只使用目录中可用的 website.test。','项目依赖应装入 /workspace，例如项目 node_modules 或 .venv，才能随工作目录恢复。']}))`;
+    const script = `const {spawnSync}=require('node:child_process');const fs=require('node:fs');const software={};for(const [key,bin,args] of [['node','node',['--version']],['python','python3',['--version']],['blender','blender',['--version']],['ffmpeg','ffmpeg',['-version']],['libreoffice','libreoffice',['--version']],['pdf','pdftoppm',['-v']]]){const r=spawnSync(bin,args,{encoding:'utf8',timeout:15000});if(r.status===0)software[key]=(r.stdout||r.stderr).split('\\n')[0]}if(fs.existsSync('${STEPS_RUNNER}'))software['${TOOL_STEPS_CAPABILITY}']='oasis-steps';process.stdout.write(JSON.stringify({software,capabilities:Object.keys(software),notes:['沙箱仅经代理访问模型、工具和获准的软件包源。','本地没有浏览器；可运行应用应交齐 oasis-app.json 与配套文件，交付前用 oasis-tool app.check --dir out/<应用目录> 在独立浏览器里自查（交付后关卡复跑同一套检查）；外站测试只使用目录中可用的 website.test。','项目依赖应装入 /workspace，例如项目 node_modules 或 .venv，才能随工作目录恢复。']}))`;
     const { Id: id } = await docker.createContainer(`oasis-probe-${randomUUID()}`, {
       Image: imageId,
       Entrypoint: ['node'],
@@ -155,6 +162,7 @@ export function createDockerExecutor(deps: {
       }
       const { Id: id } = await docker.createContainer(`oasis-run-${spec.runId}`, {
         Image: deps.image,
+        ...(spec.command ? { Entrypoint: spec.command } : {}),
         Env: Object.entries(spec.env).map(([key, value]) => `${key}=${value}`),
         Labels: { 'oasis.component': 'harness-sandbox', [LABEL_RUN]: spec.runId },
         WorkingDir: deps.workdir,

@@ -30,3 +30,4 @@ ADR 记下「为什么这么做」。代码注释里大量引用「ADR 00xx §y�
 | [0022](0022-revisions-planned-by-team.md) | 修改交给 AI 团队规划、工作流分版本、先确认再跑 | 现行 |
 | [0023](0023-node-kind-plugins.md) | task 引擎按节点种类拆成插件，大文件按职责拆开（单文件 ≤ 500 行） | 现行 |
 | [0024](0024-inspector-and-one-way-calls.md) | 检查服务 inspector，服务调用只往一个方向走 | 现行 |
+| [0025](0025-tool-nodes.md) | 工具节点：不用 AI，按写好的步骤调工具；沙箱里的本地操作 op.* | 现行 |

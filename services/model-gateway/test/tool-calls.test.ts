@@ -123,12 +123,23 @@ describe('工具目录', () => {
       'video.generate',
       'jev.decide',
       'text.batch',
+      // 沙箱里的本地操作（ADR 0025）：不调供应商，一直可用
+      'op.video.concat',
+      'op.video.trim',
+      'op.video.frames',
+      'op.video.audio',
+      'op.audio.concat',
+      'op.media.convert',
     ]);
     expect(byKey['image.generate']).toMatchObject({
       available: true,
       models: ['openai/gpt-image-2'],
       defaultModel: 'openai/gpt-image-2',
+      local: false,
+      per: { arg: 'n', default: 1 },
     });
+    expect(byKey['image.generate']?.args.map((a) => a.name)).toContain('prompt');
+    expect(byKey['op.video.concat']).toMatchObject({ available: true, local: true });
     expect(byKey['web.search']?.available).toBe(false);
     knobs.blocked = ['typesafe/jev-1.14'];
     expect((await build('k').list()).find((t) => t.key === 'jev.decide')?.available).toBe(false);

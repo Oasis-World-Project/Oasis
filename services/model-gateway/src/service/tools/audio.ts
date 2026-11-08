@@ -1,7 +1,15 @@
 // 音频工具：文字转语音、语音转文字、生成音乐。
 import { Readable } from 'node:stream';
 import { z } from 'zod';
-import { clip, estimate, optionalModel, pickModel, provider, type ToolDef } from './kit.ts';
+import {
+  clip,
+  estimate,
+  MODEL_ARG,
+  optionalModel,
+  pickModel,
+  provider,
+  type ToolDef,
+} from './kit.ts';
 
 const SpeechArgs = z.object({
   text: z.string().trim().min(1).max(4000),
@@ -50,6 +58,12 @@ export const speech: ToolDef = {
   provider: 'openrouter',
   models: (config) => config.speechModels,
   args: SpeechArgs,
+  cli: [
+    { name: 'text', kind: 'text', required: true, description: '要念的文字' },
+    { name: 'voice', kind: 'text', description: '音色' },
+    { name: 'instructions', kind: 'text', description: '语气、语速等要求' },
+    MODEL_ARG,
+  ],
   modelOf: pickModel,
   async run(deps, args, model) {
     const a = SpeechArgs.parse(args);
@@ -98,6 +112,16 @@ export const transcribe: ToolDef = {
   provider: 'openrouter',
   models: (config) => config.transcribeModels,
   args: TranscribeArgs,
+  cli: [
+    {
+      name: 'file',
+      kind: 'path',
+      required: true,
+      description: '音频文件（mp3、wav、m4a、flac、ogg、webm，不超过 20 MB）',
+    },
+    { name: 'language', kind: 'text', description: '语言代码，如 zh' },
+    MODEL_ARG,
+  ],
   modelOf: pickModel,
   async run(deps, args, model) {
     const a = TranscribeArgs.parse(args);
@@ -133,6 +157,23 @@ export const music: ToolDef = {
   provider: 'fal',
   models: (config) => config.musicModels ?? [],
   args: MusicArgs,
+  cli: [
+    {
+      name: 'prompt',
+      kind: 'text',
+      required: true,
+      description: '风格、情绪、段落要求（至少 10 个字）',
+    },
+    {
+      name: 'instrumental',
+      kind: 'flag',
+      required: true,
+      description: 'true 纯音乐；false 唱歌，要给 lyrics 或 lyrics_file',
+    },
+    { name: 'lyrics', kind: 'text', description: '歌词' },
+    { name: 'lyrics_file', kind: 'path', description: '歌词文件' },
+    MODEL_ARG,
+  ],
   modelOf: pickModel,
   async start(deps, args, model) {
     if (!deps.fal) throw new Error('音乐供应商未配置');

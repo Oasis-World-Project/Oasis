@@ -110,8 +110,33 @@ if (command === 'build' || command === 'build-3d') {
     // 超时也只清理本次随机命名的容器，绝不清理共享容器或已有镜像。
     spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore', timeout: 10_000 });
   }
+} else if (command === 'check-ops') {
+  // 本地操作 oasis-op 和工具步骤执行器（ADR 0025）：离线、用 ffmpeg 现做素材，跑完删掉容器
+  const name = `oasis-ops-check-${randomUUID()}`;
+  try {
+    result = spawnSync(
+      'docker',
+      [
+        ...['run', '--rm', '-i', '--name', name, '--network', 'none', '--cpus', '2'],
+        ...['--memory', '2g', '--pids-limit', '512', '--cap-drop', 'ALL'],
+        ...['--security-opt', 'no-new-privileges', '--entrypoint', 'sh', image, '-s'],
+      ],
+      {
+        cwd: root,
+        // 脚本可能被 git 换成了 CRLF，sh 认不得
+        input: readFileSync(
+          path.join(root, 'services/harness/test/sandbox-ops.sh'),
+          'utf8',
+        ).replaceAll('\r\n', '\n'),
+        stdio: ['pipe', 'inherit', 'inherit'],
+        timeout: 300_000,
+      },
+    );
+  } finally {
+    spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore', timeout: 10_000 });
+  }
 } else {
-  throw new Error('用法：node scripts/sandbox.mjs build|check|build-3d|check-3d');
+  throw new Error('用法：node scripts/sandbox.mjs build|check|check-ops|build-3d|check-3d');
 }
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);

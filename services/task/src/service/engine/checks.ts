@@ -1,6 +1,6 @@
 // 关卡和整体验收（ADR 0017：检查只提醒、不拦截）。检查在事务外跑，结果回到事务里推进：
 // 明确没满足的接着原会话改一次（MAX_REWORKS），改过仍没满足、没检查到的都带着提醒往下走。
-import { reworkStep } from '../kinds/index.ts';
+import { kindOf, reworkStep } from '../kinds/index.ts';
 import { missingDeliveryFiles, selectDeliverables } from '../output-files.ts';
 import type { Engine } from './shared.ts';
 
@@ -60,14 +60,18 @@ export function createChecks(
       // 检查期间节点被停止、任务被取消：结果作废
       const current = fresh.nodes.find((n) => n.id === nodeId);
       if (current?.status !== 'checking' || current.currentRunId !== runId) return;
-      // 明确没满足：接着原会话改，最多 MAX_REWORKS 次；其余（改过仍没满足、没检查到）都记成提醒往下走
-      if (unmet.length && current.reworks < MAX_REWORKS) {
+      // 明确没满足：接着原会话改，最多 MAX_REWORKS 次；其余（改过仍没满足、没检查到）都记成提醒往下走。
+      // 没有 AI 能改的节点（工具节点）不返工，直接带着提醒往下走
+      const reworkable = kindOf(current).reworkable;
+      if (unmet.length && reworkable && current.reworks < MAX_REWORKS) {
         logger.info({ nodeId, unmet }, '关卡没过，接着原会话修改一次');
         await w.setNode(nodeId, { reworks: current.reworks + 1 });
         await engine.openStep(fresh, w, current, reworkStep(current, unmet), fx);
       } else {
         const reminders = [
-          ...(unmet.length ? [`改过一次仍可能没满足：${unmet.join('；')}`] : []),
+          ...(unmet.length
+            ? [`${reworkable ? '改过一次仍可能没满足' : '没满足'}：${unmet.join('；')}`]
+            : []),
           ...(unchecked?.length ? [`没检查到：${unchecked.join('；')}`] : []),
         ];
         await w.setNode(nodeId, {
@@ -118,8 +122,11 @@ export function createChecks(
         deliverables,
         finishedAt: null,
       });
-      // 交付文件不齐：缺文件的交付节点接着原会话补一次；补过之后照常交付，缺的记在验收记录里
-      const targets = fresh.nodes.filter((n) => short.has(n.id) && n.currentRunId);
+      // 交付文件不齐：缺文件的交付节点接着原会话补一次；补过之后照常交付，缺的记在验收记录里。
+      // 工具节点自己补不了（同样的步骤再跑一遍还是缺），只在下游跟着上游的新产出重跑
+      const targets = fresh.nodes.filter(
+        (n) => short.has(n.id) && n.currentRunId && kindOf(n).reworkable,
+      );
       if (missing.length && repairs < MAX_REWORKS && targets.length) {
         await w.setTask({
           status: 'running',

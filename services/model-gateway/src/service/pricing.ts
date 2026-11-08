@@ -148,6 +148,31 @@ export function videoSecondRate(
 }
 
 /**
+ * 工具目录里视频型号的每秒单价（微美元）：默认 720p（工具不写清晰度时用的）的单价，加上各清晰度的
+ * 单价（有和默认不同的才列，估价按步骤写的清晰度取）。供应商没给价格返回 undefined。
+ */
+export function videoCatalogRate(
+  pricing: Record<string, string>,
+  resolutions: string[],
+): { costMicro: number; by?: { arg: string; costMicro: Record<string, number> } } | undefined {
+  const micro = (resolution: string) => {
+    const usd = videoSecondRate(pricing, resolution, false);
+    return Number.isFinite(usd) && usd > 0 ? Math.ceil(usd * USD_TO_MICRO) : undefined;
+  };
+  const costMicro = micro('720p');
+  if (costMicro === undefined) return undefined;
+  const tiers = Object.fromEntries(
+    resolutions.flatMap((resolution) => {
+      const price = micro(resolution);
+      return price === undefined ? [] : [[resolution, price] as const];
+    }),
+  );
+  return Object.values(tiers).some((price) => price !== costMicro)
+    ? { costMicro, by: { arg: 'resolution', costMicro: tiers } }
+    : { costMicro };
+}
+
+/**
  * 型号能力 + 它负责一个干活节点的典型花费和用时（ADR 0016 §4）：给了调用记录且有这个型号的记录就用记录；
  * 否则按价格表 × 典型 token 用量估（记录里的典型用量，没有就用配置的假设值；用时未知）。
  */

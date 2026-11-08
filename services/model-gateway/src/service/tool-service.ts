@@ -4,11 +4,12 @@
 // 这里是目录和组装；调用在 tool-call.ts，长任务在 tool-jobs.ts 和 tool-job-api.ts。
 import type { ToolEntry, ToolRate } from '@oasis/contracts/model-gateway';
 import type { Typical } from '../repo/calls-repo.ts';
-import { videoSecondRate } from './pricing.ts';
+import { videoCatalogRate } from './pricing.ts';
 import { createToolCall } from './tool-call.ts';
 import type { ToolContext, ToolServiceDeps } from './tool-context.ts';
 import { createToolJobApi } from './tool-job-api.ts';
 import { createToolJobs } from './tool-jobs.ts';
+import { localOpEntries, textBatchEntry } from './tools/catalog-extras.ts';
 import { TOOLS, type ToolDef } from './tools.ts';
 
 export function createToolService(deps: ToolServiceDeps) {
@@ -48,9 +49,10 @@ export function createToolService(deps: ToolServiceDeps) {
       const seconds = seen?.seconds ?? null;
       if (tool.key === 'video.generate') {
         const entry = videos.find((v) => v.id === model);
-        const rate = entry ? videoSecondRate(entry.pricing_skus ?? {}, '720p', false) : NaN;
-        if (Number.isFinite(rate) && rate > 0)
-          return { model, costMicro: Math.ceil(rate * 1_000_000), seconds, basis: 'catalog' };
+        const rate = entry
+          ? videoCatalogRate(entry.pricing_skus ?? {}, entry.supported_resolutions ?? [])
+          : undefined;
+        if (rate) return { model, ...rate, seconds, basis: 'catalog' };
       } else if (seen) return { model, costMicro: seen.costMicro, seconds, basis: 'history' };
       return { model, costMicro: tool.estimateMicro, seconds, basis: 'fallback' };
     });
@@ -95,25 +97,14 @@ export function createToolService(deps: ToolServiceDeps) {
             models,
             defaultModel: models[0] ?? null,
             rates: await ratesOf(tool, models),
+            args: tool.cli,
+            ...(tool.per ? { per: tool.per } : {}),
+            local: false,
           };
         }),
       );
       if (deps.avatarCatalog) entries.push(deps.avatarCatalog.entry());
-      entries.push({
-        key: 'text.batch',
-        name: '批量生成文字',
-        description:
-          '逐行生成文字，可用 --model 选择模型；uses 按输入行数估计，支持停止和恢复。预算/token/超时只在显式传入时生效，实际按 token 计费。',
-        usage:
-          'oasis-tool text.batch --in 提示.jsonl --out out/结果.jsonl（每行 {"id":"1","prompt":"要求"}；--resume true 恢复）',
-        unit: '行',
-        estimateMicro: 2_000,
-        long: false,
-        available: deps.openrouter.configured,
-        models: [],
-        defaultModel: null,
-        rates: [],
-      });
+      entries.push(textBatchEntry(deps.openrouter.configured), ...localOpEntries());
       return entries;
     },
     ...createToolCall(ctx),

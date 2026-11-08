@@ -1,6 +1,10 @@
 // harness 的内部接口（只给 task 等内部服务用，gateway 不转发）：启动一次 agent 运行、查进度、追问、停止、取消。
 import { z } from 'zod';
 import { ApplicationCheckResult } from './inspector.ts';
+import { ToolSteps } from './tool-step.ts';
+
+/** 工具运行（ADR 0025）的 model 写这个：不调模型，harness 不按模型目录准入 */
+export const TOOL_RUN_MODEL = 'oasis/tool';
 
 /** 实际运行镜像的软件探测；只描述本地环境，不代表外部供应商能力。 */
 export const ExecutionEnvironment = z.object({
@@ -34,66 +38,76 @@ export const RunInputFile = z.object({
   contentBase64: z.string(),
 });
 
-export const StartRunBody = z.object({
-  /** 调用方可以自带运行 ID（便于幂等）；不给就由 harness 生成 */
-  runId: z.uuid().optional(),
-  payerId: z.uuid(),
-  taskId: z.uuid().optional(),
-  nodeId: z.uuid().optional(),
-  /** 供应商型号，如 deepseek/deepseek-v4.1-flash */
-  model: z.string().min(1).max(200),
-  /** 工作节点使用原生持久目标；普通发言仍可只跑一轮。 */
-  goal: z.boolean().default(false),
-  /** 思考强度：max 用模型支持的最高档（规划员）；不给时最高到 high */
-  reasoningEffort: z.enum(['max']).optional(),
-  /** 规划所需的本地能力；预检失败在登记和冻结之前返回。 */
-  requires: z.array(z.string().min(1).max(100)).default([]),
-  /** 交给 agent 的完整任务说明 */
-  prompt: z.string().min(1).max(200_000),
-  inputs: z.array(RunInputFile).default([]),
-  /**
-   * 把之前某次运行的产出放进本次沙箱的 in/<as>/ 下（工作流里上游节点交给下游）。
-   * 只能引用同一付费人、已成功的运行。
-   */
-  inputsFrom: z
-    .array(
-      z.object({
-        runId: z.uuid(),
-        as: z
-          .string()
-          .regex(
-            /^[\p{L}\p{N}_.-]{1,64}$/u,
-            '只能用字母、数字、下划线、点和短横线，最长 64 个字符',
-          ),
-      }),
-    )
-    .default([]),
-  /**
-   * 用户给的素材：开沙箱前由 harness 向 canvas 取出，放在沙箱里的 path（如 materials/照片.jpg）。
-   * 是不是这个用户的文件，conversation 收附件时已经核对过。
-   */
-  materials: z
-    .array(
-      z.object({
-        uploadId: z.uuid(),
-        path: z
-          .string()
-          .min(1)
-          .max(300)
-          .regex(
-            /^materials\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\n]+$/,
-            '必须放在 materials/ 下，不能有 ..',
-          ),
-      }),
-    )
-    .default([]),
-  /**
-   * 接着之前某次运行做：挂上它的持久工作目录（会话、out/、装好的依赖都在），AI 记得前面做到哪了；
-   * 没另给 inputsFrom 就沿用它的。用于关卡退回修改、停止后继续、修改、讨论的下一轮。
-   * 只能接同一付费人、已结束、工作目录还在的运行；工作目录不在了返回 409 {@link WORKSPACE_UNAVAILABLE}。
-   */
-  continueFrom: z.uuid().optional(),
-});
+export const StartRunBody = z
+  .object({
+    /** 调用方可以自带运行 ID（便于幂等）；不给就由 harness 生成 */
+    runId: z.uuid().optional(),
+    payerId: z.uuid(),
+    taskId: z.uuid().optional(),
+    nodeId: z.uuid().optional(),
+    /** 供应商型号，如 deepseek/deepseek-v4.1-flash */
+    model: z.string().min(1).max(200),
+    /** 工作节点使用原生持久目标；普通发言仍可只跑一轮。 */
+    goal: z.boolean().default(false),
+    /** 思考强度：max 用模型支持的最高档（规划员）；不给时最高到 high */
+    reasoningEffort: z.enum(['max']).optional(),
+    /** 规划所需的本地能力；预检失败在登记和冻结之前返回。 */
+    requires: z.array(z.string().min(1).max(100)).default([]),
+    /** 交给 agent 的完整任务说明 */
+    prompt: z.string().min(1).max(200_000),
+    inputs: z.array(RunInputFile).default([]),
+    /**
+     * 把之前某次运行的产出放进本次沙箱的 in/<as>/ 下（工作流里上游节点交给下游）。
+     * 只能引用同一付费人、已成功的运行。
+     */
+    inputsFrom: z
+      .array(
+        z.object({
+          runId: z.uuid(),
+          as: z
+            .string()
+            .regex(
+              /^[\p{L}\p{N}_.-]{1,64}$/u,
+              '只能用字母、数字、下划线、点和短横线，最长 64 个字符',
+            ),
+        }),
+      )
+      .default([]),
+    /**
+     * 用户给的素材：开沙箱前由 harness 向 canvas 取出，放在沙箱里的 path（如 materials/照片.jpg）。
+     * 是不是这个用户的文件，conversation 收附件时已经核对过。
+     */
+    materials: z
+      .array(
+        z.object({
+          uploadId: z.uuid(),
+          path: z
+            .string()
+            .min(1)
+            .max(300)
+            .regex(
+              /^materials\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\n]+$/,
+              '必须放在 materials/ 下，不能有 ..',
+            ),
+        }),
+      )
+      .default([]),
+    /**
+     * 接着之前某次运行做：挂上它的持久工作目录（会话、out/、装好的依赖都在），AI 记得前面做到哪了；
+     * 没另给 inputsFrom 就沿用它的。用于关卡退回修改、停止后继续、修改、讨论的下一轮。
+     * 只能接同一付费人、已结束、工作目录还在的运行；工作目录不在了返回 409 {@link WORKSPACE_UNAVAILABLE}。
+     */
+    continueFrom: z.uuid().optional(),
+    /**
+     * 工具运行（ADR 0025）：不启动 AI，在沙箱里按顺序执行这些工具步骤（每步失败自动重试 2 次）；
+     * model 写 {@link TOOL_RUN_MODEL}，prompt 只用来记录。接着原运行做时跳过已经做完的步骤。
+     */
+    steps: ToolSteps.optional(),
+  })
+  .refine(
+    (body) => (body.model === TOOL_RUN_MODEL) === Boolean(body.steps),
+    `工具运行的 model 写 ${TOOL_RUN_MODEL} 并带上 steps；其他运行不带 steps`,
+  );
 export type StartRunBody = z.input<typeof StartRunBody>;
 
 /**

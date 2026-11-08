@@ -155,6 +155,7 @@ export function createControl(ctx: RunContext) {
           ...(request.body.reasoningEffort
             ? { reasoningEffort: request.body.reasoningEffort }
             : {}),
+          ...(request.body.steps ? { steps: request.body.steps } : {}),
         },
         catalog,
         Boolean(row.startedAt),

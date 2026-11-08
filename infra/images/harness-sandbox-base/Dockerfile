@@ -60,10 +60,15 @@ COPY --chown=node:node services/harness/src/adapter/profile/cordis.patch.yml /ho
 COPY services/harness/sandbox/oasis-tool.ts /opt/oasis/oasis-tool.ts
 COPY services/harness/sandbox/batch.ts /opt/oasis/batch.ts
 COPY services/harness/sandbox/media.py /opt/oasis/media.py
+# 工具节点（ADR 0025）：步骤执行器 oasis-steps 和本地操作 oasis-op（参数定义与 task、model-gateway 共用
+# packages/contracts 里的同一份）。按仓库里的相对位置放，import 路径在仓库和镜像里一致。
+COPY packages/contracts/src/tool-args.ts packages/contracts/src/ops.ts /opt/oasis/packages/contracts/src/
+COPY services/harness/sandbox/oasis-steps.ts services/harness/sandbox/oasis-op.ts /opt/oasis/services/harness/sandbox/
 USER root
 RUN printf '#!/bin/sh\nexec node --no-warnings /opt/oasis/oasis-tool.ts "$@"\n' > /usr/local/bin/oasis-tool \
  && printf '#!/bin/sh\nexec python3 /opt/oasis/media.py "$@"\n' > /usr/local/bin/oasis-media \
- && chmod 755 /usr/local/bin/oasis-tool /usr/local/bin/oasis-media
+ && printf '#!/bin/sh\nexec node --no-warnings /opt/oasis/services/harness/sandbox/oasis-op.ts "$@"\n' > /usr/local/bin/oasis-op \
+ && chmod 755 /usr/local/bin/oasis-tool /usr/local/bin/oasis-media /usr/local/bin/oasis-op
 USER node
 COPY --chown=node:node services/harness/src/adapter/profile/node-goal.mjs /opt/oasis/node-goal.mjs
 WORKDIR /workspace

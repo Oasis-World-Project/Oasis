@@ -2,7 +2,7 @@
 import { Readable, Transform } from 'node:stream';
 import { z } from 'zod';
 import { RenderArgs } from '../../adapters/runpod.ts';
-import { estimate, InputImages, optionalModel, pickModel, type ToolDef } from './kit.ts';
+import { estimate, InputImages, MODEL_ARG, optionalModel, pickModel, type ToolDef } from './kit.ts';
 
 const GeometryArgs = z.strictObject({
   image: InputImages.max(1),
@@ -54,6 +54,18 @@ export const render3d: ToolDef = {
   deferred: true,
   models: () => ['oasis/blender-cuda'],
   args: RenderArgs,
+  cli: [
+    {
+      name: 'scene',
+      kind: 'path',
+      required: true,
+      description: 'oasis-3d 的 scene.json（引用的 GLB 放同一目录）',
+    },
+    { name: 'width', kind: 'number', min: 64, max: 2048, description: '宽（像素，默认 512）' },
+    { name: 'height', kind: 'number', min: 64, max: 2048, description: '高（像素，默认 512）' },
+    { name: 'samples', kind: 'number', min: 1, max: 128, description: '采样数（默认 32）' },
+    { name: 'backend', kind: 'choice', choices: ['CUDA', 'OPTIX'], description: '渲染后端' },
+  ],
   modelOf: () => 'oasis/blender-cuda',
   async start() {
     throw new Error('渲染须经准备/上传/提交接口');
@@ -80,6 +92,11 @@ export const generate3d: ToolDef = {
   provider: 'fal',
   models: (config) => config.geometryModels ?? [],
   args: GeometryArgs,
+  cli: [
+    { name: 'image', kind: 'path', required: true, description: '一张参考图' },
+    { name: 'resolution', kind: 'choice', choices: ['512', '1024', '1536'], description: '精度' },
+    MODEL_ARG,
+  ],
   modelOf: pickModel,
   async start(deps, args, model) {
     if (!deps.fal) throw new Error('3D 供应商未配置');

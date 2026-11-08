@@ -2,6 +2,7 @@
 // 加一种节点：schema.ts 的 KindConfigs 加一行配置类型，写一个实现 NodeKindPlugin 的模块，在 kinds/index.ts 登记。
 import type { NodeBody, PlanNode, UpdateNodeBody } from '@oasis/contracts/task';
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
+import type { ToolStep } from '@oasis/contracts/tool-step';
 import type { KindConfigs, NodeKind, NodeRunPurpose, RunMeta } from '../../repo/schema.ts';
 import type { NodeOf, NodeRun, Snapshot } from '../../repo/task-store.ts';
 
@@ -14,6 +15,8 @@ export interface RunRequest {
   inputsFrom: { runId: string; as: string }[];
   /** 接着哪次运行的会话和工作区 */
   continueFrom?: string;
+  /** 工具运行（ADR 0025）：不起 AI，按顺序执行这些步骤 */
+  steps?: ToolStep[];
   meta: RunMeta;
 }
 
@@ -36,8 +39,10 @@ type CommonPlan = Omit<PlanNode, 'kind'>;
 export interface Rates {
   /** 这个型号干一次活的典型花费 */
   node(model: string): number;
-  /** 一次工具调用（按所选型号） */
-  tool(key: string, model?: string): number;
+  /** 一次工具调用（按所选型号；给了参数时单价随参数变的按参数取，如视频的清晰度） */
+  tool(key: string, model?: string, args?: Record<string, unknown>): number;
+  /** 工具的计费单位数写在哪个参数里（视频的秒数、生图的张数）；没有就按一次一个单位 */
+  per(key: string): { arg: string; default: number } | undefined;
   /** 一次发言 */
   speech: number;
   /** 一次运行的沙箱算力 */
@@ -53,6 +58,8 @@ export interface NodeKindPlugin<K extends NodeKind> {
 
   /** 方案节点自身的问题（如讨论里参与者重名）；没有返回空数组 */
   problems(plan: PlanOf<K>): string[];
+  /** 节点直接引用的上游文件（工具节点参数里写的 in/<上游>/…）：规划门要求有连线，并让上游必须交出它们 */
+  inputFiles?(plan: PlanOf<K>): { from: string; path: string }[];
   /** 用到的型号（规划门核对模型目录） */
   models(plan: PlanOf<K>): string[];
   /** 用到的工具不在目录里、型号不可选的问题 */
@@ -66,9 +73,18 @@ export interface NodeKindPlugin<K extends NodeKind> {
   /** 用户改还没开始的节点：这种节点自己的配置项；不属于它的项抛 400 */
   edit(node: NodeOf<K>, body: UpdateNodeBody): Partial<KindConfigs[K]>;
   /** 给工作流页看的、这种节点特有的部分 */
-  body(node: NodeOf<K>): Pick<NodeBody, 'tools' | 'discussion'>;
+  body(node: NodeOf<K>): Pick<NodeBody, 'tools' | 'discussion' | 'steps'>;
   /** 修改时能接着上一版的会话改（ADR 0022 的「接着改」） */
   readonly continuable: boolean;
+  /**
+   * 关卡没过、整体验收缺文件、用户的修改意见时能接着原会话让 AI 改（没有 AI 的工具节点不能，
+   * 要改只能重新跑一遍）
+   */
+  readonly reworkable: boolean;
+  /** 用的模型在当前网络用不了时换默认模型接着做（工具节点不用模型） */
+  readonly switchable: boolean;
+  /** 收用户的追问和补充要求（工具节点没有 AI，不收） */
+  readonly listens: boolean;
 
   // ---- 运行
 

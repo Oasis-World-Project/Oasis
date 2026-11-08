@@ -3,12 +3,13 @@
 import type { CatalogEntry, Playbook } from '@oasis/contracts/agent';
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { NodeKey, WorkflowPlan, type TaskSheet } from '@oasis/contracts/task';
+import type { ToolArgSpec } from '@oasis/contracts/tool-args';
 import { HttpError } from '@oasis/service-kit';
 import { z } from 'zod';
-import { validatePlan } from './plan.ts';
+import { validatePlan, withInputExpects } from './plan.ts';
 import type { ExecutionEnvironment } from '@oasis/contracts/harness';
 import { kindOf, type Rates } from './kinds/index.ts';
-import { toolRate, type Fallback, type PricedModel } from './quote.ts';
+import { argRate, toolRate, type Fallback, type PricedModel } from './quote.ts';
 
 const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro < 10_000 ? 4 : 2)}`;
 
@@ -50,6 +51,35 @@ export interface PlannerResources {
   environment?: ExecutionEnvironment;
 }
 
+/** 工具的参数写成一行给规划员看：名字、必填（*）和形状 */
+function argsText(args: ToolArgSpec[]): string {
+  const range = (a: ToolArgSpec) =>
+    a.min !== undefined || a.max !== undefined ? ` ${a.min ?? ''}–${a.max ?? ''}` : '';
+  const shape = (a: ToolArgSpec) => {
+    switch (a.kind) {
+      case 'number':
+        return `数字${range(a)}`;
+      case 'flag':
+        return 'true/false';
+      case 'choice':
+        return (a.choices ?? []).join('|');
+      case 'path':
+        return '文件';
+      case 'paths':
+        return `文件数组${range(a)}`;
+      case 'list':
+        return `数组${range(a)}`;
+      case 'json':
+        return 'JSON';
+      default:
+        return '文字';
+    }
+  };
+  return args
+    .map((a) => `${a.name}${a.required ? '*' : ''}（${shape(a)}；${a.description}）`)
+    .join('、');
+}
+
 export function resourceSections(input: PlannerResources): string[] {
   const TIER = { flagship: '旗舰', strong: '强力', fast: '快速' } as const;
   const models = input.catalog
@@ -71,21 +101,29 @@ export function resourceSections(input: PlannerResources): string[] {
   const tools = input.tools.length
     ? input.tools
         .map((t) => {
-          const rates = t.rates.length
-            ? t.rates
-                .map(
-                  (r) =>
-                    `${r.model} 每${t.unit}约 ${usd(r.costMicro)}${r.seconds ? `、一次约 ${r.seconds} 秒` : ''}`,
-                )
-                .join('；')
-            : `每${t.unit}约 ${usd(toolRate(t).costMicro)}`;
-          return `- ${t.key}（${t.name}）：${t.description}\n  型号与单价：${rates}`;
+          const rates = t.local
+            ? '沙箱里的本地操作，不花工具钱'
+            : t.rates.length
+              ? t.rates
+                  .map((r) => {
+                    // 单价随参数变的（视频按清晰度）列出各档，规划员按需要挑
+                    const tiers = r.by
+                      ? `（${r.by.arg} ${Object.entries(r.by.costMicro)
+                          .map(([value, micro]) => `${value} ${usd(micro)}`)
+                          .join('、')}）`
+                      : '';
+                    return `${r.model} 每${t.unit}约 ${usd(r.costMicro)}${tiers}${r.seconds ? `、一次约 ${r.seconds} 秒` : ''}`;
+                  })
+                  .join('；')
+              : `每${t.unit}约 ${usd(toolRate(t).costMicro)}`;
+          const args = t.args.length ? `\n  参数：${argsText(t.args)}` : '';
+          return `- ${t.key}（${t.name}）：${t.description}\n  ${t.local ? '' : '型号与单价：'}${rates}${args}`;
         })
         .join('\n')
     : '（现在没有可用的工具）';
   return [
     `【可以用的模型】\n${models}`,
-    `【可以用的工具】（节点里用 oasis-tool 调用；方案里写成 {"key":"image.generate","uses":预计计费单位数,"model":"型号"}）\n${tools}`,
+    `【可以用的工具】（干活节点里用 oasis-tool 调用，方案里写成 {"key":"image.generate","uses":预计计费单位数,"model":"型号"}；工具节点的步骤按「参数」写，* 是必填）\n${tools}`,
     ...(input.environment
       ? [
           `【沙箱环境】${JSON.stringify(input.environment)}\n节点依赖的本地能力写进 requires（只能填 capabilities 里有的）。`,
@@ -102,6 +140,22 @@ export function resourceSections(input: PlannerResources): string[] {
 /** 节点字段的说明（第一次规划和修改规划共用） */
 export const NODE_FORMAT_RULES = [
   '- kind：work 是一个 AI 在独立容器里做一件事，成果写到 out/；discussion 是几位参与者（各自的模型和立场）讨论几轮、由 model 汇总，只在真要权衡取舍时用。',
+  `- kind：tool 不用 AI，在容器里按顺序执行 steps，每步 {"tool":"工具名","args":{参数},"out":"out/结果路径"}（参数按工具的「参数」写；文件写容器里的路径：上游交来的 in/<上游 key>/…，用户素材 materials/…，前面步骤的结果 out/…），每步失败自动重试 2 次，不写 model。步骤和参数事先定得下来的机械活用 tool（按分镜生成视频再拼成片、转格式、抽帧、配音轨），便宜也不会跑偏；要看了内容才知道怎么做的用 work。例：${JSON.stringify(
+    {
+      key: 'cut',
+      title: '拼成片',
+      kind: 'tool',
+      goal: '把两段镜头拼成成片',
+      steps: [
+        {
+          tool: 'op.video.concat',
+          args: { in: ['in/shots/1.mp4', 'in/shots/2.mp4'] },
+          out: 'out/成片.mp4',
+        },
+      ],
+      expects: ['成片.mp4'],
+    },
+  )}`,
   '- 连线 from → to：上游的 out/ 放进下游的 in/<上游 key>/；没有连线的节点同时开跑。',
   `- deliverables：任务单上每样交付物都指定由哪个节点交出；那个节点要写 deliver（最终交付的文件路径，可用 * 通配，* 只匹配一层，** 递归）。deliver 只放任务单上的交付物；为做它产生的预览图、参考图、草稿只在节点之间传递，不写进 deliver。`,
   '- expects：节点必须产出的文件（可写 {"pattern":"图/*.png","minCount":4} 这类数量要求），系统会核对。checks：可选，节点交付前自己看一眼的几件事，最多 5 条。',
@@ -204,7 +258,8 @@ export function checkPlan(
   const parsed = PlannerPlan.safeParse(read.raw);
   if (!parsed.success) return { problems: issuesOf(parsed.error) };
   const problems = workflowProblems(parsed.data, sheet, catalog, tools, environment);
-  return problems.length > 0 ? { problems } : { plan: parsed.data };
+  // 工具节点直接用的上游文件成为上游必须交出的文件（ADR 0025）
+  return problems.length > 0 ? { problems } : { plan: withInputExpects(parsed.data) };
 }
 
 /**
@@ -268,10 +323,11 @@ export function estimatePlan(
   const rates: Rates = {
     node: (model) =>
       models.find((m) => m.providerModel === model)?.node?.costMicro ?? fallback.workRun,
-    tool(key, model) {
+    tool(key, model, args) {
       const tool = byKey.get(key);
-      return tool ? toolRate(tool, model).costMicro : 0;
+      return tool ? argRate(toolRate(tool, model), args) : 0;
     },
+    per: (key) => byKey.get(key)?.per,
     speech: fallback.speechRun,
     compute: fallback.computeRun,
   };

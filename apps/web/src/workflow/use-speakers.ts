@@ -39,12 +39,14 @@ export function useSpeakers() {
     [byProvider, models],
   );
 
-  /** 干活节点是它的模型；讨论节点是每位参与者 */
+  /** 干活节点是它的模型；讨论节点是每位参与者；工具节点没有 AI（显示齿轮） */
   const speakersOf = useCallback(
     (node: NodeBody): Speaker[] =>
-      node.discussion
-        ? node.discussion.participants.map((p) => ({ ...speakerOf(p.model), name: p.name }))
-        : [speakerOf(node.model)],
+      node.kind === 'tool'
+        ? []
+        : node.discussion
+          ? node.discussion.participants.map((p) => ({ ...speakerOf(p.model), name: p.name }))
+          : [speakerOf(node.model)],
     [speakerOf],
   );
 

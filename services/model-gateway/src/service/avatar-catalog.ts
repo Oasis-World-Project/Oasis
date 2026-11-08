@@ -43,6 +43,22 @@ export function createAvatarCatalog(client: LiveAvatarClient, now: () => number 
         models: [],
         defaultModel: null,
         rates: [],
+        args: [
+          { name: 'query', kind: 'text', description: '形象名字里的英文关键词' },
+          {
+            name: 'orientation',
+            kind: 'choice',
+            choices: ['landscape', 'portrait', 'any'],
+            description: '横屏、竖屏或都行',
+          },
+          {
+            name: 'gender',
+            kind: 'choice',
+            choices: ['male', 'female', 'any'],
+            description: '声音的性别',
+          },
+        ],
+        local: false,
       };
     },
 

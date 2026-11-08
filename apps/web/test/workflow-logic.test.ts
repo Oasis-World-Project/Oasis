@@ -1,8 +1,8 @@
 import type { NodeBody, TaskBody } from '@oasis/contracts/task';
 import { describe, expect, it } from 'vitest';
 import { layout, NODE_W } from '../src/workflow/layout.ts';
-import { keyFor } from '../src/workflow/NodeEditor.tsx';
-import { nodeActions, runLabel, stepsOf } from '../src/workflow/rules.ts';
+import { keyFor, parseSteps } from '../src/workflow/NodeEditor.tsx';
+import { nodeActions, runLabel, stepArgs, stepsOf } from '../src/workflow/rules.ts';
 
 describe('工作流自动布局', () => {
   it('按最长上游链分列，同一列里按上游的位置排', () => {
@@ -82,6 +82,28 @@ describe('节点现在能做什么（和 task 的规则一致）', () => {
     const done = task(t.nodes, t.edges, 'succeeded');
     expect(Object.values(nodeActions(done, t.nodes[1]!)).some(Boolean)).toBe(false);
   });
+
+  it('工具节点没有 AI：能改、能跑、能停，但不能追问', () => {
+    const tool = { ...node('t', 'running'), kind: 'tool' } as NodeBody;
+    expect(nodeActions(task([tool], []), tool)).toMatchObject({ stop: true, message: false });
+  });
+});
+
+describe('编辑工具节点的步骤', () => {
+  it('JSON 数组，按契约检查；问题说清楚', () => {
+    expect(
+      parseSteps('[{"tool":"op.video.concat","args":{"in":["a","b"]},"out":"out/c.mp4"}]'),
+    ).toEqual({
+      steps: [{ tool: 'op.video.concat', args: { in: ['a', 'b'] }, out: 'out/c.mp4' }],
+    });
+    expect(parseSteps('不是 JSON')).toEqual({ problem: '步骤要写成 JSON 数组' });
+    expect(parseSteps('[{"tool":"x","out":"c.mp4"}]')).toMatchObject({
+      problem: expect.stringContaining('步骤有问题') as string,
+    });
+    expect(parseSteps('[]')).toMatchObject({
+      problem: expect.stringContaining('步骤有问题') as string,
+    });
+  });
 });
 
 describe('运行过程写成普通话', () => {
@@ -121,6 +143,25 @@ describe('运行过程写成普通话', () => {
       },
       { kind: 'you', text: '加盏灯' },
     ]);
+  });
+
+  it('工具节点的步骤：本地操作（oasis-op、oasis-tool op.*）记成 op.* 工具；参数写成一行', () => {
+    const call = (callId: string, command: string) => ({
+      seq: 0,
+      kind: 'tool_call' as const,
+      data: { callId, name: 'bash', arguments: JSON.stringify({ command }) },
+      createdAt: at,
+    });
+    expect(
+      stepsOf([
+        call('a', 'oasis-op video.concat --in a.mp4,b.mp4 --out out/c.mp4'),
+        call('b', 'oasis-tool op.media.convert --in out/c.mp4 --out out/c.gif'),
+      ]).map((s) => (s.kind === 'did' ? s.tool : undefined)),
+    ).toEqual(['op.video.concat', 'op.media.convert']);
+    expect(
+      stepArgs({ args: { prompt: '猫'.repeat(70), in: ['out/1.mp4', 'out/2.mp4'], n: 2 } }),
+    ).toBe(`prompt=${'猫'.repeat(60)}…，in=["out/1.mp4","out/2.mp4"]，n=2`);
+    expect(stepArgs({ args: {} })).toBe('（没有参数）');
   });
 
   it('每次运行的名字', () => {

@@ -1,6 +1,18 @@
 // model-gateway 的内部接口：OpenAI 兼容的 chat completions、Jev 决策、沙箱运行用的临时 Key。
 // 只列出 Oasis 用到的字段，其余原样透传。
 import { z } from 'zod';
+import type { ToolArgSpec } from './tool-args.ts';
+
+/** 工具的一个命令行参数（定义见 tool-args.ts） */
+export const ToolArgSpecSchema: z.ZodType<ToolArgSpec> = z.object({
+  name: z.string(),
+  kind: z.enum(['text', 'number', 'flag', 'choice', 'path', 'paths', 'list', 'json']),
+  required: z.boolean().optional(),
+  choices: z.array(z.string()).optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  description: z.string(),
+});
 
 /** assistant 消息里的一次工具调用（OpenAI 格式）。 */
 export const ToolCall = z.looseObject({
@@ -149,6 +161,16 @@ export const ToolRate = z.object({
   seconds: z.number().int().nonnegative().nullable(),
   /** 数据来源：history 调用记录的中位数；catalog 供应商价格目录；fallback 工具目录的兜底值 */
   basis: z.enum(['history', 'catalog', 'fallback']),
+  /**
+   * 单价随某个参数变（视频按清晰度）：参数值 → 每个计费单位的单价（微美元）。参数没写或值不在表里
+   * 用 costMicro（参数默认值的单价）；旧版网关不返回时当作不随参数变。
+   */
+  by: z
+    .object({
+      arg: z.string(),
+      costMicro: z.record(z.string(), z.number().int().nonnegative()),
+    })
+    .optional(),
 });
 export type ToolRate = z.infer<typeof ToolRate>;
 
@@ -173,6 +195,15 @@ export const ToolEntry = z.object({
   /** 可以指定的模型（已去掉当前网络用不了的）；不需要模型的工具为空 */
   models: z.array(z.string()),
   defaultModel: z.string().nullable(),
+  /**
+   * 命令行参数（ADR 0025）：`oasis-tool <工具> --名字 值` 能写哪些参数。规划门按它校验工具节点，
+   * 工作流页按它展示；旧版网关不返回时当作没有，规划门只核对工具在不在。
+   */
+  args: z.array(ToolArgSpecSchema).default([]),
+  /** 计费单位数写在哪个参数里（视频的秒数、生图的张数）；没有就按一次一个单位 */
+  per: z.object({ arg: z.string(), default: z.number().positive() }).optional(),
+  /** 沙箱里的本地操作（op.*）：不调供应商、不花工具钱，只占沙箱算力 */
+  local: z.boolean().default(false),
 });
 export type ToolEntry = z.infer<typeof ToolEntry>;
 export const ToolList = z.object({ tools: z.array(ToolEntry) });

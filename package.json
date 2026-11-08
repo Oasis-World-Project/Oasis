@@ -23,6 +23,7 @@
     "stack:logs": "node scripts/compose.mjs logs",
     "sandbox:build": "node scripts/sandbox.mjs build",
     "sandbox:check": "node scripts/sandbox.mjs check",
+    "sandbox:check:ops": "node scripts/sandbox.mjs check-ops",
     "sandbox:build:3d": "node scripts/sandbox.mjs build-3d",
     "sandbox:check:3d": "node scripts/sandbox.mjs check-3d",
     "render:config": "node scripts/render.mjs config",

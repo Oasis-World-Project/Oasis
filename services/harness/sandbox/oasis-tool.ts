@@ -18,6 +18,7 @@ import {
   realpath,
   lstat,
 } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { createWriteStream, createReadStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
@@ -252,8 +253,13 @@ async function wait(id: string, out: string | undefined): Promise<void> {
   for (;;) {
     const job = (await request(`/tools/jobs/${encodeURIComponent(id)}`)) as ToolJob;
     if (job.status === 'completed' && job.result) return save(job.result, out);
-    if (job.status === 'failed' || job.status === 'uncertain')
-      throw new Error(`${job.error ?? '没做出来'}；任务号 ${id}，不要重新提交以免重复收费`);
+    // 供应商明确没做出来的不收费，可以重新提交；结果没确认的可能已经收费，不能重新提交
+    if (job.status === 'failed')
+      throw new Error(
+        `${job.error ?? '没做出来'}（任务号 ${id}，供应商没做出来，没有收费；要再试就加 --new true 重新提交）`,
+      );
+    if (job.status === 'uncertain')
+      throw new Error(`${job.error ?? '结果没确认'}；任务号 ${id}，不要重新提交以免重复收费`);
     if (Date.now() + POLL_MS > deadline) {
       const again = `oasis-tool wait ${id}${out ? ` --out ${JSON.stringify(out)}` : ''}`;
       say(`还没做好（任务号 ${id}）。先做别的，过一会儿运行：${again}`);
@@ -537,6 +543,15 @@ export async function main(argv: string[]): Promise<void> {
     const [id, ...more] = rest;
     if (!id) throw new Error('wait 后面要写任务号');
     return wait(id, parseArgs(more).out);
+  }
+  // 沙箱里的本地操作（ADR 0025）：工具目录里叫 op.*，由 oasis-op 做
+  if (command.startsWith('op.')) {
+    const child = spawn('oasis-op', [command.slice(3), ...rest], { stdio: 'inherit' });
+    process.exitCode = await new Promise<number>((done) => {
+      child.on('error', () => done(127));
+      child.on('close', (code) => done(code ?? 1));
+    });
+    return;
   }
   return run(command, rest);
 }

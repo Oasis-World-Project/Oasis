@@ -94,6 +94,52 @@ function fakeDsh(stdin: PassThrough, stdout: PassThrough) {
   });
 }
 
+/**
+ * 假的工具步骤执行器（ADR 0025）：按放进沙箱的 in/.oasis-steps.json 报告每一步；工具名带 fail 的那步失败，
+ * 带 slow 的那步要很久。和真的执行器一样做完之后不退出，等沙箱被销毁。
+ */
+function fakeSteps(stdout: PassThrough, files: { path: string; content: Buffer }[]) {
+  const file = files.find((f) => f.path === 'in/.oasis-steps.json');
+  const steps = file ? (JSON.parse(file.content.toString()) as { tool: string }[]) : [];
+  // 沙箱被销毁（输出关了）之后就不再说话
+  const send = (event: Record<string, unknown>) =>
+    stdout.writableEnded || stdout.write(`${JSON.stringify(event)}\n`);
+  void (async () => {
+    await sleep(20);
+    for (const [i, step] of steps.entries()) {
+      const callId = `step-${i + 1}-1`;
+      send({
+        type: 'tool_call',
+        callId,
+        name: 'bash',
+        arguments: JSON.stringify({ command: `oasis-tool ${step.tool}` }),
+      });
+      if (step.tool.includes('slow')) await sleep(5_000);
+      if (step.tool.includes('fail')) {
+        send({ type: 'tool_result', callId, ok: false, text: '', error: '供应商拒绝了提交' });
+        send({
+          type: 'done',
+          ok: false,
+          error: `第 ${i + 1} 步（${step.tool}）没做成：供应商拒绝了提交`,
+        });
+        return;
+      }
+      send({ type: 'tool_result', callId, ok: true, text: '已保存：out/x' });
+    }
+    send({ type: 'assistant_text', text: `${steps.length} 步都做完了。` });
+    send({ type: 'done', ok: true });
+  })();
+}
+
+/** 工具运行要的执行环境（有步骤执行器的镜像） */
+export const TOOL_ENVIRONMENT = {
+  image: 'oasis/harness-sandbox-base:test',
+  imageId: 'sha256:test',
+  software: { 'tool-steps': 'oasis-steps' },
+  capabilities: ['tool-steps'],
+  notes: [],
+};
+
 /** 假 dsh 收到的其他方法（initialize、session/resume、shutdown） */
 export const methods: string[] = [];
 
@@ -135,7 +181,8 @@ export const executor: Executor = {
     await sleep(fake.startDelayMs);
     const stdin = new PassThrough();
     const stdout = new PassThrough();
-    fakeDsh(stdin, stdout);
+    if (spec.command) fakeSteps(stdout, [...groups.values()].flat());
+    else fakeDsh(stdin, stdout);
     const sandbox: Sandbox = {
       async pause() {
         lifecycle.push('pause');

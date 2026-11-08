@@ -1,5 +1,6 @@
 // 节点详情（照原型 ⑬ 的单节点面板）：谁在做、状态和操作、关卡提醒、要做的事、上下游、
 // 工具和花费、产出文件、运行过程；还没开始或正在跑的节点可以追问、补要求。
+// 工具节点（ADR 0025）没有 AI：显示齿轮和要执行的步骤，不能追问。
 import type { NodeBody, TaskBody } from '@oasis/contracts/task';
 import { ArrowUp, Link2Off, X } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
@@ -19,8 +20,9 @@ import { ConfirmButton } from '../chat/parts.tsx';
 import { TaskDecisions } from '../chat/TaskCard.tsx';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
+import { ToolMark } from './NodeCard.tsx';
 import { RunHistory } from './RunHistory.tsx';
-import { nodeState, nodeActions, waitingOn } from './rules.ts';
+import { nodeState, nodeActions, stepArgs, waitingOn } from './rules.ts';
 import type { useSpeakers } from './use-speakers.ts';
 import type { WorkflowActions } from './use-workflow-actions.ts';
 
@@ -265,22 +267,28 @@ export function NodePanel({
     >
       <div className="flex flex-col gap-3 px-4 pb-3 pt-4">
         <div className="flex items-start gap-3">
-          <span
-            className="relative flex shrink-0"
-            style={{ width: 40 + (Math.min(who.length, 4) - 1) * 32, height: 40 }}
-          >
-            {who.slice(0, 4).map((s, i) => (
-              <span key={`${s.name}-${i}`} className="absolute top-0" style={{ left: i * 32 }}>
-                <AiAvatar mono={s.mono} glow={s.glow} size={40} glowing={live} />
-              </span>
-            ))}
-          </span>
+          {node.kind === 'tool' ? (
+            <ToolMark size={40} />
+          ) : (
+            <span
+              className="relative flex shrink-0"
+              style={{ width: 40 + (Math.min(who.length, 4) - 1) * 32, height: 40 }}
+            >
+              {who.slice(0, 4).map((s, i) => (
+                <span key={`${s.name}-${i}`} className="absolute top-0" style={{ left: i * 32 }}>
+                  <AiAvatar mono={s.mono} glow={s.glow} size={40} glowing={live} />
+                </span>
+              ))}
+            </span>
+          )}
           <div className="min-w-0 flex-1">
             <h2 className="m-0 text-[17px] font-medium leading-snug">{node.title}</h2>
             <p className="m-0 truncate text-[12.5px] text-ink-muted">
-              {node.discussion
-                ? `${who.map((s) => s.name).join('、')} 讨论 ${node.discussion.rounds} 轮`
-                : `${who[0]?.name ?? node.model}${node.role ? ` · ${node.role}` : ''}`}
+              {node.steps
+                ? `工具节点 · 不用 AI，按 ${node.steps.length} 步执行`
+                : node.discussion
+                  ? `${who.map((s) => s.name).join('、')} 讨论 ${node.discussion.rounds} 轮`
+                  : `${who[0]?.name ?? node.model}${node.role ? ` · ${node.role}` : ''}`}
             </p>
           </div>
           <button
@@ -411,6 +419,27 @@ export function NodePanel({
                 <li key={i}>{n}</li>
               ))}
             </ul>
+          </Section>
+        )}
+        {node.steps && (
+          <Section title="要执行的步骤（每步失败自动重试 2 次）">
+            <ol className="m-0 flex list-none flex-col gap-1.5 p-0">
+              {node.steps.map((step, i) => (
+                <li
+                  key={i}
+                  className="flex flex-col gap-0.5 rounded-item bg-glass-strong px-3 py-2"
+                >
+                  <span className="text-[13px] font-medium">
+                    {i + 1}. {speakers.toolName(step.tool)}
+                    <span className="font-normal text-ink-muted"> · {step.tool}</span>
+                  </span>
+                  <span className="break-all text-[12px] text-ink-muted">
+                    {stepArgs(step)}
+                    {step.out && ` → ${step.out}`}
+                  </span>
+                </li>
+              ))}
+            </ol>
           </Section>
         )}
         {node.discussion && (

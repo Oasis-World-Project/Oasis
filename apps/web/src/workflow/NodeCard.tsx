@@ -1,7 +1,7 @@
 // 工作流图上的一个节点（照原型 ⑬）：谁在做、标题、一行说明、状态；左边进线、右边出线。
 import type { NodeBody } from '@oasis/contracts/task';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
-import { Check } from 'lucide-react';
+import { Check, Cog } from 'lucide-react';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { NODE_H, NODE_W } from './layout.ts';
@@ -21,13 +21,15 @@ type FlowNodeData = {
 };
 export type FlowNode = Node<FlowNodeData, 'step'>;
 
-/** 卡片下面那行说明：讨论几轮、用什么工具、花了多少、关卡提醒 */
+/** 卡片下面那行说明：讨论几轮、几步工具、用什么工具、花了多少、关卡提醒 */
 function metaOf(node: NodeBody, toolName: (key: string) => string): string {
   if (node.warning) return '有提醒，点开查看';
   if (node.discussion) {
     const { round, rounds } = node.discussion;
     return round > 0 ? `讨论第 ${round} / ${rounds} 轮` : `讨论 ${rounds} 轮`;
   }
+  if (node.steps)
+    return `${node.steps.length} 步：${[...new Set(node.steps.map((s) => toolName(s.tool)))].join('、')}`;
   if (node.tools.length > 0) return `用${node.tools.map((t) => toolName(t.key)).join('、')}`;
   if (node.spentMicro > 0) return `已花 ${formatCost(node.spentMicro)}`;
   return node.role || node.goal;
@@ -56,6 +58,19 @@ function StatusMark({
       aria-hidden="true"
       className="size-2.5 shrink-0 rounded-full border-[1.5px] border-ink-muted/40"
     />
+  );
+}
+
+/** 工具节点的标记：齿轮，没有 AI 头像（ADR 0025） */
+export function ToolMark({ size }: { size: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{ width: size, height: size }}
+      className="flex shrink-0 items-center justify-center rounded-full bg-track text-ink-muted"
+    >
+      <Cog size={Math.round(size * 0.6)} strokeWidth={1.8} />
+    </span>
   );
 }
 
@@ -91,17 +106,21 @@ export function NodeCard({ data }: NodeProps<FlowNode>) {
         } ${ring} ${node.status === 'cancelled' ? 'opacity-55' : ''}`}
       >
         <span className="flex items-center gap-2">
-          <span
-            className="relative flex shrink-0"
-            style={{ width: 26 + (Math.min(speakers.length, 4) - 1) * 20 }}
-          >
-            {speakers.slice(0, 4).map((s, i) => (
-              <span key={`${s.name}-${i}`} className="absolute top-0" style={{ left: i * 20 }}>
-                <AiAvatar mono={s.mono} glow={s.glow} size={26} />
-              </span>
-            ))}
-            <span className="h-[26px]" />
-          </span>
+          {node.kind === 'tool' ? (
+            <ToolMark size={26} />
+          ) : (
+            <span
+              className="relative flex shrink-0"
+              style={{ width: 26 + (Math.min(speakers.length, 4) - 1) * 20 }}
+            >
+              {speakers.slice(0, 4).map((s, i) => (
+                <span key={`${s.name}-${i}`} className="absolute top-0" style={{ left: i * 20 }}>
+                  <AiAvatar mono={s.mono} glow={s.glow} size={26} />
+                </span>
+              ))}
+              <span className="h-[26px]" />
+            </span>
+          )}
           <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{node.title}</span>
           <StatusMark node={node} tone={status.tone} />
         </span>
@@ -115,6 +134,9 @@ export function NodeCard({ data }: NodeProps<FlowNode>) {
         >
           {node.kind === 'discussion' && (
             <span className="rounded-full bg-track px-1.5 text-ink-muted">讨论</span>
+          )}
+          {node.kind === 'tool' && (
+            <span className="rounded-full bg-track px-1.5 text-ink-muted">工具</span>
           )}
           {status.label}
           {status.tone === 'active' && (

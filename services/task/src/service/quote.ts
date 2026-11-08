@@ -59,6 +59,12 @@ export function toolRate(tool: ToolEntry, model?: string): ToolRate {
   );
 }
 
+/** 按这一步写的参数取单价：单价随参数变（视频的清晰度）且写了、表里有就用表里的，否则用默认单价 */
+export function argRate(rate: ToolRate, args?: Record<string, unknown>): number {
+  const value = rate.by ? args?.[rate.by.arg] : undefined;
+  return (value === undefined ? undefined : rate.by?.costMicro[String(value)]) ?? rate.costMicro;
+}
+
 /** 这一档用工具的哪个型号：省钱取最便宜的，精细取目录排第一的（最强），标准取中间价位 */
 export function tierToolRate(tool: ToolEntry, tier: BudgetTier): ToolRate {
   if (!tool.rates.length) return toolRate(tool);
