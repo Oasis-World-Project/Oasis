@@ -13,7 +13,6 @@ import type { Logger, ObjectStore, ServiceClient, StreamFile } from '@oasis/serv
 import type { AgentConnection, SandboxPackages } from '../../adapter/dsh.ts';
 import type { Executor, Sandbox } from '../../executor/executor.ts';
 import type { Run, RunOutcome, RunsRepo } from '../../repo/runs-repo.ts';
-import type { InspectionLimits } from '../file-inspection.ts';
 
 export interface RunDeps {
   repo: RunsRepo;
@@ -28,7 +27,6 @@ export interface RunDeps {
   modelBaseUrl: string;
   packages: SandboxPackages;
   batchEnv?: Record<string, string>;
-  inspectionLimits?: InspectionLimits;
   maxConcurrent: number;
   /** 显式验收超时；生产调用不设置。 */
   timeoutMs?: number;

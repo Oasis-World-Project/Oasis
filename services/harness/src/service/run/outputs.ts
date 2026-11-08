@@ -1,22 +1,20 @@
-// 读运行的产出和过程：运行事件、文字类产出（给关卡检查）、单个文件、音视频受信检查报告、
-// 运行中沙箱里的当前文件（节点自查 app.check 用）。
-import {
-  AudioCheckResult,
-  VideoCheckResult,
-  type RunEventBody,
-  type RunTextsBody,
-} from '@oasis/contracts/harness';
+// 读运行的产出和过程：运行事件、产出包的临时下载链接（给 inspector 检查）、单个文件、
+// 音视频受信检查报告、运行中沙箱里的当前文件（节点自查 app.check 用）。
+import { VideoCheckResult, type OutputsLink, type RunEventBody } from '@oasis/contracts/harness';
 import {
   archiveFile,
   contentTypeOf,
   extractFiles,
   HttpError,
   readLimited,
-  scanArchive,
 } from '@oasis/service-kit';
 import { SANDBOX_PATHS } from '../../adapter/dsh.ts';
-import { defaultInspectionLimits, inspectFiles } from '../file-inspection.ts';
 import { audioPath, isPrivateOutput, videoPath, type RunContext } from './shared.ts';
+
+/** 产出包下载链接的有效期：inspector 拿到就下载，15 分钟足够 */
+const LINK_SECONDS = 15 * 60;
+/** 读进内存的单个产出文件上限（检查用的网页文件等） */
+const FILE_MAX_BYTES = 20 * 1024 * 1024;
 
 /** 读对象存储里的受信检查报告；没有（历史运行、检查没做完）时返回 undefined */
 async function readReport<T>(
@@ -98,85 +96,16 @@ export function createOutputs(ctx: RunContext) {
       }));
     },
 
-    /** 文字类产出（给关卡检查用）：按路径顺序读，总长超过 maxChars 就截断 */
-    async texts(id: string, maxChars: number, paths?: string[]): Promise<RunTextsBody> {
+    /** 产出包的临时下载链接（交给 inspector 检查，ADR 0024）：只给这次运行的付费人和任务 */
+    async outputsLink(id: string, payerId: string, taskId: string): Promise<OutputsLink> {
       const row = await owned(id);
-      if (!row.outputKey) return { files: [], truncated: false };
-      const result: RunTextsBody = { files: [], truncated: false };
-      const limits = deps.inspectionLimits ?? defaultInspectionLimits;
-      const started = Date.now();
-      let left = maxChars;
-      // 没有受信报告（历史运行、检查没做完）时保留未检查
-      const audio = await readReport(
-        () => store.get(`runs/${id}/audio-check.json`),
-        (value) => AudioCheckResult.parse(value),
-      );
-      const video = await readReport(
-        () => store.get(`runs/${id}/video-check.json`),
-        (value) => VideoCheckResult.parse(value),
-      );
-      await scanArchive(
-        await store.read(row.outputKey),
-        deps.outputMaxBytes,
-        async (path, size, stream) => {
-          if (isPrivateOutput(path) || (paths !== undefined && !paths.includes(path))) return;
-          if (result.files.length >= limits.files || Date.now() - started > limits.totalMs) {
-            result.truncated = true;
-            return;
-          }
-          if (audioPath.test(path) || videoPath.test(path)) {
-            const reports = videoPath.test(path) ? video : audio;
-            const checked = reports?.files.find(
-              (file) =>
-                file.path === path &&
-                file.size === size &&
-                file.sha256 === row.outputs.find((output) => output.path === path)?.sha256 &&
-                Boolean(file.sha256),
-            );
-            result.files.push({
-              path,
-              valid: checked?.valid ?? false,
-              ...(checked?.valid
-                ? {
-                    evidenceScope: videoPath.test(path)
-                      ? ('decoded-video' as const)
-                      : ('decoded-audio' as const),
-                  }
-                : {}),
-              text: checked ? JSON.stringify(checked) : '',
-              ...(checked?.error
-                ? { error: checked.error }
-                : {
-                    warning: checked
-                      ? videoPath.test(path)
-                        ? '视频/工程/字幕已完成受信结构检查；画面、音画语义及 Shotcut 重导出仍需核对'
-                        : '音频已探测并解码；发音、歌词和音乐内容仍需试听核对'
-                      : '媒体检查未完成',
-                  }),
-            });
-            return;
-          }
-          if (size > limits.inputBytes) {
-            result.files.push({
-              path,
-              text: '',
-              valid: false,
-              error: '文件超过解析大小上限',
-              errorKind: 'incomplete',
-            });
-            return;
-          }
-          const checked = await inspectFiles(
-            [{ path, content: await readLimited(stream, limits.inputBytes) }],
-            left,
-            limits,
-          );
-          result.files.push(...checked.files);
-          result.truncated ||= checked.truncated;
-          left -= checked.files.reduce((sum, file) => sum + file.text.length, 0);
-        },
-      );
-      return result;
+      if (row.payerId !== payerId || row.taskId !== taskId || !row.outputKey)
+        throw new HttpError(404, 'outputs_not_found', '这次运行没有产出');
+      if (!store.sign) throw new HttpError(503, 'link_unavailable', '对象存储不支持临时下载链接');
+      return {
+        url: await store.sign(row.outputKey, 'GET', LINK_SECONDS),
+        expiresAt: new Date(Date.now() + LINK_SECONDS * 1000).toISOString(),
+      };
     },
 
     /** 读一个产出文件（下载成果、读规划员写的方案用）；没有这个文件时 404 */
@@ -187,7 +116,7 @@ export function createOutputs(ctx: RunContext) {
       return {
         content: await readLimited(
           archiveFile(await store.read(row.outputKey!), path),
-          deps.inspectionLimits?.inputBytes ?? 100 * 1024 * 1024,
+          FILE_MAX_BYTES,
         ),
         contentType: contentTypeOf(path),
       };

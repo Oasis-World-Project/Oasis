@@ -168,7 +168,7 @@ beforeEach(async () => {
             }),
             artifacts: service,
             store,
-            harness: {
+            inspector: {
               json: async () => ({ maxMicro: 500, maxMs: 60_000, idleMs: 20_000 }),
             } as unknown as ServiceClient,
             modelGateway: {

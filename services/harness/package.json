@@ -23,12 +23,7 @@
     "@oasis/live-page": "workspace:*",
     "@oasis/service-kit": "workspace:*",
     "drizzle-orm": "catalog:",
-    "fast-xml-parser": "5.11.2",
-    "fflate": "catalog:",
-    "parse5": "catalog:",
     "pg": "catalog:",
-    "sharp": "0.35.5",
-    "unpdf": "1.9.1",
     "zod": "catalog:"
   },
   "devDependencies": {

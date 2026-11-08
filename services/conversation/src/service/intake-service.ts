@@ -2,7 +2,7 @@
 // 用户确认 → 交给 task 建任务（之后由规划员排工作流）。问需求不走 harness：直接经 model-gateway 调模型。
 import { randomUUID } from 'node:crypto';
 import { ModelRoute } from '@oasis/contracts/agent';
-import { MaterialInspectResult } from '@oasis/contracts/harness';
+import type { MaterialInspectResult } from '@oasis/contracts/inspector';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import {
   AUTO_ANSWER,
@@ -20,6 +20,7 @@ import { z } from 'zod';
 import type { Conversation, ConversationRepo, Intake, Message } from '../repo/conversation-repo.ts';
 import { attachmentsOf, mergeMaterials, withAttachmentNote } from './attachments.ts';
 import { line, tokensOf, type ContextService, type ConversationContext } from './context.ts';
+import type { MaterialReader } from './materials.ts';
 import {
   FALLBACK_SHEET_INTRO,
   fallbackSheet,
@@ -114,7 +115,8 @@ function intakeActions(deps: {
   agent: ServiceClient;
   modelGateway: ServiceClient;
   task: ServiceClient;
-  harness?: ServiceClient;
+  /** 读用户上传的素材（canvas 签链接、inspector 解析，ADR 0024）；没配时不读 */
+  readMaterials?: MaterialReader;
   config: IntakeConfig;
   logger: Logger;
 }) {
@@ -396,7 +398,7 @@ function intakeActions(deps: {
     resuming = false,
     reselected = false,
   ): Promise<Message[]> {
-    if (deps.harness && intake.materials.length) {
+    if (deps.readMaterials && intake.materials.length) {
       const cached = intake.turns
         .filter((t) => t.kind === 'materials')
         .filter((t) => t.parser === 1);
@@ -407,11 +409,7 @@ function intakeActions(deps: {
         latest.files.length !== ids.length ||
         !ids.every((id) => latest.files.some((f) => f.uploadId === id))
       ) {
-        const result = await deps.harness.json('POST', '/internal/materials/inspect', {
-          body: { ownerId, ids },
-          schema: MaterialInspectResult,
-          requestId,
-        });
+        const result = await deps.readMaterials(ownerId, ids, requestId);
         const files = await Promise.all(
           result.files.map((file) => describeImage(file, ownerId, requestId)),
         );
@@ -454,7 +452,7 @@ function intakeActions(deps: {
         if (
           reply.type === 'sheet' &&
           !reselected &&
-          deps.harness &&
+          deps.readMaterials &&
           materials.some((m) => !read.has(m.uploadId))
         )
           return step(conversation, intake, ownerId, requestId, skipped, resuming, true);

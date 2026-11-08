@@ -1,8 +1,9 @@
-// canvas 的接口。/v1/* 经 gateway 给前端（只能看自己的）；/internal/* 给 conversation 和 harness。
+// canvas 的接口。/v1/* 经 gateway 给前端（只能看自己的）；/internal/* 给 conversation、task、harness 等。
 import {
   AnnotationList,
   ArtifactQuery,
   UploadDeleteBody,
+  UploadLinksBody,
   UploadLookupBody,
   UploadQuery,
 } from '@oasis/contracts/canvas';
@@ -38,7 +39,8 @@ export function registerRoutes(
     uploads: UploadService;
     artifacts: ArtifactService;
     store: ObjectStore;
-    harness?: ServiceClient;
+    /** 模型预览前的检查（ADR 0024） */
+    inspector?: ServiceClient;
     task?: ServiceClient;
     /** 数字人会话（ADR 0013）；没配时不提供 */
     modelGateway?: ServiceClient;
@@ -51,14 +53,14 @@ export function registerRoutes(
     archive?: { bytes: number; files: number };
   },
 ): void {
-  const { uploads, artifacts, store, harness } = services;
+  const { uploads, artifacts, store, inspector } = services;
   if (services.modelGateway) {
     registerAvatarRoutes(app, { artifacts, modelGateway: services.modelGateway });
   }
   const previewLimits = options.preview ?? defaultPreviewLimits;
   const preview = createPreviewService(previewLimits);
   const models = services.task
-    ? createModelPreviewService({ artifacts, uploads, store, task: services.task, harness })
+    ? createModelPreviewService({ artifacts, uploads, store, task: services.task, inspector })
     : undefined;
   let archiving = false;
   let uploading = 0;
@@ -217,6 +219,12 @@ export function registerRoutes(
   app.post('/internal/uploads/lookup', async (request) => {
     const { ownerId, ids, partial, claim } = parseWith(UploadLookupBody, request.body);
     return { uploads: await uploads.lookup(ownerId, ids, partial, claim) };
+  });
+
+  /** 临时下载链接：conversation 交给 inspector 解析素材（ADR 0024） */
+  app.post('/internal/uploads/links', async (request) => {
+    const { ownerId, ids } = parseWith(UploadLinksBody, request.body);
+    return { uploads: await uploads.links(ownerId, ids) };
   });
 
   /** 彻底删除文件：对象和记录都删（消息被删、群被解散时 conversation 调用，2026-11-05 真删除） */

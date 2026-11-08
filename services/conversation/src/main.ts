@@ -17,6 +17,7 @@ import { createConversationRepo } from './repo/conversation-repo.ts';
 import { createDmService } from './service/dm-service.ts';
 import { createContext } from './service/context.ts';
 import { createIntakeService } from './service/intake-service.ts';
+import { createMaterialReader } from './service/materials.ts';
 import { createTaskNotices } from './service/task-notices.ts';
 
 await startService({
@@ -64,13 +65,17 @@ await startService({
       logger,
     });
     const task = createServiceClient('task', config.TASK_URL, { timeoutMs: 10_000 });
+    const canvas = createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 5_000 });
     const intake = createIntakeService({
       repo,
       context,
       agent,
       modelGateway,
       task,
-      harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 45_000 }),
+      readMaterials: createMaterialReader({
+        canvas,
+        inspector: createServiceClient('inspector', config.INSPECTOR_URL, { timeoutMs: 45_000 }),
+      }),
       config: {
         detectModel: config.TASK_DETECT_MODEL,
         detectHigh: config.TASK_DETECT_HIGH,
@@ -82,7 +87,6 @@ await startService({
       },
       logger,
     });
-    const canvas = createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 5_000 });
     const dms = createDmService({
       repo,
       agent,

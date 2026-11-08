@@ -257,6 +257,8 @@ export const repo: RunsRepo = {
 
 export const stored = new Map<string, Buffer>();
 const store: ObjectStore = {
+  sign: async (key, method, expiresIn) =>
+    `http://s3.test/oasis-harness/${key}?method=${method}&expires=${expiresIn}`,
   delete: async (key) => {
     stored.delete(key);
   },

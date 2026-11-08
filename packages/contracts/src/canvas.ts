@@ -47,6 +47,14 @@ export const UploadDeleteBody = z.object({
   ids: z.array(z.uuid()).min(1).max(1000),
 });
 export const UploadLookupResult = z.object({ uploads: z.array(UploadBody) });
+/** 内部：这个人的这些文件的临时下载链接（交给 inspector 解析素材，ADR 0024）；必须都在、都是他的 */
+export const UploadLinksBody = z.object({
+  ownerId: z.uuid(),
+  ids: z.array(z.uuid()).min(1).max(20),
+});
+export const UploadLinksResult = z.object({
+  uploads: z.array(UploadBody.extend({ url: z.url() })),
+});
 
 /** 交给工作流的素材：任务上记着，规划员和每个节点运行时放进沙箱的 materials/ 下 */
 export const Material = z.object({

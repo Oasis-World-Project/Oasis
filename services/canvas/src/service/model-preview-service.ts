@@ -20,7 +20,7 @@ export function createModelPreviewService(deps: {
   uploads: UploadService;
   store: ObjectStore;
   task: ServiceClient;
-  harness?: ServiceClient;
+  inspector?: ServiceClient;
 }) {
   const cache = new Map<string, Promise<ReturnType<typeof ModelInspectionResult.parse>>>();
   const posters = new Map<string, Promise<ReturnType<typeof ModelPosterResult.parse>>>();
@@ -130,13 +130,13 @@ export function createModelPreviewService(deps: {
   async function posterFile(user: string, id: string) {
     const linked = await links(user, id),
       row = linked.poster;
-    if (!row || !deps.harness)
+    if (!row || !deps.inspector)
       throw new HttpError(404, 'model_poster_missing', '没有可用的配套封面');
     const saved = await bytes(row, () => deps.store.read(row.objectKey));
     let pending = posters.get(saved.sha256);
     if (!pending) {
       if (posters.size >= 32) posters.delete(posters.keys().next().value!);
-      pending = deps.harness.json('POST', '/internal/models/poster', {
+      pending = deps.inspector.json('POST', '/internal/models/poster', {
         body: {
           name: `poster${posix.extname(row.name).toLowerCase()}`,
           sha256: saved.sha256,
@@ -239,14 +239,14 @@ export function createModelPreviewService(deps: {
       ...(poster ? { poster } : {}),
       ...(turntable ? { turntable } : {}),
     };
-    if (!model || !deps.harness || model.size > L.bytes)
+    if (!model || !deps.inspector || model.size > L.bytes)
       return { ...result, warning: '此原件暂不支持交互预览，可查看配套图片/视频或手动下载原件。' };
     try {
       const saved = await bytes(model, model.read);
       let pending = cache.get(saved.sha256);
       if (!pending) {
         if (cache.size >= 32) cache.delete(cache.keys().next().value!);
-        pending = deps.harness.json('POST', '/internal/models/inspect', {
+        pending = deps.inspector.json('POST', '/internal/models/inspect', {
           body: { sha256: saved.sha256, contentBase64: saved.content.toString('base64') },
           schema: ModelInspectionResult,
         });

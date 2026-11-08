@@ -27,7 +27,7 @@ function setup() {
       throw new Error('upstream owner check denied');
     },
   } as unknown as ServiceClient;
-  const harness = {
+  const inspector = {
     json: async (_method: string, path: string, input: { body: { sha256: string } }) => {
       calls.push(input.body);
       return path.endsWith('/poster')
@@ -50,7 +50,7 @@ function setup() {
   } as unknown as ServiceClient;
   const artifacts = createArtifactService({ repo, uploads: memoryUploads(), store, task, logger });
   const uploads = createUploadService({ repo: memoryUploads(), store, logger });
-  const models = createModelPreviewService({ artifacts, uploads, store, task, harness });
+  const models = createModelPreviewService({ artifacts, uploads, store, task, inspector });
   async function add(path: string, content: Buffer | string, extra: object = {}) {
     const id = randomUUID(),
       body = Buffer.from(content),
@@ -91,7 +91,7 @@ function setup() {
     repo,
     add,
     task,
-    harness,
+    inspector,
     taskHeaders: () => taskHeaders,
     badInspection: () => {
       inspectedSha = '0'.repeat(64);

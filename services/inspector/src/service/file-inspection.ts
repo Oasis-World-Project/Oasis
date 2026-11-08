@@ -1,6 +1,6 @@
 // 格式解析在独立 worker 中完成；逐文件错误、资源上限和总字符上限对调用方可见。
 import { Worker } from 'node:worker_threads';
-import type { RunTextsBody } from '@oasis/contracts/harness';
+import type { InspectedFile, InspectedFiles } from '@oasis/contracts/inspector';
 import {
   GeometryPreviewReport,
   MODEL_PREVIEW_LIMITS,
@@ -32,7 +32,6 @@ export const defaultInspectionLimits: InspectionLimits = {
   totalMs: 30000,
   files: 1000,
 };
-export type InspectedFile = RunTextsBody['files'][number];
 
 async function inspect(
   file: { path: string; content: Buffer },
@@ -78,8 +77,8 @@ export async function inspectFiles(
   files: { path: string; content: Buffer }[],
   maxChars: number,
   limits = defaultInspectionLimits,
-): Promise<RunTextsBody> {
-  const result: RunTextsBody = { files: [], truncated: false };
+): Promise<InspectedFiles> {
+  const result: InspectedFiles = { files: [], truncated: false };
   let left = maxChars;
   const start = Date.now();
   for (const [index, file] of files.entries()) {

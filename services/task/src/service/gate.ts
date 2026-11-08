@@ -1,5 +1,5 @@
 // 节点出口的轻量关卡（ADR 0017）：只挡明显坏掉的成果，结果确定、不调模型。
-// 1. 文件齐不齐：产出非空，方案写明的文件都在，数量和图片尺寸符合，文件能解析（harness 的解析报告）。
+// 1. 文件齐不齐：产出非空，方案写明的文件都在，数量和图片尺寸符合，文件能解析（inspector 的解析报告）。
 // 2. 网页能不能打开：有 oasis-app.json 的成果在隔离浏览器里跑一遍（节点自己也能用 app.check 跑同一套）；
 //    交给用户的网页没配 oasis-app.json 也算没满足（画布里不能运行、浏览器检查也跑不了）。
 // 3. 音视频能不能播放：完整解码一遍。
@@ -9,9 +9,10 @@ import {
   AudioCheckResult,
   VideoCheckResult,
   ApplicationCheckResult,
-  RunTextsBody,
+  OutputsLink,
   type RunOutputFile,
 } from '@oasis/contracts/harness';
+import { InspectedFiles, type InspectedFile } from '@oasis/contracts/inspector';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import type { ExpectedFile } from '@oasis/contracts/task';
 import type { z } from 'zod';
@@ -46,7 +47,7 @@ function troubleOf(err: unknown): string {
 export function checkRules(
   outputs: RunOutputFile[],
   expects: ExpectedFile[],
-  inspected?: RunTextsBody['files'],
+  inspected?: InspectedFile[],
 ): string[] {
   if (outputs.length === 0) return ['out/ 里没有任何产出文件'];
   const unmet: string[] = [];
@@ -155,35 +156,62 @@ const MEDIA = [
     schema: VideoCheckResult,
   },
 ] as const;
+const isMedia = (path: string) => MEDIA.some((kind) => kind.pattern.test(path));
 
-export function createGate(deps: { harness: ServiceClient; logger: Logger }) {
-  const { harness, logger } = deps;
-  const call = <T>(input: GateInput, path: string, body: unknown, schema: z.ZodType<T>) =>
-    harness.json('POST', path, {
-      body,
-      schema,
-      // 检查不设时限（2026-11-04 用户决定）：用户停止/取消节点时由 signal 断开
-      timeoutMs: null,
-      ...(input.signal ? { signal: input.signal } : {}),
-    });
+/** 音视频的解码结果：数量按它算（并进文件解析报告），未满足和未检查照旧排在最后 */
+interface MediaFindings {
+  inspected: InspectedFile[];
+  unmet: string[];
+  unchecked: string[];
+}
 
-  /** 文件能不能解析、数量和尺寸：harness 的解析报告，不读正文 */
-  async function checkFiles(input: GateInput, unmet: string[], unchecked: string[]) {
-    const report = await call(
-      input,
-      `/internal/runs/${input.runId}/texts`,
-      { paths: input.outputs.map((f) => f.path), maxChars: 1 },
-      RunTextsBody,
+export function createGate(deps: {
+  harness: ServiceClient;
+  inspector: ServiceClient;
+  logger: Logger;
+}) {
+  const { harness, inspector, logger } = deps;
+  const options = <T>(input: GateInput, body: unknown, schema: z.ZodType<T>) => ({
+    body,
+    schema,
+    // 检查不设时限（2026-11-04 用户决定）：用户停止/取消节点时由 signal 断开
+    timeoutMs: null,
+    ...(input.signal ? { signal: input.signal } : {}),
+  });
+
+  /** 这次运行的产出包：harness 签发临时下载链接，inspector 拿它去读（ADR 0024） */
+  const outputsOf = (input: GateInput) =>
+    harness.json(
+      'POST',
+      `/internal/runs/${input.runId}/outputs/link`,
+      options(input, { payerId: input.payerId, taskId: input.taskId }, OutputsLink),
     );
+
+  /** 文件能不能解析、数量和尺寸：inspector 的解析报告，不读正文 */
+  async function checkFiles(
+    input: GateInput,
+    media: InspectedFile[],
+    unmet: string[],
+    unchecked: string[],
+  ) {
+    const paths = input.outputs.map((f) => f.path).filter((path) => !isMedia(path));
+    const report = paths.length
+      ? await inspector.json(
+          'POST',
+          '/internal/files/check',
+          options(input, { source: await outputsOf(input), paths, maxChars: 1 }, InspectedFiles),
+        )
+      : { files: [], truncated: false };
     for (const file of report.files)
       if (file.error && file.valid === false && file.errorKind !== 'incomplete')
         unmet.push(`${file.path}：${file.error}`);
+    const inspected = [...report.files, ...media];
     unmet.push(
-      ...checkRules(input.outputs, input.expects, report.files).filter((u) => !unmet.includes(u)),
+      ...checkRules(input.outputs, input.expects, inspected).filter((u) => !unmet.includes(u)),
     );
     for (const output of input.outputs)
       if (
-        !report.files.some((f) => f.path === output.path) &&
+        !inspected.some((f) => f.path === output.path) &&
         input.expects.some(
           (e) => typeof e !== 'string' && patternRegExp(e.pattern).test(output.path),
         )
@@ -192,34 +220,42 @@ export function createGate(deps: { harness: ServiceClient; logger: Logger }) {
   }
 
   async function checkApplication(input: GateInput, unmet: string[]) {
-    const result = await call(
-      input,
+    const result = await harness.json(
+      'POST',
       `/internal/runs/${input.runId}/application-check`,
-      { payerId: input.payerId, taskId: input.taskId },
-      ApplicationCheckResult,
+      options(input, { payerId: input.payerId, taskId: input.taskId }, ApplicationCheckResult),
     );
     if (!result.passed) unmet.push(`浏览器实际运行检查失败：${result.reason ?? '原因未返回'}`);
   }
 
-  async function checkMedia(
-    input: GateInput,
-    kind: (typeof MEDIA)[number],
-    unmet: string[],
-    unchecked: string[],
-  ) {
+  async function checkMedia(input: GateInput, kind: (typeof MEDIA)[number], found: MediaFindings) {
     const media = input.outputs.filter((file) => kind.pattern.test(file.path));
     if (!media.length) return;
-    const result = await call(
-      input,
+    const result = await harness.json(
+      'POST',
       `/internal/runs/${input.runId}/${kind.name}-check`,
-      { payerId: input.payerId, taskId: input.taskId },
-      kind.schema,
+      options(input, { payerId: input.payerId, taskId: input.taskId }, kind.schema),
     );
     for (const file of media) {
       const checked = result.files.find((item) => item.path === file.path);
-      if (!checked) unchecked.push(`${kind.label}「${file.path}」未完成解码检查`);
-      else if (!checked.valid)
-        unmet.push(`${kind.label}「${file.path}」${checked.error ?? '探测或完整解码失败'}`);
+      if (!checked) {
+        found.unchecked.push(`${kind.label}「${file.path}」未完成解码检查`);
+        found.inspected.push({
+          path: file.path,
+          text: '',
+          valid: false,
+          warning: '媒体检查未完成',
+        });
+      } else {
+        if (!checked.valid)
+          found.unmet.push(`${kind.label}「${file.path}」${checked.error ?? '探测或完整解码失败'}`);
+        found.inspected.push({
+          path: file.path,
+          text: '',
+          valid: checked.valid,
+          ...(checked.error ? { error: checked.error } : {}),
+        });
+      }
     }
   }
 
@@ -246,13 +282,18 @@ export function createGate(deps: { harness: ServiceClient; logger: Logger }) {
       if (unmet.length > 0) return { unmet };
       unmet.push(...checkWebManifest(input.outputs, input.deliver ?? []));
       const unchecked: string[] = [];
-      await guarded(input, '文件解析检查', unchecked, () => checkFiles(input, unmet, unchecked));
+      const media: MediaFindings = { inspected: [], unmet: [], unchecked: [] };
+      for (const kind of MEDIA)
+        await guarded(input, `${kind.label}解码检查`, media.unchecked, () =>
+          checkMedia(input, kind, media),
+        );
+      await guarded(input, '文件解析检查', unchecked, () =>
+        checkFiles(input, media.inspected, unmet, unchecked),
+      );
       if (input.outputs.some((file) => APP_MANIFEST.test(file.path)))
         await guarded(input, '浏览器实际运行检查', unchecked, () => checkApplication(input, unmet));
-      for (const kind of MEDIA)
-        await guarded(input, `${kind.label}解码检查`, unchecked, () =>
-          checkMedia(input, kind, unmet, unchecked),
-        );
+      unmet.push(...media.unmet);
+      unchecked.push(...media.unchecked);
       return { unmet, ...(unchecked.length ? { unchecked } : {}) };
     },
   };

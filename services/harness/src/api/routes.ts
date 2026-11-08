@@ -1,63 +1,26 @@
 // harness 只有内部接口（gateway 不转发 /internal）：task 等服务用它启动运行、看进度、追问、停止、取消。
-import {
-  RunInspectBody,
-  MaterialInspectBody,
-  RunMessageBody,
-  StartRunBody,
-} from '@oasis/contracts/harness';
+import { OutputsLinkBody, RunMessageBody, StartRunBody } from '@oasis/contracts/harness';
 import { parseWith, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import { WebsiteTestArgs } from '@oasis/contracts/ui-test';
 import type { RunService } from '../service/run-service.ts';
 import type { PreviewService } from '../service/preview-service.ts';
-import type { MaterialInspector } from '../service/material-inspection.ts';
-import { ModelInspectionBody, MODEL_PREVIEW_LIMITS } from '@oasis/contracts/model-preview';
-import {
-  createModelPreviewInspector,
-  createModelPosterInspector,
-} from '../service/file-inspection.ts';
 
 const RunParams = z.object({ runId: z.uuid() });
 const FileParams = RunParams.extend({ '*': z.string().min(1).max(500) });
-const TextsQuery = z.object({
-  maxChars: z.coerce.number().int().positive().max(50_000).default(8_000),
-});
 const EventsQuery = z.object({
   after: z.coerce.number().int().min(-1).default(-1),
   limit: z.coerce.number().int().positive().max(1000).default(200),
 });
 
-export function registerRoutes(
-  app: ServiceApp,
-  runs: RunService,
-  previews?: PreviewService,
-  inspectMaterials?: MaterialInspector,
-): void {
-  const inspectModel = createModelPreviewInspector();
-  const inspectPoster = createModelPosterInspector();
+export function registerRoutes(app: ServiceApp, runs: RunService, previews?: PreviewService): void {
   app.get('/internal/execution/environment', () => runs.environment());
-  app.post(
-    '/internal/models/inspect',
-    { bodyLimit: Math.ceil(MODEL_PREVIEW_LIMITS.bytes / 3) * 4 + 1000 },
-    (request) => inspectModel(parseWith(ModelInspectionBody, request.body)),
-  );
-  app.post(
-    '/internal/models/poster',
-    { bodyLimit: Math.ceil(MODEL_PREVIEW_LIMITS.bytes / 3) * 4 + 1000 },
-    (request) =>
-      inspectPoster(
-        parseWith(
-          ModelInspectionBody.extend({
-            name: z.enum(['poster.png', 'poster.jpg', 'poster.jpeg', 'poster.webp']),
-          }),
-          request.body,
-        ),
-      ),
-  );
-  if (inspectMaterials)
-    app.post('/internal/materials/inspect', async (request) =>
-      inspectMaterials(parseWith(MaterialInspectBody, request.body)),
-    );
+  /** 产出包的临时下载链接：交给 inspector 检查（ADR 0024） */
+  app.post('/internal/runs/:runId/outputs/link', async (request) => {
+    const { runId } = parseWith(RunParams, request.params);
+    const { payerId, taskId } = parseWith(OutputsLinkBody, request.body);
+    return runs.outputsLink(runId, payerId, taskId);
+  });
   for (const kind of ['audio', 'video'] as const) {
     app.post(`/internal/runs/:runId/${kind}-check`, async (request) => {
       const { runId } = parseWith(RunParams, request.params);
@@ -138,19 +101,6 @@ export function registerRoutes(
     const { runId } = parseWith(RunParams, request.params);
     const { after, limit } = parseWith(EventsQuery, request.query);
     return { events: await runs.events(runId, after, limit) };
-  });
-
-  /** 文字类产出（给关卡检查用），总长最多 maxChars */
-  app.get('/internal/runs/:runId/texts', async (request) => {
-    const { runId } = parseWith(RunParams, request.params);
-    const { maxChars } = parseWith(TextsQuery, request.query);
-    return runs.texts(runId, maxChars);
-  });
-
-  app.post('/internal/runs/:runId/texts', { bodyLimit: 2 * 1024 * 1024 }, async (request) => {
-    const { runId } = parseWith(RunParams, request.params);
-    const { paths, maxChars } = parseWith(RunInspectBody, request.body);
-    return runs.texts(runId, maxChars, paths);
   });
 
   /** 读一个产出文件（out/ 下的相对路径） */

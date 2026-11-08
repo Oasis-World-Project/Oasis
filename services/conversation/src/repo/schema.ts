@@ -1,7 +1,7 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
 import type { IntakeQuestion } from '@oasis/contracts/conversation';
 import type { Material } from '@oasis/contracts/canvas';
-import type { MaterialInspectResult } from '@oasis/contracts/harness';
+import type { MaterialInspectResult } from '@oasis/contracts/inspector';
 import type { TaskSheet } from '@oasis/contracts/task';
 import {
   bigint,

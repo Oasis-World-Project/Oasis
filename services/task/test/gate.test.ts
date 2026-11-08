@@ -1,6 +1,7 @@
 import { HttpError, type ServiceClient } from '@oasis/service-kit';
 import { pino } from 'pino';
 import { describe, expect, it } from 'vitest';
+import type { ZodType } from 'zod';
 import { checkRules, checkWebManifest, createGate } from '../src/service/gate.ts';
 
 describe('交给用户的网页要配 oasis-app.json', () => {
@@ -90,15 +91,18 @@ describe('关卡的规则检查', () => {
   });
 });
 
-/** 假的 harness：按路径返回固定内容，记下请求 */
-function fakeHarness(answer: (path: string) => unknown) {
+/** 假的服务：按路径返回固定内容，记下请求；和真的客户端一样按约定的格式校验回答 */
+function fakeService(answer: (path: string) => unknown) {
   const calls: { path: string; body: unknown }[] = [];
   const client = {
-    async json(_method: string, path: string, options?: { body?: unknown }) {
+    async json(_method: string, path: string, options?: { body?: unknown; schema?: ZodType }) {
       calls.push({ path, body: options?.body });
       const result = answer(path);
       if (result instanceof Error) throw result;
-      return result;
+      if (!options?.schema || result === undefined) return result;
+      const checked = options.schema.safeParse(result);
+      if (!checked.success) throw new HttpError(502, 'upstream_error', '返回的数据格式不对');
+      return checked.data;
     },
     stream: () => Promise.reject(new Error('不用')),
   } as unknown as ServiceClient;
@@ -115,23 +119,43 @@ const input = {
   outputs: [{ path: '介绍.md', size: 50 }],
   expects: ['*.md'],
 };
-const gateWith = (harness: ServiceClient) =>
-  createGate({ harness, logger: pino({ level: 'silent' }) });
-const texts = (files: unknown[] = []) => ({ files, truncated: false });
+/** harness 签发的产出包链接 */
+const LINK = {
+  url: 'http://127.0.0.1:8333/oasis-harness/runs/run-1/outputs.tar?sig',
+  expiresAt: '2026-01-01T00:15:00.000Z',
+};
+/** harness：产出包链接、浏览器和音视频检查（各测试可以覆盖） */
+const harnessWith = (answer: (path: string) => unknown = () => undefined) =>
+  fakeService((path) => (path.endsWith('/outputs/link') ? LINK : answer(path)));
+const parsed = (files: unknown[] = []) => ({ files, truncated: false });
+const gateWith = (harness: ServiceClient, inspector: ServiceClient) =>
+  createGate({ harness, inspector, logger: pino({ level: 'silent' }) });
 
 describe('轻量关卡（ADR 0017）', () => {
-  it('普通文字成果只取解析报告，不读正文、不调模型', async () => {
-    const harness = fakeHarness(() => texts([{ path: '介绍.md', text: '', valid: true }]));
-    expect(await gateWith(harness.client).check(input)).toEqual({ unmet: [] });
+  it('普通文字成果只取 inspector 的解析报告，不读正文、不调模型', async () => {
+    const harness = harnessWith();
+    const inspector = fakeService(() => parsed([{ path: '介绍.md', text: '', valid: true }]));
+    expect(await gateWith(harness.client, inspector.client).check(input)).toEqual({ unmet: [] });
     expect(harness.calls).toEqual([
-      { path: '/internal/runs/run-1/texts', body: { paths: ['介绍.md'], maxChars: 1 } },
+      { path: '/internal/runs/run-1/outputs/link', body: { payerId: PAYER, taskId: TASK } },
+    ]);
+    expect(inspector.calls).toEqual([
+      {
+        path: '/internal/files/check',
+        body: { source: LINK, paths: ['介绍.md'], maxChars: 1 },
+      },
     ]);
   });
   it('缺文件直接退回，不再往下查', async () => {
-    const harness = fakeHarness(() => texts());
-    const result = await gateWith(harness.client).check({ ...input, expects: ['报告.pdf'] });
+    const harness = harnessWith();
+    const inspector = fakeService(() => parsed());
+    const result = await gateWith(harness.client, inspector.client).check({
+      ...input,
+      expects: ['报告.pdf'],
+    });
     expect(result.unmet).toEqual(['缺少文件 out/报告.pdf']);
     expect(harness.calls).toHaveLength(0);
+    expect(inspector.calls).toHaveLength(0);
   });
   it('确定损坏退回；解析资源不足只记未检查，不误报数量不足', async () => {
     const run = {
@@ -141,8 +165,9 @@ describe('轻量关卡（ADR 0017）', () => {
     };
     const gateFor = (errorKind: 'invalid' | 'incomplete') =>
       gateWith(
-        fakeHarness(() =>
-          texts([{ path: 'project.zip', text: '', valid: false, error: '读取失败', errorKind }]),
+        harnessWith().client,
+        fakeService(() =>
+          parsed([{ path: 'project.zip', text: '', valid: false, error: '读取失败', errorKind }]),
         ).client,
       );
     const broken = await gateFor('invalid').check(run);
@@ -151,7 +176,7 @@ describe('轻量关卡（ADR 0017）', () => {
     expect((await gateFor('incomplete').check(run)).unmet).toEqual([]);
   });
   it('期望文件没有解析报告时记为未检查', async () => {
-    const result = await gateWith(fakeHarness(() => texts()).client).check({
+    const result = await gateWith(harnessWith().client, fakeService(() => parsed()).client).check({
       ...input,
       expects: [{ pattern: '*.md' }],
     });
@@ -160,12 +185,12 @@ describe('轻量关卡（ADR 0017）', () => {
   it.each(['site/oasis-app.json'])(
     '网页应用（清单 %s）在隔离浏览器里跑一遍，没跑通进入未满足项',
     async (manifest) => {
-      const harness = fakeHarness((path) =>
+      const harness = harnessWith((path) =>
         path.endsWith('/application-check')
           ? { passed: false, reason: '首页脚本报错', frameCaptured: true }
-          : texts(),
+          : undefined,
       );
-      const result = await gateWith(harness.client).check({
+      const result = await gateWith(harness.client, fakeService(() => parsed()).client).check({
         ...input,
         expects: [],
         outputs: [
@@ -180,17 +205,18 @@ describe('轻量关卡（ADR 0017）', () => {
       });
     },
   );
-  it('音视频只看能不能解码：损坏退回，没报告的记未检查', async () => {
-    const harness = fakeHarness((path) =>
+  it('音视频只看能不能解码：损坏退回，没报告的记未检查；数量按解码结果算', async () => {
+    const harness = harnessWith((path) =>
       path.endsWith('/audio-check')
-        ? { files: [{ path: 'broken.mp3', valid: false, error: '解码失败' }] }
+        ? { files: [{ path: 'broken.mp3', valid: false, error: '解码失败' }], unchecked: [] }
         : path.endsWith('/video-check')
-          ? { files: [{ path: 'final.mp4', valid: true }] }
-          : texts(),
+          ? { files: [{ path: 'final.mp4', valid: true }], unchecked: [] }
+          : undefined,
     );
-    const result = await gateWith(harness.client).check({
+    const inspector = fakeService(() => parsed());
+    const result = await gateWith(harness.client, inspector.client).check({
       ...input,
-      expects: [],
+      expects: [{ pattern: '*.mp4', exactCount: 1 }],
       outputs: [
         { path: 'broken.mp3', size: 3 },
         { path: 'song.mp3', size: 10 },
@@ -199,21 +225,45 @@ describe('轻量关卡（ADR 0017）', () => {
     });
     expect(result.unmet).toEqual(['音频「broken.mp3」解码失败']);
     expect(result.unchecked).toEqual(['音频「song.mp3」未完成解码检查']);
+    // 音视频不交给文件解析
+    expect(inspector.calls).toHaveLength(0);
   });
   it('检查服务出错只记未检查，不当成果失败', async () => {
-    const harness = fakeHarness(() => new HttpError(502, 'bad_gateway', '上游断了'));
-    const result = await gateWith(harness.client).check(input);
+    const down = fakeService(() => new HttpError(502, 'bad_gateway', '上游断了'));
+    const result = await gateWith(harnessWith().client, down.client).check(input);
     expect(result.unmet).toEqual([]);
     expect(result.unchecked).toEqual([
       '文件解析检查没做完：连不上平台的检查服务（网络中断或超时）',
     ]);
   });
+  it('检查服务答非所问（缺字段、格式不对）：记未检查，不当成通过', async () => {
+    const odd = fakeService(() => ({ passed: true }));
+    const harness = harnessWith((path) =>
+      path.endsWith('/application-check') ? { ok: true } : undefined,
+    );
+    const result = await gateWith(harness.client, odd.client).check({
+      ...input,
+      expects: [{ pattern: '*.md' }],
+      outputs: [
+        { path: '介绍.md', size: 50 },
+        { path: 'site/oasis-app.json', size: 50 },
+      ],
+    });
+    expect(result.unmet).toEqual([]);
+    expect(result.unchecked).toEqual([
+      expect.stringContaining('文件解析检查没做完'),
+      expect.stringContaining('浏览器实际运行检查没做完'),
+    ]);
+  });
   it('用户取消时直接抛出，不记成未检查', async () => {
     const controller = new AbortController();
     controller.abort();
-    const harness = fakeHarness(() => new Error('aborted'));
+    const failing = fakeService(() => new Error('aborted'));
     await expect(
-      gateWith(harness.client).check({ ...input, signal: controller.signal }),
+      gateWith(harnessWith().client, failing.client).check({
+        ...input,
+        signal: controller.signal,
+      }),
     ).rejects.toThrow();
   });
 });

@@ -224,60 +224,13 @@ export const RunEventList = z.object({ events: z.array(RunEventBody) });
 /** 用户在运行中追问或补充要求：排在当前这一轮之后处理，带着完整上下文 */
 export const RunMessageBody = z.object({ text: z.string().trim().min(1).max(20_000) });
 
-/** 某次运行的文字类产出（给关卡检查用；总长截断） */
-export const RunTextsBody = z.object({
-  files: z.array(
-    z.object({
-      path: z.string(),
-      text: z.string(),
-      valid: z.boolean().optional(),
-      error: z.string().optional(),
-      warning: z.string().optional(),
-      /** 已核验的证据范围；范围外的语义需要其他独立证据。 */
-      evidenceScope: z.enum(['geometry', 'decoded-audio', 'decoded-video']).optional(),
-      errorKind: z.enum(['invalid', 'incomplete']).optional(),
-      width: z.number().int().positive().optional(),
-      height: z.number().int().positive().optional(),
-      truncated: z.boolean().optional(),
-    }),
-  ),
-  truncated: z.boolean(),
-});
-
-/** 只解析已上传素材，不开启 agent，不接受 URL 或本机路径。 */
-export const MaterialInspectBody = z.object({
-  ownerId: z.uuid(),
-  ids: z.array(z.uuid()).max(20),
-  maxChars: z.number().int().min(1).max(50_000).default(30_000),
-});
-export type MaterialInspectBody = z.infer<typeof MaterialInspectBody>;
-export const MaterialInspection = z.object({
-  uploadId: z.uuid(),
-  name: z.string(),
-  sha256: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .nullable(),
-  text: z.string(),
-  status: z.enum(['complete', 'partial', 'unsupported', 'failed']),
-  reason: z.string().optional(),
-  /** 图片素材（如批注截图）没有正文，原图交给关卡的看图检查（2026-11-05） */
-  image: z
-    .object({
-      mediaType: z.enum(['image/png', 'image/jpeg', 'image/webp']),
-      base64: z.string(),
-    })
-    .optional(),
-});
-export const MaterialInspectResult = z.object({ files: z.array(MaterialInspection).max(20) });
-export type MaterialInspectResult = z.infer<typeof MaterialInspectResult>;
-export type RunTextsBody = z.infer<typeof RunTextsBody>;
-
-/** 先在该次运行的输出集合中选取，再解析正文；空清单不回退为全部文件。 */
-export const RunInspectBody = z.object({
-  paths: z.array(z.string().min(1).max(500)).max(1000),
-  maxChars: z.number().int().min(1).max(50_000).default(8000),
-});
+/**
+ * 一次运行产出包的临时下载链接（给 inspector 检查用，ADR 0024）：只给这次运行的付费人和任务，
+ * 运行没有产出时 404。
+ */
+export const OutputsLinkBody = z.object({ payerId: z.uuid(), taskId: z.uuid() });
+export const OutputsLink = z.object({ url: z.url(), expiresAt: z.iso.datetime() });
+export type OutputsLink = z.infer<typeof OutputsLink>;
 
 export const ApplicationCheckResult = z.object({
   application: BrowserTestResult.shape.application,

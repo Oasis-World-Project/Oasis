@@ -232,20 +232,22 @@ describe('一次 agent 运行：输入和产出', () => {
     });
   });
 
-  it('读文字类产出给关卡用：只读文字文件，总长超过上限就截断', async () => {
-    const run = await service.start({ ...base, prompt: '写' });
+  it('产出包的临时下载链接只给这次运行的付费人和任务；没有产出就 404', async () => {
+    const taskId = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
+    const run = await service.start({ ...base, taskId, prompt: '写' });
     await finished(run.id);
-    expect(await service.texts(run.id, 3)).toEqual({
-      files: [{ path: 'result.md', text: '# 成', valid: true, truncated: true }],
-      truncated: true,
+    const link = await service.outputsLink(run.id, PAYER, taskId);
+    expect(link.url).toBe(
+      `http://s3.test/oasis-harness/runs/${run.id}/outputs.tar?method=GET&expires=900`,
+    );
+    expect(new Date(link.expiresAt).getTime()).toBeGreaterThan(Date.now());
+    await expect(service.outputsLink(run.id, PAYER, PAYER)).rejects.toMatchObject({
+      statusCode: 404,
     });
-    expect(await service.texts(run.id, 100, [])).toEqual({ files: [], truncated: false });
-    expect(await service.texts(run.id, 100, ['missing.md'])).toEqual({
-      files: [],
-      truncated: false,
+    rows.set(run.id, { ...rows.get(run.id)!, outputKey: null });
+    await expect(service.outputsLink(run.id, PAYER, taskId)).rejects.toMatchObject({
+      statusCode: 404,
+      code: 'outputs_not_found',
     });
-    expect((await service.texts(run.id, 100, ['result.md'])).files.map((f) => f.path)).toEqual([
-      'result.md',
-    ]);
   });
 });

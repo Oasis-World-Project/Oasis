@@ -25,10 +25,13 @@
         "sandbox/oasis-tool.ts",
         "src/adapter/profile/node-goal.mjs",
         "src/adapter/test/native-provider.mjs",
-        "src/service/file-inspection-worker.ts",
         "preview/controller.mjs",
         "media/media-check.mjs",
       ],
+    },
+    // 解析 worker 由 Worker URL 按源码/编译后扩展名加载，静态 import 图不可见。
+    "services/inspector": {
+      "entry": ["src/main.ts", "src/service/file-inspection-worker.ts"],
     },
     "services/canvas": {
       // 开发启动器把入口作为参数传入；显式保留 main，避免覆盖默认入口推断。

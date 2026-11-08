@@ -114,6 +114,25 @@ describe('上传素材', () => {
     const content = await instance.inject({ url: `/internal/uploads/${b.id}/content` });
     expect(content.body).toBe('png');
     expect(content.headers['content-type']).toBe('image/png');
+
+    // 临时下载链接（交给 inspector 解析素材）：同样都要是这个人的
+    const links = await instance.inject({
+      method: 'POST',
+      url: '/internal/uploads/links',
+      payload: { ownerId: KAI, ids: [a.id] },
+    });
+    expect(links.json<{ uploads: { id: string; url: string }[] }>().uploads).toEqual([
+      expect.objectContaining({
+        id: a.id,
+        url: `http://s3.test/oasis-canvas/uploads/${KAI}/${a.id}?method=GET&expires=900`,
+      }),
+    ]);
+    const others = await instance.inject({
+      method: 'POST',
+      url: '/internal/uploads/links',
+      payload: { ownerId: KAI, ids: [a.id, b.id] },
+    });
+    expect(others.statusCode).toBe(404);
   });
 });
 

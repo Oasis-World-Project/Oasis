@@ -10,6 +10,8 @@ export function memoryStore(): ObjectStore & {
   const objects = new Map<string, { body: Buffer; type: string }>();
   return {
     objects,
+    sign: async (key, method, expiresIn) =>
+      `http://s3.test/oasis-canvas/${key}?method=${method}&expires=${expiresIn}`,
     delete: async (key) => {
       objects.delete(key);
     },

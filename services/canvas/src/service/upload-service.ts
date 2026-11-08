@@ -123,6 +123,24 @@ export function createUploadService(deps: {
     },
 
     /**
+     * 内部：这个人的这些文件的临时下载链接（交给 inspector 解析素材，ADR 0024）。
+     * 必须都在、都是他的；链接 15 分钟内有效。
+     */
+    async links(ownerId: string, ids: string[]): Promise<(UploadBody & { url: string })[]> {
+      const unique = [...new Set(ids)];
+      const rows = await repo.findOwned(ownerId, unique);
+      if (rows.length !== unique.length) throw notFound();
+      if (!store.sign) throw new HttpError(503, 'links_unavailable', '对象存储不支持临时下载链接');
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      return Promise.all(
+        unique.map(async (id) => {
+          const row = byId.get(id)!;
+          return { ...toUploadBody(row), url: await store.sign!(row.objectKey, 'GET', 15 * 60) };
+        }),
+      );
+    },
+
+    /**
      * 内部：彻底删除这个人的这些文件（消息被删、群被解散时 conversation 调用，2026-11-05 真删除）。
      * 不是他的、已经删过的跳过；幂等。
      */

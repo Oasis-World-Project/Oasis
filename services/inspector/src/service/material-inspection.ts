@@ -1,10 +1,10 @@
-// 上传素材与运行产出共用解析器；这里只负责所有权、传输边界和来源摘要。
+// 用户上传的素材（ADR 0024）：canvas 核对过所有权、签发了临时下载链接；这里有界下载、
+// 核对大小和摘要，再用和运行产出同一套解析器读出正文。图片原图交给关卡的看图检查。
 import { createHash } from 'node:crypto';
-import { Readable } from 'node:stream';
-import { UploadLookupResult } from '@oasis/contracts/canvas';
-import type { MaterialInspectBody, MaterialInspectResult } from '@oasis/contracts/harness';
-import { readLimited, type ServiceClient } from '@oasis/service-kit';
+import type { MaterialInspectResult, MaterialsInspectBody } from '@oasis/contracts/inspector';
+import { readLimited } from '@oasis/service-kit';
 import { inspectFiles, type InspectionLimits } from './file-inspection.ts';
+import type { Sources } from './sources.ts';
 
 /** 交给看图检查的图片素材类型和单张上限（和关卡视觉检查的上限一致） */
 const IMAGE_TYPES: Record<string, 'image/png' | 'image/jpeg' | 'image/webp'> = {
@@ -15,19 +15,16 @@ const IMAGE_TYPES: Record<string, 'image/png' | 'image/jpeg' | 'image/webp'> = {
 };
 const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
 
-export function createMaterialInspector(canvas: ServiceClient, limits: InspectionLimits) {
-  return async (input: MaterialInspectBody): Promise<MaterialInspectResult> => {
-    if (!input.ids.length) return { files: [] };
-    const { uploads } = await canvas.json('POST', '/internal/uploads/lookup', {
-      body: { ownerId: input.ownerId, ids: input.ids },
-      schema: UploadLookupResult,
-    });
+type Input = Required<Pick<MaterialsInspectBody, 'files' | 'maxChars'>>;
+
+export function createMaterialInspector(sources: Sources, limits: InspectionLimits) {
+  return async (input: Input): Promise<MaterialInspectResult> => {
     let remaining = input.maxChars;
     const started = Date.now();
     const files: MaterialInspectResult['files'] = [];
-    for (const upload of uploads) {
+    for (const upload of input.files) {
       const base = {
-        uploadId: upload.id,
+        uploadId: upload.uploadId,
         name: upload.name,
         sha256: upload.sha256 ?? null,
         text: '',
@@ -42,12 +39,8 @@ export function createMaterialInspector(canvas: ServiceClient, limits: Inspectio
         continue;
       }
       try {
-        const response = await canvas.stream('GET', `/internal/uploads/${upload.id}/content`, {
-          signal: AbortSignal.timeout(time),
-        });
-        if (!response.body) throw new Error('素材内容流缺失');
         const bytes = await readLimited(
-          Readable.fromWeb(response.body),
+          await sources.open(upload.url, AbortSignal.timeout(time)),
           Math.min(upload.size, limits.inputBytes),
         );
         const sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -99,4 +92,3 @@ export function createMaterialInspector(canvas: ServiceClient, limits: Inspectio
     return { files };
   };
 }
-export type MaterialInspector = ReturnType<typeof createMaterialInspector>;

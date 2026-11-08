@@ -5,6 +5,8 @@ export const taskEnv = {
   ...postgresAndEventBus.env,
   /** 节点在 harness 里执行 */
   HARNESS_URL: z.url(),
+  /** 关卡检查成果（ADR 0024） */
+  INSPECTOR_URL: z.url(),
   /** 报价、规划员调用模型 */
   MODEL_GATEWAY_URL: z.url(),
   HARNESS_CHECK_TIMEOUT_MS: z.coerce.number().int().min(10000).max(180000).default(40000),

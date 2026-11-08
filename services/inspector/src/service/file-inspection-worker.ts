@@ -8,7 +8,8 @@ import { Unzip, UnzipInflate } from 'fflate';
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import sharp from 'sharp';
 import { getDocumentProxy } from 'unpdf';
-import type { InspectionLimits, InspectedFile } from './file-inspection.ts';
+import type { InspectedFile } from '@oasis/contracts/inspector';
+import type { InspectionLimits } from './file-inspection.ts';
 import { GeometryLimit, inspectGlb } from './geometry-inspection.ts';
 
 class IncompleteInspection extends Error {}

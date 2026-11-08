@@ -24,7 +24,6 @@ import { createBrowserRepo } from './repo/browser-repo.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
 import { createRunService, type RunService } from './service/run-service.ts';
 import { createPreviewService, type PreviewService } from './service/preview-service.ts';
-import { createMaterialInspector } from './service/material-inspection.ts';
 
 let executor: Executor;
 let store: ObjectStore;
@@ -129,17 +128,6 @@ await startService({
       keyTtlSeconds: config.RUN_KEY_TTL_SECONDS,
       cores: config.SANDBOX_CPUS,
       outputMaxBytes: config.OUTPUT_MAX_BYTES,
-      inspectionLimits: {
-        inputBytes: config.EXTRACT_INPUT_BYTES,
-        unzipBytes: config.EXTRACT_UNZIP_BYTES,
-        entries: config.EXTRACT_MAX_ENTRIES,
-        pages: config.EXTRACT_MAX_PAGES,
-        cells: config.EXTRACT_MAX_CELLS,
-        pixels: config.EXTRACT_MAX_PIXELS,
-        timeoutMs: config.EXTRACT_TIMEOUT_MS,
-        totalMs: config.EXTRACT_TOTAL_MS,
-        files: config.EXTRACT_MAX_FILES,
-      },
       serviceName: name,
       logger,
     });
@@ -163,25 +151,7 @@ await startService({
       cpus: config.PREVIEW_CPUS,
       maxMs: config.PREVIEW_MAX_MS,
     });
-    registerRoutes(
-      app,
-      runs,
-      previews,
-      createMaterialInspector(
-        createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: config.EXTRACT_TOTAL_MS }),
-        {
-          inputBytes: config.EXTRACT_INPUT_BYTES,
-          unzipBytes: config.EXTRACT_UNZIP_BYTES,
-          entries: config.EXTRACT_MAX_ENTRIES,
-          pages: config.EXTRACT_MAX_PAGES,
-          cells: config.EXTRACT_MAX_CELLS,
-          pixels: config.EXTRACT_MAX_PIXELS,
-          timeoutMs: config.EXTRACT_TIMEOUT_MS,
-          totalMs: config.EXTRACT_TOTAL_MS,
-          files: config.EXTRACT_MAX_FILES,
-        },
-      ),
-    );
+    registerRoutes(app, runs, previews);
     // 接管上次进程遗留的运行；Docker 暂时不可用也不阻止启动（/ready 会显示 sandboxes 失败）
     await runs.recover().catch((err: unknown) => logger.warn({ err }, '清理遗留运行失败'));
     recoveryTimer = setInterval(() => {

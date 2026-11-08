@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 验收模式（docs/engineering/回归测试.md）：9 个服务从当前代码启动后不再跟着代码改动重启，Web 用构建好的版本。
+// 验收模式（docs/engineering/回归测试.md）：10 个服务从当前代码启动后不再跟着代码改动重启，Web 用构建好的版本。
 // 验收期间改代码、改共享契约都不会打断在途的任务（2026-11-08：改契约让 pnpm dev 全部重启、丢下在途调用）；
 // 要换成新代码就 Ctrl+C 后重新 pnpm accept。模型走真实供应商，花的是真钱。
 // 用法：pnpm accept   （先停掉 pnpm dev；桌面端照常 pnpm desktop）

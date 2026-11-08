@@ -125,7 +125,9 @@ const web = {
     const paths = artifacts.map((a) => a.path).sort();
     for (const file of expected)
       t.check(paths.includes(file), `画布里缺 ${file}（有：${paths.join('、')}）`);
-    const app = artifacts.find((a) => a.application?.kind === 'static');
+    const app = (await t.user.waitApplication(taskId)).find(
+      (a) => a.application?.kind === 'static',
+    );
     t.check(app, '画布里没有可运行的网页成果');
     const js = artifacts.find((a) => a.path === 'site/counter.js');
     if (js)
@@ -190,10 +192,7 @@ const testplan = {
       .of('testplan', 'site')
       .filter((c) => c.segment === 'rework' && c.action === 'bash:0');
     t.check(moved.length === 1, `修复提示里应说清测试计划放错了目录（收到 ${moved.length} 次）`);
-    const artifacts = await t.user.waitArtifacts(taskId, [
-      'site/index.html',
-      'site/oasis-app.json',
-    ]);
+    const artifacts = await t.user.waitApplication(taskId);
     t.check(
       artifacts.some((a) => a.application?.kind === 'static'),
       `画布里没有可运行的网页成果（有：${artifacts.map((a) => a.path).join('、')}）`,
@@ -258,10 +257,7 @@ const manifest = {
       .of('manifest', 'site')
       .filter((c) => c.segment === 'rework' && c.action === 'bash:0');
     t.check(fixed.length === 1, `修复提示里应说清缺 oasis-app.json（收到 ${fixed.length} 次）`);
-    const artifacts = await t.user.waitArtifacts(taskId, [
-      'site/index.html',
-      'site/oasis-app.json',
-    ]);
+    const artifacts = await t.user.waitApplication(taskId);
     t.check(
       artifacts.some((a) => a.application?.kind === 'static'),
       `补上清单后画布里应能运行（有：${artifacts.map((a) => a.path).join('、')}）`,

@@ -5,7 +5,7 @@ export const canvasEnv = {
   ...postgresAndEventBus.env,
   /** 任务完成时取任务详情和成果文件（ADR 0007 §8） */
   TASK_URL: z.url(),
-  HARNESS_URL: z.url(),
+  INSPECTOR_URL: z.url(),
   /** 数字人会话（ADR 0013）由 model-gateway 开；没配时成果页不能开实时对话 */
   MODEL_GATEWAY_URL: z
     .union([z.literal(''), z.url()])

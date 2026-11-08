@@ -83,7 +83,7 @@ await startService({
         uploads,
         artifacts,
         store,
-        harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 60_000 }),
+        inspector: createServiceClient('inspector', config.INSPECTOR_URL, { timeoutMs: 60_000 }),
         task: createServiceClient('task', config.TASK_URL, { timeoutMs: 20000 }),
         ...(config.MODEL_GATEWAY_URL
           ? {

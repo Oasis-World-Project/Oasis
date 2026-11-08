@@ -1,10 +1,19 @@
 import { zipSync } from 'fflate';
 import { createHash } from 'node:crypto';
-import type { ServiceClient } from '@oasis/service-kit';
+import { Readable } from 'node:stream';
 import { createMaterialInspector } from '../src/service/material-inspection.ts';
+import type { Sources } from '../src/service/sources.ts';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { defaultInspectionLimits, inspectFiles } from '../src/service/file-inspection.ts';
+
+/** 假的下载：按链接给出内容，记下打开过哪些链接 */
+const sourcesOf = (content: () => Buffer, opened: string[] = []): Sources => ({
+  open: async (url) => {
+    opened.push(url);
+    return Readable.from([content()]);
+  },
+});
 
 const file = (path: string, content: string | Uint8Array) => ({
   path,
@@ -71,42 +80,38 @@ describe('隔离文件解析', () => {
     corrupt[index] = 120;
     expect((await inspect([file('broken.zip', corrupt)])).files[0]?.error).toContain('CRC');
   });
-  it('材料解析先查所有权，再有界读取并核对摘要；截断与图片元数据不冒充完整正文', async () => {
+  it('素材按 canvas 签发的链接有界读取并核对摘要；截断、超大和摘要不符都不冒充完整正文', async () => {
     const id = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
     const bytes = Buffer.from('预算按报价计算，另加10%');
-    let badHash = false;
-    let lookedUp = false;
-    const canvas = {
-      json: async (_method: string, _path: string, options: { body: { ownerId: string } }) => {
-        expect(options.body.ownerId).toBe(id);
-        lookedUp = true;
-        return {
-          uploads: [
-            {
-              id,
-              name: '事实.txt',
-              size: bytes.length,
-              sha256: badHash ? '0'.repeat(64) : createHash('sha256').update(bytes).digest('hex'),
-            },
-          ],
-        };
-      },
-      stream: async () => {
-        expect(lookedUp).toBe(true);
-        return new Response(bytes);
-      },
-    } as unknown as ServiceClient;
-    const inspector = createMaterialInspector(canvas, defaultInspectionLimits);
-    const complete = await inspector({ ownerId: id, ids: [id], maxChars: 300 });
+    const opened: string[] = [];
+    const inspector = createMaterialInspector(
+      sourcesOf(() => bytes, opened),
+      defaultInspectionLimits,
+    );
+    const upload = (sha256: string, size = bytes.length) => ({
+      uploadId: id,
+      name: '事实.txt',
+      size,
+      sha256,
+      url: 'http://s3.test/canvas/uploads/1?sig',
+    });
+    const good = createHash('sha256').update(bytes).digest('hex');
+    const complete = await inspector({ files: [upload(good)], maxChars: 300 });
     expect(complete.files[0]).toMatchObject({ status: 'complete', text: bytes.toString('utf8') });
-    expect((await inspector({ ownerId: id, ids: [id], maxChars: 3 })).files[0]?.status).toBe(
+    expect(opened).toEqual(['http://s3.test/canvas/uploads/1?sig']);
+    expect((await inspector({ files: [upload(good)], maxChars: 3 })).files[0]?.status).toBe(
       'partial',
     );
-    badHash = true;
-    expect((await inspector({ ownerId: id, ids: [id], maxChars: 300 })).files[0]).toMatchObject({
-      status: 'failed',
-      text: '',
-    });
+    expect(
+      (await inspector({ files: [upload('0'.repeat(64))], maxChars: 300 })).files[0],
+    ).toMatchObject({ status: 'failed', text: '' });
+    // 超过解析上限的不下载
+    const before = opened.length;
+    expect(
+      (await inspector({ files: [upload(good, 100 * 1024 * 1024)], maxChars: 300 })).files[0]
+        ?.status,
+    ).toBe('partial');
+    expect(opened).toHaveLength(before);
   });
   it('图片素材（如批注截图）原图交给看图检查，不记成没读完', async () => {
     const id = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
@@ -115,21 +120,24 @@ describe('隔离文件解析', () => {
     })
       .png()
       .toBuffer();
-    const canvas = {
-      json: async () => ({
-        uploads: [
+    const inspector = createMaterialInspector(
+      sourcesOf(() => png),
+      defaultInspectionLimits,
+    );
+    const [image] = (
+      await inspector({
+        files: [
           {
-            id,
+            uploadId: id,
             name: '批注-site-截图1.png',
             size: png.length,
             sha256: createHash('sha256').update(png).digest('hex'),
+            url: 'http://s3.test/canvas/uploads/2?sig',
           },
         ],
-      }),
-      stream: async () => new Response(png),
-    } as unknown as ServiceClient;
-    const inspector = createMaterialInspector(canvas, defaultInspectionLimits);
-    const [image] = (await inspector({ ownerId: id, ids: [id], maxChars: 300 })).files;
+        maxChars: 300,
+      })
+    ).files;
     expect(image).toMatchObject({
       status: 'complete',
       text: '',

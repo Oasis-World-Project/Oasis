@@ -113,6 +113,18 @@ export async function signIn(options) {
     return events.filter((e) => e.type === 'done').map((e) => e.message);
   }
 
+  /** 画布在收到交付事件后才登记成果：轮询这个任务的成果，直到满足条件（返回最后读到的全部成果） */
+  async function waitList(taskId, ready, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    let list = [];
+    while (Date.now() < deadline) {
+      list = (await api.get(`/canvas/v1/artifacts?taskId=${taskId}`)).artifacts;
+      if (ready(list)) return list;
+      await sleep(1_000);
+    }
+    return list;
+  }
+
   return {
     email,
     userId: signed.user.id,
@@ -176,17 +188,12 @@ export async function signIn(options) {
     messages: async (conversationId) =>
       (await api.get(`/conversation/v1/conversations/${conversationId}/messages`)).messages,
     artifacts: async (taskId) => (await api.get(`/canvas/v1/artifacts?taskId=${taskId}`)).artifacts,
-    /** 画布在收到交付事件后才登记成果：等到这些文件都在（返回全部成果） */
-    async waitArtifacts(taskId, paths, timeoutMs = 60_000) {
-      const deadline = Date.now() + timeoutMs;
-      let list = [];
-      while (Date.now() < deadline) {
-        list = (await api.get(`/canvas/v1/artifacts?taskId=${taskId}`)).artifacts;
-        if (paths.every((p) => list.some((a) => a.path === p))) return list;
-        await sleep(1_000);
-      }
-      return list;
-    },
+    /** 等到这些文件都在（返回全部成果） */
+    waitArtifacts: (taskId, paths, timeoutMs = 60_000) =>
+      waitList(taskId, (list) => paths.every((p) => list.some((a) => a.path === p)), timeoutMs),
+    /** 应用描述在这次交付的文件全部登记完之后才写：等到画布里有这种可运行的应用（返回全部成果） */
+    waitApplication: (taskId, kind = 'static', timeoutMs = 60_000) =>
+      waitList(taskId, (list) => list.some((a) => a.application?.kind === kind), timeoutMs),
     /** 修改后画布原地更新成果：等到某个文件的内容符合预期（返回最后读到的内容） */
     async waitContent(taskId, file, expected, timeoutMs = 60_000) {
       const deadline = Date.now() + timeoutMs;

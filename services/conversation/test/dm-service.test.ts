@@ -12,6 +12,7 @@ import type {
 import { createDmService, toMessageBody } from '../src/service/dm-service.ts';
 import { createContext, type ContextService } from '../src/service/context.ts';
 import { createIntakeService } from '../src/service/intake-service.ts';
+import type { MaterialReader } from '../src/service/materials.ts';
 import {
   FALLBACK_SHEET_INTRO,
   groundRequirements,
@@ -1100,26 +1101,24 @@ describe('接需求', () => {
         ],
       },
     };
-    const inspector = {
-      json: async () => ({
-        files: [
-          {
-            uploadId: PHOTO.id,
-            name: '报价.txt',
-            sha256: 'a'.repeat(64),
-            text: evidence,
-            status: 'complete',
-          },
-        ],
-      }),
-    } as unknown as ReturnType<typeof createServiceClient>;
+    const readMaterials: MaterialReader = async () => ({
+      files: [
+        {
+          uploadId: PHOTO.id,
+          name: '报价.txt',
+          sha256: 'a'.repeat(64),
+          text: evidence,
+          status: 'complete',
+        },
+      ],
+    });
     const prepared = createIntakeService({
       repo,
       context,
       agent: createServiceClient('agent', urls.agent),
       modelGateway: createServiceClient('model-gateway', urls.gateway),
       task: createServiceClient('task', urls.task),
-      harness: inspector,
+      readMaterials,
       config: {
         detectModel: 'jev',
         detectHigh: 0.7,
@@ -1160,27 +1159,25 @@ describe('接需求', () => {
 
   it('图片素材的原图不写进提示词，也不存进接需求记录', async () => {
     const base64 = 'iVBORw0KGgo'.repeat(50_000);
-    const inspector = {
-      json: async () => ({
-        files: [
-          {
-            uploadId: PHOTO.id,
-            name: PHOTO.name,
-            sha256: 'b'.repeat(64),
-            text: '',
-            status: 'complete',
-            image: { mediaType: 'image/png', base64 },
-          },
-        ],
-      }),
-    } as unknown as ReturnType<typeof createServiceClient>;
+    const readMaterials: MaterialReader = async () => ({
+      files: [
+        {
+          uploadId: PHOTO.id,
+          name: PHOTO.name,
+          sha256: 'b'.repeat(64),
+          text: '',
+          status: 'complete',
+          image: { mediaType: 'image/png', base64 },
+        },
+      ],
+    });
     const prepared = createIntakeService({
       repo,
       context,
       agent: createServiceClient('agent', urls.agent),
       modelGateway: createServiceClient('model-gateway', urls.gateway),
       task: createServiceClient('task', urls.task),
-      harness: inspector,
+      readMaterials,
       config: {
         detectModel: 'jev',
         detectHigh: 0.7,
