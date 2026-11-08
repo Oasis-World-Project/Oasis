@@ -13,7 +13,7 @@ import {
   textOf,
   writeFiles,
 } from './fake-dsh.mjs';
-import { pickAnswer, VIDEO_MODELS } from './fake-media.mjs';
+import { JPEG_IMAGE_MODEL, pickAnswer, VIDEO_MODELS } from './fake-media.mjs';
 
 export { writeFiles } from './fake-dsh.mjs';
 
@@ -33,7 +33,7 @@ const NODE_MARK = /\[\[e2e:([\w-]+)@(\w+)\/([\w-]+)\]\]/;
  * @param {{
  *   scenarios: Record<string, object>,
  *   models: string[],
- *   fixtures: { png: Buffer, mp4: Buffer },
+ *   fixtures: { png: Buffer, jpg: Buffer, mp4: Buffer },
  *   videoSeconds?: number,
  * }} options
  */
@@ -425,8 +425,10 @@ export function createFakeProvider(options) {
     }
     if (route === 'POST /api/v1/images') {
       record({ kind: 'image', model: body.model, prompt: body.prompt });
+      // 像 Seedream 一样：要 PNG、声明 PNG，实际回 JPEG（2026-11-08 真实小样踩到）
+      const image = body.model === JPEG_IMAGE_MODEL ? fixtures.jpg : fixtures.png;
       return sendJson(res, 200, {
-        data: [{ b64_json: fixtures.png.toString('base64'), media_type: 'image/png' }],
+        data: [{ b64_json: image.toString('base64'), media_type: 'image/png' }],
         usage: { cost: 0.04 },
       });
     }

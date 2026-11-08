@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   commandOf,
+  conformOut,
   errorOf,
   expandGlobs,
   globFiles,
@@ -180,6 +181,39 @@ describe('工具步骤执行器', () => {
         '已保存：out/图-1.png\n',
       ),
     ).toBeUndefined();
+  });
+
+  it('图片按实际格式存成了别的后缀：换回计划要的格式、删掉原来那份；换不成算失败', async () => {
+    await mkdir(join(root, 'out'), { recursive: true });
+    await writeFile(join(root, 'out/frame.jpg'), 'jpeg');
+    const step = { tool: 'image.generate', args: { prompt: 'p' }, out: 'out/frame.png' };
+    const saidJpeg =
+      '生成了 1 张图片\n注意：返回的图片实际是 JPG，按实际格式存成了 out/frame.jpg\n已保存：out/frame.jpg\n';
+    const { runner, calls, events } = fake([ok(saidJpeg), ok('转成了 png 图片。\n')]);
+    expect(await runSteps(runner, [step], new Set(), async () => {})).toBeUndefined();
+    expect(calls[1]).toEqual([
+      'oasis-op',
+      'media.convert',
+      '--in',
+      'out/frame.jpg',
+      '--out',
+      'out/frame.png',
+    ]);
+    await expect(readFile(join(root, 'out/frame.jpg'))).rejects.toThrow();
+    expect(events.some((e) => String(e.text).includes('已按计划换成 out/frame.png'))).toBe(true);
+
+    // 后缀一致、多张（-1、-2）的都不动
+    const same = fake([]);
+    expect(await conformOut(same.runner, step, '已保存：out/frame.png\n')).toBeUndefined();
+    expect(
+      await conformOut(same.runner, step, '已保存：out/frame-1.jpg\n已保存：out/frame-2.jpg\n'),
+    ).toBeUndefined();
+    expect(same.calls).toEqual([]);
+
+    const broken = fake([fail('解码失败')]);
+    expect(await conformOut(broken.runner, step, '已保存：out/frame.jpg\n')).toBe(
+      '图片存成了 out/frame.jpg，换成 out/frame.png 没成功：解码失败',
+    );
   });
 
   it('进度记在工作目录里：失败后接着做时跳过做完的步骤；步骤改过就从头做', async () => {

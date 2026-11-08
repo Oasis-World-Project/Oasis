@@ -1,5 +1,5 @@
-// 回归测试的假素材：假供应商「生成」的图片和视频。图片在这里直接编码；视频用沙箱镜像里的 ffmpeg 做一次，
-// 缓存在 .tmp/e2e/fixtures（文件是真的能解码的 MP4，关卡的解码检查照常跑）。
+// 回归测试的假素材：假供应商「生成」的图片和视频。PNG 在这里直接编码；JPEG 和视频用沙箱镜像里的 ffmpeg
+// 做一次，缓存在 .tmp/e2e/fixtures（文件是真的能解码的，关卡的解码检查照常跑）。
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -40,9 +40,9 @@ function gradientPng(size = 64) {
   ]);
 }
 
-/** 2 秒带声音的测试视频（H.264 + AAC） */
-function testVideo(dir) {
-  const file = path.join(dir, 'clip.mp4');
+/** 在沙箱镜像里用 ffmpeg 做一个文件，缓存起来 */
+function made(dir, name, script, min) {
+  const file = path.join(dir, name);
   if (existsSync(file)) return readFileSync(file);
   const bytes = execFileSync(
     'docker',
@@ -59,13 +59,11 @@ function testVideo(dir) {
       'sh',
       SANDBOX_BASE,
       '-c',
-      'ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=duration=2:size=320x240:rate=15 ' +
-        '-f lavfi -i sine=frequency=440:duration=2 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest ' +
-        '-movflags +faststart /tmp/clip.mp4 && cat /tmp/clip.mp4',
+      `ffmpeg -hide_banner -loglevel error ${script} /tmp/${name} && cat /tmp/${name}`,
     ],
     { maxBuffer: 64 * 1024 * 1024, windowsHide: true },
   );
-  if (bytes.length < 1000) throw new Error('测试视频生成失败');
+  if (bytes.length < min) throw new Error(`测试素材 ${name} 生成失败`);
   writeFileSync(file, bytes);
   return bytes;
 }
@@ -73,5 +71,17 @@ function testVideo(dir) {
 export function loadFixtures() {
   const dir = path.join(ROOT, '.tmp', 'e2e', 'fixtures');
   mkdirSync(dir, { recursive: true });
-  return { png: gradientPng(), mp4: testVideo(dir) };
+  return {
+    png: gradientPng(),
+    // 「要 PNG 回 JPEG」的假图片模型交这张（像 Seedream，2026-11-08 真实小样）
+    jpg: made(dir, 'frame.jpg', '-f lavfi -i testsrc=size=64x64 -frames:v 1', 200),
+    // 2 秒带声音的测试视频（H.264 + AAC）
+    mp4: made(
+      dir,
+      'clip.mp4',
+      '-f lavfi -i testsrc=duration=2:size=320x240:rate=15 -f lavfi -i sine=frequency=440:duration=2 ' +
+        '-c:v libx264 -pix_fmt yuv420p -c:a aac -shortest -movflags +faststart',
+      1000,
+    ),
+  };
 }

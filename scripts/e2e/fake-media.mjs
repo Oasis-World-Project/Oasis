@@ -1,4 +1,8 @@
-// 假供应商的生视频型号，以及看图挑一版（ADR 0026 的挑选运行用 image.inspect）时怎么回答。
+// 假供应商的图片、生视频型号，以及看图挑一版（ADR 0026 的挑选运行用 image.inspect）时怎么回答。
+
+/** 假图片型号：fake/image-1 交 PNG；fake/image-jpeg 要 PNG 也回 JPEG（像 Seedream，2026-11-08） */
+export const IMAGE_MODEL = 'fake/image-1';
+export const JPEG_IMAGE_MODEL = 'fake/image-jpeg';
 
 /** 生视频型号：每秒 $0.05（5 秒 $0.25，和生成完成时报的花费一致） */
 export const VIDEO_MODELS = {

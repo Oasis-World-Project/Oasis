@@ -1,5 +1,6 @@
 // 回归场景（docs/engineering/回归测试.md）：动态展开和做几版挑一版（ADR 0026）。
 import { literal, query } from '../db.mjs';
+import { JPEG_IMAGE_MODEL } from '../fake-media.mjs';
 import { marker, writeFiles } from '../fake-provider.mjs';
 import { DEFAULT_MODEL, done, work } from './shared.mjs';
 
@@ -55,7 +56,12 @@ const shots12 = {
           title: '关键帧 {{index}}',
           goal: '镜头 {{index}} 的关键帧',
           steps: [
-            { tool: 'image.generate', args: { prompt: '{{item.prompt}}' }, out: 'out/frame.png' },
+            // 用要 PNG 回 JPEG 的假模型：工具步骤要把图换回计划写的 frame.png，下游才找得到
+            {
+              tool: 'image.generate',
+              args: { prompt: '{{item.prompt}}', model: JPEG_IMAGE_MODEL },
+              out: 'out/frame.png',
+            },
           ],
           expects: ['frame.png'],
           variants: { n: 2, pick: '构图最贴合镜头描述' },
@@ -135,6 +141,18 @@ const shots12 = {
       frames.length === COUNT &&
         frames.every((f) => f.variants?.chosen === 2 && f.variants.reason?.includes('假视觉模型')),
       `每条关键帧应按看图结果用第 2 版：${frames.map((f) => `${f.key}=${f.variants?.chosen}`).join(' ')}`,
+    );
+    // 供应商回的是 JPEG：各版都应交出计划写的 frame.png、没有提醒（2026-11-08 真实小样存成了 frame.jpg）
+    const versions = task.nodes.filter((n) => frames.some((f) => f.id === n.parentId));
+    const off = versions.filter(
+      (v) =>
+        v.warning ||
+        !v.outputs.some((o) => o.path === 'frame.png') ||
+        v.outputs.some((o) => o.path.endsWith('.jpg')),
+    );
+    t.check(
+      versions.length === COUNT * 2 && off.length === 0,
+      `关键帧各版应交出 frame.png：${off.map((v) => `${v.key}=${v.outputs.map((o) => o.path).join('/')} ${v.warning ?? ''}`).join('；')}`,
     );
     t.check(
       kids('clips').length === COUNT && kids('clips').every((c) => c.status === 'succeeded'),

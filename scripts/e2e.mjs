@@ -9,6 +9,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createFakeProvider, setRun } from './e2e/fake-provider.mjs';
+import { IMAGE_MODEL, JPEG_IMAGE_MODEL } from './e2e/fake-media.mjs';
 import { literal, query } from './e2e/db.mjs';
 import { loadFixtures } from './e2e/fixtures.mjs';
 import { SCENARIOS } from './e2e/scenarios.mjs';
@@ -106,7 +107,7 @@ const providerEnv = (url) => ({
   BROWSERSTACK_USERNAME: '',
   BROWSERSTACK_ACCESS_KEY: '',
   LIVEAVATAR_API_KEY: '',
-  TOOL_IMAGE_MODELS: 'fake/image-1',
+  TOOL_IMAGE_MODELS: `${IMAGE_MODEL},${JPEG_IMAGE_MODEL}`,
   TOOL_VISION_MODELS: 'fake/vision-1',
   TOOL_VIDEO_MODELS: 'fake/video-1',
   TOOL_SPEECH_MODELS: 'fake/speech-1',

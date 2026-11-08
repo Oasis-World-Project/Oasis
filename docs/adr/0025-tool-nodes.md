@@ -12,7 +12,7 @@
 1. **新的节点种类 `tool`。** 方案里写 `steps`：每步 `{tool, args, out}`，按顺序执行，最多 12 步。
    - `tool` 是工具目录里的工具名：外部工具（`video.generate`、`image.generate`……）或沙箱里的本地操作（`op.*`）。
    - `args` 和沙箱里 `oasis-tool <工具> --名字 值` 一一对应；文件写沙箱里的路径：上游交来的 `in/<上游 key>/…`、用户素材 `materials/…`、前面步骤的结果 `out/…`。参数名不能是 `out`（写在步骤的 `out` 里）、`new`（重试由执行器决定要不要重新提交）。
-   - `out`：结果存到 `out/` 下哪里。文字结果的工具（搜索、看图、转写、判断）给了 `.txt/.md/.json/.jsonl/.csv` 的 `out` 就把工具说的话存进去；该有文件却没生成算这步失败。
+   - `out`：结果存到 `out/` 下哪里。文字结果的工具（搜索、看图、转写、判断）给了 `.txt/.md/.json/.jsonl/.csv` 的 `out` 就把工具说的话存进去；该有文件却没生成算这步失败。图片工具按供应商实际格式存（要 `.png` 回了 JPEG 会存成 `.jpg`）时，执行器用 `oasis-op media.convert` 换回 `out` 写的格式、删掉原来那份，换不成算这步失败——下游按计划里的路径取文件（2026-11-08 真实小样：关键帧存成 `frame.jpg`，镜头视频找不到 `frame.png`）。
    - 工具节点不用模型（库里 `model` 为空字符串），不收追问；节点配置 `ToolConfig.steps`；`nodes.kind` 放宽到 `tool`（expand 迁移 `20261108160000`）。
 2. **执行：harness 起工具运行，不起 AI。** task 交给 harness 的运行 `model` 写 `oasis/tool`、带 `steps`；harness 不按模型目录准入，改要执行环境有 `tool-steps` 能力（镜像里有执行器，旧镜像准入就拒绝并提示 `pnpm sandbox:build`）。沙箱跑的是 `oasis-steps`（代替 dsh），其余流程（临时 Key、算力租约、存产出、停止、接管、继续）和 AI 运行完全一样。
    - 执行器按顺序调 `oasis-tool` / `oasis-op`，往 stdout 写一行一个 JSON（`tool_call`、`tool_result`、`assistant_text`、`done`），harness 记成运行事件，工作流页照常显示过程。

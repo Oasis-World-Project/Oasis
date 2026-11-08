@@ -1,6 +1,7 @@
 // 真模型回归 real-shots（ADR 0026）：6 个镜头的短片——真规划员排「分镜 → 展开出关键帧（每帧两版挑一版）
 // → 展开图生视频 → 拼成片」，真生图、真看图挑选、真视频。按秒、按张收钱：开跑前看一眼方案，没照要求用
-// 便宜型号、没用展开就当场取消。预算 $4.5，在单次 $5 的授权内。
+// 便宜型号、没用展开就当场取消。预算 $3.9（2026-11-08 第一次跑关键帧存成 frame.jpg、花了 $1.04 失败，
+// 两次合计仍在单次 $5 的授权内）。
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { literal, query } from './db.mjs';
@@ -44,7 +45,7 @@ function costProblems(steps, video) {
 /** helpers：real.mjs 里的 waitFiles、logBill、便宜视频型号、长任务等待时长 */
 export const realShots = ({ waitFiles, logBill, CHEAP_VIDEO, LONG }) => ({
   // 6 张 × 2 版生图 + 6 段 4 秒 480p 视频约 $1.7，再加规划、分镜、看图和检查；超了当场取消
-  budgetMicro: 4_500_000,
+  budgetMicro: 3_900_000,
   async run(t) {
     const { taskId } = await t.user.createTask(
       `做一段 ${SHOTS} 个镜头的短片，主题：一只橘猫在秋天小镇里的一天。` +
@@ -85,6 +86,9 @@ export const realShots = ({ waitFiles, logBill, CHEAP_VIDEO, LONG }) => ({
     const task = await t.user.waitTask(taskId, done, '成片交付', 2 * LONG);
     for (const node of task.nodes.filter((n) => n.warning))
       t.log(`「${node.title}」带着提醒：${node.warning.slice(0, 200)}`);
+    // 供应商回的格式和计划不同（Seedream 要 PNG 回 JPEG）时，工具步骤应换回计划写的文件
+    const short = task.nodes.filter((n) => n.warning?.includes('缺少文件'));
+    t.check(!short.length, `这些节点缺计划里的文件：${short.map((n) => n.key).join('、')}`);
     const kids = (node) => task.nodes.filter((n) => n.parentId === node.id);
     for (const node of task.nodes.filter((n) => n.kind === 'foreach')) {
       const items = kids(node);
