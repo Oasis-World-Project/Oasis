@@ -1,7 +1,8 @@
 // Docker Engine API 的最小客户端：只用 Node 自带的 http，经 Unix socket 或 Windows 命名管道访问。
-// harness 只需要建容器、拷文件进出、接上 stdin/stdout、停止和列出容器，用不着完整的 SDK。
+// harness（沙箱）和 inspector（检查容器）只需要建容器、拷文件进出、接上 stdin/stdout、
+// 停止和列出容器，用不着完整的 SDK。
 import http from 'node:http';
-import { Readable, type Duplex } from 'node:stream';
+import { Readable, type Duplex, type PassThrough } from 'node:stream';
 
 /** API 版本：Docker Engine 25 起支持 */
 const API = '/v1.44';
@@ -216,3 +217,29 @@ export function createDockerApi(socketPath: string) {
 }
 
 export type DockerApi = ReturnType<typeof createDockerApi>;
+
+/**
+ * Docker 在非 TTY 模式下把 stdout/stderr 复用在同一条连接上：
+ * 每帧 8 字节头（第 1 字节是流编号 1=stdout 2=stderr，后 4 字节是长度，大端）+ 内容。
+ */
+export function demultiplex(source: Readable, stdout: PassThrough, stderr: PassThrough): void {
+  let pending = Buffer.alloc(0);
+  source.on('data', (chunk: Buffer) => {
+    pending = Buffer.concat([pending, chunk]);
+    while (pending.length >= 8) {
+      const size = pending.readUInt32BE(4);
+      if (pending.length < 8 + size) break;
+      const payload = pending.subarray(8, 8 + size);
+      (pending[0] === 2 ? stderr : stdout).write(payload);
+      pending = pending.subarray(8 + size);
+    }
+  });
+  source.on('end', () => {
+    stdout.end();
+    stderr.end();
+  });
+  source.on('error', (err) => {
+    stdout.destroy(err);
+    stderr.destroy(err);
+  });
+}

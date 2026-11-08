@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import pg from 'pg';
 import Fastify from 'fastify';
 import { describe, it, expect } from 'vitest';
-import { createDockerApi, defaultDockerSocket } from '../../executor/docker-api.ts';
+import { createDockerApi, defaultDockerSocket } from '@oasis/service-kit';
 import { createDockerExecutor } from '../../executor/executor.ts';
 
 describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_URL)(

@@ -1,4 +1,16 @@
+export {
+  archiveFile,
+  extractFiles,
+  listFiles,
+  packFiles,
+  packStreams,
+  readLimited,
+  rewriteArchive,
+  scanArchive,
+  type StreamFile,
+} from './archive.ts';
 export { ConfigError, type ConfigOf, type EnvShape } from './config.ts';
+export { createDockerApi, defaultDockerSocket, demultiplex, type DockerApi } from './docker.ts';
 export { connectEventBus, eventBusEnv, type EventBusResource } from './event-bus.ts';
 export { createEnvelope, ensureStream, publishEvent, startEventConsumer } from './events.ts';
 export { createHttpServer, errorBody, type ServiceApp } from './http.ts';

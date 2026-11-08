@@ -3,8 +3,7 @@
 import { PassThrough, type Readable, type Writable } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { rewriteArchive } from './tar.ts';
-import type { DockerApi } from './docker-api.ts';
+import { demultiplex, rewriteArchive, type DockerApi } from '@oasis/service-kit';
 import { ExecutionEnvironment } from '@oasis/contracts/harness';
 
 export interface SandboxSpec {
@@ -54,32 +53,6 @@ const volumeNames = (id: string) => {
   if (!/^[\w-]+$/.test(id)) throw new Error('工作目录身份不合法');
   return [`oasis-workspace-${id}`, `oasis-sessions-${id}`];
 };
-
-/**
- * Docker 在非 TTY 模式下把 stdout/stderr 复用在同一条连接上：
- * 每帧 8 字节头（第 1 字节是流编号 1=stdout 2=stderr，后 4 字节是长度，大端）+ 内容。
- */
-export function demultiplex(source: Readable, stdout: PassThrough, stderr: PassThrough): void {
-  let pending = Buffer.alloc(0);
-  source.on('data', (chunk: Buffer) => {
-    pending = Buffer.concat([pending, chunk]);
-    while (pending.length >= 8) {
-      const size = pending.readUInt32BE(4);
-      if (pending.length < 8 + size) break;
-      const payload = pending.subarray(8, 8 + size);
-      (pending[0] === 2 ? stderr : stdout).write(payload);
-      pending = pending.subarray(8 + size);
-    }
-  });
-  source.on('end', () => {
-    stdout.end();
-    stderr.end();
-  });
-  source.on('error', (err) => {
-    stdout.destroy(err);
-    stderr.destroy(err);
-  });
-}
 
 interface MediaInspectionLimits {
   files: number;

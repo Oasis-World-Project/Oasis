@@ -3,10 +3,15 @@ import { createReadStream } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import pg from 'pg';
-import { checkedParts, createServiceClient, type ObjectStore } from '@oasis/service-kit';
+import {
+  checkedParts,
+  createDockerApi,
+  createServiceClient,
+  defaultDockerSocket,
+  type ObjectStore,
+} from '@oasis/service-kit';
 import { pino } from 'pino';
 import { SANDBOX_PATHS } from '../src/adapter/dsh.ts';
-import { createDockerApi, defaultDockerSocket } from '../src/executor/docker-api.ts';
 import { createDockerExecutor } from '../src/executor/executor.ts';
 import { createRunsRepo } from '../src/repo/runs-repo.ts';
 import { createRunService } from '../src/service/run-service.ts';

@@ -1,6 +1,6 @@
 // 运行服务：依赖中断、优雅重启和进程崩溃之后的接管与恢复。
+import { extractFiles } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
-import { extractFiles } from '../src/executor/tar.ts';
 import {
   fake,
   PAYER,

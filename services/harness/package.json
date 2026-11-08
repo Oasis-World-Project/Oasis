@@ -28,7 +28,6 @@
     "parse5": "catalog:",
     "pg": "catalog:",
     "sharp": "0.35.5",
-    "tar-stream": "3.2.2",
     "unpdf": "1.9.1",
     "zod": "catalog:"
   },
@@ -39,6 +38,7 @@
     "@types/tar-stream": "3.1.5",
     "fastify": "catalog:",
     "pino": "catalog:",
+    "tar-stream": "3.2.2",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

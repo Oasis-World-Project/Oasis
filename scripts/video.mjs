@@ -10,9 +10,11 @@ import path from 'node:path';
 import {
   createDockerApi,
   defaultDockerSocket,
-} from '../services/harness/src/executor/docker-api.ts';
-import { demultiplex, inspectSandboxMedia } from '../services/harness/src/executor/executor.ts';
-import { packFiles, scanArchive } from '../services/harness/src/executor/tar.ts';
+  demultiplex,
+  packFiles,
+  scanArchive,
+} from '../packages/service-kit/dist/index.js';
+import { inspectSandboxMedia } from '../services/harness/src/executor/executor.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
 if (existsSync(path.join(root, '.env'))) process.loadEnvFile(path.join(root, '.env'));

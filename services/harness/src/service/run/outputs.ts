@@ -6,9 +6,15 @@ import {
   type RunEventBody,
   type RunTextsBody,
 } from '@oasis/contracts/harness';
-import { contentTypeOf, HttpError } from '@oasis/service-kit';
+import {
+  archiveFile,
+  contentTypeOf,
+  extractFiles,
+  HttpError,
+  readLimited,
+  scanArchive,
+} from '@oasis/service-kit';
 import { SANDBOX_PATHS } from '../../adapter/dsh.ts';
-import { archiveFile, extractFiles, readLimited, scanArchive } from '../../executor/tar.ts';
 import { defaultInspectionLimits, inspectFiles } from '../file-inspection.ts';
 import { audioPath, isPrivateOutput, videoPath, type RunContext } from './shared.ts';
 

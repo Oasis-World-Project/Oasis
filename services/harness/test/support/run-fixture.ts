@@ -2,12 +2,11 @@
 import { extract } from 'tar-stream';
 import { PassThrough, Readable } from 'node:stream';
 import type { EventEnvelope } from '@oasis/contracts/events';
-import { createServiceClient, checkedParts, type ObjectStore } from '@oasis/service-kit';
+import { createServiceClient, checkedParts, packFiles, type ObjectStore } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 import type { Executor, Sandbox, SandboxSpec } from '../../src/executor/executor.ts';
-import { packFiles } from '../../src/executor/tar.ts';
 import type { Run, RunEvent, RunsRepo } from '../../src/repo/runs-repo.ts';
 import { createRunService } from '../../src/service/run-service.ts';
 

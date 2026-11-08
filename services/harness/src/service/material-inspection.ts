@@ -3,8 +3,7 @@ import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { UploadLookupResult } from '@oasis/contracts/canvas';
 import type { MaterialInspectBody, MaterialInspectResult } from '@oasis/contracts/harness';
-import type { ServiceClient } from '@oasis/service-kit';
-import { readLimited } from '../executor/tar.ts';
+import { readLimited, type ServiceClient } from '@oasis/service-kit';
 import { inspectFiles, type InspectionLimits } from './file-inspection.ts';
 
 /** 交给看图检查的图片素材类型和单张上限（和关卡视觉检查的上限一致） */

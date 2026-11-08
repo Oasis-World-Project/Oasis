@@ -2,9 +2,7 @@ import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import readline from 'node:readline';
 import { BrowserTestPlan, BrowserTestResult, UiTestReport } from '@oasis/contracts/ui-test';
-import type { DockerApi } from './docker-api.ts';
-import { demultiplex } from './executor.ts';
-import { packFiles } from './tar.ts';
+import { demultiplex, packFiles, type DockerApi } from '@oasis/service-kit';
 
 const seccompProfile = readFileSync(new URL('../../seccomp-profile.json', import.meta.url), 'utf8');
 

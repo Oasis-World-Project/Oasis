@@ -9,10 +9,9 @@ import type {
   StartRunBody,
 } from '@oasis/contracts/harness';
 import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
-import type { Logger, ObjectStore, ServiceClient } from '@oasis/service-kit';
+import type { Logger, ObjectStore, ServiceClient, StreamFile } from '@oasis/service-kit';
 import type { AgentConnection, SandboxPackages } from '../../adapter/dsh.ts';
 import type { Executor, Sandbox } from '../../executor/executor.ts';
-import type { StreamFile } from '../../executor/tar.ts';
 import type { Run, RunOutcome, RunsRepo } from '../../repo/runs-repo.ts';
 import type { InspectionLimits } from '../file-inspection.ts';
 

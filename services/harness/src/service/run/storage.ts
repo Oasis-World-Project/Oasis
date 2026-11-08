@@ -3,9 +3,9 @@
 import { PassThrough, Readable } from 'node:stream';
 import { UploadLookupResult } from '@oasis/contracts/canvas';
 import { VideoCheckResult } from '@oasis/contracts/harness';
+import { rewriteArchive, scanArchive } from '@oasis/service-kit';
 import { SANDBOX_PATHS } from '../../adapter/dsh.ts';
 import type { Sandbox } from '../../executor/executor.ts';
-import { rewriteArchive, scanArchive } from '../../executor/tar.ts';
 import { audioPath, isPrivateOutput, StopRun, videoPath, type RunContext } from './shared.ts';
 
 export function createStorage(

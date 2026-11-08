@@ -4,8 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { HARNESS_STREAM, TASK_STREAM, TaskDeleted } from '@oasis/contracts/events';
 import {
   connectPostgresAndEventBus,
+  createDockerApi,
   createObjectStore,
   createServiceClient,
+  defaultDockerSocket,
   ensureStream,
   startEventConsumer,
   startOutboxRelay,
@@ -16,7 +18,6 @@ import {
 import { SANDBOX_PATHS } from './adapter/dsh.ts';
 import { registerRoutes } from './api/routes.ts';
 import { harnessEnv } from './config.ts';
-import { createDockerApi, defaultDockerSocket } from './executor/docker-api.ts';
 import { createDockerExecutor, type Executor } from './executor/executor.ts';
 import { createPreviewExecutor } from './executor/preview-executor.ts';
 import { createBrowserRepo } from './repo/browser-repo.ts';

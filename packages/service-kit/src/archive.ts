@@ -1,11 +1,11 @@
-// 沙箱拷文件进出用的 tar 小工具（Docker 的 archive 接口只收发 tar）。
+// 容器拷文件进出、运行产出归档用的 tar 小工具（Docker 的 archive 接口只收发 tar）。
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
 import { extract, pack } from 'tar-stream';
 
-/** 沙箱用户（镜像里的 node 用户）的 uid/gid：放进沙箱的文件和目录都归它，dsh 才能写 */
-const SANDBOX_UID = 1000;
+/** 容器里普通用户（镜像里的 node 用户）的 uid/gid：放进容器的文件和目录都归它，容器里的程序才能写 */
+const CONTAINER_UID = 1000;
 
 export interface StreamFile {
   path: string;
@@ -132,8 +132,8 @@ export function packStreams(files: StreamFile[]): Readable {
             name: `${dir}/`,
             type: 'directory',
             mode: 0o755,
-            uid: SANDBOX_UID,
-            gid: SANDBOX_UID,
+            uid: CONTAINER_UID,
+            gid: CONTAINER_UID,
           });
         }
       }
@@ -158,8 +158,8 @@ export function packStreams(files: StreamFile[]): Readable {
             name: file.path,
             size: file.size,
             mode: 0o644,
-            uid: SANDBOX_UID,
-            gid: SANDBOX_UID,
+            uid: CONTAINER_UID,
+            gid: CONTAINER_UID,
           }),
         );
         if (size !== file.size || (file.sha256 && file.sha256 !== hash.digest('hex')))
@@ -197,8 +197,8 @@ export function rewriteArchive(
         name: `${parts.slice(0, i + 1).join('/')}/`,
         type: 'directory',
         mode: readonly ? 0o550 : 0o755,
-        uid: readonly ? 0 : SANDBOX_UID,
-        gid: SANDBOX_UID,
+        uid: readonly ? 0 : CONTAINER_UID,
+        gid: CONTAINER_UID,
       });
     await pipeline(
       stream,
@@ -206,8 +206,8 @@ export function rewriteArchive(
         name,
         size,
         mode: readonly ? 0o440 : 0o644,
-        uid: readonly ? 0 : SANDBOX_UID,
-        gid: SANDBOX_UID,
+        uid: readonly ? 0 : CONTAINER_UID,
+        gid: CONTAINER_UID,
       }),
     );
   })
@@ -220,10 +220,10 @@ export function rewriteArchive(
 
 /**
  * 把若干文件打成 tar 包（路径相对于解包目录）。上级目录也作为条目写进去，
- * 否则 Docker 会以 root 身份建这些目录，沙箱用户就写不进去了。
+ * 否则 Docker 会以 root 身份建这些目录，容器里的普通用户就写不进去了。
  */
 export async function packFiles(files: { path: string; content: Buffer }[]): Promise<Buffer> {
-  const owner = { uid: SANDBOX_UID, gid: SANDBOX_UID };
+  const owner = { uid: CONTAINER_UID, gid: CONTAINER_UID };
   const dirs = new Set<string>();
   for (const file of files) {
     const parts = file.path.split('/').slice(0, -1);

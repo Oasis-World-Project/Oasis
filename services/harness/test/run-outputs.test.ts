@@ -1,7 +1,6 @@
 // 运行服务：一次运行从输入到产出（素材、上游产出、持久工作目录、产出文件和检查报告）。
-import { HttpError } from '@oasis/service-kit';
+import { extractFiles, HttpError } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
-import { extractFiles } from '../src/executor/tar.ts';
 import {
   PAYER,
   methods,

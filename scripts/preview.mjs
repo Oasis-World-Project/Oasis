@@ -67,7 +67,7 @@ if (process.argv[2] === 'accept') {
     writeFile(path.join(output, 'acceptance.json'), JSON.stringify(record, null, 2));
   await save();
   const { createDockerApi, defaultDockerSocket } =
-    await import('../services/harness/dist/executor/docker-api.js');
+    await import('../packages/service-kit/dist/index.js');
   const { createPreviewExecutor } =
     await import('../services/harness/dist/executor/preview-executor.js');
   const executor = createPreviewExecutor({
@@ -379,7 +379,7 @@ if (process.argv[2] === 'build') {
 }
 if (process.argv[2] === 'smoke') {
   const { createDockerApi, defaultDockerSocket } =
-    await import('../services/harness/dist/executor/docker-api.js');
+    await import('../packages/service-kit/dist/index.js');
   const { createPreviewExecutor } =
     await import('../services/harness/dist/executor/preview-executor.js');
   const executor = createPreviewExecutor({

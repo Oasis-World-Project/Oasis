@@ -3,7 +3,7 @@
 // → 写结局并发出 harness.run.finished。依赖暂时不可用时保存原会话，等接管（control.ts）。
 import { RunFinished } from '@oasis/contracts/events';
 import { ExecutionModels, RunKeyCreated } from '@oasis/contracts/model-gateway';
-import { createEnvelope, HttpError } from '@oasis/service-kit';
+import { createEnvelope, HttpError, packFiles, packStreams, scanArchive } from '@oasis/service-kit';
 import {
   connectAgent,
   isSessionArchive,
@@ -13,7 +13,6 @@ import {
   type AgentConnection,
 } from '../../adapter/dsh.ts';
 import type { Sandbox } from '../../executor/executor.ts';
-import { packFiles, packStreams, scanArchive } from '../../executor/tar.ts';
 import type { RunOutcome } from '../../repo/runs-repo.ts';
 import { startRunLease } from '../run-lease.ts';
 import { KEEP_FILE, savedOutcome, StopRun, type LiveRun, type RunContext } from './shared.ts';

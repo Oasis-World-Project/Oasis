@@ -10,18 +10,20 @@ import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import http from 'node:http';
 import { pipeline } from 'node:stream/promises';
-import { createObjectStore, createService } from '../packages/service-kit/dist/index.js';
+import {
+  createDockerApi,
+  createObjectStore,
+  createService,
+  defaultDockerSocket,
+  demultiplex,
+  packStreams,
+} from '../packages/service-kit/dist/index.js';
 import { registerRoutes } from '../services/canvas/dist/api/routes.js';
 import { createUploadService } from '../services/canvas/dist/service/upload-service.js';
 import { createArtifactService } from '../services/canvas/dist/service/artifact-service.js';
 import { memoryArtifacts, memoryUploads } from '../services/canvas/test/memory.ts';
 import { createSyncFolder } from '../apps/desktop/dist/sync-folder.js';
-import {
-  createDockerApi,
-  defaultDockerSocket,
-} from '../services/harness/dist/executor/docker-api.js';
-import { demultiplex, inspectSandboxMedia } from '../services/harness/src/executor/executor.ts';
-import { packStreams } from '../services/harness/dist/executor/tar.js';
+import { inspectSandboxMedia } from '../services/harness/src/executor/executor.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
 const env = path.join(root, 'services/canvas/.env');

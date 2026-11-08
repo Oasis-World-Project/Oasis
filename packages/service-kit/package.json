@@ -29,12 +29,14 @@
     "fastify": "catalog:",
     "pg": "catalog:",
     "pino": "catalog:",
+    "tar-stream": "3.2.2",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@oasis/tsconfig": "workspace:*",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "@types/tar-stream": "3.1.5",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
