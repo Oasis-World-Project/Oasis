@@ -7,8 +7,7 @@
   "files": [
     "dist",
     "migrations",
-    "seccomp-profile.json",
-    "media"
+    "seccomp-profile.json"
   ],
   "scripts": {
     "dev": "node ../../scripts/dev-service.mjs --no-watch src/main.ts",

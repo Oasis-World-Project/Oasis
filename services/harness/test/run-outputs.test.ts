@@ -1,4 +1,4 @@
-// 运行服务：一次运行从输入到产出（素材、上游产出、持久工作目录、产出文件和检查报告）。
+// 运行服务：一次运行从输入到产出（素材、上游产出、持久工作目录、产出文件和给 inspector 的下载链接）。
 import { extractFiles, HttpError } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
 import {
@@ -22,44 +22,6 @@ import {
 } from './support/run-fixture.ts';
 
 describe('一次 agent 运行：输入和产出', () => {
-  it('视频报告必须绑定归档摘要及归属；篡改摘要或缺少报告均保持未检查', async () => {
-    const taskId = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
-    const run = await service.start({ ...base, taskId, prompt: '做一次' });
-    const row = await finished(run.id);
-    const sha256 = 'a'.repeat(64);
-    rows.set(run.id, { ...row, outputs: [{ path: 'final.mp4', size: 5, sha256 }] });
-    const key = `runs/${run.id}/video-check.json`;
-    expect(await service.videoCheck(run.id, PAYER, taskId)).toEqual({
-      files: [],
-      unchecked: ['final.mp4'],
-    });
-    stored.set(
-      key,
-      Buffer.from(
-        JSON.stringify({
-          files: [{ path: 'final.mp4', size: 5, sha256, valid: true, width: 1280, height: 720 }],
-          unchecked: [],
-        }),
-      ),
-    );
-    expect((await service.videoCheck(run.id, PAYER, taskId)).files[0]?.width).toBe(1280);
-    await expect(service.videoCheck(run.id, PAYER, PAYER)).rejects.toMatchObject({
-      statusCode: 404,
-    });
-    stored.set(
-      key,
-      Buffer.from(
-        JSON.stringify({
-          files: [{ path: 'final.mp4', size: 5, sha256: 'b'.repeat(64), valid: true }],
-          unchecked: [],
-        }),
-      ),
-    );
-    expect(await service.videoCheck(run.id, PAYER, taskId)).toEqual({
-      files: [],
-      unchecked: ['final.mp4'],
-    });
-  });
   it.each(['TRUNCATED', 'NO_END'])(
     '非正常结束不能当成功：%s（即使有产物和空闲通知）',
     async (prompt) => {

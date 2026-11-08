@@ -23,7 +23,7 @@ import { createUploadService } from '../services/canvas/dist/service/upload-serv
 import { createArtifactService } from '../services/canvas/dist/service/artifact-service.js';
 import { memoryArtifacts, memoryUploads } from '../services/canvas/test/memory.ts';
 import { createSyncFolder } from '../apps/desktop/dist/sync-folder.js';
-import { inspectSandboxMedia } from '../services/harness/src/executor/executor.ts';
+import { MEDIA_LABEL, runMediaCheck } from '../services/inspector/src/service/media-check.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
 const env = path.join(root, 'services/canvas/.env');
@@ -393,22 +393,24 @@ try {
   const snapshot = await docker.getArchive(container, '/workspace/out');
   const snapshotKey = `media-test/${taskId}/audio-snapshot.tar`;
   await store.putStream(snapshotKey, snapshot, 'application/x-tar', { maxBytes: 32 * 1024 * 1024 });
-  const audio = await inspectSandboxMedia(docker, container, await store.read(snapshotKey), {
-    files: 20,
-    timeoutMs: 90_000,
-    durationMs: 1200_000,
-    maxBytes: 2 * 1024 ** 3,
-  });
+  // 和 inspector 一样：存下的产出包交给独立的检查容器解码
+  const { report: audio } = await runMediaCheck(
+    docker,
+    {
+      image: process.env.SANDBOX_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.5',
+      cores: 2,
+      memoryMb: 2048,
+      pidsLimit: 256,
+    },
+    await store.read(snapshotKey),
+    { files: 20, timeoutMs: 90_000, durationMs: 1200_000, maxBytes: 2 * 1024 ** 3 },
+  );
   assert.equal(audio.files.find((file) => file.path === 'tone.wav')?.valid, true);
   assert.equal(audio.files.find((file) => file.path === 'broken.mp3')?.valid, false);
   report.audio = audio;
   checked('真实 FFprobe/FFmpeg：90 秒音频完整解码，损坏 MP3 被拒绝');
-  await exec([
-    'node',
-    '-e',
-    "const fs=require('node:fs');const d=fs.readdirSync('/tmp').find(n=>n.startsWith('oasis-media-'));try{fs.writeFileSync('/tmp/'+d+'/tone.wav','changed');process.exit(2)}catch(e){if(e.code!=='EACCES')throw e}",
-  ]);
-  checked('受信检查快照对沙箱用户只读');
+  assert.deepEqual(await docker.listContainers(MEDIA_LABEL), [], '检查容器应用完即删');
+  checked('解码在独立检查容器里做，用完即删');
   report.peakRssBytes = peak;
   if (bytes >= 256 * 1024 * 1024) assert(peak < bytes, `内存峰值 ${peak} 未达到流式目标`);
   await mkdir(output, { recursive: true });

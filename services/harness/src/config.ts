@@ -57,9 +57,6 @@ export const harnessEnv = {
   /** 同时进行的运行数上限，超出的排队 */
   MAX_CONCURRENT_RUNS: positiveInt.default(4),
   RECOVERY_INTERVAL_MS: positiveInt.default(15000),
-  MEDIA_CHECK_MAX_FILES: positiveInt.max(100).default(20),
-  MEDIA_CHECK_TIMEOUT_MS: positiveInt.max(300_000).default(90_000),
-  MEDIA_CHECK_MAX_DURATION_MS: positiveInt.max(3600_000).default(20 * 60_000),
   FILE_TRANSFER_TIMEOUT_MS: positiveInt.default(600_000),
   /** 计费窗口会续租，不限制任务总时长。 */
   GOAL_ROUND_WINDOW: positiveInt.min(2).default(256),

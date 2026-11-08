@@ -21,16 +21,6 @@ export function registerRoutes(app: ServiceApp, runs: RunService, previews?: Pre
     const { payerId, taskId } = parseWith(OutputsLinkBody, request.body);
     return runs.outputsLink(runId, payerId, taskId);
   });
-  for (const kind of ['audio', 'video'] as const) {
-    app.post(`/internal/runs/:runId/${kind}-check`, async (request) => {
-      const { runId } = parseWith(RunParams, request.params);
-      const { payerId, taskId } = parseWith(
-        z.object({ payerId: z.uuid(), taskId: z.uuid() }),
-        request.body,
-      );
-      return runs[`${kind}Check`](runId, payerId, taskId);
-    });
-  }
   if (previews) {
     app.post('/internal/websites/check', async (request) =>
       previews.checkWebsite(

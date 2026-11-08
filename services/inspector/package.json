@@ -2,10 +2,11 @@
   "name": "@oasis/inspector",
   "version": "0.0.0",
   "private": true,
-  "description": "检查服务：判断成果的检查都在这里（文件解析、模型预览、素材解析），不调别的服务、不存东西",
+  "description": "检查服务：判断成果的检查都在这里（文件解析、音视频解码、模型预览、素材解析），不调别的服务、不存东西",
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "media"
   ],
   "scripts": {
     "dev": "node ../../scripts/dev-service.mjs src/main.ts",

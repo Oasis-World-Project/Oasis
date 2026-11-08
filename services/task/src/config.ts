@@ -10,6 +10,14 @@ export const taskEnv = {
   /** 报价、规划员调用模型 */
   MODEL_GATEWAY_URL: z.url(),
   HARNESS_CHECK_TIMEOUT_MS: z.coerce.number().int().min(10000).max(180000).default(40000),
+  /** 关卡的音视频解码检查：inspector 开的检查容器用几核、最多跑多久（算力记在任务上，ADR 0024） */
+  MEDIA_CHECK_CPUS: z.coerce.number().positive().max(8).default(2),
+  MEDIA_CHECK_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(10_000)
+    .max(10 * 60_000)
+    .default(90_000),
   /** 一个任务同时最多跑几个节点（ADR 0004：3） */
   MAX_PARALLEL_NODES: z.coerce.number().int().positive().max(20).default(3),
   /** 规划员查模型目录 */

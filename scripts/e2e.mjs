@@ -115,7 +115,7 @@ const env = {
     MAX_CONCURRENT_RUNS: '4',
     RECOVERY_INTERVAL_MS: '5000',
   },
-  task: { RECONCILE_INTERVAL_MS: '10000' },
+  task: { RECONCILE_INTERVAL_MS: '10000', MEDIA_CHECK_CPUS: '1' },
 };
 const stack = createStack({ logDir: path.join(outDir, 'logs'), env, log });
 let provider;

@@ -1,9 +1,8 @@
 // 执行器：为一次运行起一个隔离的沙箱，给出它的 stdin/stdout，并能拷文件进出、销毁。
 // 现在只有 Docker 实现；上云后加 K8s Job、云 GPU 等实现，接口不变（ADR 0003 §6）。
 import { PassThrough, type Readable, type Writable } from 'node:stream';
-import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { demultiplex, rewriteArchive, type DockerApi } from '@oasis/service-kit';
+import { demultiplex, type DockerApi } from '@oasis/service-kit';
 import { ExecutionEnvironment } from '@oasis/contracts/harness';
 
 export interface SandboxSpec {
@@ -29,7 +28,6 @@ export interface Sandbox {
   readArchive(path: string): Promise<Readable | undefined>;
   /** 销毁沙箱（运行中也立即结束）；可重复调用 */
   destroy(): Promise<void>;
-  inspectMedia?(snapshot: Readable): Promise<unknown>;
 }
 
 export interface Executor {
@@ -54,69 +52,6 @@ const volumeNames = (id: string) => {
   return [`oasis-workspace-${id}`, `oasis-sessions-${id}`];
 };
 
-interface MediaInspectionLimits {
-  files: number;
-  timeoutMs: number;
-  durationMs: number;
-  maxBytes?: number;
-}
-export async function inspectSandboxMedia(
-  docker: DockerApi,
-  id: string,
-  snapshot: Readable,
-  limits: MediaInspectionLimits,
-): Promise<unknown> {
-  const prefix = `oasis-media-${randomUUID()}`;
-  // 从已保存快照复制到 root 所有、node 只读的目录；应用不能改动本次检查的字节。
-  await docker.putArchive(
-    id,
-    '/tmp',
-    rewriteArchive(
-      snapshot,
-      prefix,
-      (path) =>
-        /\.(wav|mp3|m4a|flac|ogg|webm|aac|mp4|mov|mkv|avi|mlt|json|srt|png|jpe?g|webp)$/i.test(
-          path,
-        ),
-      limits.maxBytes,
-      true,
-    ),
-  );
-  const script = readFileSync(new URL('../../media/media-check.mjs', import.meta.url), 'utf8');
-  const execution = await docker.exec(id, [
-    'node',
-    '--input-type=module',
-    '-e',
-    script,
-    `/tmp/${prefix}`,
-    JSON.stringify(limits),
-  ]);
-  const output = new PassThrough();
-  const errors = new PassThrough();
-  errors.resume();
-  demultiplex(execution.stream, output, errors);
-  const timeout = setTimeout(
-    () => execution.stream.destroy(new Error('媒体检查超时')),
-    limits.timeoutMs + 10_000,
-  );
-  try {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    for await (const value of output) {
-      const chunk = Buffer.from(value as Uint8Array);
-      size += chunk.length;
-      if (size > 2 * 1024 * 1024) throw new Error('媒体检查报告过大');
-      chunks.push(chunk);
-    }
-    const state = await docker.inspectExec(execution.id);
-    if (state.ExitCode !== 0) throw new Error('媒体检查进程失败');
-    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
-  } finally {
-    clearTimeout(timeout);
-    execution.stream.destroy();
-  }
-}
-
 export function createDockerExecutor(deps: {
   docker: DockerApi;
   image: string;
@@ -127,7 +62,6 @@ export function createDockerExecutor(deps: {
   /** 沙箱里的工作目录，启动前确保 files 里的目录都在它下面 */
   workdir: string;
   sessionsDir?: string;
-  mediaCheck?: { files: number; timeoutMs: number; durationMs: number; maxBytes?: number };
 }): Executor {
   const { docker } = deps;
   const instanceId = randomUUID();
@@ -271,12 +205,6 @@ export function createDockerExecutor(deps: {
           stderr,
           readArchive: (path) => docker.getArchive(id, path),
           pause: () => docker.pauseContainer(id),
-          ...(deps.mediaCheck
-            ? {
-                inspectMedia: (snapshot: Readable) =>
-                  inspectSandboxMedia(docker, id, snapshot, deps.mediaCheck!),
-              }
-            : {}),
           destroy,
         };
       } catch (err) {

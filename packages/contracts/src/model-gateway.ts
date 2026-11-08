@@ -113,8 +113,11 @@ export const ComputeHoldBody = z.object({
     .int()
     .positive()
     .max(24 * 3600_000),
-  /** 节点运行的沙箱，或检查用的隔离浏览器（调用记录里分开标识） */
-  purpose: z.enum(['run', 'application-check']).default('run'),
+  /**
+   * 节点运行的沙箱、检查用的隔离浏览器，或 inspector 解码音视频的检查容器（调用记录里分开标识；
+   * 检查容器由调用方冻结和结算，ADR 0024）
+   */
+  purpose: z.enum(['run', 'application-check', 'media-check']).default('run'),
 });
 export type ComputeHoldBody = z.infer<typeof ComputeHoldBody>;
 

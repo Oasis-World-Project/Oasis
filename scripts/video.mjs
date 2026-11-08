@@ -14,7 +14,7 @@ import {
   packFiles,
   scanArchive,
 } from '../packages/service-kit/dist/index.js';
-import { inspectSandboxMedia } from '../services/harness/src/executor/executor.ts';
+import { MEDIA_LABEL, runMediaCheck } from '../services/inspector/src/service/media-check.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
 if (existsSync(path.join(root, '.env'))) process.loadEnvFile(path.join(root, '.env'));
@@ -116,15 +116,15 @@ try {
   ]);
   const archive = await docker.getArchive(id, '/workspace/out');
   assert(archive);
-  // 与生产一样先保存快照；Docker 不能在同一容器里同时持有归档读锁和解包写锁。
+  // 与生产一样先存下产出包，再交给 inspector 的独立检查容器解码
   await mkdir(path.dirname(snapshotFile), { recursive: true });
   await pipeline(archive, createWriteStream(snapshotFile, { flags: 'wx' }));
-  const report = await inspectSandboxMedia(docker, id, createReadStream(snapshotFile), {
-    files: 30,
-    timeoutMs: 180_000,
-    durationMs: 1200_000,
-    maxBytes: 256 * 1024 ** 2,
-  });
+  const { report } = await runMediaCheck(
+    docker,
+    { image, cores: 2, memoryMb: 2048, pidsLimit: 512 },
+    createReadStream(snapshotFile),
+    { files: 30, timeoutMs: 180_000, durationMs: 1200_000, maxBytes: 256 * 1024 ** 2 },
+  );
   for (const name of [
     'landscape/final.mp4',
     'landscape/moved 工程/project.mlt',
@@ -139,16 +139,12 @@ try {
     );
   assert.equal(report.files.find((f) => f.path === 'broken.mp4')?.valid, false);
   assert.equal(report.files.find((f) => f.path === 'audio-only.mp4')?.valid, false);
-  await exec([
-    'node',
-    '-e',
-    "const fs=require('node:fs');const d=fs.readdirSync('/tmp').find(n=>n.startsWith('oasis-media-'));try{fs.writeFileSync('/tmp/'+d+'/landscape/final.mp4','changed');process.exit(2)}catch(e){if(e.code!=='EACCES')throw e}",
-  ]);
+  assert.deepEqual(await docker.listContainers(MEDIA_LABEL), [], '检查容器应用完即删');
   // 错误样本只在报告中，不作为最终成片交付。
   await saveArchive(output, true);
   await writeFile(path.join(output, 'trusted-media-check.json'), JSON.stringify(report, null, 2));
   console.log(
-    'PASS: trusted video/project/subtitle check, corrupted MP4 rejected, read-only snapshot',
+    'PASS: trusted video/project/subtitle check in a separate container, corrupted MP4 rejected',
   );
   console.log(`最终证据：${output}`);
 } catch (error) {

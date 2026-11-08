@@ -2,20 +2,20 @@
 // 1. 文件齐不齐：产出非空，方案写明的文件都在，数量和图片尺寸符合，文件能解析（inspector 的解析报告）。
 // 2. 网页能不能打开：有 oasis-app.json 的成果在隔离浏览器里跑一遍（节点自己也能用 app.check 跑同一套）；
 //    交给用户的网页没配 oasis-app.json 也算没满足（画布里不能运行、浏览器检查也跑不了）。
-// 3. 音视频能不能播放：完整解码一遍。
+// 3. 音视频能不能播放：inspector 在不联网的检查容器里完整解码一遍，算力记在这个任务上。
 // 任务单的「怎么算做好」由节点自己对照，不再交给模型逐条打分。检查程序本身出错记为没检查到，不冒充通过；
 // 检查只提醒、不拦截（2026-11-05 用户决定）。
+import { ApplicationCheckResult, OutputsLink, type RunOutputFile } from '@oasis/contracts/harness';
 import {
-  AudioCheckResult,
-  VideoCheckResult,
-  ApplicationCheckResult,
-  OutputsLink,
-  type RunOutputFile,
-} from '@oasis/contracts/harness';
-import { InspectedFiles, type InspectedFile } from '@oasis/contracts/inspector';
+  InspectedFiles,
+  MEDIA_FILE,
+  MediaCheckResult,
+  type InspectedFile,
+} from '@oasis/contracts/inspector';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import type { ExpectedFile } from '@oasis/contracts/task';
 import type { z } from 'zod';
+import type { CheckCompute } from './check-compute.ts';
 import { patternRegExp } from './output-files.ts';
 
 export interface GateResult {
@@ -142,21 +142,10 @@ interface GateInput {
   deliver?: readonly string[];
 }
 
-const MEDIA = [
-  {
-    name: 'audio',
-    label: '音频',
-    pattern: /\.(wav|mp3|m4a|flac|ogg|aac)$/i,
-    schema: AudioCheckResult,
-  },
-  {
-    name: 'video',
-    label: '视频/工程/字幕',
-    pattern: /\.(mp4|mov|mkv|avi|webm|mlt|srt)$/i,
-    schema: VideoCheckResult,
-  },
-] as const;
-const isMedia = (path: string) => MEDIA.some((kind) => kind.pattern.test(path));
+/** 音视频交给解码检查（其余文件走文件解析）；提醒里按种类称呼 */
+const isMedia = (path: string) => MEDIA_FILE.test(path);
+const mediaLabel = (path: string) =>
+  /\.(wav|mp3|m4a|flac|ogg|aac)$/i.test(path) ? '音频' : '视频/工程/字幕';
 
 /** 音视频的解码结果：数量按它算（并进文件解析报告），未满足和未检查照旧排在最后 */
 interface MediaFindings {
@@ -168,9 +157,13 @@ interface MediaFindings {
 export function createGate(deps: {
   harness: ServiceClient;
   inspector: ServiceClient;
+  /** 解码检查的算力：先冻结、按 inspector 报回的用量结算（ADR 0024） */
+  compute: CheckCompute;
+  /** 解码检查容器用几核、最多跑多久（这个任务付钱） */
+  media: { cores: number; timeoutMs: number };
   logger: Logger;
 }) {
-  const { harness, inspector, logger } = deps;
+  const { harness, inspector, compute, logger } = deps;
   const options = <T>(input: GateInput, body: unknown, schema: z.ZodType<T>) => ({
     body,
     schema,
@@ -190,6 +183,7 @@ export function createGate(deps: {
   /** 文件能不能解析、数量和尺寸：inspector 的解析报告，不读正文 */
   async function checkFiles(
     input: GateInput,
+    source: () => Promise<OutputsLink>,
     media: InspectedFile[],
     unmet: string[],
     unchecked: string[],
@@ -199,7 +193,7 @@ export function createGate(deps: {
       ? await inspector.json(
           'POST',
           '/internal/files/check',
-          options(input, { source: await outputsOf(input), paths, maxChars: 1 }, InspectedFiles),
+          options(input, { source: await source(), paths, maxChars: 1 }, InspectedFiles),
         )
       : { files: [], truncated: false };
     for (const file of report.files)
@@ -228,18 +222,31 @@ export function createGate(deps: {
     if (!result.passed) unmet.push(`浏览器实际运行检查失败：${result.reason ?? '原因未返回'}`);
   }
 
-  async function checkMedia(input: GateInput, kind: (typeof MEDIA)[number], found: MediaFindings) {
-    const media = input.outputs.filter((file) => kind.pattern.test(file.path));
+  /** 音视频、平台工程、字幕能不能完整解码：inspector 开检查容器做，算力按实际用时记在这个任务上 */
+  async function checkMedia(
+    input: GateInput,
+    source: () => Promise<OutputsLink>,
+    found: MediaFindings,
+  ) {
+    const media = input.outputs.filter((file) => isMedia(file.path));
     if (!media.length) return;
-    const result = await harness.json(
-      'POST',
-      `/internal/runs/${input.runId}/${kind.name}-check`,
-      options(input, { payerId: input.payerId, taskId: input.taskId }, kind.schema),
+    const body = {
+      source: await source(),
+      paths: media.map((file) => file.path),
+      cores: deps.media.cores,
+      timeoutMs: deps.media.timeoutMs,
+    };
+    const result = await compute(
+      input,
+      // 容器开起来、脚本收尾要多一点时间
+      { purpose: 'media-check', cores: body.cores, maxMs: body.timeoutMs + 30_000 },
+      () => inspector.json('POST', '/internal/media/check', options(input, body, MediaCheckResult)),
     );
     for (const file of media) {
+      const label = mediaLabel(file.path);
       const checked = result.files.find((item) => item.path === file.path);
       if (!checked) {
-        found.unchecked.push(`${kind.label}「${file.path}」未完成解码检查`);
+        found.unchecked.push(`${label}「${file.path}」未完成解码检查`);
         found.inspected.push({
           path: file.path,
           text: '',
@@ -248,7 +255,7 @@ export function createGate(deps: {
         });
       } else {
         if (!checked.valid)
-          found.unmet.push(`${kind.label}「${file.path}」${checked.error ?? '探测或完整解码失败'}`);
+          found.unmet.push(`${label}「${file.path}」${checked.error ?? '探测或完整解码失败'}`);
         found.inspected.push({
           path: file.path,
           text: '',
@@ -282,13 +289,15 @@ export function createGate(deps: {
       if (unmet.length > 0) return { unmet };
       unmet.push(...checkWebManifest(input.outputs, input.deliver ?? []));
       const unchecked: string[] = [];
+      // 产出包链接只要一次，文件解析和解码检查共用
+      let link: Promise<OutputsLink> | undefined;
+      const source = () => (link ??= outputsOf(input));
       const media: MediaFindings = { inspected: [], unmet: [], unchecked: [] };
-      for (const kind of MEDIA)
-        await guarded(input, `${kind.label}解码检查`, media.unchecked, () =>
-          checkMedia(input, kind, media),
-        );
+      await guarded(input, '音视频解码检查', media.unchecked, () =>
+        checkMedia(input, source, media),
+      );
       await guarded(input, '文件解析检查', unchecked, () =>
-        checkFiles(input, media.inspected, unmet, unchecked),
+        checkFiles(input, source, media.inspected, unmet, unchecked),
       );
       if (input.outputs.some((file) => APP_MANIFEST.test(file.path)))
         await guarded(input, '浏览器实际运行检查', unchecked, () => checkApplication(input, unmet));

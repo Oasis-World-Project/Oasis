@@ -1,6 +1,7 @@
-// inspector：判断成果的检查服务（ADR 0024）。文件解析、模型预览、用户素材解析都在这里；
+// inspector：判断成果的检查服务（ADR 0024）。文件解析、音视频解码、模型预览、用户素材解析都在这里；
 // 它不调别的服务、不存东西：要检查的内容由调用方给对象存储的临时下载链接，或直接放在请求里。
-import { startService } from '@oasis/service-kit';
+// 要开容器的检查（音视频解码）由调用方付算力：它先冻结，按这里报回的实际用量结算。
+import { createDockerApi, defaultDockerSocket, startService } from '@oasis/service-kit';
 import { registerRoutes } from './api/routes.ts';
 import { inspectorEnv } from './config.ts';
 import { createFileCheck } from './service/file-check.ts';
@@ -10,6 +11,7 @@ import {
   type InspectionLimits,
 } from './service/file-inspection.ts';
 import { createMaterialInspector } from './service/material-inspection.ts';
+import { createMediaCheck } from './service/media-check.ts';
 import { createSources } from './service/sources.ts';
 
 await startService({
@@ -33,6 +35,22 @@ await startService({
     });
     registerRoutes(app, {
       checkFiles: createFileCheck({ sources, limits, maxArchiveBytes: config.SOURCE_MAX_BYTES }),
+      checkMedia: createMediaCheck({
+        sources,
+        docker: createDockerApi(config.DOCKER_SOCKET ?? defaultDockerSocket()),
+        box: {
+          image: config.MEDIA_CHECK_IMAGE,
+          memoryMb: config.MEDIA_CHECK_MEMORY_MB,
+          pidsLimit: config.MEDIA_CHECK_PIDS_LIMIT,
+        },
+        limits: {
+          files: config.MEDIA_CHECK_MAX_FILES,
+          durationMs: config.MEDIA_CHECK_MAX_DURATION_MS,
+          maxBytes: config.SOURCE_MAX_BYTES,
+        },
+        concurrency: config.MEDIA_CHECK_CONCURRENCY,
+        sourceTimeoutMs: config.SOURCE_TIMEOUT_MS,
+      }),
       inspectMaterials: createMaterialInspector(sources, limits),
       inspectModel: createModelPreviewInspector(),
       inspectPoster: createModelPosterInspector(),

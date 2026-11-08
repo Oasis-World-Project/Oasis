@@ -2,6 +2,7 @@ import { HttpError, type ServiceClient } from '@oasis/service-kit';
 import { pino } from 'pino';
 import { describe, expect, it } from 'vitest';
 import type { ZodType } from 'zod';
+import { createCheckCompute } from '../src/service/check-compute.ts';
 import { checkRules, checkWebManifest, createGate } from '../src/service/gate.ts';
 
 describe('交给用户的网页要配 oasis-app.json', () => {
@@ -124,12 +125,28 @@ const LINK = {
   url: 'http://127.0.0.1:8333/oasis-harness/runs/run-1/outputs.tar?sig',
   expiresAt: '2026-01-01T00:15:00.000Z',
 };
-/** harness：产出包链接、浏览器和音视频检查（各测试可以覆盖） */
+/** harness：产出包链接、浏览器检查（各测试可以覆盖） */
 const harnessWith = (answer: (path: string) => unknown = () => undefined) =>
   fakeService((path) => (path.endsWith('/outputs/link') ? LINK : answer(path)));
 const parsed = (files: unknown[] = []) => ({ files, truncated: false });
-const gateWith = (harness: ServiceClient, inspector: ServiceClient) =>
-  createGate({ harness, inspector, logger: pino({ level: 'silent' }) });
+const CALL = '4d4d4d4d-4d4d-4d4d-8d4d-4d4d4d4d4d4d';
+/** model-gateway：检查容器的算力冻结和结算 */
+const meterWith = (hold: () => unknown = () => ({ callId: CALL, heldMicro: 30 })) =>
+  fakeService((path) => (path === '/internal/v1/compute' ? hold() : undefined));
+const gateWith = (
+  harness: ServiceClient,
+  inspector: ServiceClient,
+  modelGateway: ServiceClient = meterWith().client,
+) => {
+  const logger = pino({ level: 'silent' });
+  return createGate({
+    harness,
+    inspector,
+    compute: createCheckCompute({ modelGateway, logger }),
+    media: { cores: 2, timeoutMs: 90_000 },
+    logger,
+  });
+};
 
 describe('轻量关卡（ADR 0017）', () => {
   it('普通文字成果只取 inspector 的解析报告，不读正文、不调模型', async () => {
@@ -205,16 +222,22 @@ describe('轻量关卡（ADR 0017）', () => {
       });
     },
   );
-  it('音视频只看能不能解码：损坏退回，没报告的记未检查；数量按解码结果算', async () => {
-    const harness = harnessWith((path) =>
-      path.endsWith('/audio-check')
-        ? { files: [{ path: 'broken.mp3', valid: false, error: '解码失败' }], unchecked: [] }
-        : path.endsWith('/video-check')
-          ? { files: [{ path: 'final.mp4', valid: true }], unchecked: [] }
-          : undefined,
+  it('音视频交给 inspector 解码：损坏退回，没查到的记未检查；算力按实际用时记在任务上', async () => {
+    const harness = harnessWith();
+    const inspector = fakeService((path) =>
+      path === '/internal/media/check'
+        ? {
+            files: [
+              { path: 'broken.mp3', valid: false, error: '解码失败' },
+              { path: 'final.mp4', valid: true },
+            ],
+            unchecked: ['song.mp3'],
+            usage: { cores: 2, elapsedMs: 1500 },
+          }
+        : parsed(),
     );
-    const inspector = fakeService(() => parsed());
-    const result = await gateWith(harness.client, inspector.client).check({
+    const meter = meterWith();
+    const result = await gateWith(harness.client, inspector.client, meter.client).check({
       ...input,
       expects: [{ pattern: '*.mp4', exactCount: 1 }],
       outputs: [
@@ -225,8 +248,56 @@ describe('轻量关卡（ADR 0017）', () => {
     });
     expect(result.unmet).toEqual(['音频「broken.mp3」解码失败']);
     expect(result.unchecked).toEqual(['音频「song.mp3」未完成解码检查']);
-    // 音视频不交给文件解析
-    expect(inspector.calls).toHaveLength(0);
+    // 音视频不交给文件解析；产出包链接只要一次
+    expect(inspector.calls).toEqual([
+      {
+        path: '/internal/media/check',
+        body: {
+          source: LINK,
+          paths: ['broken.mp3', 'song.mp3', 'final.mp4'],
+          cores: 2,
+          timeoutMs: 90_000,
+        },
+      },
+    ]);
+    expect(harness.calls).toHaveLength(1);
+    expect(meter.calls).toEqual([
+      {
+        path: '/internal/v1/compute',
+        body: expect.objectContaining({
+          payerId: PAYER,
+          taskId: TASK,
+          nodeId: input.nodeId,
+          cores: 2,
+          maxMs: 120_000,
+          purpose: 'media-check',
+        }),
+      },
+      { path: `/internal/v1/compute/${CALL}/settle`, body: { cores: 2, elapsedMs: 1500 } },
+    ]);
+  });
+  it('解码检查没做完（服务出错、余额不够冻结）：记未检查、不收钱，不当成果失败', async () => {
+    const run = { ...input, expects: [], outputs: [{ path: 'final.mp4', size: 100 }] };
+    const down = fakeService((path) =>
+      path === '/internal/media/check'
+        ? new HttpError(503, 'media_check_unavailable', '媒体检查镜像不存在')
+        : parsed(),
+    );
+    const meter = meterWith();
+    expect(await gateWith(harnessWith().client, down.client, meter.client).check(run)).toEqual({
+      unmet: [],
+      unchecked: ['音视频解码检查没做完：媒体检查镜像不存在（服务暂时不可用）'],
+    });
+    expect(meter.calls.at(-1)).toEqual({
+      path: `/internal/v1/compute/${CALL}/settle`,
+      body: { cores: 2, elapsedMs: 0 },
+    });
+
+    const broke = meterWith(() => new HttpError(402, 'insufficient_balance', '余额不足'));
+    const idle = fakeService(() => parsed());
+    const unpaid = await gateWith(harnessWith().client, idle.client, broke.client).check(run);
+    expect(unpaid.unchecked).toEqual(['音视频解码检查没做完：余额不足']);
+    expect(idle.calls).toHaveLength(0);
   });
   it('检查服务出错只记未检查，不当成果失败', async () => {
     const down = fakeService(() => new HttpError(502, 'bad_gateway', '上游断了'));
@@ -241,19 +312,24 @@ describe('轻量关卡（ADR 0017）', () => {
     const harness = harnessWith((path) =>
       path.endsWith('/application-check') ? { ok: true } : undefined,
     );
-    const result = await gateWith(harness.client, odd.client).check({
+    const meter = meterWith();
+    const result = await gateWith(harness.client, odd.client, meter.client).check({
       ...input,
       expects: [{ pattern: '*.md' }],
       outputs: [
         { path: '介绍.md', size: 50 },
         { path: 'site/oasis-app.json', size: 50 },
+        { path: '片段.mp4', size: 50 },
       ],
     });
     expect(result.unmet).toEqual([]);
     expect(result.unchecked).toEqual([
       expect.stringContaining('文件解析检查没做完'),
       expect.stringContaining('浏览器实际运行检查没做完'),
+      expect.stringContaining('音视频解码检查没做完'),
     ]);
+    // 解码报告不合格式也不收钱
+    expect(meter.calls.at(-1)?.body).toEqual({ cores: 2, elapsedMs: 0 });
   });
   it('用户取消时直接抛出，不记成未检查', async () => {
     const controller = new AbortController();

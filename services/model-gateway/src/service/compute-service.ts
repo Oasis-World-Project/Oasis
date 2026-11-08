@@ -7,8 +7,12 @@ import type { Meter } from './metering.ts';
 const HOUR_MS = 3_600_000;
 /** 冻结比最长运行时间多留这么久，免得结算前就被自动退回 */
 const HOLD_MARGIN_MS = 10 * 60_000;
-/** 调用记录里的「模型」一栏：节点运行的沙箱记为 sandbox，检查用的浏览器单独标识 */
-const MODEL = { run: 'sandbox', 'application-check': 'application-check' } as const;
+/** 调用记录里的「模型」一栏：节点运行的沙箱记为 sandbox，检查用的浏览器、解码容器单独标识 */
+const MODEL = {
+  run: 'sandbox',
+  'application-check': 'application-check',
+  'media-check': 'media-check',
+} as const;
 
 export function createComputeService(deps: {
   meter: Meter;

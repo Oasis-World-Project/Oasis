@@ -1,6 +1,6 @@
-// 读运行的产出和过程：运行事件、产出包的临时下载链接（给 inspector 检查）、单个文件、
-// 音视频受信检查报告、运行中沙箱里的当前文件（节点自查 app.check 用）。
-import { VideoCheckResult, type OutputsLink, type RunEventBody } from '@oasis/contracts/harness';
+// 读运行的产出和过程：运行事件、产出包的临时下载链接（给 inspector 检查，ADR 0024）、单个文件、
+// 运行中沙箱里的当前文件（节点自查 app.check 用）。
+import { type OutputsLink, type RunEventBody } from '@oasis/contracts/harness';
 import {
   archiveFile,
   contentTypeOf,
@@ -9,62 +9,16 @@ import {
   readLimited,
 } from '@oasis/service-kit';
 import { SANDBOX_PATHS } from '../../adapter/dsh.ts';
-import { audioPath, isPrivateOutput, videoPath, type RunContext } from './shared.ts';
+import { isPrivateOutput, type RunContext } from './shared.ts';
 
 /** 产出包下载链接的有效期：inspector 拿到就下载，15 分钟足够 */
 const LINK_SECONDS = 15 * 60;
 /** 读进内存的单个产出文件上限（检查用的网页文件等） */
 const FILE_MAX_BYTES = 20 * 1024 * 1024;
 
-/** 读对象存储里的受信检查报告；没有（历史运行、检查没做完）时返回 undefined */
-async function readReport<T>(
-  read: () => Promise<Buffer>,
-  parse: (value: unknown) => T,
-): Promise<T | undefined> {
-  try {
-    return parse(JSON.parse((await read()).toString('utf8')));
-  } catch {
-    return undefined;
-  }
-}
-
 export function createOutputs(ctx: RunContext) {
   const { deps, owned } = ctx;
   const { repo, executor, store } = deps;
-
-  async function checkedMedia(
-    id: string,
-    payerId: string,
-    taskId: string,
-    kind: 'audio' | 'video',
-  ) {
-    const row = await owned(id);
-    if (row.payerId !== payerId || row.taskId !== taskId)
-      throw new HttpError(404, 'run_not_found', '没有这次运行');
-    const expected = row.outputs.filter((file) =>
-      (kind === 'audio' ? audioPath : videoPath).test(file.path),
-    );
-    const report = await readReport(
-      () => store.get(`runs/${id}/${kind}-check.json`),
-      (value) => VideoCheckResult.parse(value),
-    );
-    if (!report) return { files: [], unchecked: expected.map((file) => file.path) };
-    const files = report.files.filter((file) =>
-      expected.some(
-        (output) =>
-          output.path === file.path &&
-          output.size === file.size &&
-          output.sha256 === file.sha256 &&
-          Boolean(file.sha256),
-      ),
-    );
-    return {
-      files,
-      unchecked: expected
-        .filter((output) => !files.some((file) => file.path === output.path))
-        .map((file) => file.path),
-    };
-  }
 
   return {
     /**
@@ -133,10 +87,5 @@ export function createOutputs(ctx: RunContext) {
         sha256: found.sha256,
       };
     },
-
-    audioCheck: (id: string, payerId: string, taskId: string) =>
-      checkedMedia(id, payerId, taskId, 'audio'),
-    videoCheck: (id: string, payerId: string, taskId: string) =>
-      checkedMedia(id, payerId, taskId, 'video'),
   };
 }

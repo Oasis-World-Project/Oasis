@@ -1,4 +1,4 @@
-// 由 harness 通过独立 Docker exec 执行；输出来自受信脚本，不读取应用写出的自检结论。
+// 由 inspector 在不联网的独立检查容器里执行（ADR 0024）；输出来自受信脚本，不读取应用写出的自检结论。
 import { readdir, lstat, readFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';

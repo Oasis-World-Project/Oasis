@@ -1,6 +1,6 @@
-// inspector 的内部接口（ADR 0024）：判断成果的检查都在这里——文件解析、模型预览、用户素材解析。
+// inspector 的内部接口（ADR 0024）：判断成果的检查都在这里——文件解析、音视频解码、模型预览、用户素材解析。
 // inspector 不调别的服务、不存东西：要检查的内容由调用方给对象存储的临时下载链接（所属服务签发），
-// 或直接放在请求里。
+// 或直接放在请求里。要开容器的检查，算力由调用方在 model-gateway 冻结、按报回的实际用量结算。
 import { z } from 'zod';
 
 /** 所属服务签发的对象存储临时下载链接（inspector 只认配置里放行的对象存储地址） */
@@ -35,6 +35,77 @@ export const FilesCheckBody = z.object({
   maxChars: z.number().int().min(1).max(50_000).default(8000),
 });
 export type FilesCheckBody = z.input<typeof FilesCheckBody>;
+
+// ---- 音视频、平台工程（.mlt）、字幕的解码检查：不联网、限核的独立容器里完整解码一遍 ----
+
+/** 要做解码检查的文件（其余文件走文件解析） */
+export const MEDIA_FILE = /\.(wav|mp3|m4a|flac|ogg|aac|webm|mp4|mov|mkv|avi|mlt|srt)$/i;
+
+const Sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+const Interval = z.object({ startMs: z.number(), endMs: z.number() });
+
+/** 一个文件的解码结果；画面语义、Shotcut 实际重导出不由解码结果代替 */
+export const MediaCheckFile = z.object({
+  path: z.string(),
+  valid: z.boolean(),
+  size: z.number().int().nonnegative().optional(),
+  sha256: Sha256.optional(),
+  durationMs: z.number().int().positive().optional(),
+  codec: z.string().optional(),
+  sampleRate: z.number().positive().optional(),
+  channels: z.number().int().positive().optional(),
+  peakDb: z.number().optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  frameRate: z.number().positive().optional(),
+  audioCodec: z.string().optional(),
+  audioDurationMs: z.number().int().nonnegative().optional(),
+  avDeltaMs: z.number().int().optional(),
+  blackIntervals: z.array(Interval).max(200).optional(),
+  silentIntervals: z.array(Interval).max(200).optional(),
+  samples: z
+    .array(z.object({ atMs: z.number().nonnegative(), sha256: Sha256 }))
+    .max(3)
+    .optional(),
+  projectSources: z.number().int().positive().optional(),
+  subtitleCues: z.number().int().nonnegative().optional(),
+  error: z.string().optional(),
+});
+export type MediaCheckFile = z.infer<typeof MediaCheckFile>;
+
+/** 受信脚本（inspector/media/media-check.mjs）的报告 */
+export const MediaCheckReport = z.object({
+  files: z.array(MediaCheckFile).max(100),
+  unchecked: z.array(z.string()).max(1000),
+});
+export type MediaCheckReport = z.infer<typeof MediaCheckReport>;
+
+/**
+ * 解码一次运行产出包里的这些文件。核数和时限由付费的调用方定（它按这些冻结算力）；
+ * 平台工程引用的素材会一起放进检查容器。
+ */
+export const MediaCheckBody = z.object({
+  source: SourceLink,
+  paths: z.array(z.string().min(1).max(500)).min(1).max(1000),
+  cores: z.number().positive().max(8),
+  timeoutMs: z
+    .number()
+    .int()
+    .min(1000)
+    .max(10 * 60_000),
+});
+export type MediaCheckBody = z.infer<typeof MediaCheckBody>;
+
+/** 检查容器实际用的算力：调用方据此结算（核数 × 脚本实际运行时长） */
+export const ComputeUsage = z.object({
+  cores: z.number().positive().max(64),
+  elapsedMs: z.number().int().nonnegative(),
+});
+export type ComputeUsage = z.infer<typeof ComputeUsage>;
+
+/** 请求里的文件：查过的在 files 里，没查到的（超出上限、超时、不在包里）在 unchecked 里 */
+export const MediaCheckResult = MediaCheckReport.extend({ usage: ComputeUsage });
+export type MediaCheckResult = z.infer<typeof MediaCheckResult>;
 
 /** 解析用户上传的素材：canvas 核对过所有权、签发了下载链接；不接受任意 URL 或本机路径。 */
 export const MaterialsInspectBody = z.object({

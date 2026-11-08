@@ -22,6 +22,22 @@ export const inspectorEnv = {
   /** 运行产出包的大小上限（和 harness 存产出的上限一致） */
   SOURCE_MAX_BYTES: positiveInt.default(2 * 1024 * 1024 * 1024),
 
+  // ---- 音视频解码：每次开一个不联网的检查容器（核数和时限由付费的调用方定） ----
+  /** Docker 的 socket；不填时 Linux/macOS 用 /var/run/docker.sock，Windows 用 Docker Desktop 的命名管道 */
+  DOCKER_SOCKET: z
+    .string()
+    .optional()
+    .transform((value) => value || undefined),
+  /** 沙箱基础镜像：自带 ffmpeg、oasis-media（pnpm sandbox:build 构建） */
+  MEDIA_CHECK_IMAGE: z.string().default('oasis/harness-sandbox-base:0.2.1-rc.5'),
+  MEDIA_CHECK_MEMORY_MB: positiveInt.max(16384).default(2048),
+  MEDIA_CHECK_PIDS_LIMIT: positiveInt.max(4096).default(256),
+  MEDIA_CHECK_MAX_FILES: positiveInt.max(100).default(20),
+  /** 单个音视频最长多久，超过算不合格 */
+  MEDIA_CHECK_MAX_DURATION_MS: positiveInt.max(3600_000).default(20 * 60_000),
+  /** 同时最多开几个检查容器，多出来的排队 */
+  MEDIA_CHECK_CONCURRENCY: positiveInt.max(16).default(2),
+
   // ---- 文件解析（在独立 worker 里做，逐文件有资源上限） ----
   EXTRACT_INPUT_BYTES: positiveInt.max(100 * 1024 * 1024).default(20 * 1024 * 1024),
   EXTRACT_UNZIP_BYTES: positiveInt.max(200 * 1024 * 1024).default(50 * 1024 * 1024),

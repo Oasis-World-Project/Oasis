@@ -663,6 +663,15 @@ const video = {
       t.provider.calls.some((c) => c.kind === 'video.content'),
       '没有下载生成好的视频',
     );
+    // 关卡的解码检查在 inspector 的检查容器里做，算力按实际用时结算在这个任务上（ADR 0024）
+    const decoded = query(
+      'model_gateway',
+      `select status from calls where task_id = ${literal(taskId)} and kind = 'compute' and model = 'media-check'`,
+    );
+    t.check(
+      decoded.length > 0 && decoded.every((c) => c.status === 'succeeded'),
+      `解码检查的算力应结算在任务上（${decoded.map((c) => c.status).join('、') || '没有记录'}）`,
+    );
     const artifacts = await t.user.waitArtifacts(taskId, ['片段.mp4']);
     const clip = artifacts.find((a) => a.path === '片段.mp4');
     t.check(clip, '画布里没有短片');

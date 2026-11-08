@@ -66,12 +66,6 @@ await startService({
       pidsLimit: config.SANDBOX_PIDS_LIMIT,
       workdir: SANDBOX_PATHS.workdir,
       sessionsDir: SANDBOX_PATHS.sessions,
-      mediaCheck: {
-        files: config.MEDIA_CHECK_MAX_FILES,
-        timeoutMs: config.MEDIA_CHECK_TIMEOUT_MS,
-        durationMs: config.MEDIA_CHECK_MAX_DURATION_MS,
-        maxBytes: config.OUTPUT_MAX_BYTES,
-      },
     });
     // 就绪 = Docker 可用、沙箱镜像和网络都在；关闭时先让进行中的运行收尾
     const sandboxes: ServiceResource = {

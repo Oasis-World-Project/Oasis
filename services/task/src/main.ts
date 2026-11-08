@@ -23,6 +23,7 @@ import { createQuotes, type Quotes } from './service/quote.ts';
 import { createRevisions, type Revisions } from './service/revision.ts';
 import { taskEnv } from './config.ts';
 import { createTaskStore } from './repo/task-store.ts';
+import { createCheckCompute } from './service/check-compute.ts';
 import { createGate } from './service/gate.ts';
 import { createWorkflowService, type WorkflowService } from './service/workflow-service.ts';
 
@@ -64,6 +65,8 @@ await startService({
         inspector: createServiceClient('inspector', config.INSPECTOR_URL, {
           timeoutMs: config.HARNESS_CHECK_TIMEOUT_MS,
         }),
+        compute: createCheckCompute({ modelGateway, logger }),
+        media: { cores: config.MEDIA_CHECK_CPUS, timeoutMs: config.MEDIA_CHECK_TIMEOUT_MS },
         logger,
       }),
       maxParallel: config.MAX_PARALLEL_NODES,

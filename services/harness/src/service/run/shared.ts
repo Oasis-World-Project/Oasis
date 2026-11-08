@@ -44,8 +44,6 @@ type Status = RunBody['status'];
 
 /** 放进 out/ 的占位文件：保证目录存在且属于沙箱用户，不算产出 */
 export const KEEP_FILE = '.oasis-keep';
-export const audioPath = /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i;
-export const videoPath = /\.(mp4|mov|mkv|avi|webm|mlt|srt)$/i;
 /** 批次恢复状态和工具的中间文件在 out/ 里，会随产出包存下，但不是成果，也不传给下游节点。 */
 export const isPrivateOutput = (path: string) =>
   path === KEEP_FILE ||
@@ -190,7 +188,7 @@ export interface RunContext {
 
   // ---- 搬文件（storage.ts）
   /** 取出产出（会话和工作目录在持久卷里，不用存） */
-  save(sandbox: Pick<Sandbox, 'readArchive' | 'inspectMedia'>, id: string): Promise<Saved>;
+  save(sandbox: Pick<Sandbox, 'readArchive'>, id: string): Promise<Saved>;
   /** 上游运行的产出：解出来放到 in/<as>/ 下 */
   upstreamFiles(row: Run): Promise<{ dir: string; tar: Readable }[]>;
   /** 用户给的素材：向 canvas 取出来，放到 materials/ 下 */

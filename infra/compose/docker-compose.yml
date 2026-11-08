@@ -325,7 +325,7 @@ services:
       DOCKER_SOCKET: /var/run/docker.sock
       SANDBOX_NPM_REGISTRY: ${SANDBOX_NPM_REGISTRY:-https://registry.npmjs.org/}
       SANDBOX_PIP_INDEX_URL: ${SANDBOX_PIP_INDEX_URL:-https://pypi.org/simple}
-    # harness 要通过宿主机的 Docker 起沙箱容器（权限较大，只给 harness）。
+    # harness 要通过宿主机的 Docker 起沙箱容器（权限较大，只给 harness 和 inspector）。
     # socket 的属组在 Linux 上一般是 docker 组，用 DOCKER_SOCKET_GID 指定；Docker Desktop 上是 0。
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -353,6 +353,12 @@ services:
       <<: *runtime-env
       PORT: 4109
       SOURCE_ORIGINS: http://seaweedfs:8333
+      DOCKER_SOCKET: /var/run/docker.sock
+    # 音视频解码要开不联网的检查容器（沙箱基础镜像，pnpm sandbox:build 构建）
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - ${DOCKER_SOCKET_GID:-0}
 
   model-gateway:
     <<: *node-service
