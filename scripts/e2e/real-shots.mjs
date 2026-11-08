@@ -89,6 +89,9 @@ export const realShots = ({ waitFiles, logBill, CHEAP_VIDEO, LONG }) => ({
     // 供应商回的格式和计划不同（Seedream 要 PNG 回 JPEG）时，工具步骤应换回计划写的文件
     const short = task.nodes.filter((n) => n.warning?.includes('缺少文件'));
     t.check(!short.length, `这些节点缺计划里的文件：${short.map((n) => n.key).join('、')}`);
+    // 挑选看的是缩小的预览（2K 的 PNG 两版就超过看图工具 20 MiB 的上限，2026-11-08 第二次跑）
+    const unpicked = task.nodes.filter((n) => n.warning?.includes('挑选没做成'));
+    t.check(!unpicked.length, `这些节点没挑成：${unpicked.map((n) => n.key).join('、')}`);
     const kids = (node) => task.nodes.filter((n) => n.parentId === node.id);
     for (const node of task.nodes.filter((n) => n.kind === 'foreach')) {
       const items = kids(node);

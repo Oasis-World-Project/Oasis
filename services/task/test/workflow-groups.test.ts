@@ -219,10 +219,24 @@ describe('做几版挑一版', () => {
     now = await latest(now);
     const pick = runOf('art', now) as unknown as Run & WithInputs & { model: string };
     expect(pick.model).toBe('oasis/tool');
-    expect(pick.steps?.[0]).toMatchObject({
-      tool: 'image.inspect',
-      args: { images: ['in/v1/a.png', 'in/v2/a.png'] },
-    });
+    // 先各缩成小 JPEG 再看：原图两版加起来可能超过看图工具 20 MiB 的上限
+    expect(pick.steps).toMatchObject([
+      {
+        tool: 'op.media.convert',
+        args: { in: 'in/v1/a.png', width: '1024' },
+        out: 'out/preview-v1.jpg',
+      },
+      {
+        tool: 'op.media.convert',
+        args: { in: 'in/v2/a.png', width: '1024' },
+        out: 'out/preview-v2.jpg',
+      },
+      {
+        tool: 'image.inspect',
+        args: { images: ['out/preview-v1.jpg', 'out/preview-v2.jpg'] },
+        out: 'out/pick.txt',
+      },
+    ]);
     expect(pick.inputsFrom.map((r) => r.as)).toEqual(['v1', 'v2']);
     plans.set(pick.runId, '{"choice": 2, "reason": "第 2 版人物在画面中央，光线和描述的黄昏一致"}');
     await finish(pick.runId, 'succeeded', { outputs: [{ path: 'pick.txt', size: 40 }] });
