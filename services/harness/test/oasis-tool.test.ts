@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { main, matchImageExt, parseArgs, targetsFor } from '../sandbox/oasis-tool.ts';
+import { main, parseArgs } from '../sandbox/oasis-tool.ts';
+import { matchImageExt, targetsFor } from '../sandbox/tool-files.ts';
 
 describe('oasis-tool', () => {
   it('解析 --名字 值；列表参数按逗号拆或读 JSON；--out、--file 单独拿出来', () => {

@@ -5,7 +5,7 @@
 //      pnpm e2e --real [场景名…]      真模型、真工具，每个场景花费上限 $1（视频等场景在 e2e/real.mjs
 //                                    里单独放宽；要花真钱，按需跑）
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createFakeProvider, setRun } from './e2e/fake-provider.mjs';
@@ -28,6 +28,7 @@ import {
   webPort,
 } from './e2e/stack.mjs';
 import { signIn } from './e2e/user.mjs';
+import { pruneTurboCache, runDir } from './run-dirs.mjs';
 
 const args = process.argv.slice(2);
 const keep = args.includes('--keep');
@@ -51,12 +52,13 @@ const charged = (userId) =>
       `select coalesce(sum(charged_micro), 0)::bigint as micro from calls where payer_id = ${literal(userId)}`,
     )[0].micro,
   );
-const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-const outDir = path.join(ROOT, '.tmp', 'e2e', stamp);
-mkdirSync(outDir, { recursive: true });
+// 每轮的记录在 .tmp/e2e/<时间>/，只留最近 5 轮；构建缓存只留 7 天（每轮都会构建一次）
+const outDir = runDir('e2e', 5);
+const cacheFreed = pruneTurboCache();
 const started = Date.now();
 const log = (line) =>
   console.log(`[${((Date.now() - started) / 1000).toFixed(0).padStart(4)}s] ${line}`);
+if (cacheFreed) log(`清掉 7 天前的构建缓存 ${(cacheFreed / 1048576).toFixed(0)} MB`);
 // 这一轮的编号写进每个场景的标记：上一轮没收尾的任务不会混进来
 setRun(randomUUID().slice(0, 6));
 

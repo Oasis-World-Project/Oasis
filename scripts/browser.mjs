@@ -8,9 +8,10 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { loadEnvFile } from 'node:process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import { runDir } from './run-dirs.mjs';
 const root = path.resolve(import.meta.dirname, '..');
 const image = 'oasis/inspector-browser:1.64.0';
 if (process.argv[2] === 'android-smoke') {
@@ -42,8 +43,8 @@ if (process.argv[2] === 'android-smoke') {
       stream: async () => new Response(apk),
     },
   });
-  const dir = path.join(root, '.tmp', `android-smoke-${randomUUID()}`);
-  await mkdir(dir, { recursive: true });
+  // 记录在 .tmp/android-smoke/<时间>/，只留最近 3 次
+  const dir = runDir('android-smoke', 3);
   const receipt = {
     saved: undefined,
     async save(value) {

@@ -1,13 +1,14 @@
 // Free local HTTP/worker + real Electron smoke. No cloud accounts, databases or model calls.
 import { createRequire } from 'node:module';
 import { randomUUID, createHash } from 'node:crypto';
-import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { writeFile, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fixedDir } from './run-dirs.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
-const evidence = path.join(root, 'out', 'model-preview-20261028');
-await mkdir(evidence, { recursive: true });
+// 证据在 .tmp/model-preview/，每次覆盖
+const evidence = fixedDir('model-preview');
 // Uses an already-built local project image; never pulls or creates cloud work.
 await new Promise((resolve, reject) => {
   const child = spawn(

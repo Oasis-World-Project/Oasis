@@ -24,6 +24,7 @@ import { createArtifactService } from '../services/canvas/dist/service/artifact-
 import { memoryArtifacts, memoryUploads } from '../services/canvas/test/memory.ts';
 import { createSyncFolder } from '../apps/desktop/dist/sync-folder.js';
 import { MEDIA_LABEL, runMediaCheck } from '../services/inspector/src/service/media-check.ts';
+import { runDir } from './run-dirs.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const env = path.join(root, 'services/canvas/.env');
@@ -101,14 +102,8 @@ if (process.argv[2] === 'recover') {
   }
   process.exit(0);
 }
-const output = path.resolve(
-  root,
-  process.env.MEDIA_SMOKE_OUTPUT ?? 'out/media-foundation-acceptance',
-);
-assert(
-  output.startsWith(path.join(root, 'out') + path.sep) && !existsSync(output),
-  '选择 out/ 下新的媒体验收目录，不能覆盖已有报告',
-);
+// 报告在 .tmp/media-smoke/<时间>/，只留最近 3 次
+const output = runDir('media-smoke', 3);
 const keys = new Set();
 let journalPath;
 let journal;

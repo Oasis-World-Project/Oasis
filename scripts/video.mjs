@@ -15,17 +15,12 @@ import {
   scanArchive,
 } from '../packages/service-kit/dist/index.js';
 import { MEDIA_LABEL, runMediaCheck } from '../services/inspector/src/service/media-check.ts';
+import { runDir } from './run-dirs.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 if (existsSync(path.join(root, '.env'))) process.loadEnvFile(path.join(root, '.env'));
-const output = path.resolve(
-  root,
-  process.env.VIDEO_SMOKE_OUTPUT ?? 'out/video-foundation-acceptance',
-);
-assert(
-  output.startsWith(path.join(root, 'out') + path.sep) && !existsSync(output),
-  '选择 out/ 下新的验收目录',
-);
+// 证据在 .tmp/video-smoke/<时间>/（失败时的样本在其中的 failed/），只留最近 3 次
+const output = runDir('video-smoke', 3);
 const image = process.env.SANDBOX_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.5';
 assert(/^oasis\/[a-z0-9._-]+:[\w.-]+$/.test(image));
 const docker = createDockerApi(defaultDockerSocket());
@@ -149,7 +144,7 @@ try {
   console.log(`最终证据：${output}`);
 } catch (error) {
   if (id) {
-    const debug = path.join(root, '.tmp', `video-debug-${randomUUID()}`);
+    const debug = path.join(output, 'failed');
     await saveArchive(debug).catch(() => undefined);
     console.error(`失败样本：${debug}`);
   }

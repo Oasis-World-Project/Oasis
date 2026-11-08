@@ -17,6 +17,7 @@ import {
   SERVICES,
   webPort,
 } from './e2e/stack.mjs';
+import { runDir } from './run-dirs.mjs';
 
 const log = (line) => console.log(`[验收] ${line}`);
 const busy = [];
@@ -38,8 +39,8 @@ run(
   'pnpm exec turbo run build --filter=./packages/* --filter=@oasis/web --output-logs=errors-only',
 );
 
-const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-const logDir = path.join(ROOT, '.tmp', 'accept', stamp);
+// 日志在 .tmp/accept/<时间>/，只留最近 5 次
+const logDir = runDir('accept', 5);
 const stack = createStack({ logDir, log });
 const stop = async () => {
   log('正在停止');

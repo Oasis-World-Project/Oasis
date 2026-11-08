@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Cloud-render preparation only. Never prints credentials or starts/publishes cloud resources.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { parseEnv } from 'node:util';
+import { fixedDir } from './run-dirs.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const file = path.join(root, '.env');
@@ -100,8 +101,8 @@ function localImageCommand(action) {
     release.platform !== 'linux/amd64'
   )
     throw new Error('云镜像发布描述与 registry/仓库/命名白名单不符');
-  const evidence = path.join(root, 'out/render-worker-20261028');
-  mkdirSync(evidence, { recursive: true });
+  // 证据在 .tmp/render-worker/：后面的步骤读前面写的 source.json，固定一个目录、每次覆盖
+  const evidence = fixedDir('render-worker');
   const metadata = path.join(evidence, 'build.json');
   const receiptFile = path.join(evidence, 'local-check.json');
   const run = (args, capture = false) => {

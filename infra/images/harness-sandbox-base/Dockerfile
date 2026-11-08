@@ -58,7 +58,7 @@ RUN mkdir -p /home/node/.dsh/sessions
 COPY --chown=node:node services/harness/src/adapter/profile/cordis.patch.yml /home/node/.dsh/profiles/oasis/cordis.patch.yml
 # 沙箱里调用 Oasis 工具的命令（ADR 0006）：Node 直接运行 TypeScript
 COPY services/harness/sandbox/oasis-tool.ts /opt/oasis/oasis-tool.ts
-COPY services/harness/sandbox/batch.ts /opt/oasis/batch.ts
+COPY services/harness/sandbox/batch.ts services/harness/sandbox/tool-files.ts /opt/oasis/
 COPY services/harness/sandbox/media.py /opt/oasis/media.py
 # 工具节点（ADR 0025）：步骤执行器 oasis-steps 和本地操作 oasis-op（参数定义与 task、model-gateway 共用
 # packages/contracts 里的同一份）。按仓库里的相对位置放，import 路径在仓库和镜像里一致。
