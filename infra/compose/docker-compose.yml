@@ -354,7 +354,10 @@ services:
       PORT: 4109
       SOURCE_ORIGINS: http://seaweedfs:8333
       DOCKER_SOCKET: /var/run/docker.sock
-    # 音视频解码要开不联网的检查容器（沙箱基础镜像，pnpm sandbox:build 构建）
+      # 外站测试（website.test）放行的 HTTPS 来源，逗号分隔；为空时关闭外站访问
+      WEBSITE_TEST_ORIGINS: ${WEBSITE_TEST_ORIGINS:-}
+    # 音视频解码、网页的浏览器检查要开检查容器（沙箱基础镜像 pnpm sandbox:build、
+    # 检查浏览器镜像 pnpm browser:build）
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
@@ -378,7 +381,7 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:?}
       <<: [*runtime-env, *nats-env]
       PORT: 4108
-      HARNESS_URL: http://harness:4107
+      INSPECTOR_URL: http://inspector:4109
       DATABASE_URL: postgres://svc_model_gateway:${MODEL_GATEWAY_DB_PASSWORD:?}@postgres:5432/model_gateway?sslmode=disable
       BILLING_URL: http://billing:4102
       CANVAS_URL: http://canvas:4106

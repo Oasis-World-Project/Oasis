@@ -153,9 +153,11 @@ export function createToolCall(ctx: ToolContext) {
         // 供应商已经接下了这次调用（可能已经收费）之后才出的错：按估算结算，不退回
         let accepted = false;
         const toolDeps = {
-          harness: deps.harness,
+          checks: deps.checks,
           taskId: input.caller.taskId,
           runId: input.caller.runId,
+          nodeId: input.caller.nodeId,
+          logger: deps.logger,
           browserstack: deps.browserstack,
           payerId: input.caller.payerId,
           openrouter: deps.openrouter,

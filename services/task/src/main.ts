@@ -67,6 +67,7 @@ await startService({
         }),
         compute: createCheckCompute({ modelGateway, logger }),
         media: { cores: config.MEDIA_CHECK_CPUS, timeoutMs: config.MEDIA_CHECK_TIMEOUT_MS },
+        browser: { cores: config.BROWSER_CHECK_CPUS, maxMs: config.BROWSER_CHECK_MAX_MS },
         logger,
       }),
       maxParallel: config.MAX_PARALLEL_NODES,

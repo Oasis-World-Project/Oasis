@@ -32,7 +32,19 @@ export const modelGatewayEnv = {
     .int()
     .nonnegative()
     .default(10 * 60_000),
-  HARNESS_URL: z.url().default('http://127.0.0.1:4107'),
+  /** 浏览器检查（website.test、app.check）在 inspector 里做（ADR 0024） */
+  INSPECTOR_URL: z.url().default('http://127.0.0.1:4109'),
+  /**
+   * 检查浏览器用几核、一次冻结多久的算力（按调用的任务和节点计费）。检查本身不设时限
+   * （2026-11-04 用户决定），超过冻结时长的部分不再计费。
+   */
+  BROWSER_CHECK_CPUS: z.coerce.number().positive().max(8).default(2),
+  BROWSER_CHECK_MAX_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .max(24 * 3600_000)
+    .default(3600_000),
   BROWSERSTACK_USERNAME: z.string().optional(),
   BROWSERSTACK_ACCESS_KEY: z.string().optional(),
   BROWSERSTACK_API_URL: z.url().default('https://api-cloud.browserstack.com'),

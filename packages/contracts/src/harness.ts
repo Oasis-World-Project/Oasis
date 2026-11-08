@@ -1,6 +1,6 @@
 // harness 的内部接口（只给 task 等内部服务用，gateway 不转发）：启动一次 agent 运行、查进度、追问、停止、取消。
 import { z } from 'zod';
-import { UiTestReport, BrowserTestResult } from './ui-test.ts';
+import { ApplicationCheckResult } from './inspector.ts';
 
 /** 实际运行镜像的软件探测；只描述本地环境，不代表外部供应商能力。 */
 export const ExecutionEnvironment = z.object({
@@ -173,17 +173,12 @@ export const OutputsLinkBody = z.object({ payerId: z.uuid(), taskId: z.uuid() })
 export const OutputsLink = z.object({ url: z.url(), expiresAt: z.iso.datetime() });
 export type OutputsLink = z.infer<typeof OutputsLink>;
 
-export const ApplicationCheckResult = z.object({
-  application: BrowserTestResult.shape.application,
-  passed: z.boolean(),
-  reason: z.string().nullable(),
-  frameCaptured: z.boolean(),
-  report: UiTestReport.optional(),
-  inputSha256: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .optional(),
-  /** 平台截取的画面（打开后的首屏 opening.jpg 与测试步骤截图），不是节点自述 */
-  screenshots: z.array(z.object({ name: z.string().max(100), base64: z.string() })).optional(),
+/**
+ * 交付关卡的浏览器检查报告（inspector 检查、task 存回这次运行，ADR 0024）：只给这次运行的付费人和任务，
+ * 用户在工作流里下载。
+ */
+export const ApplicationReportBody = z.object({
+  payerId: z.uuid(),
+  taskId: z.uuid(),
+  report: ApplicationCheckResult,
 });
-export type ApplicationCheckResult = z.infer<typeof ApplicationCheckResult>;

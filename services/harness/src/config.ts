@@ -4,15 +4,6 @@ import { z } from 'zod';
 const positiveInt = z.coerce.number().int().positive();
 
 export const harnessEnv = {
-  WEBSITE_TEST_ORIGINS: z
-    .string()
-    .default('')
-    .transform((value) =>
-      value
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
   ...postgresAndEventBus.env,
   /** 签发、作废运行临时 Key */
   MODEL_GATEWAY_URL: z.url(),
@@ -28,12 +19,6 @@ export const harnessEnv = {
   /** 沙箱镜像（dsh 版本锁定在镜像标签里）。默认带 Blender 的 3D 版：它是基础版的超集，
    *  节点按需求自行决定是否建模（ADR 0011 §21；按节点选镜像尚未实现）。 */
   SANDBOX_IMAGE: z.string().default('oasis/harness-sandbox-3d:0.2.1-rc.5-blender4.3.2'),
-  PREVIEW_IMAGE: z.string().default('oasis/harness-preview:1.64.0'),
-  PREVIEW_CPUS: z.coerce.number().positive().max(8).default(2),
-  PREVIEW_MEMORY_MB: positiveInt.default(2048),
-  PREVIEW_PIDS_LIMIT: positiveInt.default(512),
-  PREVIEW_APP_PORT: positiveInt.max(65535).default(3180),
-  PREVIEW_MAX_MS: positiveInt.max(60 * 60_000).default(30 * 60_000),
   /** 沙箱所在的内部网络：不通外网，只能访问沙箱入口代理 */
   SANDBOX_NETWORK: z.string().default('oasis-sandbox'),
   /** 沙箱里的 dsh 调模型、oasis-tool 调工具用的地址（入口代理，只放行几条 /run/v1/* 路径） */

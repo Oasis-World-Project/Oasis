@@ -1,42 +1,46 @@
 // 读运行的产出和过程：运行事件、产出包的临时下载链接（给 inspector 检查，ADR 0024）、单个文件、
-// 运行中沙箱里的当前文件（节点自查 app.check 用）。
-import { type OutputsLink, type RunEventBody } from '@oasis/contracts/harness';
-import {
-  archiveFile,
-  contentTypeOf,
-  extractFiles,
-  HttpError,
-  readLimited,
-} from '@oasis/service-kit';
-import { SANDBOX_PATHS } from '../../adapter/dsh.ts';
+// 交付关卡的浏览器检查报告（task 交来留档，用户在工作流里下载）。
+import type { ApplicationReportBody, OutputsLink, RunEventBody } from '@oasis/contracts/harness';
+import { archiveFile, contentTypeOf, HttpError, readLimited } from '@oasis/service-kit';
+import type { z } from 'zod';
 import { isPrivateOutput, type RunContext } from './shared.ts';
 
-/** 产出包下载链接的有效期：inspector 拿到就下载，15 分钟足够 */
-const LINK_SECONDS = 15 * 60;
-/** 读进内存的单个产出文件上限（检查用的网页文件等） */
+/**
+ * 产出包下载链接的有效期：一次关卡的文件解析、解码检查、浏览器检查共用一个链接，
+ * inspector 的检查容器满了要排队，给 1 小时
+ */
+const LINK_SECONDS = 60 * 60;
+/** 读进内存的单个产出文件上限（下载成果、读规划员写的方案） */
 const FILE_MAX_BYTES = 20 * 1024 * 1024;
+const reportKey = (id: string) => `runs/${id}/application-check.json`;
 
 export function createOutputs(ctx: RunContext) {
   const { deps, owned } = ctx;
-  const { repo, executor, store } = deps;
+  const { repo, store } = deps;
+
+  /** 这次运行，且是这个付费人、这个任务的；不是就当没有 */
+  async function mine(id: string, payerId: string, taskId: string) {
+    const row = await owned(id);
+    if (row.payerId !== payerId || row.taskId !== taskId)
+      throw new HttpError(404, 'run_not_found', '没有这次运行');
+    return row;
+  }
 
   return {
-    /**
-     * 运行中沙箱里 out/<dir> 的当前文件（节点自查 app.check 用，ADR 0017）：只给这次运行的付款人和任务，
-     * 运行结束后读不到（成果以归档为准）。
-     */
-    liveFiles: async (input: { runId: string; payerId: string; taskId: string; dir: string }) => {
-      const row = await owned(input.runId);
-      if (row.payerId !== input.payerId || row.taskId !== input.taskId)
-        throw new HttpError(404, 'run_not_found', '没有这次运行');
-      if (row.status !== 'running' || !executor.readStoredArchive)
-        throw new HttpError(409, 'run_not_running', '只能检查正在运行的节点的成果');
-      const stream = await executor.readStoredArchive(
-        input.runId,
-        `${SANDBOX_PATHS.outputs}/${input.dir}`,
-      );
-      if (!stream) throw new HttpError(404, 'dir_not_found', `out/${input.dir} 不存在`);
-      return extractFiles(await readLimited(stream, 100 * 1024 * 1024 + 1024 * 1024));
+    /** 交付关卡的浏览器检查报告留档（inspector 检查完由 task 交来，ADR 0024）；再查一次就覆盖 */
+    async saveApplicationReport(id: string, body: z.infer<typeof ApplicationReportBody>) {
+      await mine(id, body.payerId, body.taskId);
+      await store.put(reportKey(id), Buffer.from(JSON.stringify(body.report)), 'application/json');
+    },
+
+    /** 读浏览器检查报告（用户在工作流里下载）；还没有时 404 */
+    async applicationReport(id: string, payerId: string, taskId: string): Promise<Buffer> {
+      await mine(id, payerId, taskId);
+      try {
+        return await store.get(reportKey(id));
+      } catch {
+        throw new HttpError(404, 'check_not_found', '这次运行还没有浏览器检查报告');
+      }
     },
 
     async events(id: string, afterSeq: number, limit: number): Promise<RunEventBody[]> {

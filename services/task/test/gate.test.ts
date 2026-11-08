@@ -144,8 +144,26 @@ const gateWith = (
     inspector,
     compute: createCheckCompute({ modelGateway, logger }),
     media: { cores: 2, timeoutMs: 90_000 },
+    browser: { cores: 2, maxMs: 3_600_000 },
     logger,
   });
+};
+/** 检查浏览器的报告（inspector 报回的格式） */
+const pageReport = {
+  version: 1,
+  target: 'application',
+  passed: false,
+  steps: [],
+  diagnostics: ['页面错误：boom'],
+  unchecked: [],
+};
+const webApp = {
+  ...input,
+  expects: [],
+  outputs: [
+    { path: 'site/oasis-app.json', size: 50 },
+    { path: 'site/index.html', size: 100 },
+  ],
 };
 
 describe('轻量关卡（ADR 0017）', () => {
@@ -199,29 +217,86 @@ describe('轻量关卡（ADR 0017）', () => {
     });
     expect(result).toEqual({ unmet: [], unchecked: ['介绍.md：没取得文件解析结果'] });
   });
-  it.each(['site/oasis-app.json'])(
-    '网页应用（清单 %s）在隔离浏览器里跑一遍，没跑通进入未满足项',
-    async (manifest) => {
-      const harness = harnessWith((path) =>
-        path.endsWith('/application-check')
-          ? { passed: false, reason: '首页脚本报错', frameCaptured: true }
-          : undefined,
-      );
-      const result = await gateWith(harness.client, fakeService(() => parsed()).client).check({
-        ...input,
-        expects: [],
-        outputs: [
-          { path: manifest, size: 50 },
-          { path: 'index.html', size: 100 },
-        ],
-      });
-      expect(result.unmet).toEqual(['浏览器实际运行检查失败：首页脚本报错']);
-      expect(harness.calls[1]).toEqual({
+  it('网页应用交给 inspector 在隔离浏览器里跑一遍：没跑通进入未满足项，报告存回 harness，算力记在任务上', async () => {
+    const harness = harnessWith();
+    const checked = {
+      passed: false,
+      reason: '首页脚本报错',
+      frameCaptured: true,
+      report: pageReport,
+      screenshots: [{ name: 'opening.jpg', base64: 'AA==' }],
+    };
+    const inspector = fakeService((path) =>
+      path === '/internal/applications/check'
+        ? { ...checked, usage: { cores: 2, elapsedMs: 4000 } }
+        : parsed(),
+    );
+    const meter = meterWith();
+    const result = await gateWith(harness.client, inspector.client, meter.client).check(webApp);
+    expect(result).toEqual({ unmet: ['浏览器实际运行检查失败：首页脚本报错'] });
+    expect(inspector.calls.at(-1)).toEqual({
+      path: '/internal/applications/check',
+      body: { source: LINK, manifest: 'site/oasis-app.json', cores: 2 },
+    });
+    // 产出包链接只要一次；报告（不含用量）存回 harness，用户在工作流里下载
+    expect(harness.calls).toEqual([
+      { path: '/internal/runs/run-1/outputs/link', body: { payerId: PAYER, taskId: TASK } },
+      {
         path: '/internal/runs/run-1/application-check',
-        body: { payerId: PAYER, taskId: TASK },
-      });
-    },
-  );
+        body: { payerId: PAYER, taskId: TASK, report: checked },
+      },
+    ]);
+    expect(meter.calls).toEqual([
+      {
+        path: '/internal/v1/compute',
+        body: expect.objectContaining({
+          payerId: PAYER,
+          taskId: TASK,
+          nodeId: input.nodeId,
+          cores: 2,
+          maxMs: 3_600_000,
+          purpose: 'application-check',
+        }),
+      },
+      { path: `/internal/v1/compute/${CALL}/settle`, body: { cores: 2, elapsedMs: 4000 } },
+    ]);
+  });
+  it('没开浏览器就有结论（清单不合格）时照样退回，没有报告可存；报告没存上不影响结论', async () => {
+    const unopened = fakeService((path) =>
+      path === '/internal/applications/check'
+        ? {
+            passed: false,
+            reason: 'out/site/oasis-app.json 缺少 root',
+            frameCaptured: false,
+            usage: { cores: 2, elapsedMs: 0 },
+          }
+        : parsed(),
+    );
+    const harness = harnessWith();
+    const result = await gateWith(harness.client, unopened.client).check(webApp);
+    expect(result).toEqual({
+      unmet: ['浏览器实际运行检查失败：out/site/oasis-app.json 缺少 root'],
+    });
+    expect(harness.calls.map((call) => call.path)).toEqual(['/internal/runs/run-1/outputs/link']);
+
+    const opened = fakeService((path) =>
+      path === '/internal/applications/check'
+        ? {
+            passed: true,
+            reason: null,
+            frameCaptured: true,
+            report: { ...pageReport, passed: true, diagnostics: [] },
+            usage: { cores: 2, elapsedMs: 10 },
+          }
+        : parsed(),
+    );
+    const storeDown = harnessWith((path) =>
+      path.endsWith('/application-check')
+        ? new HttpError(503, 'upstream_unavailable', 'harness 暂时不可用')
+        : undefined,
+    );
+    expect(await gateWith(storeDown.client, opened.client).check(webApp)).toEqual({ unmet: [] });
+  });
   it('音视频交给 inspector 解码：损坏退回，没查到的记未检查；算力按实际用时记在任务上', async () => {
     const harness = harnessWith();
     const inspector = fakeService((path) =>
@@ -309,11 +384,8 @@ describe('轻量关卡（ADR 0017）', () => {
   });
   it('检查服务答非所问（缺字段、格式不对）：记未检查，不当成通过', async () => {
     const odd = fakeService(() => ({ passed: true }));
-    const harness = harnessWith((path) =>
-      path.endsWith('/application-check') ? { ok: true } : undefined,
-    );
     const meter = meterWith();
-    const result = await gateWith(harness.client, odd.client, meter.client).check({
+    const result = await gateWith(harnessWith().client, odd.client, meter.client).check({
       ...input,
       expects: [{ pattern: '*.md' }],
       outputs: [
@@ -328,8 +400,11 @@ describe('轻量关卡（ADR 0017）', () => {
       expect.stringContaining('浏览器实际运行检查没做完'),
       expect.stringContaining('音视频解码检查没做完'),
     ]);
-    // 解码报告不合格式也不收钱
-    expect(meter.calls.at(-1)?.body).toEqual({ cores: 2, elapsedMs: 0 });
+    // 解码、浏览器检查的报告不合格式也不收钱
+    expect(meter.calls.filter((call) => call.path.endsWith('/settle'))).toEqual([
+      { path: `/internal/v1/compute/${CALL}/settle`, body: { cores: 2, elapsedMs: 0 } },
+      { path: `/internal/v1/compute/${CALL}/settle`, body: { cores: 2, elapsedMs: 0 } },
+    ]);
   });
   it('用户取消时直接抛出，不记成未检查', async () => {
     const controller = new AbortController();

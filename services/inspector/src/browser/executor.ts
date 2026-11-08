@@ -1,3 +1,6 @@
+// 检查浏览器容器（ADR 0024）：每次检查开一个，应用和 Chromium 同容器、无外部网络，控制端经 stdin/stdout
+// 说一行一个 JSON 的协议。容器只认第一个接上的连接（StdinOnce）：inspector 断开时控制端退出、
+// 容器被 Docker 自动删除，inspector 意外退出也不留孤儿。
 import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import readline from 'node:readline';
@@ -6,11 +9,11 @@ import { demultiplex, packFiles, type DockerApi } from '@oasis/service-kit';
 
 const seccompProfile = readFileSync(new URL('../../seccomp-profile.json', import.meta.url), 'utf8');
 
-export interface LivePreview {
+export interface BrowserBox {
   id: string;
   frame(): { seq: number; jpegBase64: string } | undefined;
   diagnostics(): string[];
-  /** 预览进程还在（进程退出或容器被回收后为 false） */
+  /** 浏览器进程还在（进程退出或容器被回收后为 false） */
   alive(): boolean;
   test(plan: BrowserTestPlan): Promise<BrowserTestResult>;
   /** 画面检查：等页面画出来，返回是否一直是一整片纯色（ADR 0021） */
@@ -19,23 +22,23 @@ export interface LivePreview {
   destroy(): Promise<void>;
 }
 
-export function createPreviewExecutor(deps: {
+export function createBrowserExecutor(deps: {
   docker: DockerApi;
   image: string;
-  cpus: number;
   memoryMb: number;
   pidsLimit: number;
   appPort: number;
 }) {
   return {
-    destroy: (id: string) => deps.docker.removeContainer(id),
     async check() {
       await deps.docker.ping();
       if (!(await deps.docker.imageExists(deps.image)))
-        throw new Error(`预览镜像 ${deps.image} 不存在，请先运行 pnpm preview:build`);
+        throw new Error(`检查浏览器镜像 ${deps.image} 不存在，请先运行 pnpm browser:build`);
     },
     async start(input: {
       id: string;
+      /** 用几核（付费的调用方定） */
+      cores: number;
       kind: 'static' | 'node' | 'website';
       website?: {
         url: string;
@@ -46,8 +49,8 @@ export function createPreviewExecutor(deps: {
       };
       entry: string;
       files: { path: string; content: Buffer }[];
-    }): Promise<LivePreview> {
-      const { Id: id } = await deps.docker.createContainer(`oasis-preview-${input.id}`, {
+    }): Promise<BrowserBox> {
+      const { Id: id } = await deps.docker.createContainer(`oasis-browser-${input.id}`, {
         Image: deps.image,
         Env: [
           `APP_KIND=${input.kind}`,
@@ -55,17 +58,19 @@ export function createPreviewExecutor(deps: {
           `APP_PORT=${deps.appPort}`,
           ...(input.website ? [`WEBSITE_URL=${input.website.url}`] : []),
         ],
-        Labels: { 'oasis.component': 'preview', 'oasis.preview-id': input.id },
+        Labels: { 'oasis.component': 'inspector-browser', 'oasis.check-id': input.id },
         WorkingDir: '/workspace/app',
         AttachStdin: true,
         AttachStdout: true,
         AttachStderr: true,
         OpenStdin: true,
-        StdinOnce: false,
+        // inspector 的连接一断就关 stdin：控制端随即退出
+        StdinOnce: true,
         Tty: false,
         HostConfig: {
+          AutoRemove: true,
           NetworkMode: 'none',
-          NanoCpus: Math.round(deps.cpus * 1e9),
+          NanoCpus: Math.round(input.cores * 1e9),
           Memory: deps.memoryMb * 1024 * 1024,
           PidsLimit: deps.pidsLimit,
           ShmSize: 256 * 1024 * 1024,
@@ -242,15 +247,7 @@ export function createPreviewExecutor(deps: {
         throw error;
       }
     },
-    async removeOrphans(keep: ReadonlySet<string>) {
-      const all = await deps.docker.listContainers('oasis.component=preview');
-      const orphans = all.filter(
-        (container) => !keep.has(container.Labels['oasis.preview-id'] ?? ''),
-      );
-      for (const container of orphans) await deps.docker.removeContainer(container.Id);
-      return orphans.length;
-    },
   };
 }
 
-export type PreviewExecutor = ReturnType<typeof createPreviewExecutor>;
+export type BrowserExecutor = ReturnType<typeof createBrowserExecutor>;

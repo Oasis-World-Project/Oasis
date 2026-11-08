@@ -2,11 +2,12 @@
   "name": "@oasis/inspector",
   "version": "0.0.0",
   "private": true,
-  "description": "检查服务：判断成果的检查都在这里（文件解析、音视频解码、模型预览、素材解析），不调别的服务、不存东西",
+  "description": "检查服务：判断成果的检查都在这里（文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览、素材解析），不调别的服务、不存东西",
   "type": "module",
   "files": [
     "dist",
-    "media"
+    "media",
+    "seccomp-profile.json"
   ],
   "scripts": {
     "dev": "node ../../scripts/dev-service.mjs src/main.ts",
@@ -17,6 +18,7 @@
   },
   "dependencies": {
     "@oasis/contracts": "workspace:*",
+    "@oasis/live-page": "workspace:*",
     "@oasis/service-kit": "workspace:*",
     "fast-xml-parser": "5.11.2",
     "fflate": "catalog:",

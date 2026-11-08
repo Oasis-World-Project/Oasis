@@ -1,12 +1,14 @@
 // 节点出口的轻量关卡（ADR 0017）：只挡明显坏掉的成果，结果确定、不调模型。
 // 1. 文件齐不齐：产出非空，方案写明的文件都在，数量和图片尺寸符合，文件能解析（inspector 的解析报告）。
-// 2. 网页能不能打开：有 oasis-app.json 的成果在隔离浏览器里跑一遍（节点自己也能用 app.check 跑同一套）；
-//    交给用户的网页没配 oasis-app.json 也算没满足（画布里不能运行、浏览器检查也跑不了）。
-// 3. 音视频能不能播放：inspector 在不联网的检查容器里完整解码一遍，算力记在这个任务上。
-// 任务单的「怎么算做好」由节点自己对照，不再交给模型逐条打分。检查程序本身出错记为没检查到，不冒充通过；
-// 检查只提醒、不拦截（2026-11-05 用户决定）。
-import { ApplicationCheckResult, OutputsLink, type RunOutputFile } from '@oasis/contracts/harness';
+// 2. 网页能不能打开：有 oasis-app.json 的成果由 inspector 在隔离浏览器里跑一遍（节点自己也能用 app.check
+//    跑同一套），报告存回 harness 供用户下载；交给用户的网页没配 oasis-app.json 也算没满足
+//    （画布里不能运行、浏览器检查也跑不了）。
+// 3. 音视频能不能播放：inspector 在不联网的检查容器里完整解码一遍。
+// 开容器的检查（2、3）算力记在这个任务上。任务单的「怎么算做好」由节点自己对照，不再交给模型逐条打分。
+// 检查程序本身出错记为没检查到，不冒充通过；检查只提醒、不拦截（2026-11-05 用户决定）。
+import { OutputsLink, type RunOutputFile } from '@oasis/contracts/harness';
 import {
+  ApplicationCheckReply,
   InspectedFiles,
   MEDIA_FILE,
   MediaCheckResult,
@@ -157,10 +159,12 @@ interface MediaFindings {
 export function createGate(deps: {
   harness: ServiceClient;
   inspector: ServiceClient;
-  /** 解码检查的算力：先冻结、按 inspector 报回的用量结算（ADR 0024） */
+  /** 检查容器的算力：先冻结、按 inspector 报回的用量结算（ADR 0024） */
   compute: CheckCompute;
   /** 解码检查容器用几核、最多跑多久（这个任务付钱） */
   media: { cores: number; timeoutMs: number };
+  /** 检查浏览器用几核、一次冻结多久的算力（检查本身不设时限，超出的部分不再计费） */
+  browser: { cores: number; maxMs: number };
   logger: Logger;
 }) {
   const { harness, inspector, compute, logger } = deps;
@@ -213,13 +217,38 @@ export function createGate(deps: {
         unchecked.push(`${output.path}：没取得文件解析结果`);
   }
 
-  async function checkApplication(input: GateInput, unmet: string[]) {
-    const result = await harness.json(
-      'POST',
-      `/internal/runs/${input.runId}/application-check`,
-      options(input, { payerId: input.payerId, taskId: input.taskId }, ApplicationCheckResult),
+  /** 网页能不能打开：inspector 开检查浏览器跑一遍，报告存回 harness（用户在工作流里下载） */
+  async function checkApplication(
+    input: GateInput,
+    source: () => Promise<OutputsLink>,
+    unmet: string[],
+  ) {
+    // 和画布登记应用一样，按第一份清单检查
+    const manifest = input.outputs.find((file) => APP_MANIFEST.test(file.path))!.path;
+    const { cores, maxMs } = deps.browser;
+    const result = await compute(input, { purpose: 'application-check', cores, maxMs }, async () =>
+      inspector.json(
+        'POST',
+        '/internal/applications/check',
+        options(input, { source: await source(), manifest, cores }, ApplicationCheckReply),
+      ),
     );
     if (!result.passed) unmet.push(`浏览器实际运行检查失败：${result.reason ?? '原因未返回'}`);
+    // 没开浏览器就有结论（清单、入口不合格）时没有报告可存
+    if (!result.report) return;
+    const { usage: _usage, ...report } = result;
+    await harness
+      .json('PUT', `/internal/runs/${input.runId}/application-check`, {
+        body: { payerId: input.payerId, taskId: input.taskId, report },
+        ...(input.signal ? { signal: input.signal } : {}),
+      })
+      .catch((err: unknown) => {
+        input.signal?.throwIfAborted();
+        logger.warn(
+          { err, taskId: input.taskId, runId: input.runId },
+          '浏览器检查报告没存上，用户下载不到这次的报告',
+        );
+      });
   }
 
   /** 音视频、平台工程、字幕能不能完整解码：inspector 开检查容器做，算力按实际用时记在这个任务上 */
@@ -289,7 +318,7 @@ export function createGate(deps: {
       if (unmet.length > 0) return { unmet };
       unmet.push(...checkWebManifest(input.outputs, input.deliver ?? []));
       const unchecked: string[] = [];
-      // 产出包链接只要一次，文件解析和解码检查共用
+      // 产出包链接只要一次，文件解析、解码检查和浏览器检查共用
       let link: Promise<OutputsLink> | undefined;
       const source = () => (link ??= outputsOf(input));
       const media: MediaFindings = { inspected: [], unmet: [], unchecked: [] };
@@ -300,7 +329,9 @@ export function createGate(deps: {
         checkFiles(input, source, media.inspected, unmet, unchecked),
       );
       if (input.outputs.some((file) => APP_MANIFEST.test(file.path)))
-        await guarded(input, '浏览器实际运行检查', unchecked, () => checkApplication(input, unmet));
+        await guarded(input, '浏览器实际运行检查', unchecked, () =>
+          checkApplication(input, source, unmet),
+        );
       unmet.push(...media.unmet);
       unchecked.push(...media.unchecked);
       return { unmet, ...(unchecked.length ? { unchecked } : {}) };

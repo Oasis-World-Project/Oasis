@@ -18,6 +18,17 @@ export const taskEnv = {
     .min(10_000)
     .max(10 * 60_000)
     .default(90_000),
+  /**
+   * 关卡的浏览器检查：inspector 开的检查浏览器用几核、一次冻结多久的算力。检查本身不设时限
+   * （2026-11-04 用户决定），超过冻结时长的部分不再计费。
+   */
+  BROWSER_CHECK_CPUS: z.coerce.number().positive().max(8).default(2),
+  BROWSER_CHECK_MAX_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .max(24 * 3600_000)
+    .default(3600_000),
   /** 一个任务同时最多跑几个节点（ADR 0004：3） */
   MAX_PARALLEL_NODES: z.coerce.number().int().positive().max(20).default(3),
   /** 规划员查模型目录 */

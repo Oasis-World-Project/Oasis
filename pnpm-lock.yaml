@@ -520,9 +520,6 @@ importers:
       '@oasis/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@oasis/live-page':
-        specifier: workspace:*
-        version: link:../../packages/live-page
       '@oasis/service-kit':
         specifier: workspace:*
         version: link:../../packages/service-kit
@@ -609,6 +606,9 @@ importers:
       '@oasis/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@oasis/live-page':
+        specifier: workspace:*
+        version: link:../../packages/live-page
       '@oasis/service-kit':
         specifier: workspace:*
         version: link:../../packages/service-kit

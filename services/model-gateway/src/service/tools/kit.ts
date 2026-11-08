@@ -1,12 +1,13 @@
 // 工具定义共用的部分（ADR 0006）：每个工具 = 参数校验 + 目录信息 + 怎么调供应商、怎么算钱。
 import type { Readable } from 'node:stream';
-import type { ServiceClient } from '@oasis/service-kit';
+import type { Logger, ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { BrowserStackClient } from '../../adapters/browserstack.ts';
 import type { FalClient } from '../../adapters/fal.ts';
 import type { ProviderClient } from '../../adapters/openrouter.ts';
 import type { RenderClient } from '../../adapters/runpod.ts';
 import type { SearchClient } from '../../adapters/tavily.ts';
+import type { ComputeService } from '../compute-service.ts';
 import { USD_TO_MICRO, type CostSource } from '../pricing.ts';
 
 /** 工具交回给 AI 的文字最多这么长 */
@@ -31,11 +32,25 @@ export interface ToolConfig {
   geometryMicroPerGeneration?: number;
 }
 
-interface ToolDeps {
-  harness?: ServiceClient;
+/**
+ * 浏览器检查（website.test、app.check，ADR 0024）：inspector 开检查浏览器，
+ * 算力由网关先冻结、按 inspector 报回的实际用时结算。
+ */
+export interface BrowserChecks {
+  inspector: ServiceClient;
+  compute: Pick<ComputeService, 'hold' | 'settle'>;
+  /** 检查浏览器用几核、一次冻结多久的算力（检查本身不设时限，超出的部分不再计费） */
+  cores: number;
+  maxMs: number;
+}
+
+export interface ToolDeps {
+  checks?: BrowserChecks;
   taskId?: string;
-  /** 调用工具的那次节点运行（app.check 读它沙箱里的当前成果） */
+  /** 调用工具的那次节点运行 */
   runId?: string;
+  nodeId?: string;
+  logger?: Logger;
   browserstack?: BrowserStackClient;
   payerId?: string;
   render?: RenderClient;
@@ -74,7 +89,7 @@ interface ToolBase {
   /** 调用前冻结多少（微美元），按参数算 */
   holdMicro: (args: Record<string, unknown>) => number;
   /** 依赖哪个供应商（没配 Key 就不能用） */
-  provider: 'openrouter' | 'tavily' | 'fal' | 'runpod' | 'browserstack' | 'harness';
+  provider: 'openrouter' | 'tavily' | 'fal' | 'runpod' | 'browserstack' | 'inspector';
   /** 可以选的模型；不需要模型的工具返回空 */
   models: (config: ToolConfig) => string[];
   args: z.ZodType<Record<string, unknown>>;

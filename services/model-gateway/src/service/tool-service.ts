@@ -15,8 +15,8 @@ export function createToolService(deps: ToolServiceDeps) {
   const { meter, config } = deps;
   const byKey = new Map(TOOLS.map((t) => [t.key, t]));
   const configured = (tool: ToolDef) =>
-    tool.provider === 'harness'
-      ? Boolean(deps.harness)
+    tool.provider === 'inspector'
+      ? Boolean(deps.checks)
       : tool.provider === 'browserstack'
         ? Boolean(deps.browserstack?.configured)
         : tool.provider === 'runpod'

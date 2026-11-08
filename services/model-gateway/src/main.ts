@@ -159,9 +159,20 @@ await startService({
       baseUrl: config.LIVEAVATAR_BASE_URL,
       apiKey: config.LIVEAVATAR_API_KEY,
     });
+    const compute = createComputeService({
+      meter,
+      repo: callsRepo,
+      pricePerCoreHourMicro: config.COMPUTE_PRICE_MICRO_PER_CORE_HOUR,
+    });
     const tools = createToolService({
       estimateFromHistory: config.ESTIMATE_FROM_HISTORY,
-      harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 65000 }),
+      // 浏览器检查在 inspector（ADR 0024）；检查浏览器的算力在这里冻结、结算
+      checks: {
+        inspector: createServiceClient('inspector', config.INSPECTOR_URL, { timeoutMs: 65_000 }),
+        compute,
+        cores: config.BROWSER_CHECK_CPUS,
+        maxMs: config.BROWSER_CHECK_MAX_MS,
+      },
       browserstack: createBrowserStackClient({
         username: config.BROWSERSTACK_USERNAME,
         accessKey: config.BROWSERSTACK_ACCESS_KEY,
@@ -269,11 +280,7 @@ await startService({
       runKeys,
       avatars,
       tools,
-      compute: createComputeService({
-        meter,
-        repo: callsRepo,
-        pricePerCoreHourMicro: config.COMPUTE_PRICE_MICRO_PER_CORE_HOUR,
-      }),
+      compute,
       unavailableModels: meter.regionBlockedModels,
       executionModels: async () => {
         // 开发阶段不参考调用记录（ESTIMATE_FROM_HISTORY）：只按价格表 × 假设的用量估

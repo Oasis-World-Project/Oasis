@@ -7,12 +7,22 @@
 //   oasis-tool audio.transcribe --file in/录音.mp3
 //   oasis-tool video.generate --prompt "…" --out out/视频.mp4   长任务：提交后自己等，等不到就给任务号
 //   oasis-tool wait <任务号> --out out/视频.mp4                   接着等长任务
-import { mkdir, readFile, stat, writeFile, rename, rm, realpath, lstat } from 'node:fs/promises';
+import {
+  mkdir,
+  readdir,
+  readFile,
+  stat,
+  writeFile,
+  rename,
+  rm,
+  realpath,
+  lstat,
+} from 'node:fs/promises';
 import { createWriteStream, createReadStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { basename, dirname, extname, join, resolve, relative, isAbsolute } from 'node:path';
+import { basename, dirname, extname, join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { runBatch } from './batch.ts';
 
 /** 这些参数是列表：逗号分隔，或者直接写 JSON 数组 */
@@ -278,8 +288,56 @@ async function localImages(paths: unknown): Promise<{ mediaType: string; base64:
   return images;
 }
 
+/** app.check 一次带上的应用文件上限（入口代理收 50 MB 的请求，base64 后要放得下） */
+const APP_MAX_FILES = 1000;
+const APP_MAX_BYTES = 25 * 1024 * 1024;
+
+/**
+ * app.check：浏览器检查在平台的隔离容器里跑（ADR 0024），读不到沙箱，所以把 out/<dir> 里的文件
+ * 随调用带上。只认普通文件、不跟随符号链接；超过上限就说清楚，交付后关卡照样会检查。
+ */
+export async function appFiles(
+  args: Record<string, unknown>,
+): Promise<{ path: string; contentBase64: string }[]> {
+  const usage = '--dir 写 oasis-app.json 所在的目录，如 out/site';
+  if (typeof args.dir !== 'string') throw new Error(usage);
+  const dir = args.dir.replace(/^(\.\/)?(\/workspace\/)?(out\/)?/, '').replace(/\/+$/, '');
+  if (!dir || dir.split('/').some((part) => !part || part === '.' || part === '..'))
+    throw new Error(usage);
+  args.dir = dir;
+  const root = resolve(process.env.OASIS_OUT_DIR ?? 'out', dir);
+  const files: { path: string; contentBase64: string }[] = [];
+  let total = 0;
+  const walk = async (folder: string): Promise<void> => {
+    for (const entry of await readdir(folder, { withFileTypes: true })) {
+      const full = join(folder, entry.name);
+      if (entry.isDirectory()) await walk(full);
+      else if (entry.isFile()) {
+        total += (await stat(full)).size;
+        if (files.length >= APP_MAX_FILES || total > APP_MAX_BYTES)
+          throw new Error(
+            `out/${dir} 超过自查上限（${APP_MAX_FILES} 个文件、25 MB），自查不了；交付后关卡照样会检查`,
+          );
+        files.push({
+          path: relative(root, full).split(sep).join('/'),
+          contentBase64: (await readFile(full)).toString('base64'),
+        });
+      }
+    }
+  };
+  try {
+    await walk(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      throw new Error(`out/${dir} 不存在`, { cause: error });
+    throw error;
+  }
+  return files;
+}
+
 async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
+  if (key === 'app.check') args.files = await appFiles(args);
   const renderInputs: string[] = [];
   if (key === '3d.render') {
     if (typeof args.scene !== 'string') throw new Error('--scene 需要本地 scene.json');

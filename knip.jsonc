@@ -1,6 +1,6 @@
 {
   // 这两个工具由 scripts/check-engineering.mjs 通过 `pnpm exec` 动态调用，knip 静态分析看不到
-  // playwright-core 仅在锁定版本的预览镜像内安装，不在宿主工作区依赖中。
+  // playwright-core 仅在锁定版本的检查浏览器镜像内安装，不在宿主工作区依赖中。
   "ignoreDependencies": ["dependency-cruiser", "jscpd", "playwright-core"],
   "workspaces": {
     ".": {
@@ -19,19 +19,23 @@
       "ignoreBinaries": ["dsh"],
       // 原生附件恢复回归仅在镜像内加载 dsh 自带的精确依赖；宿主不重复安装底座。
       "ignoreDependencies": ["@deepseek-ai/cordis", "@deepseek-ai/dsh-attachment-local"],
-      // 装进沙箱、预览镜像里执行的脚本，静态 import 图不可见。
+      // 装进沙箱镜像里执行的脚本，静态 import 图不可见。
       "entry": [
         "src/main.ts",
         "sandbox/oasis-tool.ts",
         "src/adapter/profile/node-goal.mjs",
         "src/adapter/test/native-provider.mjs",
-        "preview/controller.mjs",
       ],
     },
-    // 解析 worker 由 Worker URL 按源码/编译后扩展名加载；解码脚本读成文本放进检查容器执行。
-    // 两者都不在静态 import 图里。
+    // 解析 worker 由 Worker URL 按源码/编译后扩展名加载；解码脚本读成文本放进检查容器执行；
+    // 检查浏览器的控制端装进检查浏览器镜像执行。都不在静态 import 图里。
     "services/inspector": {
-      "entry": ["src/main.ts", "src/service/file-inspection-worker.ts", "media/media-check.mjs"],
+      "entry": [
+        "src/main.ts",
+        "src/service/file-inspection-worker.ts",
+        "media/media-check.mjs",
+        "browser/controller.mjs",
+      ],
     },
     "services/canvas": {
       // 开发启动器把入口作为参数传入；显式保留 main，避免覆盖默认入口推断。

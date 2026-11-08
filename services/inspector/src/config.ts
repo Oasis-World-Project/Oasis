@@ -38,6 +38,18 @@ export const inspectorEnv = {
   /** 同时最多开几个检查容器，多出来的排队 */
   MEDIA_CHECK_CONCURRENCY: positiveInt.max(16).default(2),
 
+  // ---- 网页的浏览器检查：每次开一个检查浏览器容器（核数由付费的调用方定，不设时限） ----
+  /** 检查浏览器镜像（pnpm browser:build 构建） */
+  BROWSER_IMAGE: z.string().default('oasis/inspector-browser:1.64.0'),
+  BROWSER_MEMORY_MB: positiveInt.max(16384).default(2048),
+  BROWSER_PIDS_LIMIT: positiveInt.max(4096).default(512),
+  /** 容器里应用监听的回环端口 */
+  BROWSER_APP_PORT: positiveInt.min(1024).max(65535).default(3180),
+  /** 同时最多开几个检查浏览器，多出来的排队 */
+  BROWSER_CONCURRENCY: positiveInt.max(16).default(3),
+  /** 外站测试明确放行的 HTTPS 来源，逗号分隔；为空时关闭外站访问 */
+  WEBSITE_TEST_ORIGINS: list,
+
   // ---- 文件解析（在独立 worker 里做，逐文件有资源上限） ----
   EXTRACT_INPUT_BYTES: positiveInt.max(100 * 1024 * 1024).default(20 * 1024 * 1024),
   EXTRACT_UNZIP_BYTES: positiveInt.max(200 * 1024 * 1024).default(50 * 1024 * 1024),

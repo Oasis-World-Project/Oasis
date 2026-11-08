@@ -12,6 +12,7 @@ import {
   type MediaCheckResult,
 } from '@oasis/contracts/inspector';
 import { demultiplex, HttpError, rewriteArchive, type DockerApi } from '@oasis/service-kit';
+import { createQueue } from './queue.ts';
 import type { Sources } from './sources.ts';
 
 /** 检查容器：镜像和资源 */
@@ -166,35 +167,6 @@ export async function runMediaCheck(
     snapshot.destroy();
     await docker.removeContainer(id).catch(() => undefined);
   }
-}
-
-/** 同时最多开几个检查容器；多出来的排队（排队时间不计费），调用方断开就不再等 */
-function createQueue(limit: number) {
-  let active = 0;
-  const waiting: (() => void)[] = [];
-  return async <T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
-    while (active >= limit) {
-      signal?.throwIfAborted();
-      await new Promise<void>((resolve) => {
-        const wake = () => {
-          signal?.removeEventListener('abort', wake);
-          const index = waiting.indexOf(wake);
-          if (index >= 0) waiting.splice(index, 1);
-          resolve();
-        };
-        waiting.push(wake);
-        signal?.addEventListener('abort', wake, { once: true });
-      });
-    }
-    signal?.throwIfAborted();
-    active++;
-    try {
-      return await work();
-    } finally {
-      active--;
-      waiting.shift()?.();
-    }
-  };
 }
 
 /** 关卡的解码检查：读运行产出包里请求的这些文件（加上工程引用的素材），报回结果和实际算力 */

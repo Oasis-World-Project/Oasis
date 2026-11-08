@@ -200,16 +200,18 @@ export function createDockerApi(socketPath: string) {
         req.on('error', reject);
         req.end();
       }),
-    /** 强制删除（运行中的会先被杀掉），连同匿名卷；容器不存在不算错 */
+    /** 强制删除（运行中的会先被杀掉），连同匿名卷；容器不存在、正在被自动删除都不算错 */
     removeContainer: async (id: string) => {
       try {
         await readAll(await call('DELETE', `/containers/${id}?force=1&v=1`));
       } catch (err) {
-        if (!(err instanceof DockerApiError && err.status === 404)) throw err;
+        if (!(err instanceof DockerApiError && (err.status === 404 || err.status === 409)))
+          throw err;
       }
     },
+    /** 按标签列出容器（含已停止的）；State 是 created、running、exited 等，Created 是创建时刻（秒） */
     listContainers: (label: string) =>
-      json<{ Id: string; Labels: Record<string, string> }[]>(
+      json<{ Id: string; Labels: Record<string, string>; State?: string; Created?: number }[]>(
         'GET',
         `/containers/json?all=1&filters=${encodeURIComponent(JSON.stringify({ label: [label] }))}`,
       ),

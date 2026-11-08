@@ -200,7 +200,7 @@ describe('一次 agent 运行：输入和产出', () => {
     await finished(run.id);
     const link = await service.outputsLink(run.id, PAYER, taskId);
     expect(link.url).toBe(
-      `http://s3.test/oasis-harness/runs/${run.id}/outputs.tar?method=GET&expires=900`,
+      `http://s3.test/oasis-harness/runs/${run.id}/outputs.tar?method=GET&expires=3600`,
     );
     expect(new Date(link.expiresAt).getTime()).toBeGreaterThan(Date.now());
     await expect(service.outputsLink(run.id, PAYER, PAYER)).rejects.toMatchObject({
@@ -210,6 +210,30 @@ describe('一次 agent 运行：输入和产出', () => {
     await expect(service.outputsLink(run.id, PAYER, taskId)).rejects.toMatchObject({
       statusCode: 404,
       code: 'outputs_not_found',
+    });
+  });
+
+  it('交付关卡的浏览器检查报告：task 交来留档、再查一次就覆盖；只给这次运行的付费人和任务读', async () => {
+    const taskId = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
+    const run = await service.start({ ...base, taskId, prompt: '写' });
+    await finished(run.id);
+    await expect(service.applicationReport(run.id, PAYER, taskId)).rejects.toMatchObject({
+      statusCode: 404,
+      code: 'check_not_found',
+    });
+    const failed = { passed: false, reason: '首页脚本报错', frameCaptured: true };
+    await service.saveApplicationReport(run.id, { payerId: PAYER, taskId, report: failed });
+    const passed = { passed: true, reason: null, frameCaptured: true };
+    await service.saveApplicationReport(run.id, { payerId: PAYER, taskId, report: passed });
+    const saved = await service.applicationReport(run.id, PAYER, taskId);
+    expect(JSON.parse(saved.toString('utf8'))).toEqual(passed);
+    // 别人的任务既存不进来，也读不到
+    await expect(
+      service.saveApplicationReport(run.id, { payerId: PAYER, taskId: PAYER, report: failed }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'run_not_found' });
+    await expect(service.applicationReport(run.id, PAYER, PAYER)).rejects.toMatchObject({
+      statusCode: 404,
+      code: 'run_not_found',
     });
   });
 });

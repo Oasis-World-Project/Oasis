@@ -100,6 +100,8 @@ const web = {
           seg.text.includes('第 3 步 text #count')
             ? { bash: writeFiles({ 'out/site/counter.js': counter(1) }), description: '修计数' }
             : { text: `修复提示里没有浏览器检查发现的计数问题：${seg.text.slice(0, 200)}` },
+        // 交回前自查：沙箱带着 out/site 的文件经网关交给 inspector，跑和关卡同一套浏览器检查（ADR 0024）
+        { bash: 'oasis-tool app.check --dir out/site', description: '自查网页' },
       ],
     },
   },
@@ -110,10 +112,31 @@ const web = {
     const node = task.nodes[0];
     t.check(node.reworks === 1, `浏览器关卡应退回修一次，实际 ${node.reworks} 次`);
     t.check(!node.warning, `修好后不应再有提醒：${node.warning}`);
-    const fixed = t.provider
-      .of('web', 'site')
-      .filter((c) => c.segment === 'rework' && c.action === 'bash:0');
+    const site = t.provider.of('web', 'site');
+    const fixed = site.filter((c) => c.segment === 'rework' && c.action === 'bash:0');
     t.check(fixed.length === 1, `修复提示里应带着浏览器检查发现的问题（收到 ${fixed.length} 次）`);
+    const selfCheck = site.find((c) => c.segment === 'rework' && c.action === 'done');
+    t.check(
+      selfCheck?.previous?.includes('浏览器检查通过'),
+      `节点自查 app.check 应通过：${selfCheck?.previous ?? '没有记录'}`,
+    );
+    // 浏览器检查（关卡两次、节点自查一次）的算力按实际用时结算在这个任务上
+    const browsed = query(
+      'model_gateway',
+      `select status from calls where task_id = ${literal(taskId)} and kind = 'compute' and model = 'application-check'`,
+    );
+    t.check(
+      browsed.length >= 3 && browsed.every((c) => c.status === 'succeeded'),
+      `浏览器检查的算力应结算在任务上（${browsed.map((c) => c.status).join('、') || '没有记录'}）`,
+    );
+    // 关卡的检查报告由 task 存回 harness，用户在工作流里下载的是最后一次（修好后）的
+    const report = await t.user.api.get(
+      `/task/v1/tasks/${taskId}/nodes/${node.id}/application-check`,
+    );
+    t.check(
+      report?.passed === true && report.screenshots?.some((s) => s.name === 'opening.jpg'),
+      `下载的浏览器检查报告应是修好后通过的那次、带首屏截图：${JSON.stringify(report).slice(0, 200)}`,
+    );
     const expected = [
       'site/app.js',
       'site/counter.js',

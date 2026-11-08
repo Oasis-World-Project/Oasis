@@ -1,6 +1,6 @@
 // 工具服务（tool-service.ts）分成几块：一次工具调用的计量（tool-call）、长任务的后台推进（tool-jobs）、
 // 长任务的对外接口（tool-job-api）。这里放它们共用的依赖和接口，免得文件之间循环 import。
-import type { Logger, ObjectStore, ServiceClient } from '@oasis/service-kit';
+import type { Logger, ObjectStore } from '@oasis/service-kit';
 import type { BrowserStackClient } from '../adapters/browserstack.ts';
 import type { FalClient } from '../adapters/fal.ts';
 import type { ProviderClient } from '../adapters/openrouter.ts';
@@ -9,12 +9,14 @@ import type { SearchClient } from '../adapters/tavily.ts';
 import type { ToolJob, ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
 import type { AvatarCatalog } from './avatar-catalog.ts';
 import type { Caller, Meter } from './metering.ts';
+import type { BrowserChecks } from './tools/kit.ts';
 import type { ToolConfig, ToolDef } from './tools.ts';
 
 export interface ToolServiceDeps {
   /** 单价要不要参考调用记录（开发阶段关掉，只用供应商价格和目录兜底值） */
   estimateFromHistory?: boolean;
-  harness?: ServiceClient;
+  /** 浏览器检查：inspector 和检查浏览器的算力（ADR 0024） */
+  checks?: BrowserChecks;
   browserstack?: BrowserStackClient;
   openrouter: ProviderClient;
   tavily: SearchClient;

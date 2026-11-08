@@ -72,14 +72,15 @@ function run(command, options = {}) {
 
 // ---------- 准备：Docker、镜像、端口、中间件、共享包 ----------
 const harnessEnv = readEnv(path.join(ROOT, 'services/harness/.env'));
+const inspectorEnv = readEnv(path.join(ROOT, 'services/inspector/.env'));
 const images = [
   harnessEnv.SANDBOX_IMAGE || 'oasis/harness-sandbox-3d:0.2.1-rc.5-blender4.3.2',
-  harnessEnv.PREVIEW_IMAGE || 'oasis/harness-preview:1.64.0',
+  inspectorEnv.BROWSER_IMAGE || 'oasis/inspector-browser:1.64.0',
   'oasis/harness-sandbox-base:0.2.1-rc.5',
 ];
 for (const image of images)
   if (spawnSync('docker', ['image', 'inspect', image], { stdio: 'ignore' }).status !== 0)
-    throw new Error(`缺少镜像 ${image}：先运行 pnpm sandbox:build / pnpm preview:build`);
+    throw new Error(`缺少镜像 ${image}：先运行 pnpm sandbox:build / pnpm browser:build`);
 const busy = [];
 for (const name of SERVICES) if (await portBusy(portOf(name))) busy.push(`${name}:${portOf(name)}`);
 if (await portBusy(webPort())) busy.push(`web:${webPort()}`);
@@ -111,11 +112,12 @@ const providerEnv = (url) => ({
 const env = {
   harness: {
     SANDBOX_CPUS: '1',
-    PREVIEW_CPUS: '1',
     MAX_CONCURRENT_RUNS: '4',
     RECOVERY_INTERVAL_MS: '5000',
   },
-  task: { RECONCILE_INTERVAL_MS: '10000', MEDIA_CHECK_CPUS: '1' },
+  task: { RECONCILE_INTERVAL_MS: '10000', MEDIA_CHECK_CPUS: '1', BROWSER_CHECK_CPUS: '1' },
+  // 节点自查 app.check 开的检查浏览器
+  'model-gateway': { BROWSER_CHECK_CPUS: '1' },
 };
 const stack = createStack({ logDir: path.join(outDir, 'logs'), env, log });
 let provider;
@@ -141,7 +143,7 @@ try {
     });
     const providerUrl = await provider.listen();
     log(`假供应商 ${providerUrl}`);
-    env['model-gateway'] = providerEnv(providerUrl);
+    env['model-gateway'] = { ...env['model-gateway'], ...providerEnv(providerUrl) };
   }
   await stack.startAll(SECOND);
   const drift = await schemaDrift();

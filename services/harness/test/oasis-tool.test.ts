@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
@@ -268,6 +268,27 @@ describe('oasis-tool 长任务', () => {
       main(['image.inspect', '--images', JSON.stringify(Array(5).fill(path))]),
     ).rejects.toThrow('1–4');
     expect(received).toHaveLength(count);
+  });
+
+  it('app.check 把 out/<dir> 里的文件随调用带上（检查在平台的隔离浏览器里跑，读不到沙箱）', async () => {
+    const site = join(dir, 'out', 'site');
+    await mkdir(join(site, 'js'), { recursive: true });
+    await writeFile(join(site, 'index.html'), '<h1>hi</h1>');
+    await writeFile(join(site, 'js', 'app.js'), 'export {}');
+    vi.stubEnv('OASIS_OUT_DIR', join(dir, 'out'));
+    await main(['app.check', '--dir', 'out/site/']);
+    const sent = received.at(-1)!;
+    expect(sent.key).toBe('app.check');
+    expect(sent.args.dir).toBe('site');
+    expect(sent.args.files).toEqual(
+      expect.arrayContaining([
+        { path: 'index.html', contentBase64: Buffer.from('<h1>hi</h1>').toString('base64') },
+        { path: 'js/app.js', contentBase64: Buffer.from('export {}').toString('base64') },
+      ]),
+    );
+    expect(sent.args.files).toHaveLength(2);
+    await expect(main(['app.check', '--dir', 'out/missing'])).rejects.toThrow('out/missing 不存在');
+    await expect(main(['app.check', '--dir', '../etc'])).rejects.toThrow('--dir');
   });
 
   it('web.fetch --out 传全文模式并写入完整 Markdown，终端只显示摘要', async () => {

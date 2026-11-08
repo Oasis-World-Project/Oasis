@@ -1,12 +1,56 @@
 // 检查类工具：外站浏览器测试、网页应用自查（和交付关卡同一套浏览器检查）、Android 原生应用测试。
-import { ApplicationCheckResult } from '@oasis/contracts/harness';
-import { BrowserTestResult, WebsiteTestArgs } from '@oasis/contracts/ui-test';
+// 浏览器检查都在 inspector（ADR 0024）：网关转交参数，检查浏览器的算力由网关冻结、按 inspector 报回的
+// 实际用时结算，记在调用的任务和节点上。
+import { randomUUID } from 'node:crypto';
+import {
+  ApplicationCheckReply,
+  WebsiteCheckReply,
+  type ApplicationCheckResult,
+  type ComputeUsage,
+} from '@oasis/contracts/inspector';
+import { WebsiteTestArgs } from '@oasis/contracts/ui-test';
 import { HttpError } from '@oasis/service-kit';
 import { z } from 'zod';
 import { AndroidTestArgs } from '../../adapters/browserstack.ts';
-import type { ToolDef } from './kit.ts';
+import type { ToolDef, ToolDeps } from './kit.ts';
 
-const AppCheckArgs = z.object({ dir: z.string().min(1).max(220) });
+const AppCheckArgs = z.object({
+  dir: z.string().min(1).max(220),
+  /** 沙箱里的 oasis-tool 读好 out/<dir> 的文件一起带来（相对 dir 的路径） */
+  files: z.array(z.object({ path: z.string(), contentBase64: z.string() })).optional(),
+});
+
+/** 检查浏览器的算力：先冻结，按 inspector 报回的实际用时结算；检查没做完不收钱 */
+async function metered<T extends { usage: ComputeUsage }>(
+  deps: ToolDeps,
+  work: (cores: number) => Promise<T>,
+): Promise<T> {
+  const { compute, cores, maxMs } = deps.checks!;
+  const id = randomUUID();
+  const hold = await compute.hold({
+    runId: id,
+    payerId: deps.payerId!,
+    taskId: deps.taskId ?? null,
+    nodeId: deps.nodeId ?? null,
+    cores,
+    maxMs,
+    purpose: 'application-check',
+    requestId: id,
+  });
+  let usage: ComputeUsage = { cores, elapsedMs: 0 };
+  try {
+    const result = await work(cores);
+    usage = { cores: result.usage.cores, elapsedMs: Math.min(maxMs, result.usage.elapsedMs) };
+    return result;
+  } finally {
+    if (hold.callId)
+      await compute
+        .settle(hold.callId, usage)
+        .catch((err: unknown) =>
+          deps.logger?.warn({ err, callId: hold.callId }, '检查算力没结算上，冻结到期会自动退回'),
+        );
+  }
+}
 
 /** app.check 的结果说成节点能直接照着改的话：原因、页面报错、没覆盖到的地方 */
 function appCheckText(dir: string, result: ApplicationCheckResult): string {
@@ -32,20 +76,22 @@ export const websiteTest: ToolDef = {
   unit: '次（算力单独结算）',
   estimateMicro: 0,
   holdMicro: () => 1,
-  provider: 'harness',
+  provider: 'inspector',
   models: () => ['oasis/browser'],
   modelOf: () => 'oasis/browser',
   args: WebsiteTestArgs,
   long: false,
   run: async (deps, args) => {
     if (!deps.taskId) throw new HttpError(400, 'task_required', '网站测试需要所属任务');
-    const response = await deps.upstream(() =>
-      deps.harness!.stream('POST', '/internal/websites/check', {
-        body: { ...args, payerId: deps.payerId, taskId: deps.taskId },
-        signal: deps.signal,
-      }),
-    );
-    const result = BrowserTestResult.parse(await response.json());
+    const result = await metered(deps, async (cores) => {
+      const response = await deps.upstream(() =>
+        deps.checks!.inspector.stream('POST', '/internal/websites/check', {
+          body: { ...args, cores },
+          signal: deps.signal,
+        }),
+      );
+      return WebsiteCheckReply.parse(await response.json());
+    });
     return {
       text: result.report.passed
         ? '外站声明式测试步骤通过；覆盖限制见报告。'
@@ -73,28 +119,35 @@ export const appCheck: ToolDef = {
   unit: '次（算力单独结算）',
   estimateMicro: 0,
   holdMicro: () => 1,
-  provider: 'harness',
+  provider: 'inspector',
   models: () => ['oasis/browser'],
   modelOf: () => 'oasis/browser',
   args: AppCheckArgs,
   long: false,
   run: async (deps, args) => {
-    if (!deps.taskId || !deps.runId)
-      throw new HttpError(400, 'run_required', '网页应用自查只能在任务节点里用');
-    const dir = AppCheckArgs.parse(args)
-      .dir.replace(/^(\.\/)?(\/workspace\/)?(out\/)?/, '')
-      .replace(/\/+$/, '');
+    if (!deps.taskId) throw new HttpError(400, 'task_required', '网页应用自查只能在任务节点里用');
+    const parsed = AppCheckArgs.parse(args);
+    const dir = parsed.dir.replace(/^(\.\/)?(\/workspace\/)?(out\/)?/, '').replace(/\/+$/, '');
     if (!dir)
       throw new HttpError(400, 'invalid_args', '--dir 写 oasis-app.json 所在的目录，如 out/site');
-    const response = await deps.upstream(() =>
-      deps.harness!.stream('POST', `/internal/runs/${deps.runId}/application-check/live`, {
-        body: { payerId: deps.payerId, taskId: deps.taskId, dir },
-        // 页面多慢都等（与关卡一致），调用方中断时随之回收浏览器
-        timeoutMs: null,
-        signal: deps.signal,
-      }),
-    );
-    const result = ApplicationCheckResult.parse(await response.json());
+    // 文件由沙箱里的 oasis-tool 读好带来；旧版沙箱镜像不带
+    if (!parsed.files)
+      throw new HttpError(
+        400,
+        'sandbox_outdated',
+        'oasis-tool 版本过旧，没有带上 out/ 里的文件，app.check 用不了（沙箱镜像需要重建：pnpm sandbox:build）。这次先跳过自查，交付后关卡照常检查。',
+      );
+    if (!parsed.files.length) throw new HttpError(400, 'invalid_args', `out/${dir} 里没有文件`);
+    const result = await metered(deps, async (cores) => {
+      const response = await deps.upstream(() =>
+        deps.checks!.inspector.stream('POST', '/internal/applications/check-files', {
+          body: { dir, files: parsed.files, cores },
+          // 页面多慢都等（与关卡一致），调用方中断时随之回收浏览器
+          signal: deps.signal,
+        }),
+      );
+      return ApplicationCheckReply.parse(await response.json());
+    });
     return {
       text: appCheckText(dir, result),
       data: result.report ?? null,

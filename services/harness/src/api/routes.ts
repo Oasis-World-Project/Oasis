@@ -1,10 +1,14 @@
 // harness 只有内部接口（gateway 不转发 /internal）：task 等服务用它启动运行、看进度、追问、停止、取消。
-import { OutputsLinkBody, RunMessageBody, StartRunBody } from '@oasis/contracts/harness';
+// harness 不调 model-gateway、inspector：检查由 task 拿产出包链接交给 inspector（ADR 0024）。
+import {
+  ApplicationReportBody,
+  OutputsLinkBody,
+  RunMessageBody,
+  StartRunBody,
+} from '@oasis/contracts/harness';
 import { parseWith, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
-import { WebsiteTestArgs } from '@oasis/contracts/ui-test';
 import type { RunService } from '../service/run-service.ts';
-import type { PreviewService } from '../service/preview-service.ts';
 
 const RunParams = z.object({ runId: z.uuid() });
 const FileParams = RunParams.extend({ '*': z.string().min(1).max(500) });
@@ -12,8 +16,11 @@ const EventsQuery = z.object({
   after: z.coerce.number().int().min(-1).default(-1),
   limit: z.coerce.number().int().positive().max(1000).default(200),
 });
+const Owner = z.object({ payerId: z.uuid(), taskId: z.uuid() });
+/** 浏览器检查报告带平台截图（首屏和测试步骤），比默认的 1 MiB 请求体大 */
+const REPORT_BODY_LIMIT = 64 * 1024 * 1024;
 
-export function registerRoutes(app: ServiceApp, runs: RunService, previews?: PreviewService): void {
+export function registerRoutes(app: ServiceApp, runs: RunService): void {
   app.get('/internal/execution/environment', () => runs.environment());
   /** 产出包的临时下载链接：交给 inspector 检查（ADR 0024） */
   app.post('/internal/runs/:runId/outputs/link', async (request) => {
@@ -21,60 +28,23 @@ export function registerRoutes(app: ServiceApp, runs: RunService, previews?: Pre
     const { payerId, taskId } = parseWith(OutputsLinkBody, request.body);
     return runs.outputsLink(runId, payerId, taskId);
   });
-  if (previews) {
-    app.post('/internal/websites/check', async (request) =>
-      previews.checkWebsite(
-        parseWith(WebsiteTestArgs.extend({ payerId: z.uuid(), taskId: z.uuid() }), request.body),
-      ),
-    );
-    app.post('/internal/runs/:runId/application-check/report', async (request, reply) => {
+  /** 交付关卡的浏览器检查报告：task 拿 inspector 的结论交来留档，再查一次就覆盖 */
+  app.put(
+    '/internal/runs/:runId/application-check',
+    { bodyLimit: REPORT_BODY_LIMIT },
+    async (request, reply) => {
       const { runId } = parseWith(RunParams, request.params);
-      const { payerId, taskId } = parseWith(
-        z.object({ payerId: z.uuid(), taskId: z.uuid() }),
-        request.body,
-      );
-      return reply.type('application/json').send(await previews.report({ runId, payerId, taskId }));
-    });
-    // 节点自查（ADR 0017）：读运行中沙箱的 out/<dir>，跑和关卡同一套浏览器检查，不留档
-    app.post('/internal/runs/:runId/application-check/live', async (request, reply) => {
-      const { runId } = parseWith(RunParams, request.params);
-      const body = parseWith(
-        z.object({
-          payerId: z.uuid(),
-          taskId: z.uuid(),
-          dir: z
-            .string()
-            .min(1)
-            .max(200)
-            .refine(
-              (dir) =>
-                !dir.includes('\\') &&
-                dir.split('/').every((part) => part && part !== '.' && part !== '..'),
-              'dir 是 out/ 下的相对目录',
-            ),
-        }),
-        request.body,
-      );
-      const abort = new AbortController();
-      reply.raw.on('close', () => {
-        if (!reply.raw.writableEnded) abort.abort();
-      });
-      return previews.checkLive({ runId, ...body, signal: abort.signal });
-    });
-    app.post('/internal/runs/:runId/application-check', async (request, reply) => {
-      const { runId } = parseWith(RunParams, request.params);
-      const { payerId, taskId } = parseWith(
-        z.object({ payerId: z.uuid(), taskId: z.uuid() }),
-        request.body,
-      );
-      // 检查不设时限：task 在用户停止/取消节点时断开请求，这里随之回收浏览器
-      const abort = new AbortController();
-      reply.raw.on('close', () => {
-        if (!reply.raw.writableEnded) abort.abort();
-      });
-      return previews.checkRun({ runId, payerId, taskId, signal: abort.signal });
-    });
-  }
+      await runs.saveApplicationReport(runId, parseWith(ApplicationReportBody, request.body));
+      return reply.code(204).send();
+    },
+  );
+  app.post('/internal/runs/:runId/application-check/report', async (request, reply) => {
+    const { runId } = parseWith(RunParams, request.params);
+    const { payerId, taskId } = parseWith(Owner, request.body);
+    return reply
+      .type('application/json')
+      .send(await runs.applicationReport(runId, payerId, taskId));
+  });
   /** 启动一次运行：立即返回（202），运行在后台进行，结束时发出 harness.run.finished */
   app.post('/internal/runs', async (request, reply) => {
     const body = parseWith(StartRunBody, request.body);

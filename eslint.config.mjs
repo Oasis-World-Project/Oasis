@@ -34,7 +34,7 @@ export default defineConfig(
   },
   {
     // 已按职责拆开的服务：单个文件不超过 500 行，防止再长回去
-    files: ['services/{task,harness,model-gateway}/{src,test}/**/*.ts'],
+    files: ['services/{task,harness,model-gateway,inspector}/{src,test}/**/*.ts'],
     rules: { 'max-lines': ['error', { max: 500 }] },
   },
   {

@@ -19,16 +19,12 @@ import { SANDBOX_PATHS } from './adapter/dsh.ts';
 import { registerRoutes } from './api/routes.ts';
 import { harnessEnv } from './config.ts';
 import { createDockerExecutor, type Executor } from './executor/executor.ts';
-import { createPreviewExecutor } from './executor/preview-executor.ts';
-import { createBrowserRepo } from './repo/browser-repo.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
 import { createRunService, type RunService } from './service/run-service.ts';
-import { createPreviewService, type PreviewService } from './service/preview-service.ts';
 
 let executor: Executor;
 let store: ObjectStore;
 let runs: RunService | undefined;
-let previews: PreviewService | undefined;
 let recoveryTimer: NodeJS.Timeout | undefined;
 
 await startService({
@@ -73,11 +69,10 @@ await startService({
       ready: () => executor.check(),
       close: async () => {
         clearInterval(recoveryTimer);
-        await previews?.close();
         await runs?.stopAll();
       },
     };
-    // 任务被用户删除：停掉它还开着的检查浏览器，删掉运行存档和记录（ADR 0012）
+    // 任务被用户删除：删掉运行存档和记录（ADR 0012）
     const taskDeleted = startEventConsumer({
       connection: eventBus.connection,
       stream: TASK_STREAM,
@@ -87,8 +82,7 @@ await startService({
       handle: async (envelope) => {
         const { taskId } = TaskDeleted.data.parse(envelope.data);
         // 服务还在启动（接口层还没建好）：抛出让事件稍后重投
-        if (!runs || !previews) throw new Error('harness 还没就绪');
-        await previews.stopTask(taskId);
+        if (!runs) throw new Error('harness 还没就绪');
         if (!(await runs.purgeTask(taskId))) throw new Error('任务还有没结束的运行，稍后再清理');
       },
     });
@@ -125,27 +119,7 @@ await startService({
       serviceName: name,
       logger,
     });
-    previews = createPreviewService({
-      websiteOrigins: config.WEBSITE_TEST_ORIGINS,
-      store,
-      repo: createBrowserRepo(resources.postgres.pool),
-      executor: createPreviewExecutor({
-        docker: createDockerApi(config.DOCKER_SOCKET ?? defaultDockerSocket()),
-        image: config.PREVIEW_IMAGE,
-        cpus: config.PREVIEW_CPUS,
-        memoryMb: config.PREVIEW_MEMORY_MB,
-        pidsLimit: config.PREVIEW_PIDS_LIMIT,
-        appPort: config.PREVIEW_APP_PORT,
-      }),
-      modelGateway: createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
-        timeoutMs: 10_000,
-      }),
-      logger,
-      runs,
-      cpus: config.PREVIEW_CPUS,
-      maxMs: config.PREVIEW_MAX_MS,
-    });
-    registerRoutes(app, runs, previews);
+    registerRoutes(app, runs);
     // 接管上次进程遗留的运行；Docker 暂时不可用也不阻止启动（/ready 会显示 sandboxes 失败）
     await runs.recover().catch((err: unknown) => logger.warn({ err }, '清理遗留运行失败'));
     recoveryTimer = setInterval(() => {
@@ -153,8 +127,5 @@ await startService({
         ?.recover()
         .catch((err: unknown) => logger.warn({ err }, '运行接管暂未完成，稍后重试'));
     }, config.RECOVERY_INTERVAL_MS);
-    await previews
-      .recover()
-      .catch((err: unknown) => logger.warn({ err }, '清理遗留的检查浏览器失败'));
   },
 });
