@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// 工程规范 §7 的确定性检查入口：命名、镜像命名、依赖方向、死代码/未用依赖、重复率、数据库迁移。
-// 用法：node scripts/check-engineering.mjs [--only naming,images,tokens,deps,dead,dup,migrations]
+// 工程规范 §7 的确定性检查入口：命名、镜像命名、服务调用、依赖方向、死代码/未用依赖、重复率、数据库迁移。
+// 用法：node scripts/check-engineering.mjs [--only naming,images,tokens,calls,deps,dead,dup,migrations]
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -18,6 +18,12 @@ const DOCKER_BUILD = /docker\s+(?:buildx\s+)?build\b[^\n]*/g;
 // AGENTS.md B.12：前端颜色只来自设计令牌，应用代码里不写裸色值
 const RAW_COLOR = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch)\(/;
 const TOKEN_CHECKED = /^apps\/web\/src\/.+\.(tsx?|css)$/;
+// ADR 0024：服务之间的同步调用（createServiceClient('<对方>', …)，对方名字写成字面量）不能成环；
+// inspector 不调任何服务，检查要的内容由调用方给。已知的环都经过画布（画布读任务的成果和详情、
+// 开数字人会话），留到画布重整时再拆：先放行这两条边，别处再出现环就拦下。
+const SERVICE_CLIENT = /createServiceClient\(\s*['"]([a-z][a-z-]*)['"]/g;
+const LEAF_SERVICES = ['inspector'];
+const KNOWN_CYCLE_EDGES = new Set(['canvas -> task', 'canvas -> model-gateway']);
 
 function run(cmd, args, { capture = false } = {}) {
   const options = {
@@ -114,6 +120,46 @@ function checkTokens() {
   return problems.length === 0;
 }
 
+function checkCalls() {
+  const edges = new Map();
+  for (const file of files.filter((f) => /^services\/[^/]+\/src\/.+\.(ts|mts|mjs)$/.test(f))) {
+    const from = file.split('/')[1];
+    for (const [, to] of readFileSync(path.join(ROOT, file), 'utf8').matchAll(SERVICE_CLIENT)) {
+      if (!edges.has(from)) edges.set(from, new Set());
+      edges.get(from).add(to);
+    }
+  }
+  const problems = [];
+  for (const leaf of LEAF_SERVICES)
+    for (const to of edges.get(leaf) ?? []) problems.push(`${leaf} 不能调别的服务（调了 ${to}）`);
+  for (const edge of KNOWN_CYCLE_EDGES) {
+    const [from, to] = edge.split(' -> ');
+    if (!edges.get(from)?.has(to))
+      problems.push(`放行的 ${edge} 已经不存在了，把它从 KNOWN_CYCLE_EDGES 里删掉`);
+  }
+  // 去掉放行的边后找环：深度优先，走回还在路径上的服务就是一个环
+  const state = new Map();
+  const trail = [];
+  const visit = (service) => {
+    state.set(service, 'active');
+    trail.push(service);
+    for (const next of edges.get(service) ?? []) {
+      if (KNOWN_CYCLE_EDGES.has(`${service} -> ${next}`)) continue;
+      if (state.get(next) === 'active')
+        problems.push(`服务调用成环：${[...trail.slice(trail.indexOf(next)), next].join(' → ')}`);
+      else if (!state.has(next)) visit(next);
+    }
+    trail.pop();
+    state.set(service, 'done');
+  };
+  for (const service of [...edges.keys()].sort()) if (!state.has(service)) visit(service);
+  for (const p of problems) console.error(`  ${p}`);
+  if (!problems.length)
+    for (const [from, to] of [...edges].sort(([a], [b]) => a.localeCompare(b)))
+      console.log(`  ${from} → ${[...to].sort().join('、')}`);
+  return problems.length === 0;
+}
+
 function checkMigrations() {
   const migrations = files.filter((f) => /^services\/[^/]+\/migrations\/.+\.sql$/.test(f));
   let ok = true;
@@ -140,6 +186,7 @@ const CHECKS = {
   naming: { label: '版本后缀命名', fn: checkNaming },
   images: { label: '镜像命名 oasis/', fn: checkImages },
   tokens: { label: '前端只用设计令牌', fn: checkTokens },
+  calls: { label: '服务调用无环（ADR 0024）', fn: checkCalls },
   migrations: { label: '数据库迁移 Expand/Contract', fn: checkMigrations },
   deps: {
     label: '依赖方向与循环依赖（dependency-cruiser）',

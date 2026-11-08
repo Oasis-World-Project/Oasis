@@ -12,7 +12,7 @@
 pnpm install        # 安装依赖，同时装好 git 钩子
 pnpm env:init       # 生成根目录和每个服务的 .env（随机密码）
 pnpm infra:up       # 启动 PostgreSQL、Valkey、NATS、SeaweedFS、Mailpit，等到全部健康
-pnpm dev            # 9 个服务 + 前端开发服务器在本机运行，改代码自动重启 / 热更新
+pnpm dev            # 10 个服务 + 前端开发服务器在本机运行，改代码自动重启 / 热更新
 pnpm desktop        # 另开一个终端，打开 Electron 桌面窗口（产品以桌面端为准）
 ```
 
@@ -50,7 +50,22 @@ pnpm sandbox:check
 - harness 的 `/ready` 会检查 Docker、沙箱镜像和网络是否都在。设计见 [ADR 0003](docs/adr/0003-task-workflow.md)。
 - `pnpm dev` 中 harness 使用稳定进程，不随源码变动自动重启；修改它后手动重启开发服务。重启会接管原运行和原生会话，`/workspace` 与会话目录保留在带 Oasis 标签的 named volume 中，任务删除后一起清理。项目依赖装进工作目录（如 `.venv`、`node_modules`），不要修改镜像内的系统环境来保存任务状态。接管依赖暂不可用时保留进度等待恢复，用户停止/取消意图优先处理；详见 [ADR 0015](docs/adr/0015-persistent-node-execution.md)。
 
-需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 9 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。
+### 检查（inspector）
+
+判断成果的检查都在 inspector（ADR 0024）：文件解析、音视频解码、网页的浏览器检查（交付关卡、节点里的 `oasis-tool app.check`、外站测试 `website.test`）、模型预览、素材解析。它不调别的服务、不存东西，要检查的内容由调用方给对象存储的临时下载链接，或直接放在请求里。
+
+- 音视频解码在不联网、限核的检查容器里做，用沙箱基础镜像（`pnpm sandbox:build`）。
+- 网页的浏览器检查在检查浏览器容器里做（Playwright + Chromium，应用和浏览器同容器、无外部网络），第一次用之前构建镜像，可以顺手烟测一遍（不花钱）：
+
+```bash
+pnpm browser:build
+pnpm browser:smoke
+```
+
+- 检查容器的算力由付钱的一方结算：交付关卡记在任务上（task 冻结、按 inspector 报回的实际用时结算），`app.check`、`website.test` 记在调用的节点上（model-gateway 结算）。容器用完即删，inspector 断开时检查浏览器跟着退出。
+- 外站测试只访问 inspector 的 `WEBSITE_TEST_ORIGINS` 里放行的 HTTPS 来源，默认为空（关闭）。
+
+需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 10 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。
 
 ## 服务
 
@@ -65,6 +80,7 @@ pnpm sandbox:check
 | canvas | 4106 | 成果、批注、文件 | 经 gateway |
 | harness | 4107 | Agent 运行时（唯一接触 DeepSeek Harness） | 仅内部 |
 | model-gateway | 4108 | 所有模型调用的唯一出口，计量上报 billing | 仅内部 |
+| inspector | 4109 | 检查成果：文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览、素材解析（不调别的服务、不存东西，ADR 0024） | 仅内部 |
 | model-gateway（数字人入口） | 4118 | 只有 `/avatar/v1/chat/completions`，给 LiveAvatar 回调大模型（ADR 0013）；开发期经 `pnpm avatar:tunnel` 和服务器 nginx 暴露为 `https://oasis-dev.elysiumgrid.space/avatar/v1` | 只这一条路径公网可达 |
 
 每个服务都有 `/health`（进程存活）、`/ready`（依赖可用）、`/v1/meta`（服务名、版本、提交号）。业务接口放在 `/v1/*`，只给服务之间调用的放在 `/internal/*`（gateway 不转发）。
@@ -84,7 +100,7 @@ pnpm sandbox:check
 
 ```
 apps/       web（React 19 + Vite + TanStack Router + Tailwind v4）、desktop（Electron 壳）
-services/   9 个微服务，各自独立数据库
+services/   10 个微服务，各自独立数据库（inspector 不用数据库）
 packages/   contracts（契约）、service-kit（服务启动底座）、design-tokens（设计令牌）、tsconfig
 infra/      本地编排（docker compose）
 scripts/    工程检查、清理、环境初始化

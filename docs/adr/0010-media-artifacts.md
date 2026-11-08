@@ -3,6 +3,7 @@
 - 状态：5.8a 实现、免费工程验证与三例真实音频成品验收通过（2026-10-27）；未确认费用保留对账，不视为全部闭合。5.8b 实现、免费视频工程验证与两例真实模型成品验收通过，均在 Shotcut 打开并重新导出；具体限制和历史提醒见 §14。
 - 依据：ADR 0003 §10 的场景 2/3、ADR 0006 的能力网关、ADR 0007 的画布与上传、ADR 0008 的遗留媒体范围，以及用户本次确认：包含完整音乐作品；视频编辑用户素材并交付可再编辑的 Shotcut 工程。
 - 范围：agent、model-gateway、harness、canvas、task、Web/desktop、contracts、媒体运行镜像；不新增业务微服务。
+- 注（2026-11-08，ADR 0024）：交付关卡的音视频、平台工程、字幕解码检查已从 harness 搬到 inspector：检查容器仍用沙箱基础镜像、不联网、限核，受信脚本是 `services/inspector/media/media-check.mjs`；核数和时限由 task 定（`MEDIA_CHECK_CPUS`、`MEDIA_CHECK_TIMEOUT_MS`），算力按实际用时记在任务上。下文写 harness 做解码检查的地方以此为准。
 
 ## 1. 当前基础与缺口
 

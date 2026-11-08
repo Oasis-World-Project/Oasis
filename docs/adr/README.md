@@ -15,7 +15,7 @@ ADR 记下「为什么这么做」。代码注释里大量引用「ADR 00xx §y�
 | [0007](0007-frontend-trunk.md) | 前端主干（私聊卡片、工作流视图、画布、桌面同步） | 现行；浏览器相关取舍以 0019 为准 |
 | [0008](0008-file-scenarios.md) | 文件类场景 | 现行 |
 | [0009](0009-runnable-artifacts.md) | 可运行成果与独立预览 | 现行；节点自查 app.check 见 0017；平台容器预览已被 0021 删除 |
-| [0010](0010-media-artifacts.md) | 音频、视频成品与可编辑工程 | 现行；视频黑屏/静音提醒已被 0017 删除 |
+| [0010](0010-media-artifacts.md) | 音频、视频成品与可编辑工程 | 现行；视频黑屏/静音提醒已被 0017 删除；解码检查在 inspector（0024） |
 | [0011](0011-3d-and-cloud-rendering.md) | 3D 与云端渲染 | 现行；沙箱 3D 工具补充见 0020 |
 | [0012](0012-revise-results.md) | 修改成果 | 现行；2026-11-05 起在原任务里接着改，怎么改由规划员定见 0022 |
 | [0013](0013-digital-human.md) | 实时数字人 | 现行 |
@@ -26,6 +26,7 @@ ADR 记下「为什么这么做」。代码注释里大量引用「ADR 00xx §y�
 | [0018](0018-lean-prompts.md) | 规则减负、规划员一律最强、报价方式 | 现行 |
 | [0019](0019-desktop-first.md) | 以桌面端为准 | 现行 |
 | [0020](0020-3d-toolkit-and-steering.md) | 3D 工具、运行中消息即时送达、3D 导演台 | 现行 |
-| [0021](0021-canvas-runs-what-checks-pass.md) | 检查过的网页，画布里一定打得开 | 现行 |
+| [0021](0021-canvas-runs-what-checks-pass.md) | 检查过的网页，画布里一定打得开 | 现行；浏览器检查在 inspector（0024） |
 | [0022](0022-revisions-planned-by-team.md) | 修改交给 AI 团队规划、工作流分版本、先确认再跑 | 现行 |
 | [0023](0023-node-kind-plugins.md) | task 引擎按节点种类拆成插件，大文件按职责拆开（单文件 ≤ 500 行） | 现行 |
+| [0024](0024-inspector-and-one-way-calls.md) | 检查服务 inspector，服务调用只往一个方向走 | 现行 |
