@@ -1,8 +1,9 @@
-// 私聊的输入框：「＋」里作为任务发布、添加文件；文件也可以粘贴进来（拖进对话区由页面处理）。
+// 私聊的输入框：「＋」里作为任务发布、添加文件、只用国内模型；文件也可以粘贴进来（拖进对话区由页面处理）。
 // 有文件还在上传或上传失败时不能发送。
 import { ArrowUp, ListChecks, Paperclip, Plus, Play, Square, X } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { PendingFiles } from './Attachments.tsx';
+import { ModelScopeToggle } from './ModelScopeToggle.tsx';
 import type { useAttachments } from './use-attachments.ts';
 
 type Attachments = ReturnType<typeof useAttachments>;
@@ -37,7 +38,7 @@ function ComposerMenu({
       {open && (
         <div
           role="menu"
-          className="glass absolute bottom-12 left-0 z-10 flex w-56 flex-col rounded-card bg-glass-strong p-1.5"
+          className="glass absolute bottom-12 left-0 z-10 flex w-60 flex-col rounded-card bg-glass-strong p-1.5"
         >
           <button
             type="button"
@@ -70,6 +71,7 @@ function ComposerMenu({
               <span className="text-[12px] text-ink-muted">图片、文档、音视频都行</span>
             </span>
           </button>
+          <ModelScopeToggle className={item} />
         </div>
       )}
     </div>

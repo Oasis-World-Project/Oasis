@@ -4,6 +4,7 @@
 // 这里是目录和组装；调用在 tool-call.ts，长任务在 tool-jobs.ts 和 tool-job-api.ts。
 import type { ToolEntry, ToolRate } from '@oasis/contracts/model-gateway';
 import type { Typical } from '../repo/calls-repo.ts';
+import type { ModelFilter } from './model-scope.ts';
 import { videoCatalogRate } from './pricing.ts';
 import { createToolCall } from './tool-call.ts';
 import type { ToolContext, ToolServiceDeps } from './tool-context.ts';
@@ -58,10 +59,15 @@ export function createToolService(deps: ToolServiceDeps) {
     });
   }
 
-  /** 这个工具现在能用的模型：去掉当前网络用不了的 */
-  async function usableModels(tool: ToolDef): Promise<string[]> {
-    const blocked = new Set(await meter.regionBlockedModels());
-    return tool.models(config).filter((m) => !blocked.has(m));
+  /**
+   * 这个工具的模型里给不给用：只有经 OpenRouter 调模型的工具按用户的模型范围过滤（ADR 0027），
+   * 搜索、云渲染这类不按模型厂商分的工具不过滤。
+   */
+  const modelsOf = (tool: ToolDef, allowed: ModelFilter) =>
+    tool.provider === 'openrouter' ? tool.models(config).filter(allowed) : tool.models(config);
+
+  async function usableModels(tool: ToolDef, payerId: string | undefined): Promise<string[]> {
+    return modelsOf(tool, await deps.scope.filterFor(payerId));
   }
 
   const ctx = {
@@ -78,13 +84,15 @@ export function createToolService(deps: ToolServiceDeps) {
 
   return {
     ...jobApi.api,
-    /** 工具目录：没配 Key、或者没有能用的模型的工具标成不可用 */
-    async list(): Promise<ToolEntry[]> {
-      const blocked = new Set(await meter.regionBlockedModels());
+    /**
+     * 工具目录：没配 Key、或者没有能用的模型的工具标成不可用。payerId 是替哪个用户列的
+     * （按他的模型范围过滤型号）；不给就列全部。
+     */
+    async list(payerId?: string): Promise<ToolEntry[]> {
+      const allowed = await deps.scope.filterFor(payerId);
       const entries = await Promise.all(
         TOOLS.map(async (tool) => {
-          const all = tool.models(config);
-          const models = all.filter((m) => !blocked.has(m));
+          const models = modelsOf(tool, allowed);
           return {
             key: tool.key,
             name: tool.name,

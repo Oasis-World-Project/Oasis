@@ -2,12 +2,12 @@
 // → 规划门检查 → 没过就接着原会话改，次数用完交给用户 → 通过就建节点和连线、算预估、开跑。
 import { randomUUID } from 'node:crypto';
 import { Catalog, PlaybookList, type Playbook } from '@oasis/contracts/agent';
+import { OASIS_HEADERS } from '@oasis/contracts/common';
 import type { RunFinishedData } from '@oasis/contracts/events';
 import { RunBody, ExecutionEnvironment } from '@oasis/contracts/harness';
 import { ExecutionModels, ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
 import type { WorkflowOptions } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
-import { z } from 'zod';
 import type { Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
 import type { Effects, Engine, PlannerJob } from './effects.ts';
 import { isRoot } from './groups.ts';
@@ -36,7 +36,6 @@ export interface PlanningConfig {
 }
 
 const RUN_FINAL = ['succeeded', 'failed', 'cancelled', 'stopped'];
-const Unavailable = z.object({ models: z.array(z.string()) });
 
 export function createPlanning(deps: {
   store: TaskStore;
@@ -49,37 +48,30 @@ export function createPlanning(deps: {
 }) {
   const { store, harness, engine, config, logger } = deps;
 
-  /** 规划员能挑的模型：已接入的，去掉在当前网络用不了的（查不到时不排除），带上典型单价 */
-  async function catalog(): Promise<PricedModel[]> {
+  /** 替这个用户向 model-gateway 要目录：它按他的模型范围（「只用国内模型」，ADR 0027）过滤 */
+  const listedFor = (userId: string) => ({ headers: { [OASIS_HEADERS.payerId]: userId } });
+
+  /** 这个用户的 AI 团队能挑的模型：已接入、能执行、在他的模型范围里的，带上典型单价 */
+  async function catalog(userId: string): Promise<PricedModel[]> {
     const { models } = await deps.agent.json('GET', '/internal/models/catalog', {
       schema: Catalog,
     });
     const execution = await deps.modelGateway.json('GET', '/internal/v1/models/execution', {
+      ...listedFor(userId),
       schema: ExecutionModels,
     });
     const node = new Map(execution.models.map((m) => [m.id, m.node]));
-    const blocked = await deps.modelGateway
-      .json('GET', '/internal/v1/models/unavailable', { schema: Unavailable })
-      .then((r) => new Set(r.models))
-      .catch((err: unknown) => {
-        logger.warn({ err }, '查不到哪些模型用不了，不排除');
-        return new Set<string>();
-      });
-    // 地区限制按厂商生效（同一家的型号要么都能用要么都不能用）：一个型号被拒，这家的其他型号也排除
-    const vendorOf = (model: string) => model.split('/')[0];
-    const blockedVendors = new Set([...blocked].map(vendorOf));
-    return models
-      .filter((m) => node.has(m.providerModel) && !blockedVendors.has(vendorOf(m.providerModel)))
-      .map((m) => {
-        const rate = node.get(m.providerModel);
-        return rate ? { ...m, node: rate } : m;
-      });
+    return models.flatMap((m) => {
+      if (!node.has(m.providerModel)) return [];
+      const rate = node.get(m.providerModel);
+      return [rate ? { ...m, node: rate } : m];
+    });
   }
 
   /** 目录不可读时等待恢复，不能把未知当成没有工具而编造替代方案。 */
-  async function tools(): Promise<ToolEntry[]> {
+  async function tools(userId: string): Promise<ToolEntry[]> {
     return deps.modelGateway
-      .json('GET', '/internal/v1/tools', { schema: ToolList })
+      .json('GET', '/internal/v1/tools', { ...listedFor(userId), schema: ToolList })
       .then((r) => r.tools.filter((t) => t.available));
   }
 
@@ -133,8 +125,8 @@ export function createPlanning(deps: {
     try {
       const guides = job.revise ? [] : await playbooks(task.id);
       const resources = async () => ({
-        catalog: await catalog(),
-        tools: await tools(),
+        catalog: await catalog(task.payerId),
+        tools: await tools(task.payerId),
         playbooks: guides,
         defaultModel: config.defaultModel,
         environment: await harness.json('GET', '/internal/execution/environment', {
@@ -241,8 +233,8 @@ export function createPlanning(deps: {
     const task = await store.findTaskByPlannerRun(result.runId);
     if (task?.status !== 'planning' || task.plannerRunId !== result.runId) return;
     // 事务外读方案、查模型和工具目录，事务里只做决定
-    const toolList = result.status === 'succeeded' ? await tools() : [];
-    const models = result.status === 'succeeded' ? await catalog() : [];
+    const toolList = result.status === 'succeeded' ? await tools(task.payerId) : [];
+    const models = result.status === 'succeeded' ? await catalog(task.payerId) : [];
     const environment =
       result.status === 'succeeded'
         ? await harness.json('GET', '/internal/execution/environment', {
@@ -364,12 +356,15 @@ export function createPlanning(deps: {
     submit,
     onFinished,
 
-    /** 报价和估价用的单价：带单价的模型目录和工具目录 */
-    pricing: async () => ({ models: await catalog(), tools: await tools() }),
+    /** 报价和估价用的单价：这个用户能用的模型目录和工具目录，带单价 */
+    pricing: async (userId: string) => ({
+      models: await catalog(userId),
+      tools: await tools(userId),
+    }),
 
     /** 编辑节点时能选的模型和工具：和规划员看到的一样 */
-    async options(): Promise<WorkflowOptions> {
-      const [models, available] = await Promise.all([catalog(), tools()]);
+    async options(userId: string): Promise<WorkflowOptions> {
+      const [models, available] = await Promise.all([catalog(userId), tools(userId)]);
       return {
         models: models.map(({ key, name, vendor, providerModel }) => ({
           key,

@@ -103,8 +103,8 @@ describe('文件场景工具', () => {
 });
 
 describe('工具目录', () => {
-  it('列出全部工具；没配 Key 的、模型都用不了的标成不可用；默认模型跳过用不了的', async () => {
-    knobs.blocked = ['bytedance-seed/seedream-4.5'];
+  it('列出全部工具；没配 Key 的标成不可用；不替哪个用户列时不过滤型号', async () => {
+    knobs.domesticOnly = true;
     const list = await build(undefined).list();
     const byKey = Object.fromEntries(list.map((t) => [t.key, t]));
     expect(Object.keys(byKey)).toEqual([
@@ -133,16 +133,56 @@ describe('工具目录', () => {
     ]);
     expect(byKey['image.generate']).toMatchObject({
       available: true,
-      models: ['openai/gpt-image-2'],
-      defaultModel: 'openai/gpt-image-2',
+      models: ['bytedance-seed/seedream-4.5', 'openai/gpt-image-2'],
+      defaultModel: 'bytedance-seed/seedream-4.5',
       local: false,
       per: { arg: 'n', default: 1 },
     });
     expect(byKey['image.generate']?.args.map((a) => a.name)).toContain('prompt');
     expect(byKey['op.video.concat']).toMatchObject({ available: true, local: true });
     expect(byKey['web.search']?.available).toBe(false);
-    knobs.blocked = ['typesafe/jev-1.14'];
-    expect((await build('k').list()).find((t) => t.key === 'jev.decide')?.available).toBe(false);
+  });
+
+  it('用户打开「只用国内模型」：替他列的目录只留国内厂商的型号，没有国内型号的工具不可用；不按模型厂商分的工具不受影响', async () => {
+    const all = Object.fromEntries(
+      (await build('k', true, true).list(PAYER)).map((t) => [t.key, t]),
+    );
+    knobs.domesticOnly = true;
+    const list = await build('k', true, true).list(PAYER);
+    const byKey = Object.fromEntries(list.map((t) => [t.key, t]));
+    expect(byKey['image.generate']).toMatchObject({
+      available: true,
+      models: ['bytedance-seed/seedream-4.5'],
+      defaultModel: 'bytedance-seed/seedream-4.5',
+      rates: [{ model: 'bytedance-seed/seedream-4.5' }],
+    });
+    expect(byKey['video.generate']?.models).toEqual(['alibaba/wan-2.7']);
+    // 型号全是国外厂商的：整个工具不可用
+    for (const key of ['image.inspect', 'audio.transcribe', 'jev.decide'])
+      expect(byKey[key]).toMatchObject({ available: false, models: [], defaultModel: null });
+    // 搜索（Tavily）、云渲染（Runpod）、音乐和 3D 生成（FAL）、浏览器检查、本地操作：和没开时一样
+    for (const key of ['web.search', '3d.render', '3d.generate', 'audio.music', 'app.check'])
+      expect(byKey[key]).toEqual(all[key]);
+    expect(byKey['web.search']?.available).toBe(true);
+    expect(byKey['3d.render']?.models).toEqual(['oasis/blender-cuda']);
+  });
+
+  it('开着「只用国内模型」时调用工具：默认用国内型号；点名国外型号或工具没有国内型号，调供应商之前就拒绝、不冻结', async () => {
+    knobs.domesticOnly = true;
+    const done = await call('image.generate', { prompt: 'x' });
+    expect(done.text).toContain('bytedance-seed/seedream-4.5');
+    const holds = billingCalls.length;
+    const named = await errorOf(
+      call('image.generate', { prompt: 'x', model: 'openai/gpt-image-2' }),
+    );
+    expect(named).toMatchObject({ statusCode: 409, code: 'model_out_of_scope' });
+    expect(named?.message).toBe(
+      '已开启「只用国内模型」，生成图片不能用 openai/gpt-image-2；可以用：bytedance-seed/seedream-4.5',
+    );
+    const none = await errorOf(call('image.inspect', { images: [reference], question: '?' }));
+    expect(none).toMatchObject({ code: 'model_out_of_scope' });
+    expect(none?.message).toBe('已开启「只用国内模型」，查看图片没有国内型号可用');
+    expect(billingCalls).toHaveLength(holds);
   });
 });
 

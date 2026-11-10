@@ -13,7 +13,6 @@ import type { ToolDef } from './tools.ts';
 export function createToolCall(ctx: ToolContext) {
   const { deps, byKey, configured } = ctx;
   const { meter, config, jobs } = deps;
-  const usableModels = (tool: ToolDef) => ctx.usableModels(tool);
   const ownedJob = (caller: Caller, id: string) => ctx.ownedJob(caller, id);
 
   return {
@@ -67,7 +66,7 @@ export function createToolCall(ctx: ToolContext) {
       if (typeof args.model === 'string' && !tool.models(config).includes(args.model)) {
         throw new HttpError(400, 'invalid_tool_args', `${tool.name}不能用模型 ${args.model}`);
       }
-      let models = await usableModels(tool);
+      let models = await ctx.usableModels(tool, input.caller.payerId);
       let videoHoldMicro: number | undefined;
       let videoEstimateMicro: number | undefined;
       if (tool.key === 'video.generate') {
@@ -125,11 +124,12 @@ export function createToolCall(ctx: ToolContext) {
         }
       }
       const model = tool.modelOf(args, models);
+      // 配了模型却一个也不给用，或点名的模型不在给用的里面：这个用户开着「只用国内模型」（ADR 0027）
       if (tool.models(config).length > 0 && !models.includes(model)) {
         throw new HttpError(
-          503,
-          'provider_region_unavailable',
-          `${tool.name}的模型 ${model || ''}在当前网络用不了`,
+          409,
+          'model_out_of_scope',
+          `已开启「只用国内模型」，${tool.name}${model ? `不能用 ${model}` : '没有国内型号可用'}${models.length ? `；可以用：${models.join('、')}` : ''}`,
         );
       }
 

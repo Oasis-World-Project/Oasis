@@ -1,9 +1,11 @@
-// 模型在当前网络用不了时换模型、用户素材、节点详情、删除任务（真删除）。
-import { HttpError } from '@oasis/service-kit';
+// 只用国内模型、模型在当前网络用不了时换模型、用户素材、节点详情、删除任务（真删除）。
+import { createServiceClient, HttpError } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
+import { createModelScopes } from '../src/service/model-scope.ts';
 import { events } from './support/memory-store.ts';
 import {
   fake,
+  harnessUrl,
   OWNER,
   STRANGER,
   submitted,
@@ -21,16 +23,12 @@ import {
   errorOf,
 } from './support/workflow.ts';
 
-describe('模型在当前网络用不了', () => {
-  const REGION =
-    '502: {"code":"provider_region_unavailable","message":"这个模型在当前网络所在的地区用不了"}';
-
-  it('规划员的模型目录里去掉用不了的模型（地区限制按厂商：同一家的其他型号也去掉）', async () => {
-    fake.unavailable = ['openai/other-model'];
+describe('只用国内模型（ADR 0027）', () => {
+  const plannerPrompt = async (ownerId: string) => {
     await createPlanned({
-      ownerId: OWNER,
+      ownerId,
       materials: [],
-      payerId: OWNER,
+      payerId: ownerId,
       title: 't',
       brief: 'b',
       sheet: {
@@ -43,10 +41,36 @@ describe('模型在当前网络用不了', () => {
         materials: [],
       },
     });
-    const prompt = (submitted.find((x) => !x.nodeId) as { prompt: string }).prompt;
+    return (submitted.findLast((x) => !x.nodeId) as { prompt: string }).prompt;
+  };
+
+  it('开关经 task 读写；打开后这个用户的规划员和编辑节点时都只看到国内模型，别的用户不受影响', async () => {
+    const scopes = createModelScopes(createServiceClient('model-gateway', harnessUrl));
+    expect(await scopes.get(OWNER)).toEqual({ domesticOnly: false });
+    expect(await plannerPrompt(OWNER)).toContain('openai/blocked（GPT');
+    expect((await service.options(OWNER)).models.map((m) => m.providerModel)).toEqual([
+      'deepseek/x',
+      'openai/blocked',
+    ]);
+
+    expect(await scopes.set(OWNER, { domesticOnly: true })).toEqual({ domesticOnly: true });
+    expect(await scopes.get(OWNER)).toEqual({ domesticOnly: true });
+    const prompt = await plannerPrompt(OWNER);
     expect(prompt).toContain('deepseek/x（DeepSeek');
     expect(prompt).not.toContain('openai/blocked');
+    const options = await service.options(OWNER);
+    expect(options.models.map((m) => m.providerModel)).toEqual(['deepseek/x']);
+    expect(options.tools.map((t) => t.key)).toEqual(['image.generate']);
+    expect(await plannerPrompt(STRANGER)).toContain('openai/blocked（GPT');
+
+    await scopes.set(OWNER, { domesticOnly: false });
+    expect((await service.options(OWNER)).models).toHaveLength(2);
   });
+});
+
+describe('模型在当前网络用不了', () => {
+  const REGION =
+    '502: {"code":"provider_region_unavailable","message":"这个模型在当前网络所在的地区用不了"}';
 
   it('干活节点碰上了：换默认模型接着做，不算一次重做，节点上留提醒', async () => {
     const task = await service.create({
@@ -138,14 +162,6 @@ describe('节点详情（ADR 0007 §6）', () => {
     expect(
       (await errorOf(() => service.nodeEvents(OWNER, task.id, b, -1, first.runId))).status,
     ).toBe(404);
-  });
-
-  it('编辑节点时能选的模型和工具：去掉用不了的', async () => {
-    fake.unavailable = ['openai/blocked'];
-    const options = await service.options();
-    expect(options.models.map((m) => m.providerModel)).toEqual(['deepseek/x']);
-    expect(options.tools.map((t) => t.key)).toEqual(['image.generate']);
-    fake.unavailable = [];
   });
 });
 

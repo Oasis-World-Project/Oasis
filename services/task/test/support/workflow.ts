@@ -1,5 +1,6 @@
 // 工作流服务测试的公共部分：假 harness / agent / model-gateway（一个 Fastify）、假关卡、每个测试前重建服务，
 // 以及建任务、结束运行、看状态的帮手。各个 workflow-*.test.ts 共用。
+import { OASIS_HEADERS } from '@oasis/contracts/common';
 import { createServiceClient, HttpError } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
@@ -11,7 +12,8 @@ import { events, memoryStore } from './memory-store.ts';
 /** 测试里会整个换掉的假结果 */
 export const fake = {
   rejectNext: false,
-  unavailable: [] as string[],
+  /** 打开了「只用国内模型」的用户（假 model-gateway 记着，ADR 0027） */
+  domesticOnly: new Set<string>(),
   gateResults: [] as (string[] | GateResult | 'throw')[],
   gateWaits: [] as (Promise<void> | undefined)[],
   /** 工具目录里另加的工具（带参数定义；同名的盖过默认的） */
@@ -31,16 +33,34 @@ export let finishedRemote = new Map<string, Record<string, unknown>>();
 /** 这些运行的持久工作目录不在了：接着它们做时 harness 返回 409 workspace_unavailable */
 export let lostWorkspaces = new Set<string>();
 export const harness = Fastify();
-harness.get('/internal/v1/models/execution', async () => ({
-  models: ['deepseek/x', 'openai/blocked'].map((id) => ({
-    id,
-    name: id,
-    contextWindow: 100000,
-    maxTokens: 16000,
-    input: ['text'],
-    reasoning: true,
-  })),
+/** 假 model-gateway：能执行的模型；替打开了「只用国内模型」的用户列时只留国内的（ADR 0027） */
+harness.get('/internal/v1/models/execution', async (request) => ({
+  models: ['deepseek/x', 'openai/blocked']
+    .filter(
+      (id) =>
+        id.startsWith('deepseek/') ||
+        !fake.domesticOnly.has(String(request.headers[OASIS_HEADERS.payerId])),
+    )
+    .map((id) => ({
+      id,
+      name: id,
+      contextWindow: 100000,
+      maxTokens: 16000,
+      input: ['text'],
+      reasoning: true,
+    })),
 }));
+/** 假 model-gateway：读写一个用户的模型范围 */
+harness.get('/internal/v1/model-scopes/:userId', async (request) => ({
+  domesticOnly: fake.domesticOnly.has((request.params as { userId: string }).userId),
+}));
+harness.put('/internal/v1/model-scopes/:userId', async (request) => {
+  const { userId } = request.params as { userId: string };
+  const scope = request.body as { domesticOnly: boolean };
+  if (scope.domesticOnly) fake.domesticOnly.add(userId);
+  else fake.domesticOnly.delete(userId);
+  return scope;
+});
 harness.get('/internal/execution/environment', async () => ({
   image: 'oasis/test:1',
   imageId: 'sha256:test',
@@ -126,8 +146,6 @@ harness.post('/internal/v1/decisions', async (request) => {
     usage: { input_tokens: 1, output_tokens: 1, cost: 0 },
   };
 });
-/** 假 model-gateway：在当前网络用不了的模型 */
-harness.get('/internal/v1/models/unavailable', async () => ({ models: fake.unavailable }));
 /** 假 model-gateway：工具目录（联网搜索没配 Key，不可用） */
 export const toolEntry = (key: string, estimateMicro: number, available: boolean) => ({
   key,
@@ -223,7 +241,7 @@ beforeEach(() => {
   fake.rejectNext = false;
   lostWorkspaces = new Set();
   plans = new Map();
-  fake.unavailable = [];
+  fake.domesticOnly.clear();
   fake.tools = [];
   events.length = 0;
   fake.gateResults = [];

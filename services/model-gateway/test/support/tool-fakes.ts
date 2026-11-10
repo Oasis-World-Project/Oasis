@@ -25,7 +25,8 @@ export const knobs = {
   videoUsdTariff: true,
   /** 视频提交被拒的状态码和原文；null = 接受 */
   videoReject: null as { status: number; body: unknown } | null,
-  blocked: [] as string[],
+  /** 测试用户有没有打开「只用国内模型」（ADR 0027） */
+  domesticOnly: false,
   typical: noHistory(),
   renderCleanupFails: false,
   archiveFails: false,
@@ -202,7 +203,7 @@ export const repo: CallsRepo = {
   start: async () => {},
   get: async (id) => recordedCalls.get(id) as Call | undefined,
   computeForRun: async () => [],
-  regionBlockedModels: async () => knobs.blocked,
+  regionBlockedModels: async () => [],
   staleRunning: async () => [],
   typicalUsage: async () => knobs.typical,
   async finish(id, outcome, event) {

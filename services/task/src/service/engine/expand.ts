@@ -95,7 +95,7 @@ export function createExpand(engine: Engine): Pick<Engine, 'expand'> {
   ): Promise<{ problem: string } | { prepared: Prepared[]; perItem: number }> {
     const read = await readList(snapshot, node);
     if ('problem' in read) return { problem: read.problem };
-    const { models, tools } = await engine.planning.pricing();
+    const { models, tools } = await engine.planning.pricing(snapshot.task.payerId);
     const byKey = new Map(tools.map((t) => [t.key, t]));
     const problems: string[] = [];
     const prepared: Prepared[] = read.items.map((item, i) => {

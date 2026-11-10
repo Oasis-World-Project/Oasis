@@ -30,9 +30,9 @@ export function createPickApi(api: {
       nodeId: string,
       version: number,
     ): Promise<TaskBody> {
-      await owned(ownerId, taskId);
+      const { task: owner } = await owned(ownerId, taskId);
       // 可能要排成修改、算预估：单价事务外先取
-      const pricing = await engine.planning.pricing();
+      const pricing = await engine.planning.pricing(owner.payerId);
       await engine.transact(taskId, async (snapshot, w, fx) => {
         const { task } = snapshot;
         const node = nodeOf(snapshot, nodeId);

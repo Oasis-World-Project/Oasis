@@ -198,7 +198,8 @@ const Completion = z.object({
 /** 报价服务：列草案的那一次模型调用由付费人付；草案用不了时返回 null（照样能确认任务） */
 export function createQuotes(deps: {
   modelGateway: ServiceClient;
-  pricing: () => Promise<{ models: PricedModel[]; tools: ToolEntry[] }>;
+  /** 这个用户能用的模型和工具，带单价 */
+  pricing: (userId: string) => Promise<{ models: PricedModel[]; tools: ToolEntry[] }>;
   /** 列草案用的便宜模型 */
   model: string;
   /** 规划员型号（各档相同） */
@@ -213,7 +214,7 @@ export function createQuotes(deps: {
       sheet: TaskSheet;
       requestId: string;
     }): Promise<BudgetQuote | null> {
-      const { models, tools } = await deps.pricing();
+      const { models, tools } = await deps.pricing(input.ownerId);
       try {
         const result = await deps.modelGateway.json('POST', '/internal/v1/chat/completions', {
           body: {

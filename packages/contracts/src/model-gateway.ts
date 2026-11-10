@@ -192,7 +192,7 @@ export const ToolEntry = z.object({
   long: z.boolean(),
   /** 能不能用（供应商 Key 没配就不能用） */
   available: z.boolean(),
-  /** 可以指定的模型（已去掉当前网络用不了的）；不需要模型的工具为空 */
+  /** 可以指定的模型（替某个用户列时已按他的模型范围过滤，ADR 0027）；不需要模型的工具为空 */
   models: z.array(z.string()),
   defaultModel: z.string().nullable(),
   /**
@@ -207,6 +207,13 @@ export const ToolEntry = z.object({
 });
 export type ToolEntry = z.infer<typeof ToolEntry>;
 export const ToolList = z.object({ tools: z.array(ToolEntry) });
+
+/**
+ * 一个用户让 AI 团队用哪些模型（ADR 0027）。domesticOnly：只用国内厂商的模型——AI 团队的模型和
+ * 各工具的型号都排除国外厂商的；关着（默认）时不排除任何模型。
+ */
+export const ModelScope = z.object({ domesticOnly: z.boolean() });
+export type ModelScope = z.infer<typeof ModelScope>;
 
 /** 调用工具：参数按工具各自校验 */
 export const ToolCallBody = z.object({

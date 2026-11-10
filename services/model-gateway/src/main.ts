@@ -23,12 +23,14 @@ import { registerRoutes } from './api/routes.ts';
 import { modelGatewayEnv } from './config.ts';
 import { createCallsRepo } from './repo/calls-repo.ts';
 import { createAvatarSessionsRepo } from './repo/avatar-sessions-repo.ts';
+import { createModelScopesRepo } from './repo/model-scopes-repo.ts';
 import { createRunKeysRepo } from './repo/run-keys-repo.ts';
 import { createToolJobsRepo } from './repo/tool-jobs-repo.ts';
 import { createChatService } from './service/chat-service.ts';
 import { createComputeService } from './service/compute-service.ts';
 import { createDecisionService } from './service/decision-service.ts';
 import { createMeter } from './service/metering.ts';
+import { createModelScopeService } from './service/model-scope.ts';
 import { withNodeRate } from './service/pricing.ts';
 import { createRunKeyService } from './service/run-key-service.ts';
 import { createToolService } from './service/tool-service.ts';
@@ -164,6 +166,10 @@ await startService({
       repo: callsRepo,
       pricePerCoreHourMicro: config.COMPUTE_PRICE_MICRO_PER_CORE_HOUR,
     });
+    const scope = createModelScopeService({
+      repo: createModelScopesRepo(resources.postgres.pool),
+      domesticVendors: config.DOMESTIC_MODEL_VENDORS,
+    });
     const tools = createToolService({
       estimateFromHistory: config.ESTIMATE_FROM_HISTORY,
       // 浏览器检查在 inspector（ADR 0024）；检查浏览器的算力在这里冻结、结算
@@ -210,6 +216,7 @@ await startService({
         apiKey: config.TAVILY_API_KEY,
       }),
       meter,
+      scope,
       jobs: createToolJobsRepo(resources.postgres.pool),
       jobTimeoutMs: config.TOOL_JOB_TIMEOUT_MS,
       config: {
@@ -281,6 +288,7 @@ await startService({
       avatars,
       tools,
       compute,
+      scope,
       unavailableModels: meter.regionBlockedModels,
       executionModels: async () => {
         // 开发阶段不参考调用记录（ESTIMATE_FROM_HISTORY）：只按价格表 × 假设的用量估

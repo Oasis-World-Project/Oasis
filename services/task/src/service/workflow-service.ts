@@ -293,9 +293,9 @@ export function createWorkflowService(deps: EngineDeps) {
     },
 
     /** 编辑节点时能选的模型和工具 */
-    options: () => planning.options(),
-    /** 报价用的单价：带单价的模型目录和工具目录（ADR 0016 §4） */
-    pricing: () => planning.pricing(),
+    options: (userId: string) => planning.options(userId),
+    /** 报价用的单价：这个用户能用的模型目录和工具目录，带单价（ADR 0016 §4） */
+    pricing: (userId: string) => planning.pricing(userId),
 
     /** 运行整个工作流（先检查整张图） */
     run: (ownerId: string, taskId: string) =>

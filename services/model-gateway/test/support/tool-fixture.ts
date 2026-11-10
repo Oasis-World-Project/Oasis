@@ -8,6 +8,7 @@ import { createRenderClient } from '../../src/adapters/runpod.ts';
 import { createHash } from 'node:crypto';
 import { createTavilyClient } from '../../src/adapters/tavily.ts';
 import { createMeter } from '../../src/service/metering.ts';
+import { createModelScopeService } from '../../src/service/model-scope.ts';
 import { createToolService } from '../../src/service/tool-service.ts';
 import {
   knobs,
@@ -170,6 +171,15 @@ export const build = (
     }),
     tavily: createTavilyClient({ baseUrl: `${urls.fake}/tavily`, apiKey: tavilyKey }),
     meter: createMeter({ billing: createServiceClient('billing', urls.billing), repo, logger }),
+    scope: createModelScopeService({
+      repo: {
+        domesticOnly: async () => knobs.domesticOnly,
+        setDomesticOnly: async (_userId, domesticOnly) => {
+          knobs.domesticOnly = domesticOnly;
+        },
+      },
+      domesticVendors: ['bytedance-seed', 'alibaba'],
+    }),
     jobs,
     store: mediaStore,
     jobTimeoutMs: 30 * 60_000,
@@ -232,7 +242,7 @@ beforeEach(() => {
   upstream.length = 0;
   finished.length = 0;
   settled.length = 0;
-  knobs.blocked = [];
+  knobs.domesticOnly = false;
   knobs.imageStatus = 200;
   knobs.imageRejections = 0;
   knobs.visionStatus = 200;

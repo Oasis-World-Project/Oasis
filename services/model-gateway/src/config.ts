@@ -163,6 +163,13 @@ export const modelGatewayEnv = {
     .default(30 * 60_000),
   /** jev.decide 用的决策模型 */
   TOOL_JEV_MODEL: z.string().min(1).default('typesafe/jev-1.14'),
+  /**
+   * 国内厂商（模型 ID 里「/」前面的部分）。用户打开「只用国内模型」后，只给他的 AI 团队列这些厂商的
+   * 模型和工具型号（ADR 0027）；不在名单里的都算国外。
+   */
+  DOMESTIC_MODEL_VENDORS: list(
+    'deepseek,qwen,alibaba,moonshotai,bytedance,bytedance-seed,kwaivgi,minimax,stepfun,tencent,xiaomi,z-ai',
+  ),
   /** 配音拿不到实际花费时每个字估多少（微美元） */
   TOOL_SPEECH_MICRO_PER_CHAR: z.coerce.number().int().nonnegative().default(20),
   /** 沙箱算力每核每小时多少钱（微美元；按云服务器成本价约 $0.015）。为 0 时不计费 */

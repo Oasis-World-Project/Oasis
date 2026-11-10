@@ -127,7 +127,7 @@ AI（交付消息）：做了什么、成果文件、没完全满足的地方（
 
 用户在 Windows 上用真实模型试了一次（「官网首页首屏：文案 + 效果图」）。规划员给效果图节点选了 GPT，给讨论里的一位参与者选了 Gemini，这两个模型在用户网络所在的地区都用不了，节点各重试 3 次后失败。修正：
 
-- model-gateway 新增 `GET /internal/v1/models/unavailable`：按调用记录，列出最近一次聊天调用因地区限制被拒、之后没再成功过的模型。规划员的模型目录里去掉这些。部署到海外后没有被拒的记录，就不会排除任何模型，不需要配置。
+- model-gateway 新增 `GET /internal/v1/models/unavailable`：按调用记录，列出最近一次聊天调用因地区限制被拒、之后没再成功过的模型。规划员的模型目录里去掉这些。部署到海外后没有被拒的记录，就不会排除任何模型，不需要配置。（2026-11-10 起规划员的目录不再按这份记录排除，改成用户自己开的「只用国内模型」开关，见 ADR 0027；这个接口只剩接需求时给私聊 AI 兜底用。）
 - 节点运行碰上「地区不可用」：重试没用，直接换成默认模型（DeepSeek）接着做，不算一次重做，并在节点上留提醒。讨论里只换那位参与者的模型。默认模型也用不了时，照常按失败处理。
 
 ## 后果
@@ -252,7 +252,7 @@ AI（交付消息）：做了什么、成果文件、没完全满足的地方（
 
 - **私聊和 AI 团队分开**：私聊 AI 只负责接需求、传话，型号不变（models 表）。AI 团队的型号在 agent 的 `team-models.ts`：各家旗舰（DeepSeek V4 Pro、Claude Fable 5.1 / Opus 5.5、GPT-6 Astra Pro / GPT-6.1 Sol Pro、Gemini 4 Argon、Grok 4.7、Kimi K3.1 Pro、GLM-5.3 Prime、Qwen3.8 Max Prime）和强力型号（Claude Sonnet 5.5、GPT-6.1 Sol、Seed 2.0 Code、MiniMax M3、Mistral Large 4、混元 Hy4、MiMo V2.6 Pro、Step 5），每个标档位和能直接读的输入；私聊的省钱型号作为「快速」档留在目录末尾（只做机械小事，旧任务的头像也还认得出）。型号 ID 照 OpenRouter 目录核对（2026-11-05）。Llama 没有强力型号，不登记。
 - **规划员**：`PLANNER_MODEL` / `DEFAULT_NODE_MODEL` 默认 `deepseek/deepseek-v4-pro-0813`；深度思考由 harness 自动用型号支持的最高推理档（实测有推理 token）。说明里要求：核心产出一律旗舰、按专长混用厂商、要看图的选能读图的；拿不准的先用 `web.search` / `web.fetch` 联网查证，把要点写进节点 goal。
-- **地区限制按厂商排除**：一家有型号因地区被拒，这家的其他型号也不给规划员（开发机上 Anthropic、OpenAI、Google 都被拒）；部署到海外后没有被拒记录，全部可用。
+- **地区限制按厂商排除**：一家有型号因地区被拒，这家的其他型号也不给规划员（开发机上 Anthropic、OpenAI、Google 都被拒）；部署到海外后没有被拒记录，全部可用。（2026-11-10 起取消，见 ADR 0027。）
 - **工具也换最强的**：生图默认 Seedream 5.0 Pro，依次 Nano Banana 2.1、GPT Image 2.5 Sunburst、FLUX.3、Qwen Image 3 Pro……；视频 Veo 3.1、Seedance 2.5、Kling 3.0 Pro、Wan 3.0 Prime、Hailuo 3 Max、Runway Gen-4.5；看图 Qwen3.8 Max Prime、Kimi K3.1 Pro、Gemini 4 Argon、Claude Opus 5.5、Qwen3-VL 235B（输出上限提到 16000，推理型号不会只想不答）。冻结金额跟着提高（每张图 $0.50、视频每秒 $0.70）。fal.ai 上的 3D 和音乐各家接口参数不同，要逐个写适配，下一步做。
 - **预估**：干活节点一次按 $1、讨论一次发言按 $0.20 估（按马车任务记账数据粗估），以后用记账数据校准。
 

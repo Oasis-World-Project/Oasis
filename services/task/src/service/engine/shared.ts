@@ -18,7 +18,7 @@ export interface EngineDeps {
   maxToolChildren?: number;
   /** 规划员要查模型目录 */
   agent: ServiceClient;
-  /** 规划员要排除在当前网络用不了的模型 */
+  /** 规划员要查这个用户能用的模型和工具（按他的模型范围，ADR 0027） */
   modelGateway: ServiceClient;
   planning: PlanningConfig;
   logger: Logger;

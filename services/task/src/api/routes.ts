@@ -11,8 +11,10 @@ import {
   UpdateEdgeBody,
   UpdateNodeBody,
 } from '@oasis/contracts/task';
+import { ModelScope } from '@oasis/contracts/model-gateway';
 import { fileResponseHeaders, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
+import type { ModelScopes } from '../service/model-scope.ts';
 import type { Quotes } from '../service/quote.ts';
 import type { Revisions } from '../service/revision.ts';
 import type { WorkflowService } from '../service/workflow-service.ts';
@@ -34,6 +36,7 @@ export function registerRoutes(
   workflows: WorkflowService,
   quotes: Quotes,
   revisions: Revisions,
+  modelScopes: ModelScopes,
 ): void {
   /** 给任务单报价（ADR 0016 §4）：三档预算和用时；草案用不了时 quote 为 null */
   app.post('/internal/quotes', async (request) => {
@@ -216,10 +219,13 @@ export function registerRoutes(
   });
 
   /** 编辑节点时能选的模型和工具 */
-  app.get('/v1/workflow/options', async (request) => {
-    requireUserId(request);
-    return workflows.options();
-  });
+  app.get('/v1/workflow/options', async (request) => workflows.options(requireUserId(request)));
+
+  /** 「只用国内模型」开关（ADR 0027）：这个用户的 AI 团队用哪些模型 */
+  app.get('/v1/model-scope', async (request) => modelScopes.get(requireUserId(request)));
+  app.put('/v1/model-scope', async (request) =>
+    modelScopes.set(requireUserId(request), parseWith(ModelScope, request.body)),
+  );
 
   /** 追问 / 补充要求：运行中的直接送达（delivered），还没开始、已停止的记下来（noted） */
   app.post('/v1/tasks/:taskId/nodes/:nodeId/messages', async (request, reply) => {

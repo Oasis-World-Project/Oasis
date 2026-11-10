@@ -7,6 +7,7 @@ import {
   CreateRunKeyBody,
   DecisionRequest,
   type ModelCapabilities,
+  ModelScope,
   ToolCallBody,
 } from '@oasis/contracts/model-gateway';
 import {
@@ -22,6 +23,7 @@ import type { ChatService } from '../service/chat-service.ts';
 import type { ComputeService } from '../service/compute-service.ts';
 import type { DecisionService } from '../service/decision-service.ts';
 import type { Caller } from '../service/metering.ts';
+import type { ModelScopeService } from '../service/model-scope.ts';
 import type { RunKeyService } from '../service/run-key-service.ts';
 import type { ToolService } from '../service/tool-service.ts';
 
@@ -48,6 +50,12 @@ function internalCaller(request: FastifyRequest): Caller {
     ...(taskId && nodeId ? { nodeId } : {}),
   };
 }
+
+const ForUser = z.object({ [OASIS_HEADERS.payerId]: z.uuid().optional() });
+/** 目录是替哪个用户列的（按他的模型范围过滤，ADR 0027）；没带就是平台自己看，列全部 */
+const listedFor = (request: FastifyRequest) =>
+  parseWith(ForUser, request.headers)[OASIS_HEADERS.payerId];
+const UserIdParams = z.object({ userId: z.uuid() });
 
 /** 客户端断开时取消上游请求（已产生的部分照样按实际花费结算）。 */
 function abortOnClose(reply: FastifyReply): AbortSignal {
@@ -103,6 +111,7 @@ export function registerRoutes(
     tools: ToolService;
     compute: ComputeService;
     avatars: AvatarService;
+    scope: ModelScopeService;
     /** 在当前网络用不了的模型 */
     unavailableModels: () => Promise<string[]>;
     executionModels: () => Promise<ModelCapabilities[]>;
@@ -146,12 +155,24 @@ export function registerRoutes(
   );
 
   /** 工具目录（规划员、节点说明用）；调用工具（ADR 0006） */
-  app.get('/internal/v1/tools', async () => ({ tools: await tools.list() }));
-  app.get('/internal/v1/models/execution', async () => {
-    const blocked = new Set(await services.unavailableModels());
+  app.get('/internal/v1/tools', async (request) => ({
+    tools: await tools.list(listedFor(request)),
+  }));
+  app.get('/internal/v1/models/execution', async (request) => {
+    const allowed = await services.scope.filterFor(listedFor(request));
     const models = await services.executionModels();
-    return { models: models.filter((model) => !blocked.has(model.id)) };
+    return { models: models.filter((model) => allowed(model.id)) };
   });
+  /** 一个用户的模型范围（ADR 0027）：task 替网页读写「只用国内模型」开关 */
+  app.get('/internal/v1/model-scopes/:userId', async (request) =>
+    services.scope.get(parseWith(UserIdParams, request.params).userId),
+  );
+  app.put('/internal/v1/model-scopes/:userId', async (request) =>
+    services.scope.set(
+      parseWith(UserIdParams, request.params).userId,
+      parseWith(ModelScope, request.body),
+    ),
+  );
   app.post('/internal/v1/tools/:key', TOOL_BODY, (request, reply) =>
     useTool(internalCaller(request), request, reply),
   );
@@ -213,7 +234,7 @@ export function registerRoutes(
     return services.compute.outcome(callId);
   });
 
-  /** 在当前网络用不了的模型（task 的规划员挑模型时排除它们） */
+  /** 在当前网络用不了的模型（conversation 接需求时，私聊的 AI 用不了就事先换一个） */
   app.get('/internal/v1/models/unavailable', async () => ({
     models: await services.unavailableModels(),
   }));
@@ -262,8 +283,8 @@ export function registerRoutes(
   );
   // 沙箱里的 oasis-tool：看有哪些工具、调用工具
   app.get('/run/v1/tools', async (request) => {
-    await runKeys.authenticate(request.headers.authorization);
-    return { tools: await tools.list() };
+    const caller = await runKeys.authenticate(request.headers.authorization);
+    return { tools: await tools.list(caller.payerId) };
   });
   app.post('/run/v1/tools/:key', TOOL_BODY, async (request, reply) =>
     useTool(await runKeys.authenticate(request.headers.authorization), request, reply),

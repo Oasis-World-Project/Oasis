@@ -12,6 +12,7 @@ import {
 } from '@oasis/contracts/conversation';
 import { MeBody, VerifyCodeResult } from '@oasis/contracts/identity';
 import { RunEventList, type RunEventBody } from '@oasis/contracts/harness';
+import { ModelScope } from '@oasis/contracts/model-gateway';
 import {
   NodeRunList,
   TaskBody,
@@ -273,6 +274,14 @@ export const workflowOptionsQuery = queryOptions({
   queryFn: () => api('/task/v1/workflow/options', WorkflowOptions),
   staleTime: 5 * 60_000,
 });
+
+/** 「只用国内模型」开关（ADR 0027）：这个账号的 AI 团队用哪些模型 */
+export const modelScopeQuery = queryOptions({
+  queryKey: ['model-scope'],
+  queryFn: () => api('/task/v1/model-scope', ModelScope),
+});
+export const setModelScope = (scope: ModelScope) =>
+  api('/task/v1/model-scope', ModelScope, { method: 'PUT', body: scope });
 
 // ---- 画布（ADR 0007 §8–9）----
 /** 全部成果（类别和搜索在前端筛，数量也在前端算）；可以只看某个任务的 */

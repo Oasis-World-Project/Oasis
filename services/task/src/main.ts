@@ -25,9 +25,11 @@ import { taskEnv } from './config.ts';
 import { createTaskStore } from './repo/task-store.ts';
 import { createCheckCompute } from './service/check-compute.ts';
 import { createGate } from './service/gate.ts';
+import { createModelScopes, type ModelScopes } from './service/model-scope.ts';
 import { createWorkflowService, type WorkflowService } from './service/workflow-service.ts';
 
 let workflows: WorkflowService;
+let modelScopes: ModelScopes;
 let quotes: Quotes;
 let revisions: Revisions;
 
@@ -81,9 +83,10 @@ await startService({
       },
       logger,
     });
+    modelScopes = createModelScopes(modelGateway);
     quotes = createQuotes({
       modelGateway,
-      pricing: () => workflows.pricing(),
+      pricing: (userId) => workflows.pricing(userId),
       model: config.QUOTE_MODEL,
       planner: config.PLANNER_MODEL,
       fallback,
@@ -125,5 +128,5 @@ await startService({
     };
     return { postgres, eventBus, outbox, runFinished, callSettled, reconciler };
   },
-  routes: (app) => registerRoutes(app, workflows, quotes, revisions),
+  routes: (app) => registerRoutes(app, workflows, quotes, revisions, modelScopes),
 });
