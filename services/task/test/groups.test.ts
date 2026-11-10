@@ -2,7 +2,7 @@
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { describe, expect, it } from 'vitest';
 import { fillTemplate, listItems } from '../src/service/groups.ts';
-import { parsePick } from '../src/service/pick.ts';
+import { parsePick, pickRequest } from '../src/service/pick.ts';
 import { checkPlan, estimatePlan } from '../src/service/planner.ts';
 
 const sheet = {
@@ -45,10 +45,10 @@ const tools: ToolEntry[] = [
     rates: [{ model: 'i/1', costMicro: 100_000, seconds: 10, basis: 'catalog' }],
     args: [{ name: 'prompt', kind: 'text', required: true, description: '画面' }],
   }),
-  entry('image.inspect', {
+  entry('media.inspect', {
     rates: [{ model: 'v/1', costMicro: 2_000, seconds: 5, basis: 'catalog' }],
     args: [
-      { name: 'images', kind: 'paths', required: true, min: 1, max: 4, description: '图' },
+      { name: 'files', kind: 'paths', required: true, min: 1, max: 4, description: '文件' },
       { name: 'question', kind: 'text', required: true, description: '问题' },
     ],
   }),
@@ -167,6 +167,14 @@ describe('模板和清单', () => {
     expect(parsePick('{"choice": 1, "reason": "更好"}', [1, 2])).toMatchObject({
       problem: expect.stringContaining('理由太笼统'),
     });
+    // 版本号写成 "v2"、"第 2 版" 也认（真实任务里挑配乐的回答写了 "v1"，被当成没选中）
+    for (const choice of ['"v2"', '"第 2 版"'])
+      expect(
+        parsePick(
+          `{"choice": ${choice}, "reason": "第 2 版结尾收得干净，雨声一直铺到最后"}`,
+          [1, 2],
+        ),
+      ).toMatchObject({ choice: 2 });
     expect(parsePick(undefined, [1, 2])).toMatchObject({
       problem: expect.stringContaining('pick.txt'),
     });
@@ -213,5 +221,63 @@ describe('规划门和估价', () => {
     expect(perNode.get('keys')).toBe(4 * (2 * (100_000 + 10_000) + 2_000 + 10_000));
     // 视频：秒数写成模板，按默认 5 秒估
     expect(perNode.get('clips')).toBe(4 * (5 * 50_000 + 10_000));
+  });
+});
+
+describe('挑一版：各版交给谁比较', () => {
+  type Group = Parameters<typeof pickRequest>[0];
+  const group = {
+    title: '配乐',
+    config: { variants: { n: 2, pick: '更像八音盒摇篮曲' } },
+  } as unknown as Group;
+  const versions = (path: string) =>
+    [1, 2].map(
+      (k) =>
+        ({
+          config: { version: { k }, outputsRunId: `run-${k}` },
+          outputs: [{ path, size: 1 }],
+        }) as unknown as Group,
+    );
+
+  it('音频：各版一起交给能听的型号（真实任务里曾落到只读文字的 AI，靠频谱图猜了 14 分钟）', () => {
+    const pick = pickRequest(group, versions('bgm.mp3'), 'ai/text-only');
+    expect(pick.model).not.toBe('ai/text-only');
+    expect(pick.steps).toMatchObject([
+      {
+        tool: 'media.inspect',
+        args: { files: ['in/v1/bgm.mp3', 'in/v2/bgm.mp3'] },
+        out: 'out/pick.txt',
+      },
+    ]);
+    expect(String(pick.steps?.[0]?.args.question)).toContain(
+      '这几段音频依次是第 1 版、第 2 版，是同一步做的几个版本。挑选标准：更像八音盒摇篮曲。',
+    );
+  });
+
+  it('视频：看的是缩小后的整段视频，不是第 1 秒的一帧', () => {
+    const pick = pickRequest(group, versions('clip.mp4'), 'ai/text-only');
+    expect(pick.steps).toMatchObject([
+      {
+        tool: 'op.media.convert',
+        args: { in: 'in/v1/clip.mp4', width: '640' },
+        out: 'out/preview-v1.mp4',
+      },
+      {
+        tool: 'op.media.convert',
+        args: { in: 'in/v2/clip.mp4', width: '640' },
+        out: 'out/preview-v2.mp4',
+      },
+      {
+        tool: 'media.inspect',
+        args: { files: ['out/preview-v1.mp4', 'out/preview-v2.mp4'] },
+        out: 'out/pick.txt',
+      },
+    ]);
+  });
+
+  it('文字、网页这类产出：还是由 AI 读完各版再比较', () => {
+    const pick = pickRequest(group, versions('稿.md'), 'ai/text-only');
+    expect(pick.steps).toBeUndefined();
+    expect(pick.model).toBe('ai/text-only');
   });
 });

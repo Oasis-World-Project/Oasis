@@ -114,8 +114,10 @@ describe('规划门', () => {
       playbooks: [],
       defaultModel: 'deepseek/x',
     });
-    expect(prompt).toContain('deepseek/x（DeepSeek，v；旗舰；能直接读：image）');
+    expect(prompt).toContain('deepseek/x（DeepSeek，v；旗舰；节点里能直接看图）');
     expect(prompt).toContain('deepseek/fast（DeepSeek，v；快速；只读文字）');
+    // 视频、音频节点里的型号读不了：说清楚要靠哪个工具，不让规划员以为挑个「多模态」型号就行
+    expect(prompt).toContain('视频、音频不管哪个型号都读不了，要用 media.inspect');
     expect(prompt).toContain('用户没有选预算档');
     expect(prompt).toContain('没有越少越好，也没有越多越好');
     expect(prompt).toContain('快速是私聊用的轻量型号');

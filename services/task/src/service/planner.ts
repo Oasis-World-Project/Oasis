@@ -98,7 +98,7 @@ export function resourceSections(input: PlannerResources): string[] {
             ]
           : []),
         ...(m.tags.length ? [m.tags.join('、')] : []),
-        ...(reads ? [reads.length ? `能直接读：${reads.join('、')}` : '只读文字'] : []),
+        ...(reads ? [reads.length ? '节点里能直接看图' : '只读文字'] : []),
       ];
       return `- ${m.providerModel}（${m.name}，${m.vendor}${notes.length ? `；${notes.join('；')}` : ''}）`;
     })
@@ -127,7 +127,7 @@ export function resourceSections(input: PlannerResources): string[] {
         .join('\n')
     : '（现在没有可用的工具）';
   return [
-    `【可以用的模型】（档次：旗舰是各家最强的型号；强力次一档，各有专长；快速是私聊用的轻量型号，最便宜也最快，复杂推理和写代码的能力弱于前两档）\n${models}`,
+    `【可以用的模型】（档次：旗舰是各家最强的型号；强力次一档，各有专长；快速是私聊用的轻量型号，最便宜也最快，复杂推理和写代码的能力弱于前两档。节点里的型号最多能直接看图；视频、音频不管哪个型号都读不了，要用 media.inspect 交给能看能听的型号，只读文字的型号看图也要靠它）\n${models}`,
     `【可以用的工具】（干活节点里用 oasis-tool 调用，方案里写成 {"key":"image.generate","uses":3,"model":"型号"}；uses 是预计用几个计费单位——看下面单价「每X」的 X（张、秒、次、作业……），是数量不是金额，生成 3 张图就写 3；工具节点的步骤按「参数」写，* 是必填）\n${tools}`,
     ...(input.environment
       ? [

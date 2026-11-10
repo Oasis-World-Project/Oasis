@@ -47,31 +47,63 @@ export function matchImageExt(target: string, bytes: Buffer): string {
   return `${target.slice(0, -ext.length)}${actual}`;
 }
 
-export async function localImages(
-  paths: unknown,
-): Promise<{ mediaType: string; base64: string }[]> {
+/** 能交给型号看、听的本地文件：后缀 → 种类和供应商要的格式写法 */
+const MEDIA: Record<string, { kind: 'image' | 'video' | 'audio'; type: string }> = {
+  '.png': { kind: 'image', type: 'image/png' },
+  '.jpg': { kind: 'image', type: 'image/jpeg' },
+  '.jpeg': { kind: 'image', type: 'image/jpeg' },
+  '.webp': { kind: 'image', type: 'image/webp' },
+  '.mp4': { kind: 'video', type: 'video/mp4' },
+  '.webm': { kind: 'video', type: 'video/webm' },
+  '.mov': { kind: 'video', type: 'video/quicktime' },
+  '.mp3': { kind: 'audio', type: 'mp3' },
+  '.wav': { kind: 'audio', type: 'wav' },
+  '.m4a': { kind: 'audio', type: 'm4a' },
+  '.flac': { kind: 'audio', type: 'flac' },
+  '.ogg': { kind: 'audio', type: 'ogg' },
+};
+
+/**
+ * 读 1–4 个本地文件带给工具（合计不超过 20 MiB）。media.inspect 三种都收；
+ * 生图的参考图、视频首帧只收图片（imagesOnly）。
+ */
+export async function localMedia(paths: unknown, imagesOnly = false) {
+  const what = imagesOnly ? '图片' : '文件';
   if (
     !Array.isArray(paths) ||
     paths.length < 1 ||
     paths.length > 4 ||
     paths.some((p) => typeof p !== 'string')
   )
-    throw new Error('请提供 1–4 个图片路径');
+    throw new Error(`请提供 1–4 个${what}路径`);
   let total = 0;
-  const images = [];
+  const files = [];
   for (const path of paths as string[]) {
-    const mediaType = {
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.webp': 'image/webp',
-    }[extname(path).toLowerCase()];
-    if (!mediaType) throw new Error('图片只支持 PNG、JPEG、WebP');
+    const media = MEDIA[extname(path).toLowerCase()];
+    if (!media || (imagesOnly && media.kind !== 'image'))
+      throw new Error(
+        imagesOnly
+          ? '图片只支持 PNG、JPEG、WebP'
+          : '只支持图片 png/jpg/webp、视频 mp4/webm/mov、音频 mp3/wav/m4a/flac/ogg',
+      );
     total += (await stat(path)).size;
-    if (total > 20 * 1024 * 1024) throw new Error('图片总大小超过 20 MiB');
-    images.push({ mediaType, base64: (await readFile(path)).toString('base64') });
+    if (total > 20 * 1024 * 1024) throw new Error(`${what}总大小超过 20 MiB`);
+    const base64 = (await readFile(path)).toString('base64');
+    files.push(
+      media.kind === 'audio'
+        ? { kind: media.kind, format: media.type, base64 }
+        : { kind: media.kind, mediaType: media.type, base64 },
+    );
   }
-  return images;
+  return files;
+}
+
+/** 只要图片的地方（参考图、首帧）：网关那边的参数不带 kind */
+export async function localImages(paths: unknown) {
+  return (await localMedia(paths, true)).map((file) => ({
+    mediaType: (file as { mediaType: string }).mediaType,
+    base64: file.base64,
+  }));
 }
 
 /** app.check 一次带上的应用文件上限（入口代理收 50 MB 的请求，base64 后要放得下） */

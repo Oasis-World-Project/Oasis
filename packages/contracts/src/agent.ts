@@ -57,7 +57,7 @@ export const CatalogEntry = z.object({
   tags: z.array(z.string()),
   providerModel: z.string(),
   tier: ModelTier.optional(),
-  /** 能直接读的输入：text、image、video、audio、file */
+  /** 这个型号在节点里能直接读的输入（text、image）：task 照供应商目录填，agent 不写 */
   inputs: z.array(z.string()).optional(),
 });
 export type CatalogEntry = z.infer<typeof CatalogEntry>;

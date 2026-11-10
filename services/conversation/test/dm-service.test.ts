@@ -415,7 +415,7 @@ modelGateway.post('/internal/v1/decisions', async () => {
 });
 /** 看图工具收到的图片数 */
 let visionCalls = 0;
-modelGateway.post('/internal/v1/tools/image.inspect', async () => {
+modelGateway.post('/internal/v1/tools/media.inspect', async () => {
   visionCalls += 1;
   return {
     text: '一名戴眼镜的男子，穿荧光黄外卖骑手冲锋衣，胸口印 Uber Eats，正面、侧面、背面三视图。',

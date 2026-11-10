@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { main, parseArgs } from '../sandbox/oasis-tool.ts';
@@ -260,14 +260,38 @@ describe('oasis-tool 长任务', () => {
         references: [{ mediaType: 'image/png', base64: bytes.toString('base64') }],
       },
     });
-    await main(['image.inspect', '--question', '图里是什么？', '--images', JSON.stringify([path])]);
-    expect(received.at(-1)?.args.images).toEqual([
-      { mediaType: 'image/png', base64: bytes.toString('base64') },
+    // 看图、看视频、听音频是同一个工具：按后缀认出种类，音频带格式、图片和视频带媒体类型
+    const song = join(dirname(path), 'bgm.mp3');
+    const clip = join(dirname(path), 'clip.mp4');
+    await writeFile(song, 'ID3 music');
+    await writeFile(clip, 'mp4 video');
+    await main([
+      'media.inspect',
+      '--question',
+      '哪个更好？',
+      '--files',
+      JSON.stringify([path, song, clip]),
+    ]);
+    expect(received.at(-1)?.args.files).toEqual([
+      { kind: 'image', mediaType: 'image/png', base64: bytes.toString('base64') },
+      { kind: 'audio', format: 'mp3', base64: Buffer.from('ID3 music').toString('base64') },
+      {
+        kind: 'video',
+        mediaType: 'video/mp4',
+        base64: Buffer.from('mp4 video').toString('base64'),
+      },
     ]);
     const count = received.length;
     await expect(
-      main(['image.inspect', '--images', JSON.stringify(Array(5).fill(path))]),
+      main(['media.inspect', '--files', JSON.stringify(Array(5).fill(path))]),
     ).rejects.toThrow('1–4');
+    await expect(
+      main(['media.inspect', '--files', JSON.stringify([join(dirname(path), 'a.txt')])]),
+    ).rejects.toThrow('只支持图片');
+    // 参考图只收图片
+    await expect(
+      main(['image.generate', '--prompt', 'x', '--ref', JSON.stringify([song])]),
+    ).rejects.toThrow('图片只支持');
     expect(received).toHaveLength(count);
   });
 

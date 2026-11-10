@@ -3,7 +3,7 @@
 import { music, speech, transcribe } from './tools/audio.ts';
 import { androidTest, appCheck, websiteTest } from './tools/checks.ts';
 import { decide } from './tools/decide.ts';
-import { imageGenerate, imageInspect } from './tools/images.ts';
+import { imageGenerate, mediaInspect } from './tools/images.ts';
 import type { ToolDef } from './tools/kit.ts';
 import { generate3d, render3d } from './tools/three-d.ts';
 import { videoGenerate } from './tools/video.ts';
@@ -17,7 +17,7 @@ export const TOOLS: ToolDef[] = [
   render3d,
   generate3d,
   imageGenerate,
-  imageInspect,
+  mediaInspect,
   speech,
   transcribe,
   webSearch,

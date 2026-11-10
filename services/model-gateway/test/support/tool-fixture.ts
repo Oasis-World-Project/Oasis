@@ -169,6 +169,15 @@ export const build = (
       decisionsUrl: `${urls.fake}/api/alpha/decisions`,
       apiKey: 'k',
     }),
+    // 供应商目录里各型号能读什么：前两个只看图，第三个还能看视频、听音频
+    inputsOf: (model) =>
+      knobs.directory === false
+        ? undefined
+        : {
+            'vision/first': ['text', 'image'],
+            'vision/second': ['text', 'image'],
+            'listen/first': ['text', 'image', 'video', 'audio'],
+          }[model],
     tavily: createTavilyClient({ baseUrl: `${urls.fake}/tavily`, apiKey: tavilyKey }),
     meter: createMeter({ billing: createServiceClient('billing', urls.billing), repo, logger }),
     scope: createModelScopeService({
@@ -187,8 +196,8 @@ export const build = (
       musicModels: ['fal-ai/minimax-music/v2.6'],
       geometryModels: withMusic ? ['fal-ai/trellis-2'] : [],
       imageModels: ['bytedance-seed/seedream-4.5', 'openai/gpt-image-2'],
-      visionModels: ['vision/first', 'vision/second'],
-      visionMaxTokens: 2048,
+      inspectModels: ['vision/first', 'vision/second', 'listen/first'],
+      inspectMaxTokens: 2048,
       fetchMaxBytes: 200_000,
       videoModels: ['alibaba/wan-2.7'],
       speechModels: ['bytedance-seed/seed-audio-1-0'],
@@ -246,6 +255,7 @@ beforeEach(() => {
   knobs.imageStatus = 200;
   knobs.imageRejections = 0;
   knobs.visionStatus = 200;
+  knobs.directory = true;
   knobs.referenceLimit = 4;
   knobs.pageText = '# 正文';
   knobs.videoPolls = 0;
@@ -274,6 +284,14 @@ export const errorOf = (p: Promise<unknown>) =>
     () => undefined,
     (e: unknown) => e as HttpError,
   );
+
+/** 交给 media.inspect 看的一张图（reference 加上种类） */
+export const seen = {
+  kind: 'image',
+  mediaType: 'image/png',
+  base64:
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO1sAAAAASUVORK5CYII=',
+};
 
 export const reference = {
   mediaType: 'image/png',

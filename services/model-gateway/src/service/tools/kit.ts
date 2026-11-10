@@ -16,8 +16,9 @@ export const MAX_TEXT = 20_000;
 
 export interface ToolConfig {
   imageModels: string[];
-  visionModels: string[];
-  visionMaxTokens: number;
+  /** 看图、看视频、听音频的型号，按顺序试；每个型号读得了哪几种由供应商目录说了算 */
+  inspectModels: string[];
+  inspectMaxTokens: number;
   fetchMaxBytes: number;
   videoModels: string[];
   speechModels: string[];
@@ -181,6 +182,51 @@ export const InputImages = z
       20 * 1024 * 1024,
     '图片总大小超过 20 MiB',
   );
+
+const MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+const base64 = z.string().min(4).max(28_000_000);
+
+/**
+ * 要看、要听的文件（media.inspect）：图片、视频、音频都经既有上传/沙箱通路传入，不接受远程 URL。
+ * kind 对应供应商目录里型号的输入种类（image、video、audio），用来挑读得了它们的型号。
+ */
+export const InputMedia = z
+  .array(
+    z.discriminatedUnion('kind', [
+      z.object({
+        kind: z.literal('image'),
+        mediaType: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+        base64,
+      }),
+      z.object({
+        kind: z.literal('video'),
+        mediaType: z.enum(['video/mp4', 'video/webm', 'video/quicktime']),
+        base64,
+      }),
+      z.object({
+        kind: z.literal('audio'),
+        format: z.enum(['mp3', 'wav', 'm4a', 'flac', 'ogg']),
+        base64,
+      }),
+    ]),
+  )
+  .min(1)
+  .max(4)
+  .refine(
+    (files) =>
+      files.reduce((n, file) => n + Buffer.byteLength(file.base64, 'base64'), 0) <= MEDIA_MAX_BYTES,
+    '文件总大小超过 20 MiB',
+  )
+  .refine(
+    (files) =>
+      InputImages.safeParse(
+        files.flatMap((f) =>
+          f.kind === 'image' ? [{ mediaType: f.mediaType, base64: f.base64 }] : [],
+        ),
+      ).success || !files.some((f) => f.kind === 'image'),
+    '图片编码、格式或文件签名无效',
+  );
+export type InputMedia = z.infer<typeof InputMedia>;
 
 /** 实际花费拿不到时的估算 */
 export const estimate = (costMicro: number) => ({ costMicro, source: 'estimate' as const });

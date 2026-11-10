@@ -222,8 +222,8 @@ function intakeActions(deps: {
     if (!file.image) return file;
     const plain = withoutImage(file);
     try {
-      const { text } = await deps.modelGateway.json('POST', '/internal/v1/tools/image.inspect', {
-        body: { args: { images: [file.image], question: IMAGE_QUESTION } },
+      const { text } = await deps.modelGateway.json('POST', '/internal/v1/tools/media.inspect', {
+        body: { args: { files: [{ kind: 'image', ...file.image }], question: IMAGE_QUESTION } },
         headers: { [OASIS_HEADERS.payerId]: ownerId },
         requestId,
         schema: z.object({ text: z.string().min(1) }),

@@ -1,5 +1,6 @@
 // 做几版挑一版（ADR 0026）：各版都做完后开一次挑选运行，结果写在 out/pick.txt：{"choice":版本号,"reason":"…"}。
-// - 图片：各缩成宽 1024 的 JPEG，视觉模型一起看（image.inspect）；视频：先各抽第 1 秒的一帧再看。
+// - 图片、视频、音频：各版一起交给能看能听的型号比较（media.inspect）。图片先各缩成宽 1024 的 JPEG，
+//   视频先各缩成宽 640（挑版看内容和动作，不需要原片，原片几版加起来会超过工具的大小上限）。
 // - 其他产出（文字、网页、代码……）：开一个单轮的 AI 运行读完各版再比较（需要时它自己用 jev.decide）。
 // 理由要说出具体差别；挑选失败、结果不可用都先用做成的第一版，原因写进提醒。
 import { TOOL_RUN_MODEL } from '@oasis/contracts/harness';
@@ -11,6 +12,9 @@ import type { RunRequest } from './kinds/index.ts';
 export const PICK_FILE = 'pick.txt';
 const IMAGE = /\.(?:png|jpe?g|webp)$/i;
 const VIDEO = /\.(?:mp4|mov|webm|mkv)$/i;
+const AUDIO = /\.(?:mp3|wav|m4a|flac|ogg)$/i;
+/** 看视频挑选前把各版缩到多宽（像素） */
+const VIDEO_PREVIEW_WIDTH = 640;
 /** 理由至少这么长才算说出了具体差别 */
 const MIN_REASON = 15;
 /** 看图挑选前把各版图片缩到多宽（像素） */
@@ -44,6 +48,7 @@ export function pickRequest(group: Node, done: Node[], aiModel: string): RunRequ
   };
   const images = done.map((c) => firstOf(c, IMAGE));
   const videos = done.map((c) => firstOf(c, VIDEO));
+  const audios = done.map((c) => firstOf(c, AUDIO));
   let steps: ToolStep[] | undefined;
   if (images.every(Boolean)) {
     // 先各缩成宽 PREVIEW_WIDTH 的 JPEG 再看：原图可能很大（2K 的 PNG 约 10 MB），两版就超过看图工具
@@ -55,9 +60,9 @@ export function pickRequest(group: Node, done: Node[], aiModel: string): RunRequ
         out: `out/preview-v${versionOf(c)}.jpg`,
       })),
       {
-        tool: 'image.inspect',
+        tool: 'media.inspect',
         args: {
-          images: done.map((c) => `out/preview-v${versionOf(c)}.jpg`),
+          files: done.map((c) => `out/preview-v${versionOf(c)}.jpg`),
           question: `这几张图依次是${labels}，是同一步做的几个版本。挑选标准：${standard}。${answer}`,
         },
         out: `out/${PICK_FILE}`,
@@ -66,15 +71,26 @@ export function pickRequest(group: Node, done: Node[], aiModel: string): RunRequ
   } else if (videos.every(Boolean)) {
     steps = [
       ...done.map((c, i) => ({
-        tool: 'op.video.frames',
-        args: { in: `in/v${versionOf(c)}/${videos[i]}`, at: '1', format: 'jpg' },
-        out: `out/frames-v${versionOf(c)}`,
+        tool: 'op.media.convert',
+        args: { in: `in/v${versionOf(c)}/${videos[i]}`, width: String(VIDEO_PREVIEW_WIDTH) },
+        out: `out/preview-v${versionOf(c)}.mp4`,
       })),
       {
-        tool: 'image.inspect',
+        tool: 'media.inspect',
         args: {
-          images: done.map((c) => `out/frames-v${versionOf(c)}/frame-0001.jpg`),
-          question: `这几张图依次是${labels}视频第 1 秒的画面，是同一步做的几个版本。挑选标准：${standard}。${answer}`,
+          files: done.map((c) => `out/preview-v${versionOf(c)}.mp4`),
+          question: `这几段视频依次是${labels}，是同一步做的几个版本。挑选标准：${standard}。${answer}`,
+        },
+        out: `out/${PICK_FILE}`,
+      },
+    ];
+  } else if (audios.every(Boolean)) {
+    steps = [
+      {
+        tool: 'media.inspect',
+        args: {
+          files: done.map((c, i) => `in/v${versionOf(c)}/${audios[i]}`),
+          question: `这几段音频依次是${labels}，是同一步做的几个版本。挑选标准：${standard}。${answer}`,
         },
         out: `out/${PICK_FILE}`,
       },
@@ -107,7 +123,8 @@ export function parsePick(
     data = undefined;
   }
   if (!data) return { problem: '挑选结果不是 JSON' };
-  const choice = Number(data.choice);
+  // 版本号也有写成 "v1"、"第 1 版" 的：取里面的数字
+  const choice = Number(/\d+/.exec(String(data.choice))?.[0] ?? NaN);
   if (!allowed.includes(choice))
     return { problem: `选了第 ${String(data.choice)} 版，不在做成的几版里` };
   const reason = typeof data.reason === 'string' ? data.reason.trim() : '';

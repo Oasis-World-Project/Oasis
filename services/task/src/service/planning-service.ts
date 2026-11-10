@@ -60,11 +60,12 @@ export function createPlanning(deps: {
       ...listedFor(userId),
       schema: ExecutionModels,
     });
-    const node = new Map(execution.models.map((m) => [m.id, m.node]));
+    const listed = new Map(execution.models.map((m) => [m.id, m]));
     return models.flatMap((m) => {
-      if (!node.has(m.providerModel)) return [];
-      const rate = node.get(m.providerModel);
-      return [rate ? { ...m, node: rate } : m];
+      const model = listed.get(m.providerModel);
+      if (!model) return [];
+      // 节点里能直接读什么（文字、图片）照供应商目录，各档次的型号都有；不用手写的清单
+      return [{ ...m, inputs: model.input, ...(model.node ? { node: model.node } : {}) }];
     });
   }
 

@@ -9,6 +9,7 @@ import { upstreamError, type Caller } from './metering.ts';
 import { videoSecondRate } from './pricing.ts';
 import { HOLD_MARGIN_MS, type ToolContext } from './tool-context.ts';
 import type { ToolDef } from './tools.ts';
+import { mediaKinds } from './tools/images.ts';
 
 export function createToolCall(ctx: ToolContext) {
   const { deps, byKey, configured } = ctx;
@@ -123,6 +124,33 @@ export function createToolCall(ctx: ToolContext) {
           );
         }
       }
+      if (tool.key === 'media.inspect') {
+        // 只留读得了这次全部文件的型号：图片、视频、音频各有各的型号，目录说了算
+        const kinds = mediaKinds(args);
+        // 目录还没拉到（刚启动、供应商目录暂时读不了）时不筛，照配置的先后试
+        const listed = models.some((candidate) => deps.inputsOf(candidate) !== undefined);
+        const able = models.filter((candidate) => {
+          const inputs = deps.inputsOf(candidate);
+          return !listed || (inputs !== undefined && kinds.every((kind) => inputs.includes(kind)));
+        });
+        if (models.length && !able.length)
+          throw new HttpError(
+            400,
+            'media_unsupported',
+            `可用的型号里没有读得了${kinds.join('、')}的；没有调用`,
+          );
+        if (
+          typeof args.model === 'string' &&
+          models.includes(args.model) &&
+          !able.includes(args.model)
+        )
+          throw new HttpError(
+            400,
+            'media_unsupported',
+            `${args.model} 读不了${kinds.join('、')}；可以用：${able.join('、')}`,
+          );
+        models = able;
+      }
       const model = tool.modelOf(args, models);
       // 配了模型却一个也不给用，或点名的模型不在给用的里面：这个用户开着「只用国内模型」（ADR 0027）
       if (tool.models(config).length > 0 && !models.includes(model)) {
@@ -133,7 +161,7 @@ export function createToolCall(ctx: ToolContext) {
         );
       }
 
-      const canFallback = tool.key === 'image.generate' || tool.key === 'image.inspect';
+      const canFallback = tool.key === 'image.generate' || tool.key === 'media.inspect';
       const candidates =
         !canFallback || typeof args.model === 'string' || !models.length ? [model] : models;
       let lastError: unknown;

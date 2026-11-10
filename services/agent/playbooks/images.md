@@ -5,4 +5,4 @@
 - `image.generate`：`--aspect_ratio` 选画幅，`--n` 一次多张，`--ref` 最多 4 张参考图（改图、商品图）。每张都收费。
 - 生图模型写中文常出错；沙箱有 Pillow，可以在无字底图上排字。
 - 供应商可能返回 JPEG：要 PNG 就用 Pillow 重新编码，不要只改扩展名。
-- 看图自查可以用 `image.inspect`。
+- 看图自查可以用 `media.inspect`（图片、视频、音频都能交给它）。

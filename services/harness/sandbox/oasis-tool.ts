@@ -15,10 +15,10 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { basename, dirname, extname, join, resolve, relative, isAbsolute } from 'node:path';
 import { runBatch } from './batch.ts';
-import { appFiles, localImages, matchImageExt, targetsFor } from './tool-files.ts';
+import { appFiles, localImages, localMedia, matchImageExt, targetsFor } from './tool-files.ts';
 
 /** 这些参数是列表：逗号分隔，或者直接写 JSON 数组 */
-const LIST_ARGS = new Set(['urls', 'options', 'scale', 'ref', 'images', 'steps']);
+const LIST_ARGS = new Set(['urls', 'options', 'scale', 'ref', 'files', 'steps']);
 const AUDIO_FORMATS = new Set(['mp3', 'wav', 'm4a', 'flac', 'ogg', 'webm']);
 
 interface ToolFile {
@@ -347,12 +347,12 @@ async function run(key: string, argv: string[]): Promise<void> {
     say(`结果：${out}；恢复使用同一 --out 并加 --resume true。不确定的行不会自动重发。`);
     return;
   }
-  const paths =
-    key === 'image.generate' ? args.ref : key === 'image.inspect' ? args.images : undefined;
-  if (paths !== undefined) {
+  if (key === 'image.generate' && args.ref !== undefined) {
+    args.references = await localImages(args.ref);
     delete args.ref;
-    args[key === 'image.generate' ? 'references' : 'images'] = await localImages(paths);
   }
+  if (key === 'media.inspect' && args.files !== undefined)
+    args.files = await localMedia(args.files);
   if (key === 'web.fetch' && out) args.format = 'files';
   if (file) {
     const format = extname(file).slice(1).toLowerCase();

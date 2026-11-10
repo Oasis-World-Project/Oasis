@@ -13,10 +13,10 @@ export const variantsConfig = (variants: Variants | undefined) =>
 export const variantsPlan = (node: Pick<Node, 'config'>) =>
   node.config.variants ? { variants: node.config.variants } : {};
 
-/** 估价：一版的花费 × 版数，再加一次挑选（看图一次 + 一次沙箱） */
+/** 估价：一版的花费 × 版数，再加一次挑选（看或听一次 + 一次沙箱） */
 export function withVariants(one: number, variants: Variants | undefined, rates: Rates): number {
   if (!variants || variants.n < 2) return one;
-  return one * variants.n + rates.tool('image.inspect') + rates.compute;
+  return one * variants.n + rates.tool('media.inspect') + rates.compute;
 }
 
 /** 用户改还没开始的节点：做几版（null 表示不做几版了） */

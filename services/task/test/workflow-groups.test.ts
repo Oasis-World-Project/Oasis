@@ -27,7 +27,7 @@ const tools = [
     ],
   },
   {
-    ...toolEntry('image.inspect', 2_000, true),
+    ...toolEntry('media.inspect', 2_000, true),
     args: [
       { name: 'images', kind: 'paths', required: true, min: 1, max: 4, description: '图' },
       { name: 'question', kind: 'text', required: true, description: '问题' },
@@ -232,8 +232,8 @@ describe('做几版挑一版', () => {
         out: 'out/preview-v2.jpg',
       },
       {
-        tool: 'image.inspect',
-        args: { images: ['out/preview-v1.jpg', 'out/preview-v2.jpg'] },
+        tool: 'media.inspect',
+        args: { files: ['out/preview-v1.jpg', 'out/preview-v2.jpg'] },
         out: 'out/pick.txt',
       },
     ]);

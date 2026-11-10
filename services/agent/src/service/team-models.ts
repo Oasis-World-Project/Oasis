@@ -5,9 +5,6 @@ import type { CatalogEntry } from '@oasis/contracts/agent';
 
 type TeamModel = Omit<CatalogEntry, 'category'> & { tier: 'flagship' | 'strong' };
 
-const TEXT = ['text'];
-const IMAGE = ['text', 'image'];
-
 export const TEAM_MODELS: TeamModel[] = [
   // ---- 旗舰：各家最强的型号 ----
   {
@@ -17,7 +14,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'flagship',
     tags: ['深度推理', '写代码', '超长上下文'],
     providerModel: 'deepseek/deepseek-v4-pro-0813',
-    inputs: TEXT,
   },
   {
     key: 'claude',
@@ -26,7 +22,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'flagship',
     tags: ['最强编码与长程代理', '前端与视觉设计', '长文写作'],
     providerModel: 'anthropic/claude-fable-5.1',
-    inputs: ['text', 'image', 'file'],
   },
   {
     key: 'claude',
@@ -35,7 +30,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'flagship',
     tags: ['编码', '复杂推理', '长文写作'],
     providerModel: 'anthropic/claude-opus-5.5',
-    inputs: ['text', 'image', 'file'],
   },
   {
     key: 'gpt',
@@ -44,7 +38,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'flagship',
     tags: ['最强推理', '难题攻关（慢）'],
     providerModel: 'openai/gpt-6-astra-pro',
-    inputs: ['text', 'image', 'file'],
   },
   {
     key: 'gpt',
@@ -53,7 +46,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'flagship',
     tags: ['全能', '编码', '多模态'],
     providerModel: 'openai/gpt-6.1-sol-pro',
-    inputs: ['text', 'image', 'file'],
   },
   {
     key: 'gemini',
@@ -62,7 +54,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'flagship',
     tags: ['复杂工程', '数学科学', '看图看视频听音频'],
     providerModel: 'google/gemini-4-argon',
-    inputs: ['text', 'image', 'video', 'audio', 'file'],
   },
   {
     key: 'grok',
@@ -71,7 +62,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'flagship',
     tags: ['编码', '代理任务', '实时资讯'],
     providerModel: 'x-ai/grok-4.7',
-    inputs: ['text', 'image', 'file'],
   },
   {
     key: 'kimi',
@@ -80,7 +70,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'flagship',
     tags: ['长程编码', '3D', '多模态'],
     providerModel: 'moonshotai/kimi-k3.1-pro',
-    inputs: ['text', 'image', 'video'],
   },
   {
     key: 'glm',
@@ -89,7 +78,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'flagship',
     tags: ['智能体', '工具调用', '编码'],
     providerModel: 'z-ai/glm-5.3-prime',
-    inputs: TEXT,
   },
   {
     key: 'qwen',
@@ -98,7 +86,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'flagship',
     tags: ['中文强', '多模态', '编码'],
     providerModel: 'qwen/qwen3.8-max-prime',
-    inputs: ['text', 'image', 'video'],
   },
   // ---- 强力：各有专长，可以和旗舰混用 ----
   {
@@ -108,7 +95,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'strong',
     tags: ['编码', '写作', '比 Opus 快'],
     providerModel: 'anthropic/claude-sonnet-5.5',
-    inputs: ['text', 'image', 'file'],
   },
   {
     key: 'gpt',
@@ -117,7 +103,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'strong',
     tags: ['全能', '多模态', '比 Pro 快'],
     providerModel: 'openai/gpt-6.1-sol',
-    inputs: ['text', 'image', 'file'],
   },
   {
     key: 'doubao',
@@ -126,7 +111,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'strong',
     tags: ['前端开发', '编码代理'],
     providerModel: 'bytedance-seed/seed-2.0-code',
-    inputs: ['text', 'image', 'video'],
   },
   {
     key: 'minimax',
@@ -135,7 +119,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'strong',
     tags: ['长程代理', '编码', '多模态'],
     providerModel: 'minimax/minimax-m3',
-    inputs: ['text', 'image', 'video'],
   },
   {
     key: 'mistral',
@@ -144,7 +127,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'strong',
     tags: ['推理', '编码', '欧洲多语言'],
     providerModel: 'mistralai/mistral-large-4-0',
-    inputs: IMAGE,
   },
   {
     key: 'hunyuan',
@@ -153,7 +135,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'strong',
     tags: ['中文创作', '代理任务'],
     providerModel: 'tencent/hy4',
-    inputs: IMAGE,
   },
   {
     key: 'mimo',
@@ -162,7 +143,6 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'strong',
     tags: ['多模态（图、视频、音频）', '推理'],
     providerModel: 'xiaomi/mimo-v2.6-pro',
-    inputs: ['text', 'image', 'video', 'audio'],
   },
   {
     key: 'step',
@@ -171,6 +151,5 @@ export const TEAM_MODELS: TeamModel[] = [
     tier: 'strong',
     tags: ['代理任务', '软件工程'],
     providerModel: 'stepfun/step-5-preview',
-    inputs: ['text', 'image', 'video'],
   },
 ];

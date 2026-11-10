@@ -108,7 +108,7 @@ const providerEnv = (url) => ({
   BROWSERSTACK_ACCESS_KEY: '',
   LIVEAVATAR_API_KEY: '',
   TOOL_IMAGE_MODELS: `${IMAGE_MODEL},${JPEG_IMAGE_MODEL}`,
-  TOOL_VISION_MODELS: 'fake/vision-1',
+  TOOL_INSPECT_MODELS: 'fake/vision-1',
   TOOL_VIDEO_MODELS: 'fake/video-1',
   TOOL_SPEECH_MODELS: 'fake/speech-1',
   TOOL_TRANSCRIBE_MODELS: 'fake/transcribe-1',

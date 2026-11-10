@@ -10,7 +10,7 @@ import {
   settled,
   noHistory,
 } from './support/tool-fakes.ts';
-import { tools, build, useTools, call, errorOf, reference } from './support/tool-fixture.ts';
+import { tools, build, useTools, call, errorOf, reference, seen } from './support/tool-fixture.ts';
 
 describe('文件场景工具', () => {
   it('参考图仅发送给能力目录确认支持的模型，保留 data URL', async () => {
@@ -28,8 +28,8 @@ describe('文件场景工具', () => {
     await expect(
       call('image.generate', { prompt: 'x', references: [reference] }),
     ).rejects.toMatchObject({ code: 'reference_images_unsupported' });
-    for (const images of [Array(5).fill(reference), [{ ...reference, base64: PNG }]]) {
-      await expect(call('image.inspect', { question: 'x', images })).rejects.toMatchObject({
+    for (const images of [Array(5).fill(seen), [{ ...seen, base64: PNG }]]) {
+      await expect(call('media.inspect', { question: 'x', files: images })).rejects.toMatchObject({
         code: 'invalid_tool_args',
       });
     }
@@ -46,13 +46,13 @@ describe('文件场景工具', () => {
       call('image.generate', { prompt: 'x', references: [large] }),
     ).rejects.toMatchObject({ code: 'reference_images_unsupported' });
     await expect(
-      call('image.inspect', { question: 'x', images: Array(4).fill(large) }),
+      call('media.inspect', { question: 'x', files: Array(4).fill({ kind: 'image', ...large }) }),
     ).rejects.toMatchObject({ code: 'invalid_tool_args' });
     expect(billingCalls).toEqual([]);
   });
   it('看图按实际费用结算并归属任务；明确地区拒绝才自动换模型', async () => {
     knobs.visionStatus = 403;
-    const result = await call('image.inspect', { images: [reference], question: '是什么？' }, TASK);
+    const result = await call('media.inspect', { files: [seen], question: '是什么？' }, TASK);
     expect(result.text).toContain('杯子');
     expect(upstream.map((r) => r.body.model)).toEqual(['vision/first', 'vision/second']);
     expect(upstream[1]?.body).toMatchObject({
@@ -62,15 +62,61 @@ describe('文件场景工具', () => {
     expect(billingCalls.map((r) => r.path)).toEqual(['hold', 'release', 'hold', 'settle']);
     expect(settled[0]).toMatchObject({ data: { taskId: TASK, kind: 'tool', chargedMicro: 2000 } });
   });
+  it('听音频、看视频：只用目录里读得了这种文件的型号，内容按供应商的写法带上', async () => {
+    const heard = {
+      kind: 'audio',
+      format: 'mp3',
+      base64: Buffer.from('ID3 music').toString('base64'),
+    };
+    const watched = {
+      kind: 'video',
+      mediaType: 'video/mp4',
+      base64: Buffer.from('mp4 video').toString('base64'),
+    };
+    const result = await call('media.inspect', {
+      files: [heard, watched, seen],
+      question: '哪一段更好？',
+    });
+    expect(result.text).toContain('杯子');
+    // 前两个型号只看图，直接跳过，不去试
+    expect(upstream.map((r) => r.body.model)).toEqual(['listen/first']);
+    expect(upstream[0]?.body).toMatchObject({
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: '哪一段更好？' },
+            { type: 'input_audio', input_audio: { data: heard.base64, format: 'mp3' } },
+            { type: 'video_url', video_url: { url: `data:video/mp4;base64,${watched.base64}` } },
+            { type: 'image_url' },
+          ],
+        },
+      ],
+    });
+    upstream.length = 0;
+    const holds = billingCalls.length;
+    // 点名一个读不了音频的型号：说清楚它读不了、谁读得了，不调用也不冻结
+    const named = await errorOf(
+      call('media.inspect', { files: [heard], question: '?', model: 'vision/first' }),
+    );
+    expect(named).toMatchObject({ statusCode: 400, code: 'media_unsupported' });
+    expect(named?.message).toBe('vision/first 读不了audio；可以用：listen/first');
+    expect(upstream).toEqual([]);
+    expect(billingCalls).toHaveLength(holds);
+    // 目录还没拉到：不筛，照配置的先后试
+    knobs.directory = false;
+    await call('media.inspect', { files: [heard], question: '?' });
+    expect(upstream.map((r) => r.body.model)).toEqual(['vision/first']);
+  });
   it('看图的模型被上游限流：退回冻结，换下一个模型；指定了模型就不换', async () => {
     knobs.visionStatus = 429;
-    const result = await call('image.inspect', { images: [reference], question: '是什么？' });
+    const result = await call('media.inspect', { files: [seen], question: '是什么？' });
     expect(result.text).toContain('杯子');
     expect(upstream.map((r) => r.body.model)).toEqual(['vision/first', 'vision/second']);
     expect(billingCalls.map((r) => r.path)).toEqual(['hold', 'release', 'hold', 'settle']);
     upstream.length = 0;
     await expect(
-      call('image.inspect', { images: [reference], question: '是什么？', model: 'vision/first' }),
+      call('media.inspect', { files: [seen], question: '是什么？', model: 'vision/first' }),
     ).rejects.toMatchObject({ code: 'provider_busy' });
     expect(upstream.map((r) => r.body.model)).toEqual(['vision/first']);
   });
@@ -114,7 +160,7 @@ describe('工具目录', () => {
       '3d.render',
       '3d.generate',
       'image.generate',
-      'image.inspect',
+      'media.inspect',
       'audio.speech',
       'audio.transcribe',
       'web.search',
@@ -158,7 +204,7 @@ describe('工具目录', () => {
     });
     expect(byKey['video.generate']?.models).toEqual(['alibaba/wan-2.7']);
     // 型号全是国外厂商的：整个工具不可用
-    for (const key of ['image.inspect', 'audio.transcribe', 'jev.decide'])
+    for (const key of ['media.inspect', 'audio.transcribe', 'jev.decide'])
       expect(byKey[key]).toMatchObject({ available: false, models: [], defaultModel: null });
     // 搜索（Tavily）、云渲染（Runpod）、音乐和 3D 生成（FAL）、浏览器检查、本地操作：和没开时一样
     for (const key of ['web.search', '3d.render', '3d.generate', 'audio.music', 'app.check'])
@@ -179,9 +225,9 @@ describe('工具目录', () => {
     expect(named?.message).toBe(
       '已开启「只用国内模型」，生成图片不能用 openai/gpt-image-2；可以用：bytedance-seed/seedream-4.5',
     );
-    const none = await errorOf(call('image.inspect', { images: [reference], question: '?' }));
+    const none = await errorOf(call('media.inspect', { files: [seen], question: '?' }));
     expect(none).toMatchObject({ code: 'model_out_of_scope' });
-    expect(none?.message).toBe('已开启「只用国内模型」，查看图片没有国内型号可用');
+    expect(none?.message).toBe('已开启「只用国内模型」，看图、看视频、听音频没有国内型号可用');
     expect(billingCalls).toHaveLength(holds);
   });
 });

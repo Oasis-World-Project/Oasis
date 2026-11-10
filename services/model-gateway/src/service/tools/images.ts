@@ -1,8 +1,9 @@
-// 图片工具：生成图片、看图回答问题。
+// 图片工具：生成图片；看图、看视频、听音频回答问题（media.inspect）。
 import { z } from 'zod';
 import {
   estimate,
   InputImages,
+  InputMedia,
   MODEL_ARG,
   optionalModel,
   pickModel,
@@ -44,10 +45,26 @@ const ImageArgs = z.object({
 });
 
 const InspectArgs = z.object({
-  images: InputImages,
+  files: InputMedia,
   question: z.string().trim().min(1).max(4000),
   model: optionalModel,
 });
+
+/** 文件按给的顺序带给型号：图片、视频是 data: 地址，音频是 base64 加格式（供应商的三种内容块） */
+const mediaParts = (files: InputMedia) =>
+  files.map((file) =>
+    file.kind === 'image'
+      ? { type: 'image_url', image_url: { url: `data:${file.mediaType};base64,${file.base64}` } }
+      : file.kind === 'video'
+        ? { type: 'video_url', video_url: { url: `data:${file.mediaType};base64,${file.base64}` } }
+        : { type: 'input_audio', input_audio: { data: file.base64, format: file.format } },
+  );
+
+/** 这次要读的种类（image、video、audio），去重 */
+export const mediaKinds = (args: Record<string, unknown>): string[] => {
+  const files = Array.isArray(args.files) ? (args.files as { kind?: unknown }[]) : [];
+  return [...new Set(files.map((f) => f.kind).filter((k): k is string => typeof k === 'string'))];
+};
 
 const imageParts = (images: z.infer<typeof InputImages>) =>
   images.map((image) => ({
@@ -139,26 +156,29 @@ export const imageGenerate: ToolDef = {
   },
 };
 
-export const imageInspect: ToolDef = {
-  key: 'image.inspect',
-  name: '查看图片',
-  description: '读取 1–4 张本地图片，回答画面、文字或图表问题；无法看清时应明确说明。',
-  usage: 'oasis-tool image.inspect --images materials/图.png --question "图中写了什么？"',
+export const mediaInspect: ToolDef = {
+  key: 'media.inspect',
+  name: '看图、看视频、听音频',
+  description:
+    '把 1–4 个本地文件（图片、视频、音频可以混着给）交给能看能听的型号，回答画面、文字、动作、听感或几个文件之间差别的问题；看不清、听不清时应明确说明。',
+  usage:
+    'oasis-tool media.inspect --files out/封面.png --question "图中写了什么？"；oasis-tool media.inspect --files out/a.mp3 out/b.mp3 --question "哪一段更像八音盒摇篮曲？"',
   unit: '次',
   estimateMicro: 2_000,
   holdMicro: () => 200_000,
   long: false,
   provider: 'openrouter',
-  models: (config) => config.visionModels,
+  models: (config) => config.inspectModels,
   args: InspectArgs,
   cli: [
     {
-      name: 'images',
+      name: 'files',
       kind: 'paths',
       required: true,
       min: 1,
       max: 4,
-      description: '要看的图片（1–4 张）',
+      description:
+        '要看、要听的文件（1–4 个，合计不超过 20 MiB）：图片 png/jpg/webp，视频 mp4/webm/mov，音频 mp3/wav/m4a/flac/ogg',
     },
     { name: 'question', kind: 'text', required: true, description: '要回答的问题' },
     MODEL_ARG,
@@ -171,12 +191,12 @@ export const imageInspect: ToolDef = {
         {
           model,
           stream: false,
-          max_tokens: deps.config.visionMaxTokens,
+          max_tokens: deps.config.inspectMaxTokens,
           usage: { include: true },
           messages: [
             {
               role: 'user',
-              content: [{ type: 'text', text: a.question }, ...imageParts(a.images)],
+              content: [{ type: 'text', text: a.question }, ...mediaParts(a.files)],
             },
           ],
         },

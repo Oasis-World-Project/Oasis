@@ -14,6 +14,8 @@ export const knobs = {
   /** 接下来几次生图请求被供应商拒绝 */
   imageRejections: 0,
   visionStatus: 200,
+  /** 供应商目录拉到了没有（false：各型号能读什么都还不知道） */
+  directory: true,
   referenceLimit: 4,
   pageText: '# 正文',
   videoPolls: 0,

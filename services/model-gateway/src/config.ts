@@ -136,11 +136,15 @@ export const modelGatewayEnv = {
     'bytedance-seed/seedream-5-0-pro,google/gemini-nano-banana-2.1,openai/gpt-image-2.5-sunburst,black-forest-labs/flux-3-image,qwen/qwen-image-3-pro,microsoft/mai-image-2.6,recraft/recraft-v4.1-pro,bytedance-seed/seedream-4.5,black-forest-labs/flux.2-pro',
   ),
   // 按顺序试：前一个被限流或地区用不了时换下一个（不同厂商分摊共享额度上的限流）
-  TOOL_VISION_MODELS: list(
-    'qwen/qwen3.8-max-prime,moonshotai/kimi-k3.1-pro,google/gemini-4-argon,anthropic/claude-opus-5.5,qwen/qwen3-vl-235b-a22b-instruct,qwen/qwen3-vl-30b-a3b-instruct',
+  // 看图、看视频、听音频（media.inspect）共用这一份：每个型号读得了哪几种看供应商目录，这里只管先后。
+  // 三种各至少有三个国内型号，2026-11-11 逐个真实调用过：看视频 qwen3.8-max-prime、kimi-k3.1-pro、mimo-v2.6-pro；
+  // 听音频 mimo-v2.6-pro、mimo-v2.6-flash、mimo-v2.5（两段各 150 秒的 mp3 一起比较都行）。qwen3.8-omni-flash 排在它们后面：
+  // 20 秒的单段能听，两段 5 MB 的 mp3 一起给时供应商报「The audio is empty」。
+  TOOL_INSPECT_MODELS: list(
+    'qwen/qwen3.8-max-prime,moonshotai/kimi-k3.1-pro,xiaomi/mimo-v2.6-pro,xiaomi/mimo-v2.6-flash,xiaomi/mimo-v2.5,qwen/qwen3.8-omni-flash,google/gemini-4-argon,anthropic/claude-opus-5.5,minimax/minimax-m3,stepfun/step-5-preview',
   ),
-  /** 看图的输出上限：前面几个是推理型号，推理也占这个额度，给小了会只想不答 */
-  TOOL_VISION_MAX_TOKENS: z.coerce.number().int().min(1).max(32_000).default(16_000),
+  /** 输出上限：前面几个是推理型号，推理也占这个额度，给小了会只想不答 */
+  TOOL_INSPECT_MAX_TOKENS: z.coerce.number().int().min(1).max(32_000).default(16_000),
   TOOL_FETCH_MAX_BYTES: z.coerce
     .number()
     .int()

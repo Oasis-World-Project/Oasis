@@ -20,6 +20,8 @@ export interface ToolServiceDeps {
   checks?: BrowserChecks;
   browserstack?: BrowserStackClient;
   openrouter: ProviderClient;
+  /** 供应商目录里这个型号能读的输入种类；目录里没有它返回 undefined */
+  inputsOf: (model: string) => string[] | undefined;
   tavily: SearchClient;
   meter: Meter;
   /** 模型范围：替哪个用户挑模型，就按他的范围过滤（ADR 0027） */
