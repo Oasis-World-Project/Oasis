@@ -1,4 +1,4 @@
-// 场景经验手册（ADR 0006 §8）：playbooks/ 下每个 .md 一份，启动时读一次。
+// 场景经验手册（ADR 0006 §8）：playbooks/ 下每个 .md 一份，启动时读一次（开发时改了手册，dev-service 会重启服务）。
 // 格式：第一行「# 名称」，接着一行「> 适用：……」，其余是正文。
 import { readdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';

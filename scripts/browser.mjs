@@ -147,28 +147,32 @@ if (process.argv[2] === 'smoke') {
       },
     },
   ];
-  for (const app of apps) {
-    const check = (plan) => {
-      const files = {
-        'oasis-app.json': JSON.stringify({
-          version: 1,
-          kind: app.kind,
-          root: 'app',
-          entry: app.entry,
-        }),
-        'oasis-test.json': JSON.stringify(plan),
-        ...app.files,
-      };
-      outputs = Object.entries(files).map(([path, content]) => ({
-        path: `out/app/${path}`,
-        content: Buffer.from(content),
-      }));
-      return checks.checkOutputs({
+  const checkApp = (app, plan, signal) => {
+    const files = {
+      'oasis-app.json': JSON.stringify({
+        version: 1,
+        kind: app.kind,
+        root: 'app',
+        entry: app.entry,
+      }),
+      'oasis-test.json': JSON.stringify(plan),
+      ...app.files,
+    };
+    outputs = Object.entries(files).map(([path, content]) => ({
+      path: `out/app/${path}`,
+      content: Buffer.from(content),
+    }));
+    return checks.checkOutputs(
+      {
         source: { url: 'http://smoke.invalid/outputs.tar' },
         manifest: 'app/oasis-app.json',
         cores: 1,
-      });
-    };
+      },
+      signal,
+    );
+  };
+  for (const app of apps) {
+    const check = (plan) => checkApp(app, plan);
     const passed = await check(passing);
     // 首屏 opening.jpg 加上测试计划里那一张截图
     if (!passed.passed || passed.screenshots?.length !== 2 || passed.report?.diagnostics.length)
@@ -186,6 +190,56 @@ if (process.argv[2] === 'smoke') {
       `检查浏览器烟测通过：${app.kind}，首屏、交互断言、失败证据和画面检查都正常（用时 ${passed.usage.elapsedMs} ms）`,
     );
   }
+  // 一直在变的页面（游戏的计时、动画文字不停改 DOM）永远等不到「安定」：条件不满足时也要下结论，
+  // 晚一点才满足的照样等到。没有结论就是检查卡住了，这里最多等 3 分钟。
+  const restless = {
+    kind: 'static',
+    entry: 'index.html',
+    files: {
+      'index.html':
+        '<!doctype html><title>Restless</title><p id="clock">0</p><script>' +
+        'let n = 0; setInterval(() => { document.getElementById("clock").textContent = String(++n); }, 50);' +
+        'setTimeout(() => { const late = document.createElement("p"); late.id = "late"; late.textContent = "来了"; document.body.append(late); }, 1500);' +
+        '</script>',
+    },
+  };
+  const unsettled = await checkApp(
+    restless,
+    {
+      version: 1,
+      steps: [
+        { action: 'text', selector: '#late', text: '来了' },
+        { action: 'text', selector: '#missing', text: '没有这个元素' },
+        { action: 'visible', selector: '#clock' },
+      ],
+    },
+    AbortSignal.timeout(180_000),
+  ).catch((err) => {
+    throw new Error(`一直在变的页面上，条件不满足时检查没有结论（卡住了）：${err.message}`);
+  });
+  const [late, missing, after] = unsettled.report?.steps ?? [];
+  if (
+    unsettled.passed ||
+    late?.status !== 'passed' ||
+    missing?.status !== 'failed' ||
+    !missing.error?.includes('页面一直在变化') ||
+    after?.status !== 'unchecked'
+  )
+    throw new Error(`一直在变的页面上结论不对：${JSON.stringify(unsettled.report)}`);
+  console.log(
+    `检查浏览器烟测通过：一直在变的页面，晚出现的元素等到了，不存在的元素判了没通过（用时 ${unsettled.usage.elapsedMs} ms）`,
+  );
+  // 画布里打开静态网页不带查询参数：测试要带就明说，不能悄悄丢掉
+  const query = await checkApp(apps[0], {
+    version: 1,
+    steps: [
+      { action: 'navigate', path: '/?debug=1' },
+      { action: 'visible', selector: 'button' },
+    ],
+  });
+  if (query.passed || !query.report?.steps[0]?.error?.includes('查询参数'))
+    throw new Error(`静态网页的测试带查询参数时没有说明：${JSON.stringify(query.report)}`);
+  console.log('检查浏览器烟测通过：静态网页的测试带查询参数时明确报出');
   const site = await checks.checkWebsite({
     url: 'https://example.com/',
     plan: {

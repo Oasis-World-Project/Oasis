@@ -7,6 +7,8 @@ import path from 'node:path';
 
 const roots = [
   'src',
+  // agent 的场景手册启动时读一次：改了手册也要重启，不然跑着的服务一直用旧的
+  'playbooks',
   '../../packages/contracts/dist',
   '../../packages/service-kit/dist',
   '.env',

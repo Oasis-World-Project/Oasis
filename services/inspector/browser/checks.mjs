@@ -68,6 +68,9 @@ export function createChecks({
   let target = first;
   // 页面加载完成后，连续这么多个动画帧里条件都不满足、DOM 也没有任何变化，才下「未通过」的结论。
   const SETTLED_FRAMES = 30;
+  // 有的页面永远安定不下来（游戏的计时、动画文字不停改 DOM）：条件一直不满足时最多等这么多帧就下结论，
+  // 不然这一步永远没有结果。仍然按帧不按秒（慢机器帧慢，等得自然更久），和画面检查的 LOOK_FRAMES 是同一种上限。
+  const RESTLESS_FRAMES = 600;
   /** 等下一帧，并返回期间 DOM 是否有变化（变化计数由初始化脚本累计） */
   const nextFrame = () =>
     target.evaluate(
@@ -78,19 +81,22 @@ export function createChecks({
     );
   /**
    * 反复检查 probe()，直到它返回 { ok: true }；页面加载完成且连续 SETTLED_FRAMES 帧
-   * 结果不变、DOM 不动时，返回最后一次的 { ok: false, why }。
+   * 结果不变、DOM 不动时，返回最后一次的 { ok: false, why }；页面一直在变、等满 RESTLESS_FRAMES 帧时也一样。
+   * waited 说的是等到了哪一种情况，接在 why 前面就是完整的原因。
    */
   async function settle(probe) {
     await target.waitForLoadState('load');
     let quiet = 0;
     let mutations = await nextFrame();
-    for (;;) {
+    for (let frames = 1; ; frames += 1) {
       const result = await probe();
       if (result.ok) return result;
       const now = await nextFrame();
       quiet = now === mutations ? quiet + 1 : 0;
       mutations = now;
-      if (quiet >= SETTLED_FRAMES) return result;
+      if (quiet >= SETTLED_FRAMES) return { ...result, waited: '等到页面安定后' };
+      if (frames >= RESTLESS_FRAMES)
+        return { ...result, waited: `页面一直在变化，等了 ${RESTLESS_FRAMES} 帧后` };
     }
   }
   /** 说清楚一个选择器现在匹配到了什么：几个、第一个的尺寸和样式、文字 */
@@ -161,14 +167,13 @@ export function createChecks({
         if (d.invalid)
           return (await locator.isVisible()) && (!usable || (await locator.isEnabled()))
             ? { ok: true }
-            : { ok: false, why: '等到页面安定后仍不可见或不可用' };
+            : { ok: false, why: '仍不可见或不可用' };
         if (!(d.count > 0 && d.width > 0 && d.height > 0 && d.visibility !== 'hidden'))
-          return { ok: false, why: `等到页面安定后仍不可见：${shape(d)}` };
-        if (usable && d.disabled)
-          return { ok: false, why: `等到页面安定后仍是禁用状态：${shape(d)}` };
+          return { ok: false, why: `仍不可见：${shape(d)}` };
+        if (usable && d.disabled) return { ok: false, why: `仍是禁用状态：${shape(d)}` };
         return { ok: true };
       });
-      if (!checked.ok) throw new Error(checked.why);
+      if (!checked.ok) throw new Error(`${checked.waited}${checked.why}`);
     };
     switch (step.action) {
       case 'navigate': {
@@ -177,6 +182,12 @@ export function createChecks({
         // 画布里只运行入口页面（ADR 0021）：静态网页只能重新打开入口
         if (kind === 'static' && !['/', `/${path.basename(entry)}`].includes(url.pathname))
           throw new Error('画布里只运行入口页面，不能打开别的页面；多页内容请做成同一页里的切换');
+        // 入口页面是放进隔离框里运行的，地址上的查询参数和 # 片段到不了页面：悄悄丢掉的话，
+        // 靠它打开的功能（如 ?debug=1 的调试按钮）不会出现，后面的步骤只会莫名其妙地找不到元素
+        if (kind === 'static' && (url.search || url.hash))
+          throw new Error(
+            `画布里打开入口页面时不带查询参数和 # 片段，页面读不到 ${url.search}${url.hash}`,
+          );
         const response = await page.goto(kind === 'static' ? origin : url.href, {
           waitUntil: 'domcontentloaded',
         });
@@ -189,7 +200,7 @@ export function createChecks({
         await ready();
         if (!(await describe(step.selector)).invalid) {
           const hit = await settle(() => hitTarget(step.selector));
-          if (!hit.ok) throw new Error(`等到页面安定后仍点不到：${hit.why}`);
+          if (!hit.ok) throw new Error(`${hit.waited}仍点不到：${hit.why}`);
         }
         await locator.click();
         return;
@@ -212,7 +223,7 @@ export function createChecks({
             const count = await target.locator(step.selector).count();
             return count === step.count
               ? { ok: true }
-              : { ok: false, why: `等到页面安定后匹配 ${count} 个，要求 ${step.count} 个` };
+              : { ok: false, why: `匹配 ${count} 个，要求 ${step.count} 个` };
           }
           const texts = await target.locator(step.selector).allTextContents();
           return texts.some((text) => text.includes(step.text))
@@ -220,11 +231,11 @@ export function createChecks({
             : {
                 ok: false,
                 why: texts.length
-                  ? `等到页面安定后文字不含「${step.text}」，实际为「${texts.join(' | ').slice(0, 300)}」`
-                  : '页面上没有匹配的元素',
+                  ? `文字不含「${step.text}」，实际为「${texts.join(' | ').slice(0, 300)}」`
+                  : '仍没有匹配的元素',
               };
         });
-        if (!checked.ok) throw new Error(checked.why);
+        if (!checked.ok) throw new Error(`${checked.waited}${checked.why}`);
         return;
       }
       case 'screenshot':
