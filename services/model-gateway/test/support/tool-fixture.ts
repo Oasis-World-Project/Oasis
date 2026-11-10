@@ -203,6 +203,7 @@ export const build = (
       speechModels: ['bytedance-seed/seed-audio-1-0'],
       transcribeModels: ['openai/whisper-large-v3'],
       jevModel: 'typesafe/jev-1.14',
+      decideChatModels: ['alibaba/judge-1'],
       tavilyCreditMicro: 8_000,
       speechMicroPerChar: 20,
     },
@@ -255,6 +256,7 @@ beforeEach(() => {
   knobs.imageStatus = 200;
   knobs.imageRejections = 0;
   knobs.visionStatus = 200;
+  knobs.judgeAnswer = '好的：{"type":"choice","choice":"标题B"}';
   knobs.directory = true;
   knobs.referenceLimit = 4;
   knobs.pageText = '# 正文';

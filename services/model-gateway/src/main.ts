@@ -229,6 +229,7 @@ await startService({
         transcribeModels: config.TOOL_TRANSCRIBE_MODELS,
         videoModels: config.TOOL_VIDEO_MODELS,
         jevModel: config.TOOL_JEV_MODEL,
+        decideChatModels: config.TOOL_DECIDE_CHAT_MODELS,
         tavilyCreditMicro: config.TAVILY_CREDIT_MICRO,
         speechMicroPerChar: config.TOOL_SPEECH_MICRO_PER_CHAR,
         musicModels: config.TOOL_MUSIC_MODELS,

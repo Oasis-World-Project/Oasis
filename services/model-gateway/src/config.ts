@@ -151,10 +151,15 @@ export const modelGatewayEnv = {
     .min(1024)
     .max(20 * 1024 * 1024)
     .default(5 * 1024 * 1024),
+  // 配音：前四个国内型号 2026-11-11 真实调用过，念出来的中文再转写回来一字不差。seed-audio 排最后：
+  // 它是按描述生成声音的型号，只给要念的文字时出来的不是这句话（转写成「呜呜」）。
   TOOL_SPEECH_MODELS: list(
-    'bytedance-seed/seed-audio-1-0,fish-audio/s2.1-pro,openai/gpt-4o-mini-tts-2025-12-15',
+    'qwen/qwen-audio-3.0-tts-flash,minimax/speech-2.8-turbo,qwen/qwen-audio-3.0-tts-plus,minimax/speech-2.8-hd,fish-audio/s2.1-pro,openai/gpt-4o-mini-tts-2025-12-15,bytedance-seed/seed-audio-1-0',
   ),
-  TOOL_TRANSCRIBE_MODELS: list('openai/whisper-large-v3,google/chirp-3'),
+  // 转写：供应商目录里国内的只有 qwen3-asr 这两个（2026-11-11 真实调用过）
+  TOOL_TRANSCRIBE_MODELS: list(
+    'openai/whisper-large-v3,qwen/qwen3-asr-1.7b,qwen/qwen3-asr-0.6b,google/chirp-3',
+  ),
   /** 最贵的 Veo 3.1 4K 带声音每秒 $0.60（冻结按每秒 $0.70 算）；换更贵的模型要同时调冻结 */
   TOOL_VIDEO_MODELS: list(
     'google/veo-3.1,bytedance/seedance-2.5,kwaivgi/kling-v3.0-pro,alibaba/wan-3.0-prime,minimax/hailuo-3-max,runway/gen-4.5,alibaba/wan-3.0,kwaivgi/kling-v3.0-std',
@@ -167,6 +172,10 @@ export const modelGatewayEnv = {
     .default(30 * 60_000),
   /** jev.decide 用的决策模型 */
   TOOL_JEV_MODEL: z.string().min(1).default('typesafe/jev-1.14'),
+  /** 上面的决策模型用不了时（如「只用国内模型」）回答 jev.decide 的聊天模型：三个国内的轻量型号 */
+  TOOL_DECIDE_CHAT_MODELS: list(
+    'deepseek/deepseek-v4.1-flash,qwen/qwen3.8-flash,z-ai/glm-5.3-flash',
+  ),
   /**
    * 国内厂商（模型 ID 里「/」前面的部分）。用户打开「只用国内模型」后，只给他的 AI 团队列这些厂商的
    * 模型和工具型号（ADR 0027）；不在名单里的都算国外。

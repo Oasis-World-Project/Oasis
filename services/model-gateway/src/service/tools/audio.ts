@@ -60,20 +60,23 @@ export const speech: ToolDef = {
   args: SpeechArgs,
   cli: [
     { name: 'text', kind: 'text', required: true, description: '要念的文字' },
-    { name: 'voice', kind: 'text', description: '音色' },
+    { name: 'voice', kind: 'text', description: '音色（各型号的不一样；不写用该型号的第一个）' },
     { name: 'instructions', kind: 'text', description: '语气、语速等要求' },
     MODEL_ARG,
   ],
   modelOf: pickModel,
   async run(deps, args, model) {
     const a = SpeechArgs.parse(args);
+    // 多数配音型号不点名音色就拒绝（An explicit voice is required）：没写就用目录里这个型号的第一个
+    const voice =
+      a.voice ?? (await deps.openrouter.speechVoices(model).catch(() => [] as string[]))[0];
     const response = await deps.upstream(() =>
       deps.openrouter.speech(
         {
           model,
           input: a.text,
           response_format: 'mp3',
-          ...(a.voice ? { voice: a.voice } : {}),
+          ...(voice ? { voice } : {}),
           ...(a.instructions ? { instructions: a.instructions } : {}),
         },
         deps.signal,

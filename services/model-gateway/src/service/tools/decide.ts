@@ -1,6 +1,8 @@
-// 快速判断：让 Jev 对材料做结构化判断并给出概率。
+// 快速判断：对材料做结构化判断（是不是、几选一、按刻度打分）。专用的决策模型 Jev 给概率；
+// 用不了它的时候（如「只用国内模型」）由清单里后面的聊天模型按同样的格式回答。
 import { z } from 'zod';
-import { estimate, provider, type ToolDef } from './kit.ts';
+import { HttpError } from '@oasis/service-kit';
+import { estimate, provider, type ToolDef, type ToolDeps } from './kit.ts';
 
 const DecideArgs = z.object({
   question: z.string().trim().min(1).max(1000),
@@ -17,11 +19,75 @@ const DecisionResponse = z.looseObject({
   usage: z.looseObject({ cost: z.number().optional() }).optional(),
 });
 
+/** 聊天模型回答判断：只要一个 JSON，形状和 Jev 的回答一样；选项、刻度必须是给出的原文 */
+async function judgeByChat(deps: ToolDeps, a: z.infer<typeof DecideArgs>, model: string) {
+  const format = a.options
+    ? `{"type":"choice","choice":"选中的选项原文"}，选项：${JSON.stringify(a.options)}`
+    : a.scale
+      ? `{"type":"score","score":"选中的刻度原文"}，刻度从低到高：${JSON.stringify(a.scale)}`
+      : '{"type":"noul","noul":0 到 1 之间的小数，表示「是」的把握}';
+  const response = await deps.upstream(() =>
+    deps.openrouter.chatCompletions(
+      {
+        model,
+        stream: false,
+        // 推理型号的思考也占这个额度，给小了会只想不答
+        max_tokens: 4000,
+        usage: { include: true },
+        messages: [
+          {
+            role: 'user',
+            content: `${a.context ? `材料：\n${a.context}\n\n` : ''}问题：${a.question}\n只回答一个 JSON，不要别的字：${format}`,
+          },
+        ],
+      },
+      deps.signal,
+    ),
+  );
+  const body = z
+    .object({
+      choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1),
+      usage: z.object({ cost: z.number().nonnegative().optional() }).optional(),
+    })
+    .parse(await response.json());
+  const found = /\{[\s\S]*\}/.exec(body.choices[0]!.message.content);
+  const answer = z
+    .discriminatedUnion('type', [
+      z.object({
+        type: z.literal('choice'),
+        choice: z.enum((a.options ?? ['']) as [string, ...string[]]),
+      }),
+      z.object({
+        type: z.literal('score'),
+        score: z.enum((a.scale ?? ['']) as [string, ...string[]]),
+      }),
+      z.object({ type: z.literal('noul'), noul: z.number().min(0).max(1) }),
+    ])
+    .safeParse(found ? safeJson(found[0]) : undefined);
+  const wanted = a.options ? 'choice' : a.scale ? 'score' : 'noul';
+  if (!answer.success || answer.data.type !== wanted)
+    throw new HttpError(502, 'decision_unusable', `${model} 的回答不是要求的格式，没有得到判断`);
+  return {
+    text: JSON.stringify(answer.data),
+    data: answer.data,
+    files: [],
+    cost: body.usage?.cost !== undefined ? provider(body.usage.cost) : estimate(500),
+  };
+}
+
+const safeJson = (text: string): unknown => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+};
+
 export const decide: ToolDef = {
   key: 'jev.decide',
   name: '快速判断',
   description:
-    '让 Jev 对材料做一个结构化判断并给出概率：是否满足某条件、从几个选项里选一个、或按刻度打分。几乎不花钱，适合挑最好的版本、检查是否达标。',
+    '对材料做一个结构化判断：是否满足某条件、从几个选项里选一个、或按刻度打分。几乎不花钱，适合挑最好的版本、检查是否达标。只读文字，图片、视频、音频要先用 media.inspect。',
   usage:
     'oasis-tool jev.decide --question "哪个标题更好" --options "标题A,标题B" [--context "材料"]（或 --scale "差,一般,好"）；批量：--in 问题.jsonl --out out/评分.jsonl --budget_micro 1000000，每行 {id,question,context?,scale?}，uses 按行数计；--resume true 恢复',
   unit: '次',
@@ -29,7 +95,7 @@ export const decide: ToolDef = {
   holdMicro: (args) => 2_000 + String(args.context ?? '').length,
   long: false,
   provider: 'openrouter',
-  models: (config) => [config.jevModel],
+  models: (config) => [config.jevModel, ...config.decideChatModels],
   args: DecideArgs,
   cli: [
     { name: 'question', kind: 'text', description: '要判断的问题（批量时用 in）' },
@@ -47,6 +113,7 @@ export const decide: ToolDef = {
   modelOf: (_args, models) => models[0] ?? '',
   async run(deps, args, model) {
     const a = DecideArgs.parse(args);
+    if (model !== deps.config.jevModel) return judgeByChat(deps, a, model);
     const question = a.options
       ? {
           type: 'choice',

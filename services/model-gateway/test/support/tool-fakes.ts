@@ -14,6 +14,8 @@ export const knobs = {
   /** 接下来几次生图请求被供应商拒绝 */
   imageRejections: 0,
   visionStatus: 200,
+  /** 聊天模型对快速判断的回答 */
+  judgeAnswer: '好的：{"type":"choice","choice":"标题B"}',
   /** 供应商目录拉到了没有（false：各型号能读什么都还不知道） */
   directory: true,
   referenceLimit: 4,
@@ -97,6 +99,12 @@ fake.post('/api/v1/chat/completions', async (request, reply) => {
     return reply.code(403).send({ error: { message: 'not available in your region' } });
   if (knobs.visionStatus === 429 && (request.body as { model: string }).model === 'vision/first')
     return reply.code(429).send({ error: { message: 'temporarily rate-limited upstream' } });
+  // 聊天模型回答快速判断：按要求只回一个 JSON（前后带点废话也要认得出）
+  if ((request.body as { model: string }).model === 'alibaba/judge-1')
+    return {
+      choices: [{ message: { content: knobs.judgeAnswer } }],
+      usage: { cost: 0.0003 },
+    };
   return { choices: [{ message: { content: '图中有一只杯子。' } }], usage: { cost: 0.002 } };
 });
 fake.addContentTypeParser('*', (_req, _body, done) => done(null, {}));
@@ -128,6 +136,10 @@ fake.post('/api/v1/audio/speech', async (request, reply) => {
   return reply.header('x-generation-id', 'gen-1').type('audio/mpeg').send(Buffer.from('mp3'));
 });
 fake.get('/api/v1/generation', async () => ({ data: { total_cost: 0.0021 } }));
+// 配音型号的目录（按输出种类取）：各型号能用的音色
+fake.get('/api/v1/models', async () => ({
+  data: [{ id: 'bytedance-seed/seed-audio-1-0', supported_voices: ['voice-a', 'voice-b'] }],
+}));
 fake.post('/api/v1/audio/transcriptions', async (request) => {
   record('transcribe', request.body);
   return { text: '你好，欢迎来到小木屋。' };

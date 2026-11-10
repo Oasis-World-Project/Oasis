@@ -204,8 +204,14 @@ describe('工具目录', () => {
     });
     expect(byKey['video.generate']?.models).toEqual(['alibaba/wan-2.7']);
     // 型号全是国外厂商的：整个工具不可用
-    for (const key of ['media.inspect', 'audio.transcribe', 'jev.decide'])
+    for (const key of ['media.inspect', 'audio.transcribe'])
       expect(byKey[key]).toMatchObject({ available: false, models: [], defaultModel: null });
+    // 快速判断：专用的决策模型是国外的，剩下清单里的国内聊天模型
+    expect(byKey['jev.decide']).toMatchObject({
+      available: true,
+      models: ['alibaba/judge-1'],
+      defaultModel: 'alibaba/judge-1',
+    });
     // 搜索（Tavily）、云渲染（Runpod）、音乐和 3D 生成（FAL）、浏览器检查、本地操作：和没开时一样
     for (const key of ['web.search', '3d.render', '3d.generate', 'audio.music', 'app.check'])
       expect(byKey[key]).toEqual(all[key]);
@@ -341,10 +347,14 @@ describe('调用工具', () => {
       files: [{ name: 'speech.mp3', mediaType: 'audio/mpeg' }],
     });
     expect(Buffer.from(result.files[0]!.base64, 'base64').toString()).toBe('mp3');
+    // 没写音色：用供应商目录里这个型号的第一个（多数配音型号不点名音色就拒绝）
     expect(upstream[0]?.body).toMatchObject({
       model: 'bytedance-seed/seed-audio-1-0',
       response_format: 'mp3',
+      voice: 'voice-a',
     });
+    await call('audio.speech', { text: '欢迎来到小木屋', voice: 'voice-b' });
+    expect(upstream[1]?.body).toMatchObject({ voice: 'voice-b' });
   });
 
   it('转写：把录音交给转写模型，交回文字', async () => {
@@ -393,6 +403,39 @@ describe('调用工具', () => {
         },
       },
     });
+  });
+
+  it('快速判断在「只用国内模型」下：由清单里的聊天模型按同样的格式回答；答非所问不当成判断', async () => {
+    knobs.domesticOnly = true;
+    const result = await call('jev.decide', {
+      question: '哪个标题更好',
+      options: ['标题A', '标题B'],
+      context: '面向小学生的科普读物',
+    });
+    expect(result.data).toEqual({ type: 'choice', choice: '标题B' });
+    expect(upstream[0]?.body).toMatchObject({ model: 'alibaba/judge-1' });
+    const asked = (upstream[0]?.body.messages as { content: string }[])[0]!.content;
+    expect(asked).toContain('材料：\n面向小学生的科普读物');
+    expect(asked).toContain('选项：["标题A","标题B"]');
+    // 选了不在选项里的、或者干脆没给 JSON：报错，不编一个结果
+    for (const answer of ['{"type":"choice","choice":"标题C"}', '我觉得都不错']) {
+      knobs.judgeAnswer = answer;
+      expect(
+        await errorOf(
+          call('jev.decide', { question: '哪个标题更好', options: ['标题A', '标题B'] }),
+        ),
+      ).toMatchObject({ code: 'decision_unusable' });
+    }
+    // 是不是、打分
+    knobs.judgeAnswer = '{"type":"noul","noul":0.8}';
+    expect((await call('jev.decide', { question: '达标了吗' })).data).toEqual({
+      type: 'noul',
+      noul: 0.8,
+    });
+    knobs.judgeAnswer = '{"type":"score","score":"好"}';
+    expect(
+      (await call('jev.decide', { question: '写得怎么样', scale: ['差', '一般', '好'] })).data,
+    ).toEqual({ type: 'score', score: '好' });
   });
 
   it('没配 Key 的工具：503', async () => {

@@ -24,6 +24,8 @@ export interface ToolConfig {
   speechModels: string[];
   transcribeModels: string[];
   jevModel: string;
+  /** jevModel 用不了时（如「只用国内模型」）回答快速判断的聊天模型，按顺序 */
+  decideChatModels: string[];
   /** Tavily 每个积分多少钱（微美元） */
   tavilyCreditMicro: number;
   /** 配音拿不到实际花费时，每个字估多少钱（微美元） */

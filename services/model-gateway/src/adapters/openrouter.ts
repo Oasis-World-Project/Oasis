@@ -51,6 +51,8 @@ export interface ProviderClient {
   /** 所有支持参考图的端点中，最保守的参考图数量上限；未知或不支持返回 0。 */
   imageReferenceLimit(model: string): Promise<number>;
   listVideoModels(): Promise<VideoModel[]>;
+  /** 目录里这个配音型号能用的音色（多数配音型号必须点名一个）；目录里没有它返回空 */
+  speechVoices(model: string): Promise<string[]>;
   chatCompletions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   decisions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   images(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
@@ -87,8 +89,38 @@ export function createOpenRouterClient(options: {
       headers: { authorization: `Bearer ${options.apiKey ?? ''}` },
       signal: AbortSignal.timeout(timeoutMs),
     });
+  /** 配音型号不在默认目录里，要按输出种类另取；音色不常变，取一次用 10 分钟 */
+  let voices: { at: number; byModel: Map<string, string[]> } | undefined;
   return {
     configured: Boolean(options.apiKey),
+
+    async speechVoices(model) {
+      if (!voices || Date.now() - voices.at > 10 * 60_000) {
+        const response = await fetch(`${base}/models?output_modalities=speech`, {
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) throw new Error(`读取配音型号目录失败：${response.status}`);
+        const { data } = z
+          .object({
+            data: z.array(
+              z.looseObject({ id: z.string(), supported_voices: z.array(z.unknown()).nullish() }),
+            ),
+          })
+          .parse(await response.json());
+        voices = {
+          at: Date.now(),
+          byModel: new Map(
+            data.map((entry) => [
+              entry.id,
+              (entry.supported_voices ?? []).filter(
+                (voice): voice is string => typeof voice === 'string' && voice.length > 0,
+              ),
+            ]),
+          ),
+        };
+      }
+      return voices.byModel.get(model) ?? [];
+    },
 
     async listVideoModels() {
       const response = await get(`${base}/videos/models`, 15_000);
