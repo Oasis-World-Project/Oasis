@@ -14,6 +14,8 @@ import { isRoot } from './groups.ts';
 import { materialPaths } from './materials.ts';
 import { planToRows } from './plan.ts';
 import {
+  BUDGET_CHECK_ATTEMPTS,
+  budgetProblems,
   checkPlan,
   estimatePlan,
   PLAN_FILE,
@@ -249,7 +251,7 @@ export function createPlanning(deps: {
         : undefined;
     if (task.revision) {
       const before = await previous(task.id);
-      const revised =
+      let revised: ReturnType<typeof checkRevisionPlan> =
         result.status === 'succeeded'
           ? checkRevisionPlan(await readPlan(result.runId), {
               sheet: task.sheet!,
@@ -259,6 +261,24 @@ export function createPlanning(deps: {
               nodes: before.nodes,
             })
           : { problems: [`规划员没跑完：${result.error ?? result.status}`] };
+      if ('plan' in revised && task.planAttempts <= BUDGET_CHECK_ATTEMPTS) {
+        const total = estimateRevision(
+          revised.plan,
+          revised.workflow,
+          models,
+          toolList,
+          config.fallback,
+        );
+        const fresh = new Set(
+          revised.changes.filter((c) => c.change !== 'reuse').map((c) => c.key),
+        );
+        const work = {
+          ...revised.workflow,
+          nodes: revised.workflow.nodes.filter((n) => fresh.has(n.key)),
+        };
+        const over = budgetProblems(work, task.sheet!, total, toolList);
+        if (over.length) revised = { problems: over };
+      }
       return engine.transact(task.id, async (snapshot, w, fx) => {
         const current = snapshot.task;
         if (current.status !== 'planning' || current.plannerRunId !== result.runId) return;
@@ -296,10 +316,16 @@ export function createPlanning(deps: {
         });
       });
     }
-    const checked =
+    let checked: ReturnType<typeof checkPlan> =
       result.status === 'succeeded'
         ? checkPlan(await readPlan(result.runId), task.sheet!, models, toolList, environment)
         : { problems: [`规划员没跑完：${result.error ?? result.status}`] };
+    // 估价远超预算多半是数量写错了：前几次退回去核对，之后照收（预算只是参考）
+    if ('plan' in checked && task.planAttempts <= BUDGET_CHECK_ATTEMPTS) {
+      const { totalMicro } = estimatePlan(checked.plan, models, toolList, config.fallback);
+      const over = budgetProblems(checked.plan, task.sheet!, totalMicro, toolList);
+      if (over.length) checked = { problems: over };
+    }
     await engine.transact(task.id, async (snapshot, w, fx) => {
       const current = snapshot.task;
       if (current.status !== 'planning' || current.plannerRunId !== result.runId) return;

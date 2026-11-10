@@ -126,7 +126,7 @@ export function resourceSections(input: PlannerResources): string[] {
     : '（现在没有可用的工具）';
   return [
     `【可以用的模型】\n${models}`,
-    `【可以用的工具】（干活节点里用 oasis-tool 调用，方案里写成 {"key":"image.generate","uses":预计计费单位数,"model":"型号"}；工具节点的步骤按「参数」写，* 是必填）\n${tools}`,
+    `【可以用的工具】（干活节点里用 oasis-tool 调用，方案里写成 {"key":"image.generate","uses":3,"model":"型号"}；uses 是预计用几个计费单位——看下面单价「每X」的 X（张、秒、次、作业……），是数量不是金额，生成 3 张图就写 3；工具节点的步骤按「参数」写，* 是必填）\n${tools}`,
     ...(input.environment
       ? [
           `【沙箱环境】${JSON.stringify(input.environment)}\n节点依赖的本地能力写进 requires（只能填 capabilities 里有的）。`,
@@ -316,4 +316,51 @@ export function estimatePlan(
   const perNode = new Map(plan.nodes.map((n) => [n.key, kindOf(n).estimate(n, rates)]));
   const totalMicro = Math.ceil([...perNode.values()].reduce((a, b) => a + b, 0));
   return { totalMicro, perNode };
+}
+
+/**
+ * 方案估价超过任务单预算这么多倍，多半是规划员写错了数量（2026-11-10：$1.27 的 3D 任务估出 $5008——
+ * 规划员把金额（微美元）写进了 uses，3d.render 写成 100000 次）。退回去核对。
+ */
+const OVER_BUDGET_TIMES = 5;
+/** 前几次规划才因为估价退回；之后照收（预算只是参考，ADR 0016 §2），不让规划员一直改下去 */
+export const BUDGET_CHECK_ATTEMPTS = 2;
+
+/** 估价远超预算时交回给规划员的话：总价、倍数、最贵的几项工具用量；没超返回空 */
+export function budgetProblems(
+  plan: WorkflowPlan,
+  sheet: TaskSheet,
+  totalMicro: number,
+  tools: ToolEntry[],
+): string[] {
+  const budget = sheet.budget?.micro;
+  if (!budget || totalMicro <= budget * OVER_BUDGET_TIMES) return [];
+  const byKey = new Map(tools.map((t) => [t.key, t]));
+  const lines = plan.nodes
+    .flatMap((n) => {
+      if (n.kind === 'work') return n.tools.map((t) => ({ node: n.key, t, times: 1 }));
+      if (n.kind === 'foreach' && n.each.kind === 'work')
+        return n.each.tools.map((t) => ({ node: n.key, t, times: n.count }));
+      return [];
+    })
+    .flatMap(({ node, t, times }) => {
+      const tool = byKey.get(t.key);
+      if (!tool) return [];
+      const rate = toolRate(tool, t.model).costMicro;
+      const micro = rate * t.uses * times;
+      return [
+        {
+          micro,
+          text: `节点「${node}」的 ${t.key}${times > 1 ? ' 每条' : ''} 写了 uses ${t.uses}（每${tool.unit}约 ${usd(rate)}，合计约 ${usd(micro)}）`,
+        },
+      ];
+    })
+    .sort((a, b) => b.micro - a.micro)
+    .slice(0, 3)
+    .map((l) => l.text);
+  return [
+    `方案估价约 ${usd(totalMicro)}，是任务单预算 ${usd(budget)} 的 ${Math.round(totalMicro / budget)} 倍。` +
+      (lines.length ? `最贵的：${lines.join('；')}。` : '') +
+      'uses 是数量（几张、几秒、几次），不是金额；按实际要用的数量改，让方案大致落在预算内。',
+  ];
 }

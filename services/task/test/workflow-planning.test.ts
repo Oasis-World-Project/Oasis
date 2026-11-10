@@ -181,6 +181,39 @@ describe('规划（从任务单开始）', () => {
     );
   });
 
+  it('估价远超预算（把金额写成了数量）：退回规划员核对；退回两次之后照收（预算只是参考）', async () => {
+    // 2026-11-10：$1.27 的 3D 任务，规划员把 3d.render 的 uses 写成 100000，估价 $5008
+    const task = await createPlanned({
+      ownerId: OWNER,
+      materials: [],
+      payerId: OWNER,
+      title: '小木屋首页',
+      brief: 'b',
+      sheet: {
+        ...sheetOf(),
+        budget: { tier: 'standard', micro: 100_000, minutes: 5, steps: [] },
+      },
+    });
+    expect(plannerRuns().at(-1)?.prompt).toContain('是数量不是金额，生成 3 张图就写 3');
+    const wrong = JSON.stringify({
+      nodes: [{ ...work('draw', '画首屏'), tools: [{ key: 'image.generate', uses: 100_000 }] }],
+      edges: [],
+      deliverables: { 首页文案: 'draw' },
+    });
+    const first = await plannerDone(wrong);
+    const revise = plannerRuns().at(-1)!;
+    expect(revise.continueFrom).toBe(first.runId);
+    expect(revise.prompt).toContain('方案估价约 $4000.00，是任务单预算 $0.10 的 40000 倍');
+    expect(revise.prompt).toContain(
+      '节点「draw」的 image.generate 写了 uses 100000（每次约 $0.04，合计约 $4000.00）',
+    );
+    expect(revise.prompt).toContain('uses 是数量');
+    await plannerDone(wrong);
+    expect((await service.get(OWNER, task.id)).status).toBe('planning');
+    await plannerDone(wrong);
+    expect((await service.get(OWNER, task.id)).status).toBe('running');
+  });
+
   it('方案没过规划门：接着原会话让规划员改；改好了照常开跑', async () => {
     const task = await fromSheet();
     const bad = JSON.stringify({
