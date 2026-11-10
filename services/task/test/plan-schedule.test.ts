@@ -70,6 +70,89 @@ describe('方案校验', () => {
     expect(findCycle(['A', 'B'], [{ from: 'A', to: 'B' }])).toBeUndefined();
   });
 
+  describe('AI 节点的说明里写到 in/<别的节点>/', () => {
+    const says = (key: string, goal: string) => ({ ...work(key), goal });
+    const problems = (plan: Parameters<typeof validatePlan>[0]) => {
+      try {
+        validatePlan(plan);
+      } catch (err) {
+        return (err as HttpError).message;
+      }
+      return '';
+    };
+    const chain = [
+      { from: 'build', to: 'check' },
+      { from: 'check', to: 'fix' },
+    ];
+
+    it('要有直接连线：隔着一个节点的文件拿不到，规划时就退回', () => {
+      // 真实任务里出过的方案：fix 只连了 check，说明里却要拷 in/build/site/，开跑后找不到文件、把游戏重做了一遍
+      const nodes = [
+        work('build'),
+        work('check'),
+        says('fix', '把 in/build/site/ 完整拷贝到 out/site/，再按 in/check/check-report.json 修'),
+      ];
+      const message = problems({ nodes, edges: chain });
+      expect(message).toContain('没有连线 build → fix');
+      expect(message).not.toContain('check → fix');
+      expect(problems({ nodes, edges: [...chain, { from: 'build', to: 'fix' }] })).toBe('');
+    });
+
+    it('只管方案里的节点名：上一版的 in/_previous/、自己的名字、路径里凑巧的 in/ 都不算', () => {
+      const fix = says(
+        'fix',
+        '在 in/_previous/ 的基础上改；plug-in/build/、src/in/build/ 是项目里的目录；in/fix/、in/别的/ 不用管',
+      );
+      expect(problems({ nodes: [work('build'), fix], edges: [] })).toBe('');
+    });
+
+    it('讨论参与者的立场、展开节点每条的 goal 也查', () => {
+      const debate = {
+        key: 'debate',
+        title: '讨论',
+        kind: 'discussion' as const,
+        role: '',
+        goal: '定方向',
+        model: 'm',
+        checks: [] as string[],
+        expects: [] as string[],
+        participants: [
+          { name: '甲', model: 'm', stance: '对照 in/build/site/ 挑毛病' },
+          { name: '乙', model: 'm', stance: '' },
+        ],
+        rounds: 1,
+      };
+      expect(problems({ nodes: [work('build'), debate], edges: [] })).toContain(
+        '没有连线 build → debate',
+      );
+      const pages = {
+        key: 'pages',
+        title: '逐页做',
+        kind: 'foreach' as const,
+        role: '',
+        goal: '每页一份',
+        model: '',
+        checks: [] as string[],
+        expects: [] as string[],
+        over: 'in/list/pages.json',
+        count: 2,
+        each: {
+          kind: 'work' as const,
+          role: '',
+          goal: '第 {{index}} 页，素材在 in/build/assets/',
+          model: 'm',
+          checks: [] as string[],
+          expects: [] as string[],
+          tools: [] as { key: string; uses: number }[],
+        },
+      };
+      const nodes = [work('list'), work('build'), pages];
+      const listed = [{ from: 'list', to: 'pages' }];
+      expect(problems({ nodes, edges: listed })).toContain('没有连线 build → pages');
+      expect(problems({ nodes, edges: [...listed, { from: 'build', to: 'pages' }] })).toBe('');
+    });
+  });
+
   it('讨论节点：参与者不能重名；验收点、应有文件、参与者和轮数写进节点配置', () => {
     const discussion = (names: string[]) => ({
       key: 'D',

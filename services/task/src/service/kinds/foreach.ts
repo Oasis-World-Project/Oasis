@@ -55,6 +55,10 @@ export const foreach: NodeKindPlugin<'foreach'> = {
     const used = branch.kind === 'tool' ? (tool.inputFiles?.(branch) ?? []) : [];
     return [listSource(plan.over), ...used];
   },
+  texts(plan) {
+    const branch = branchPlan(plan);
+    return branch.kind === 'work' ? (work.texts?.(branch) ?? []) : [];
+  },
   models: (plan) => {
     const branch = branchPlan(plan);
     return branch.kind === 'work' ? work.models(branch) : [];

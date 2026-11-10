@@ -55,6 +55,30 @@ function groupProblems(plan: WorkflowPlan): string[] {
   return problems;
 }
 
+/** 文字里写到的 in/<节点名>/；前面紧挨着字母、数字或 . / _ - 的不算（plug-in/x/、src/in/x/ 不是沙箱目录） */
+const MENTIONED_INPUT = /(?<![A-Za-z0-9_./-])in\/([\p{L}\p{N}_-]{1,40})\//gu;
+
+/**
+ * AI 节点的说明里写到 in/<别的节点>/：只有直接连过来的上游才会放进它的 in/，隔着一个节点的不算。
+ * 没有连线它开跑后找不到这些文件，只能照着说明重做一遍，所以在规划时就退回。
+ * 只查方案里有的节点名：in/_previous/（修改时上一版的文件）和别的文字不在这里管。
+ */
+function mentionProblems(plan: WorkflowPlan, known: ReadonlySet<string>): string[] {
+  const problems: string[] = [];
+  for (const node of plan.nodes) {
+    const text = (kindOf(node).texts?.(node) ?? []).join('\n');
+    const mentioned = new Set([...text.matchAll(MENTIONED_INPUT)].map((m) => m[1] as string));
+    for (const from of mentioned) {
+      if (from === node.key || !known.has(from)) continue;
+      if (plan.edges.some((e) => e.from === from && e.to === node.key)) continue;
+      problems.push(
+        `节点「${node.key}」的说明里写到 in/${from}/，但没有连线 ${from} → ${node.key}，它拿不到「${from}」交出的文件：要用就连上这条线，不用就不要写`,
+      );
+    }
+  }
+  return problems;
+}
+
 /** 校验方案；有问题时抛 400，并把所有问题一起列出来 */
 export function validatePlan(plan: WorkflowPlan): void {
   const problems: string[] = [];
@@ -75,6 +99,7 @@ export function validatePlan(plan: WorkflowPlan): void {
         problems.push(`节点「${node.key}」用到的 in/${from}/ 不是任何节点交来的`);
       else if (!plan.edges.some((e) => e.from === from && e.to === node.key))
         problems.push(`节点「${node.key}」用到 in/${from}/ 里的文件，要连线 ${from} → ${node.key}`);
+  problems.push(...mentionProblems(plan, known));
   problems.push(...groupProblems(plan));
   const pairs = plan.edges.map((e) => `${e.from}→${e.to}`);
   if (new Set(pairs).size !== pairs.length) problems.push('有重复的连线');

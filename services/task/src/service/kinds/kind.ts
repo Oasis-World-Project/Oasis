@@ -66,6 +66,8 @@ export interface NodeKindPlugin<K extends NodeKind> {
   problems(plan: PlanOf<K>): string[];
   /** 节点直接引用的上游文件（工具节点参数里写的 in/<上游>/…）：规划门要求有连线，并让上游必须交出它们 */
   inputFiles?(plan: PlanOf<K>): { from: string; path: string }[];
+  /** 写给 AI 看的文字（goal、角色、立场）：里面写到 in/<别的节点>/ 时规划门要求有连线，没有连线它拿不到那些文件 */
+  texts?(plan: PlanOf<K>): string[];
   /** 用到的型号（规划门核对模型目录） */
   models(plan: PlanOf<K>): string[];
   /** 用到的工具不在目录里、型号不可选的问题 */

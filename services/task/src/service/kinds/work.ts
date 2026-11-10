@@ -113,6 +113,7 @@ function carryOn(snapshot: Snapshot, node: WorkNode, interrupted: boolean): Step
 
 export const work: NodeKindPlugin<'work'> = {
   problems: () => [],
+  texts: (plan) => [plan.goal, plan.role],
   models: (plan) => [plan.model],
   toolProblems(plan, tools) {
     const problems: string[] = [];

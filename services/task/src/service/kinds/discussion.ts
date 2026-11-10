@@ -160,6 +160,7 @@ function resume(snapshot: Snapshot, node: DiscussionNode): Step {
 
 export const discussion: NodeKindPlugin<'discussion'> = {
   problems: (plan) => duplicateNames(plan.title, plan.participants),
+  texts: (plan) => [plan.goal, plan.role, ...plan.participants.map((p) => p.stance)],
   models: (plan) => [plan.model, ...plan.participants.map((p) => p.model)],
   toolProblems: () => [],
   estimate: (plan, rates) =>
