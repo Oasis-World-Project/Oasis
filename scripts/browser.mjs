@@ -229,6 +229,29 @@ if (process.argv[2] === 'smoke') {
   console.log(
     `检查浏览器烟测通过：一直在变的页面，晚出现的元素等到了，不存在的元素判了没通过（用时 ${unsettled.usage.elapsedMs} ms）`,
   );
+  // 静态网页在隔离框里：还没点过页面就对着 body 按键，键也要到得了页面（游戏菜单里「按 1 选关」）
+  const keys = await checkApp(
+    {
+      kind: 'static',
+      entry: 'index.html',
+      files: {
+        'index.html':
+          '<!doctype html><title>Keys</title><p id="key" style="width:300px;height:200px;background:#246">-</p><script>' +
+          'document.addEventListener("keydown", (e) => { document.getElementById("key").textContent = "key:" + e.key; });' +
+          '</script>',
+      },
+    },
+    {
+      version: 1,
+      steps: [
+        { action: 'press', selector: 'body', key: '1' },
+        { action: 'text', selector: '#key', text: 'key:1' },
+      ],
+    },
+  );
+  if (!keys.passed)
+    throw new Error(`静态网页里点击之前按的键没有到页面：${JSON.stringify(keys.report)}`);
+  console.log('检查浏览器烟测通过：静态网页里点击之前按的键到了页面');
   // 画布里打开静态网页不带查询参数：测试要带就明说，不能悄悄丢掉
   const query = await checkApp(apps[0], {
     version: 1,

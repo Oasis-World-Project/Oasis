@@ -156,6 +156,16 @@ export function createChecks({
     }, selector);
   }
 
+  /**
+   * 按键只到拿着键盘焦点的那个文档。静态网页在隔离框里，还没点过页面时焦点在外壳上；body 这类元素又聚不了焦，
+   * 这时对着它按键，被测页面一个键盘事件都收不到（游戏菜单里「按 1 选关」就是这样没反应的）。
+   * 按键前先把焦点交给框，相当于用户已经点进了画布里的作品；焦点已经在框里就不动它。
+   */
+  async function focusApp() {
+    if (kind !== 'static' || (await target.evaluate(() => document.hasFocus()))) return;
+    await page.locator('iframe[title="oasis-live"]').focus();
+  }
+
   /** 一步测试：没通过时抛出说清原因的错误 */
   async function perform(step) {
     const locator = step.selector ? target.locator(step.selector).first() : undefined;
@@ -211,6 +221,7 @@ export function createChecks({
         return;
       case 'press':
         await ready();
+        await focusApp();
         await locator.press(step.key);
         return;
       case 'visible':
