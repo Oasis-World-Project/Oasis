@@ -159,6 +159,8 @@ export const ApplicationFilesCheckBody = z.object({
     .min(1)
     .max(1000),
   cores: BrowserCores,
+  /** 把平台截的画面（打开后的首屏、测试步骤截图）也交回：节点要看画面时用 */
+  screenshots: z.boolean().optional(),
 });
 export type ApplicationFilesCheckBody = z.infer<typeof ApplicationFilesCheckBody>;
 

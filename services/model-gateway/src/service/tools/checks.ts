@@ -122,7 +122,7 @@ export const appCheck: ToolDef = {
   key: 'app.check',
   name: '网页应用自查',
   description:
-    '把网页应用（带 oasis-app.json；自己 out/ 里的，或上游交来的 in/<上游 key>/ 里的）放进和交付检查同一个隔离浏览器里打开，按 oasis-test.json 操作，当场返回页面报错和没通过的步骤；给了 --out 就把完整报告（JSON）存进去。',
+    '把网页应用（带 oasis-app.json；自己 out/ 里的，或上游交来的 in/<上游 key>/ 里的）放进和交付检查同一个隔离浏览器里打开，按 oasis-test.json 操作，当场返回页面报错和没通过的步骤；给了 --out 就把完整报告（JSON）存进去，平台截的画面（打开后的首屏 opening.jpg、测试里 screenshot 步骤和没通过那一步的截图）存在报告旁边，名字是「报告名-截图名」。',
   usage:
     'oasis-tool app.check --dir out/site [--out out/检查报告.json]（--dir 是 oasis-app.json 所在目录；上游交来的写 in/<上游 key>/site）',
   unit: '次（算力单独结算）',
@@ -159,7 +159,13 @@ export const appCheck: ToolDef = {
     const result = await metered(deps, async (cores) => {
       const response = await deps.upstream(() =>
         deps.checks!.inspector.stream('POST', '/internal/applications/check-files', {
-          body: { dir, files: parsed.files, cores },
+          // 给了 --out：除了报告，平台截的画面也要回来，存在报告旁边给节点看
+          body: {
+            dir,
+            files: parsed.files,
+            cores,
+            ...(parsed.report ? { screenshots: true } : {}),
+          },
           // 页面多慢都等（与关卡一致），调用方中断时随之回收浏览器
           signal: deps.signal,
         }),
@@ -184,6 +190,11 @@ export const appCheck: ToolDef = {
                 }),
               ).toString('base64'),
             },
+            ...(result.screenshots ?? []).map((shot) => ({
+              name: shot.name,
+              mediaType: 'image/jpeg',
+              base64: shot.base64,
+            })),
           ]
         : [],
       cost: { costMicro: 0, source: 'provider' },

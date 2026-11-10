@@ -106,6 +106,10 @@ describe('网页应用自查 app.check（ADR 0017）', () => {
       passed: false,
       reason: '页面诊断：页面错误：x is not defined',
       frameCaptured: true,
+      screenshots: [
+        { name: 'opening.jpg', base64: 'AAAA' },
+        { name: 'step-3.jpg', base64: 'BBBB' },
+      ],
       usage: { cores: 2, elapsedMs: 100 },
     });
     const result = await call('app.check', checks, {
@@ -114,10 +118,15 @@ describe('网页应用自查 app.check（ADR 0017）', () => {
       report: true,
       files: FILES,
     });
-    // inspector 按应用在产出里的位置（清单的 root）认，和检查自己 out/ 里的一样
-    expect(calls[0]?.body).toMatchObject({ dir: 'site' });
+    // inspector 按应用在产出里的位置（清单的 root）认，和检查自己 out/ 里的一样；给了 --out 就连截图一起要
+    expect(calls[0]?.body).toMatchObject({ dir: 'site', screenshots: true });
     expect(result.text).toContain('in/build/site：浏览器检查没通过');
-    expect(result.files.map((f) => f.name)).toEqual(['app-check.json']);
+    // 报告在前（沙箱把它原样存到 --out），平台截的画面跟在后面（存在报告旁边）
+    expect(result.files).toMatchObject([
+      { name: 'app-check.json', mediaType: 'application/json' },
+      { name: 'opening.jpg', mediaType: 'image/jpeg' },
+      { name: 'step-3.jpg', mediaType: 'image/jpeg' },
+    ]);
     expect(
       JSON.parse(Buffer.from(result.files[0]!.base64, 'base64').toString('utf8')),
     ).toMatchObject({
@@ -128,6 +137,7 @@ describe('网页应用自查 app.check（ADR 0017）', () => {
     // 没给 --out（AI 节点自查）：不交文件，out/ 里不会多出一份报告
     const plain = await call('app.check', checks, { dir: 'site', files: FILES });
     expect(plain.files).toEqual([]);
+    expect(calls[1]?.body).not.toHaveProperty('screenshots');
     expect(plain.text).toContain('out/site：浏览器检查没通过');
   });
   it('不在任务节点里调用、旧版沙箱没带文件时拒绝，不开浏览器、不冻结算力', async () => {

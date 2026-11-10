@@ -2,13 +2,19 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, relative, resolve, sep } from 'node:path';
 
-/** 文件要存到哪：给了 --out 就用它（多个文件时加 -1、-2），否则放进 out/ 用工具给的名字 */
+/**
+ * 文件要存到哪：给了 --out 就用它（多个文件时加 -1、-2），否则放进 out/ 用工具给的名字。
+ * 几个文件后缀不一样、其中只有一个和 --out 同后缀时，它就是主结果，原样存到 --out（工具节点、下游都按这个路径找它）；
+ * 其余的是附带的（如 app.check 的截图），放在旁边，名字接在后面。
+ */
 export function targetsFor(files: { name: string }[], out: string | undefined): string[] {
   if (!out) return files.map((f) => join('out', f.name));
   if (files.length === 1) return [out];
   const ext = extname(out);
   const stem = ext ? out.slice(0, -ext.length) : out;
   const mixed = new Set(files.map((f) => extname(f.name))).size > 1;
+  const main = mixed && ext ? files.filter((f) => extname(f.name) === ext) : [];
+  if (main.length === 1) return files.map((f) => (f === main[0] ? out : `${stem}-${f.name}`));
   return files.map((f, i) => `${stem}-${i + 1}${mixed ? extname(f.name) : ext || extname(f.name)}`);
 }
 

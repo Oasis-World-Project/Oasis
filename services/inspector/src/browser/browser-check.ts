@@ -176,6 +176,7 @@ export function createBrowserChecks(deps: {
     cores: number,
     signal: AbortSignal | undefined,
     keep: boolean,
+    shots = keep,
   ): Promise<ApplicationCheckReply> {
     const { outcome, usage } = await browse(prepared.bundle, prepared.plan, cores, signal);
     if (!('report' in outcome)) return { ...outcome, usage };
@@ -184,11 +185,11 @@ export function createBrowserChecks(deps: {
       reason: outcome.report.passed ? null : failureReason(outcome.report),
       frameCaptured: true,
       report: outcome.report,
-      // 交付关卡留档：绑定实际检查的运行包，带上平台截的画面；节点自查当场看结论就够了
-      ...(keep
+      // 交付关卡留档：绑定实际检查的运行包
+      ...(keep ? { application: prepared.application, inputSha256: prepared.inputSha256 } : {}),
+      // 平台截的画面：关卡留档时带上；节点自查要看画面时（shots）也带上，不要就只给结论
+      ...(shots
         ? {
-            application: prepared.application,
-            inputSha256: prepared.inputSha256,
             screenshots: [
               ...(outcome.opening ? [{ name: 'opening.jpg', base64: outcome.opening }] : []),
               ...outcome.steps,
@@ -238,7 +239,7 @@ export function createBrowserChecks(deps: {
           async (path) => files.get(path)!,
         );
         if ('reason' in prepared) return unopened(prepared, body.cores);
-        return conclude(prepared, body.cores, signal, false);
+        return conclude(prepared, body.cores, signal, false, body.screenshots === true);
       }, signal),
 
     /** 外站测试（website.test）：只按测试计划访问放行来源的 HTTPS 页面 */

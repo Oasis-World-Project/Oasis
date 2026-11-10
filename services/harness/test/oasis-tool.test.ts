@@ -48,7 +48,14 @@ describe('oasis-tool', () => {
         [files[0]!, { name: 'project.zip', mediaType: 'application/zip', base64: '' }],
         'out/渲染.png',
       ),
-    ).toEqual(['out/渲染-1.png', 'out/渲染-2.zip']);
+    ).toEqual(['out/渲染.png', 'out/渲染-project.zip']);
+    // 后缀不一样、只有一个和 --out 同后缀：它是主结果，原样存到 --out；附带的放旁边（app.check 的报告和截图）
+    expect(
+      targetsFor(
+        [{ name: 'app-check.json' }, { name: 'opening.jpg' }, { name: 'step-3.jpg' }],
+        'out/检查报告.json',
+      ),
+    ).toEqual(['out/检查报告.json', 'out/检查报告-opening.jpg', 'out/检查报告-step-3.jpg']);
     expect(targetsFor(files, undefined)).toEqual([
       join('out', 'image-1.png'),
       join('out', 'image-2.png'),

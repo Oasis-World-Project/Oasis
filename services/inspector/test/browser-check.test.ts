@@ -147,6 +147,15 @@ describe('网页的浏览器检查', () => {
     expect(test).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(opened).toEqual([]);
+    // 节点要看画面（app.check --out）：平台截的首屏和步骤截图一并交回，仍然不留档
+    const shown = await checks.checkFiles({
+      dir: 'site',
+      files: uploaded(app),
+      cores: 1,
+      screenshots: true,
+    });
+    expect(shown.application).toBeUndefined();
+    expect(shown.screenshots?.map((shot) => shot.name)).toContain('opening.jpg');
     const missing = await checks.checkFiles({
       dir: 'other',
       files: [{ path: 'index.html', contentBase64: 'AA==' }],
