@@ -2,7 +2,7 @@
 // - 开跑：持续目标，带上下文、工具和预算；交出产出后过关卡。
 // - 停止后继续：接着停下的那次运行的会话；那次运行已经交出产出、又没有新要求时直接重新过关卡。
 // - 失败：原会话的工作目录还在就接着做，不把已付费的工作从头重放；否则从头做。
-// - 运行中花费越过份额的 1.5 倍、2 倍时各提醒一次收尾（节点在会话里看不到花费）。
+// - 运行中花费越过份额的 1.5 倍、2 倍时各告诉它一次花了多少（节点在会话里看不到花费）；接着做还是交付由它判断（ADR 0028）。
 import { HttpError } from '@oasis/service-kit';
 import type { WorkConfig } from '../../repo/schema.ts';
 import type { NodeOf, NodeRun, Snapshot } from '../../repo/task-store.ts';
@@ -21,7 +21,7 @@ type WorkNode = NodeOf<'work'>;
 
 const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
 
-/** 节点花费到份额的这些倍数时各提醒一次收尾（用户 2026-11-07 同意 1.5 倍、2 倍） */
+/** 节点花费到份额的这些倍数时各提醒一次（用户 2026-11-07 同意 1.5 倍、2 倍；2026-11-10 起只报数字，不要求收尾） */
 const NUDGE_AT = [1.5, 2];
 
 /** 预算和进度：只给事实，节点自己掂量 */
@@ -33,7 +33,7 @@ function budgetPart(b: NonNullable<NodeContext['budget']>): string {
       : [`整个任务已花 ${usd(b.spentMicro)}`]),
     `已经跑了 ${b.elapsedMinutes} 分钟${b.taskMinutes ? `，预计总用时约 ${b.taskMinutes} 分钟` : ''}`,
   ];
-  return `【预算和用时】${facts.join('；')}。预算是参考不是上限，但花的是用户的钱、用户也在等：够用就交。`;
+  return `【预算和用时】${facts.join('；')}。预算和预计用时都是参考，不是上限。`;
 }
 
 /** 节点能用的外部工具：都通过沙箱里的 oasis-tool 命令调用，用法让 AI 自己查 */
@@ -187,7 +187,7 @@ export const work: NodeKindPlugin<'work'> = {
       : undefined;
     return {
       config: { ...node.config, budgetNudges: crossed },
-      text: `【系统提醒】这一步已花 ${usd(spentMicro)}（分到约 ${usd(share)}）${minutes === undefined ? '' : `，已经跑了 ${minutes} 分钟`}。请收尾：把现有成果整理好交出来，别再打磨。`,
+      text: `【系统提醒】这一步已花 ${usd(spentMicro)}（分到约 ${usd(share)}）${minutes === undefined ? '' : `，已经跑了 ${minutes} 分钟`}。预算是参考不是上限，接着做还是现在交付由你判断。`,
     };
   },
 };

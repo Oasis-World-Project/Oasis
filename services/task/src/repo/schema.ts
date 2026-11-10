@@ -67,7 +67,7 @@ interface CommonConfig {
 export interface WorkConfig extends CommonConfig {
   /** 要用的外部工具（model：规划员按预算选的型号） */
   tools?: { key: string; uses: number; model?: string }[];
-  /** 运行中已经发过几次「超预算请收尾」的提醒（1.5 倍、2 倍各一次，2026-11-07） */
+  /** 运行中已经发过几次超预算提醒（1.5 倍、2 倍各一次，2026-11-07；只报已花多少，ADR 0028） */
   budgetNudges?: number;
 }
 

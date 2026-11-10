@@ -37,7 +37,7 @@ export function branchParts(node: Node, itemIndex: number | undefined): string[]
   const version = node.config.version;
   if (version)
     parts.push(
-      `【多版】这是同一步的第 ${version.k} 版（共 ${version.n} 版），做完会和其他版比较后选一版：走你自己的方向，不要做成最保守的那种。`,
+      `【多版】这是同一步的第 ${version.k} 版（共 ${version.n} 版）。各版同时做、互相看不到，都做完后比较，选一版交给下游。`,
     );
   return parts;
 }

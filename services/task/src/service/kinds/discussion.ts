@@ -38,7 +38,7 @@ function speechPrompt(input: {
 }): string {
   const ask = [
     `这是第 ${input.round} 轮（共 ${input.rounds} 轮）。`,
-    '直接在你最后一条消息里说出你的发言，不用写文件，也不用调工具，除非你需要看 in/ 里的材料。',
+    '发言就是你最后一条消息的内容，不用写文件。',
   ].join('');
   const respond = '请回应：同意什么、反对什么、还要补充什么。';
   if (input.round === 1 || input.history) {

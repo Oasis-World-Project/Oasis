@@ -96,7 +96,9 @@ describe('规划（从任务单开始）', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({ runId: run });
     expect(messages[0]?.text).toContain('已花 $0.16（分到约 $0.10）');
-    expect(messages[0]?.text).toContain('请收尾');
+    // 只报数字，接着做还是交付由节点判断（ADR 0028）
+    expect(messages[0]?.text).toContain('由你判断');
+    expect(messages[0]?.text).not.toContain('收尾');
     await settle(3, 10_000);
     expect(messages).toHaveLength(1);
     await settle(4, 50_000);
@@ -165,6 +167,9 @@ describe('规划（从任务单开始）', () => {
     const prompt = runOf('draw', detail).prompt;
     expect(prompt).toContain('规划建议用：image.generate');
     expect(prompt).toContain('oasis-tool list');
+    // 预算只给事实，不催它早交（ADR 0028）
+    expect(prompt).toContain('预算和预计用时都是参考，不是上限');
+    expect(prompt).not.toContain('够用就交');
   });
 
   it('方案里用了不能用的工具：退回给规划员改', async () => {

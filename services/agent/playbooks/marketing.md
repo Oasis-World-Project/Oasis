@@ -2,5 +2,5 @@
 
 > 适用：商品营销、多平台文案、社媒配图、商品图、广告素材和平台 A/B 内容方案。
 
-- 商品图用 `image.generate --ref 主图`，中文用 Pillow 排；批量文案可用 `text.batch`，判断类问题可用 `jev.decide`（很便宜）。
+- 商品图可用 `image.generate --ref 主图` 保持商品一致，中文可用 Pillow 排；批量文案可用 `text.batch`，判断类问题可用 `jev.decide`（很便宜）。
 - 只产出内容，不会真的投放或发布。

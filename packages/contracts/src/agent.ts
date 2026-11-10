@@ -42,8 +42,8 @@ export const ModelRoute = z.object({
 export type ModelRoute = z.infer<typeof ModelRoute>;
 
 /**
- * AI 团队的档位（2026-11-05 用户决定）：干活节点和规划员用旗舰/强力型号，
- * 快速档（私聊用的省钱型号）只做机械的小事。
+ * AI 团队的档位（2026-11-05 用户决定登记各家最强的型号）：旗舰、强力，加上快速档（私聊用的省钱型号）。
+ * 节点用哪一档由规划员按任务判断，提示里只写各档是什么（ADR 0028）。
  */
 export const ModelTier = z.enum(['flagship', 'strong', 'fast']);
 export type ModelTier = z.infer<typeof ModelTier>;

@@ -24,12 +24,12 @@ const TIER_NAMES = {
   custom: '自定义',
 } as const;
 
-/** 预算：一句话，是参考不是上限 */
+/** 预算：只讲事实——是参考不是上限，怎么取舍由规划员判断（ADR 0028） */
 function budgetPart(sheet: TaskSheet): string {
   const budget = sheet.budget;
   return budget
-    ? `【预算】用户选了「${TIER_NAMES[budget.tier]}」档：约 ${usd(budget.micro)}、${budget.minutes} 分钟左右。这是参考不是上限，按它挑模型和工具。`
-    : '【预算】用户没有选预算档，按常规质量安排。';
+    ? `【预算】用户选了「${TIER_NAMES[budget.tier]}」档：约 ${usd(budget.micro)}、${budget.minutes} 分钟左右。这是参考不是上限；方案的预估花费会显示给用户。`
+    : '【预算】用户没有选预算档。';
 }
 
 /** 规划员写的方案：工作流 + 每样交付物由哪个节点负责 */
@@ -125,7 +125,7 @@ export function resourceSections(input: PlannerResources): string[] {
         .join('\n')
     : '（现在没有可用的工具）';
   return [
-    `【可以用的模型】\n${models}`,
+    `【可以用的模型】（档次：旗舰是各家最强的型号；强力次一档，各有专长；快速是私聊用的轻量型号，最便宜也最快，复杂推理和写代码的能力弱于前两档）\n${models}`,
     `【可以用的工具】（干活节点里用 oasis-tool 调用，方案里写成 {"key":"image.generate","uses":3,"model":"型号"}；uses 是预计用几个计费单位——看下面单价「每X」的 X（张、秒、次、作业……），是数量不是金额，生成 3 张图就写 3；工具节点的步骤按「参数」写，* 是必填）\n${tools}`,
     ...(input.environment
       ? [
@@ -155,7 +155,10 @@ export function exampleNode(key: string, title: string, goal: string, file: stri
   };
 }
 
-/** 给规划员的说明：只讲清任务、资源和方案格式，怎么排由规划员自己判断（用户 2026-11-07：规则只留最重要的） */
+/**
+ * 给规划员的说明：只讲清任务、资源和方案格式，怎么排由规划员自己判断（用户 2026-11-07：规则只留最重要的）。
+ * 不带倾向（ADR 0028，用户 2026-11-10）：不说节点、版数越少越好或越多越好，也不替它定用哪一档模型。
+ */
 export function plannerPrompt(
   input: PlannerResources & { brief: string; sheet: TaskSheet },
 ): string {
@@ -184,8 +187,7 @@ export function plannerPrompt(
   };
   return [
     '你是 Oasis 的规划员。用户确认了下面的任务单，你来安排 AI 团队怎么做。',
-    '用最简单、能把交付物做好的方案：简单任务一个节点就够，确实需要分工或并行才拆。你只排方案，不要动手做或试跑实现，那是节点的事。',
-    '省钱靠少排节点、少做几版，不靠换弱模型：写代码、做 3D、做网页这类难活用旗舰或强力档模型。',
+    '排几个节点、用哪种节点、哪些同时做、要不要做几版、各用什么模型和工具，都由你按这件任务本身判断：没有越少越好，也没有越多越好。你只排方案，不要动手做或试跑实现，那是节点的事。',
     `【任务】\n${input.brief}`,
     `【任务单】\n${JSON.stringify(input.sheet)}`,
     budgetPart(input.sheet),
@@ -361,6 +363,6 @@ export function budgetProblems(
   return [
     `方案估价约 ${usd(totalMicro)}，是任务单预算 ${usd(budget)} 的 ${Math.round(totalMicro / budget)} 倍。` +
       (lines.length ? `最贵的：${lines.join('；')}。` : '') +
-      'uses 是数量（几张、几秒、几次），不是金额；按实际要用的数量改，让方案大致落在预算内。',
+      'uses 是数量（几张、几秒、几次），不是金额；请核对各项数量，写错了就改。',
   ];
 }

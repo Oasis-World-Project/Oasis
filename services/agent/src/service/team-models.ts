@@ -1,5 +1,5 @@
 // AI 团队（规划员和干活节点）能用的型号（2026-11-05 用户决定）。
-// 私聊用的是 models 表里各家的省钱型号；干活要用各家最强的型号，不替用户省钱。
+// 私聊用的是 models 表里各家的省钱型号；这里登记各家最强的型号（旗舰、强力），节点用哪个由规划员判断（ADR 0028）。
 // 型号 ID 照 OpenRouter 目录（2026-11-05 核对）；网络受限时用户可以打开「只用国内模型」，国外厂商的就不列给他的 AI 团队（ADR 0027）。
 import type { CatalogEntry } from '@oasis/contracts/agent';
 
@@ -9,7 +9,7 @@ const TEXT = ['text'];
 const IMAGE = ['text', 'image'];
 
 export const TEAM_MODELS: TeamModel[] = [
-  // ---- 旗舰：核心产出（写代码、做 3D、设计、长文、复杂推理）默认用这些 ----
+  // ---- 旗舰：各家最强的型号 ----
   {
     key: 'deepseek',
     name: 'DeepSeek V4 Pro',

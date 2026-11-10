@@ -34,7 +34,7 @@ export function createModelService(repo: ModelRepo) {
     },
 
     /**
-     * 规划员能挑的模型：AI 团队的旗舰和强力型号，加上私聊用的省钱型号（快速档，只做机械的小事；
+     * 规划员能挑的模型：AI 团队的旗舰和强力型号，加上私聊用的省钱型号（快速档；用不用由规划员判断，
      * 旧任务的节点也还认得出是谁）。
      */
     async catalog(): Promise<CatalogEntry[]> {

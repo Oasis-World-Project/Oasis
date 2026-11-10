@@ -102,7 +102,7 @@ describe('规划门', () => {
       problems: [expect.stringContaining('最多 5 条')],
     });
   });
-  it('规划员看到各型号的档位和能读什么；默认最简单的方案、不动手试跑', () => {
+  it('规划员看到各型号的档位和能读什么；怎么排由它判断、不带倾向，不动手试跑（ADR 0028）', () => {
     const prompt = plannerPrompt({
       brief: 'b',
       sheet,
@@ -117,8 +117,19 @@ describe('规划门', () => {
     expect(prompt).toContain('deepseek/x（DeepSeek，v；旗舰；能直接读：image）');
     expect(prompt).toContain('deepseek/fast（DeepSeek，v；快速；只读文字）');
     expect(prompt).toContain('用户没有选预算档');
-    expect(prompt).toContain('简单任务一个节点就够');
+    expect(prompt).toContain('没有越少越好，也没有越多越好');
+    expect(prompt).toContain('快速是私聊用的轻量型号');
     expect(prompt).toContain('不要动手做或试跑实现');
+    // 不把选择往一边推：少排、少做、只在…时才用、指定用哪一档
+    for (const nudge of [
+      '一个节点就够',
+      '省钱靠',
+      '难活用',
+      '只在真要',
+      '只给看运气',
+      '按常规质量',
+    ])
+      expect(prompt).not.toContain(nudge);
   });
   it('节点所需能力必须来自实测环境，不能把包可安装当成浏览器已就绪', () => {
     const environment = {
