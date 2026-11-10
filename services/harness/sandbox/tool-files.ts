@@ -78,20 +78,48 @@ export async function localImages(
 const APP_MAX_FILES = 1000;
 const APP_MAX_BYTES = 25 * 1024 * 1024;
 
+/** 清单里写的 root（应用在做它的那个节点的产出里的位置）；读不出来返回 undefined，留给检查去说清楚 */
+async function manifestRoot(folder: string): Promise<string | undefined> {
+  try {
+    const manifest = JSON.parse(await readFile(join(folder, 'oasis-app.json'), 'utf8')) as {
+      root?: unknown;
+    };
+    return typeof manifest.root === 'string' ? manifest.root.replace(/\/+$/, '') : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * app.check：浏览器检查在平台的隔离容器里跑（ADR 0024），读不到沙箱，所以把 out/<dir> 里的文件
- * 随调用带上。只认普通文件、不跟随符号链接；超过上限就说清楚，交付后关卡照样会检查。
+ * app.check：浏览器检查在平台的隔离容器里跑（ADR 0024），读不到沙箱，所以把应用目录里的文件随调用带上。
+ * 应用可以是这个节点自己做的（out/<dir>），也可以是上游交来的（in/<上游 key>/<dir>，工具节点检查上游的
+ * 网页就是这种）。只认普通文件、不跟随符号链接；超过上限就说清楚，交付后关卡照样会检查。
+ * 交给检查的 dir 是「应用在做它的那个节点的产出里的位置」，也就是清单里的 root：自己做的是 out/ 之后的部分；
+ * 上游交来的在 in/<上游 key>/ 之后（展开节点的每一条在 in/<上游 key>/<条目号>/ 之后），按清单写的 root 认。
  */
 export async function appFiles(
   args: Record<string, unknown>,
 ): Promise<{ path: string; contentBase64: string }[]> {
-  const usage = '--dir 写 oasis-app.json 所在的目录，如 out/site';
+  const usage =
+    '--dir 写 oasis-app.json 所在的目录：自己做的如 out/site，上游交来的如 in/<上游 key>/site';
   if (typeof args.dir !== 'string') throw new Error(usage);
-  const dir = args.dir.replace(/^(\.\/)?(\/workspace\/)?(out\/)?/, '').replace(/\/+$/, '');
-  if (!dir || dir.split('/').some((part) => !part || part === '.' || part === '..'))
-    throw new Error(usage);
+  const given = args.dir.replace(/^(\.\/)?(\/workspace\/)?/, '').replace(/\/+$/, '');
+  // 没写 out/、in/ 的按 out/ 下的目录算
+  const path = /^(?:out|in)\//.test(given) ? given : `out/${given}`;
+  const parts = path.split('/');
+  if (parts.some((part) => !part || part === '.' || part === '..')) throw new Error(usage);
+  const upstream = parts[0] === 'in';
+  const outDir = resolve(process.env.OASIS_OUT_DIR ?? 'out');
+  const root = upstream ? resolve(outDir, '..', path) : resolve(outDir, parts.slice(1).join('/'));
+  let dir = parts.slice(upstream ? 2 : 1).join('/');
+  if (upstream) {
+    const declared = await manifestRoot(root);
+    if (declared && path.endsWith(`/${declared}`)) dir = declared;
+  }
+  if (!dir) throw new Error(usage);
   args.dir = dir;
-  const root = resolve(process.env.OASIS_OUT_DIR ?? 'out', dir);
+  // 结果里说的是实际检查的那个目录
+  args.shown = path;
   const files: { path: string; contentBase64: string }[] = [];
   let total = 0;
   const walk = async (folder: string): Promise<void> => {
@@ -102,7 +130,7 @@ export async function appFiles(
         total += (await stat(full)).size;
         if (files.length >= APP_MAX_FILES || total > APP_MAX_BYTES)
           throw new Error(
-            `out/${dir} 超过自查上限（${APP_MAX_FILES} 个文件、25 MB），自查不了；交付后关卡照样会检查`,
+            `${path} 超过自查上限（${APP_MAX_FILES} 个文件、25 MB），自查不了；交付后关卡照样会检查`,
           );
         files.push({
           path: relative(root, full).split(sep).join('/'),
@@ -115,7 +143,7 @@ export async function appFiles(
     await walk(root);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-      throw new Error(`out/${dir} 不存在`, { cause: error });
+      throw new Error(`${path} 不存在`, { cause: error });
     throw error;
   }
   return files;

@@ -90,6 +90,26 @@ describe('关卡的规则检查', () => {
       '缺少文件 out/数据.csv',
     ]);
   });
+  it('不带通配符的要求写的是目录时，目录里有文件就算有（不当成一个叫这个名字的文件去找）', () => {
+    const outputs = [
+      { path: 'site/index.html', size: 10 },
+      { path: 'site/js/app.js', size: 10 },
+      { path: 'sitemap.txt', size: 10 },
+    ];
+    // 2026-11-10：工具节点检查 in/build/site，上游被要求交出「site」，以前报「缺少文件 out/site」
+    expect(checkRules(outputs, ['site', 'site/', 'site/js'])).toEqual([]);
+    // 只认整段目录名：sitemap.txt 不算 site 目录里的文件
+    expect(checkRules([{ path: 'sitemap.txt', size: 10 }], ['site'])).toEqual([
+      '缺少文件 out/site',
+    ]);
+    expect(checkRules([{ path: 'site/index.html', size: 0 }], ['site'])).toEqual([
+      '文件 out/site 是空的',
+    ]);
+    // 交付写目录名：目录里的文件都交付，缺清单的提醒照常
+    expect(checkWebManifest([{ path: 'site/index.html', size: 10 }], ['site'])[0]).toContain(
+      'out/site/ 里没有 oasis-app.json',
+    );
+  });
 });
 
 /** 假的服务：按路径返回固定内容，记下请求；和真的客户端一样按约定的格式校验回答 */

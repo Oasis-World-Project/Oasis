@@ -217,7 +217,11 @@ async function wait(id: string, out: string | undefined): Promise<void> {
 
 async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
-  if (key === 'app.check') args.files = await appFiles(args);
+  if (key === 'app.check') {
+    args.files = await appFiles(args);
+    // 给了 --out（工具节点把检查结果交给下游）就要一份完整报告存进去；没给只看终端里的结论
+    if (out) args.report = true;
+  }
   const renderInputs: string[] = [];
   if (key === '3d.render') {
     if (typeof args.scene !== 'string') throw new Error('--scene 需要本地 scene.json');

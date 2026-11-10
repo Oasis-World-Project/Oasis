@@ -18,6 +18,7 @@ import { z } from 'zod';
 import type { RevisionPlanNode, RevisionState } from '../repo/schema.ts';
 import type { Edge, Node } from '../repo/task-store.ts';
 import { kindOf } from './kinds/index.ts';
+import { patternRegExp } from './output-files.ts';
 import { withInputExpects } from './plan.ts';
 import {
   estimatePlan,
@@ -266,7 +267,8 @@ export function checkRevisionPlan(
   for (const node of nodes)
     for (const file of kindOf(node).inputFiles?.(node) ?? []) {
       const source = reused.has(file.from) ? old.get(file.from) : undefined;
-      if (source && !source.outputs.some((o) => o.path === file.path))
+      // 引用的可以是一个文件、一个目录或带 * 的一批文件：和关卡用同一套匹配
+      if (source && !source.outputs.some((o) => patternRegExp(file.path).test(o.path)))
         problems.push(
           `沿用的「${file.from}」上一版没有交出 ${file.path}，节点「${node.key}」要用它`,
         );

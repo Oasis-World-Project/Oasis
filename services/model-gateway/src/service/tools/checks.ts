@@ -16,8 +16,12 @@ import type { ToolDef, ToolDeps } from './kit.ts';
 
 const AppCheckArgs = z.object({
   dir: z.string().min(1).max(220),
-  /** 沙箱里的 oasis-tool 读好 out/<dir> 的文件一起带来（相对 dir 的路径） */
+  /** 沙箱里的 oasis-tool 读好应用目录的文件一起带来（相对 dir 的路径） */
   files: z.array(z.object({ path: z.string(), contentBase64: z.string() })).optional(),
+  /** 实际检查的目录在沙箱里的路径（out/site、in/<上游 key>/site），结果里照这个说；旧版沙箱不带 */
+  shown: z.string().min(1).max(260).optional(),
+  /** 调用时给了 --out：把完整报告作为文件交回，存进去给下游用 */
+  report: z.boolean().optional(),
 });
 
 /** 检查浏览器的算力：先冻结，按 inspector 报回的实际用时结算；检查没做完不收钱 */
@@ -53,12 +57,12 @@ async function metered<T extends { usage: ComputeUsage }>(
 }
 
 /** app.check 的结果说成节点能直接照着改的话：原因、页面报错、没覆盖到的地方 */
-function appCheckText(dir: string, result: ApplicationCheckResult): string {
+function appCheckText(shown: string, result: ApplicationCheckResult): string {
   const report = result.report;
   const lines = [
     result.passed
-      ? `out/${dir}：浏览器检查通过（交付后关卡复跑的是同一套检查）。`
-      : `out/${dir}：浏览器检查没通过：${result.reason ?? '原因未返回'}`,
+      ? `${shown}：浏览器检查通过（交付后关卡复跑的是同一套检查）。`
+      : `${shown}：浏览器检查没通过：${result.reason ?? '原因未返回'}`,
     ...(report?.steps ?? [])
       .filter((step) => step.status === 'failed')
       .map((step) => `- 第 ${step.index + 1} 步 ${step.action}：${step.error ?? '未通过'}`),
@@ -118,8 +122,9 @@ export const appCheck: ToolDef = {
   key: 'app.check',
   name: '网页应用自查',
   description:
-    '把 out/ 里的网页应用（带 oasis-app.json）放进和交付检查同一个隔离浏览器里打开，按 oasis-test.json 操作，当场返回页面报错和没通过的步骤。',
-  usage: 'oasis-tool app.check --dir out/site（--dir 是 oasis-app.json 所在目录）',
+    '把网页应用（带 oasis-app.json；自己 out/ 里的，或上游交来的 in/<上游 key>/ 里的）放进和交付检查同一个隔离浏览器里打开，按 oasis-test.json 操作，当场返回页面报错和没通过的步骤；给了 --out 就把完整报告（JSON）存进去。',
+  usage:
+    'oasis-tool app.check --dir out/site [--out out/检查报告.json]（--dir 是 oasis-app.json 所在目录；上游交来的写 in/<上游 key>/site）',
   unit: '次（算力单独结算）',
   estimateMicro: 0,
   holdMicro: () => 1,
@@ -130,9 +135,9 @@ export const appCheck: ToolDef = {
   cli: [
     {
       name: 'dir',
-      kind: 'text',
+      kind: 'dir',
       required: true,
-      description: 'oasis-app.json 所在目录，如 out/site',
+      description: 'oasis-app.json 所在目录：自己做的如 out/site，上游交来的如 in/<上游 key>/site',
     },
   ],
   long: false,
@@ -149,7 +154,8 @@ export const appCheck: ToolDef = {
         'sandbox_outdated',
         'oasis-tool 版本过旧，没有带上 out/ 里的文件，app.check 用不了（沙箱镜像需要重建：pnpm sandbox:build）。这次先跳过自查，交付后关卡照常检查。',
       );
-    if (!parsed.files.length) throw new HttpError(400, 'invalid_args', `out/${dir} 里没有文件`);
+    const shown = parsed.shown ?? `out/${dir}`;
+    if (!parsed.files.length) throw new HttpError(400, 'invalid_args', `${shown} 里没有文件`);
     const result = await metered(deps, async (cores) => {
       const response = await deps.upstream(() =>
         deps.checks!.inspector.stream('POST', '/internal/applications/check-files', {
@@ -161,9 +167,25 @@ export const appCheck: ToolDef = {
       return ApplicationCheckReply.parse(await response.json());
     });
     return {
-      text: appCheckText(dir, result),
+      text: appCheckText(shown, result),
       data: result.report ?? null,
-      files: [],
+      // 调用时给了 --out（工具节点把检查结果交给下游）：完整报告作为文件交回，沙箱存到 --out
+      files: parsed.report
+        ? [
+            {
+              name: 'app-check.json',
+              mediaType: 'application/json',
+              base64: Buffer.from(
+                JSON.stringify({
+                  dir: shown,
+                  passed: result.passed,
+                  ...(result.reason ? { reason: result.reason } : {}),
+                  report: result.report ?? null,
+                }),
+              ).toString('base64'),
+            },
+          ]
+        : [],
       cost: { costMicro: 0, source: 'provider' },
     };
   },

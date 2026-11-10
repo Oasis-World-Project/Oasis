@@ -35,7 +35,7 @@ function fakeChecks(result: unknown) {
 type Run = (
   deps: unknown,
   args: Record<string, unknown>,
-) => Promise<{ text: string; data?: unknown }>;
+) => Promise<{ text: string; data?: unknown; files: { name: string; base64: string }[] }>;
 const runOf = (key: string) => (TOOLS.find((t) => t.key === key) as unknown as { run: Run }).run;
 const call = (
   key: string,
@@ -100,6 +100,35 @@ describe('网页应用自查 app.check（ADR 0017）', () => {
     expect(text).toContain('THREE is not defined');
     expect(text).toContain('第 2 步 click：找不到 #start');
     expect(text).toContain('没检查到：音频未检查');
+  });
+  it('检查上游交来的网页：结论里说的是实际检查的目录；给了 --out 才把完整报告作为文件交回', async () => {
+    const { checks, calls } = fakeChecks({
+      passed: false,
+      reason: '页面诊断：页面错误：x is not defined',
+      frameCaptured: true,
+      usage: { cores: 2, elapsedMs: 100 },
+    });
+    const result = await call('app.check', checks, {
+      dir: 'site',
+      shown: 'in/build/site',
+      report: true,
+      files: FILES,
+    });
+    // inspector 按应用在产出里的位置（清单的 root）认，和检查自己 out/ 里的一样
+    expect(calls[0]?.body).toMatchObject({ dir: 'site' });
+    expect(result.text).toContain('in/build/site：浏览器检查没通过');
+    expect(result.files.map((f) => f.name)).toEqual(['app-check.json']);
+    expect(
+      JSON.parse(Buffer.from(result.files[0]!.base64, 'base64').toString('utf8')),
+    ).toMatchObject({
+      dir: 'in/build/site',
+      passed: false,
+      reason: '页面诊断：页面错误：x is not defined',
+    });
+    // 没给 --out（AI 节点自查）：不交文件，out/ 里不会多出一份报告
+    const plain = await call('app.check', checks, { dir: 'site', files: FILES });
+    expect(plain.files).toEqual([]);
+    expect(plain.text).toContain('out/site：浏览器检查没通过');
   });
   it('不在任务节点里调用、旧版沙箱没带文件时拒绝，不开浏览器、不冻结算力', async () => {
     const { checks, calls, compute } = fakeChecks({});

@@ -292,6 +292,43 @@ describe('oasis-tool 长任务', () => {
     await expect(main(['app.check', '--dir', '../etc'])).rejects.toThrow('--dir');
   });
 
+  it('app.check 也能检查上游交来的网页（in/<上游 key>/…）：按清单的 root 认应用，给了 --out 就要完整报告', async () => {
+    // 2026-11-10：规划员让工具节点检查 in/build/site，以前一律到 out/ 下找，报「out/in/build/site 不存在」
+    const manifest = JSON.stringify({
+      version: 1,
+      kind: 'static',
+      root: 'site',
+      entry: 'index.html',
+    });
+    for (const folder of [
+      join(dir, 'in', 'build', 'site'),
+      join(dir, 'in', 'pages', '02', 'site'),
+    ]) {
+      await mkdir(folder, { recursive: true });
+      await writeFile(join(folder, 'index.html'), '<h1>up</h1>');
+      await writeFile(join(folder, 'oasis-app.json'), manifest);
+    }
+    vi.stubEnv('OASIS_OUT_DIR', join(dir, 'out'));
+    await main(['app.check', '--dir', 'in/build/site', '--out', join(dir, 'out', 'report.json')]);
+    let sent = received.at(-1)!;
+    expect(sent.args).toMatchObject({ dir: 'site', shown: 'in/build/site', report: true });
+    expect(sent.args.files).toEqual(
+      expect.arrayContaining([
+        { path: 'index.html', contentBase64: Buffer.from('<h1>up</h1>').toString('base64') },
+        { path: 'oasis-app.json', contentBase64: Buffer.from(manifest).toString('base64') },
+      ]),
+    );
+    // 展开节点的每一条在 in/<上游 key>/<条目号>/ 下：条目号不算进应用的位置
+    await main(['app.check', '--dir', '/workspace/in/pages/02/site/']);
+    sent = received.at(-1)!;
+    expect(sent.args).toMatchObject({ dir: 'site', shown: 'in/pages/02/site' });
+    expect(sent.args.report).toBeUndefined();
+    await expect(main(['app.check', '--dir', 'in/build/none'])).rejects.toThrow(
+      'in/build/none 不存在',
+    );
+    await expect(main(['app.check', '--dir', 'in/build'])).rejects.toThrow('--dir');
+  });
+
   it('web.fetch --out 传全文模式并写入完整 Markdown，终端只显示摘要', async () => {
     printed.length = 0;
     await main(['web.fetch', '--urls', 'https://example.com', '--out', join(dir, 'sources')]);

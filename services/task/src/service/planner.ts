@@ -68,6 +68,8 @@ function argsText(args: ToolArgSpec[]): string {
         return (a.choices ?? []).join('|');
       case 'path':
         return '文件';
+      case 'dir':
+        return '目录';
       case 'paths':
         return `文件数组${range(a)}`;
       case 'list':

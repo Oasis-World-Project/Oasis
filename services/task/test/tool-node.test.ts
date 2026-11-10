@@ -3,6 +3,7 @@ import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { TOOL_RUN_MODEL } from '@oasis/contracts/harness';
 import { checkToolArgs } from '@oasis/contracts/tool-args';
 import { describe, expect, it } from 'vitest';
+import { checkRules } from '../src/service/gate.ts';
 import { kindOf } from '../src/service/kinds/index.ts';
 import { unitsOf, upstreamFiles } from '../src/service/kinds/tool.ts';
 import {
@@ -314,5 +315,53 @@ describe('工具节点', () => {
     expect(checkToolArgs(specs, { in: 'in/a/1.mp4,in/a/2.mp4', fps: 30 })[0]).toContain(
       '不认识参数 fps',
     );
+  });
+
+  it('目录参数（app.check 检查上游交来的网页）：要写沙箱里的目录；上游要交出这个目录，目录里有文件就算交了', () => {
+    const withCheck = [
+      ...tools,
+      entry('app.check', {
+        args: [{ name: 'dir', kind: 'dir', required: true, description: '应用目录' }],
+      }),
+    ];
+    const build = {
+      key: 'build',
+      title: '做网页',
+      kind: 'work',
+      goal: '做网页',
+      model: 'deepseek/x',
+      deliver: ['site/**'],
+    };
+    const plan = (dir: string) =>
+      JSON.stringify({
+        nodes: [
+          build,
+          {
+            key: 'check',
+            title: '浏览器自查',
+            kind: 'tool',
+            goal: '检查上游交来的网页',
+            steps: [{ tool: 'app.check', args: { dir }, out: 'out/check-report.json' }],
+          },
+        ],
+        edges: [{ from: 'build', to: 'check' }],
+        deliverables: { 成片: 'build' },
+      });
+    // 不在沙箱目录约定里的写法在规划时就退回，不等到节点开跑才失败
+    const bad = checkPlan(plan('site'), sheet, catalog, withCheck);
+    expect((bad as { problems: string[] }).problems.join('\n')).toContain(
+      '参数 dir 要写沙箱里的目录路径',
+    );
+    const good = checkPlan(plan('in/build/site'), sheet, catalog, withCheck);
+    expect(good).toHaveProperty('plan');
+    const expects = (good as Extract<typeof good, { plan: unknown }>).plan.nodes.find(
+      (n) => n.key === 'build',
+    )!.expects;
+    expect(expects).toEqual(['site']);
+    // 2026-11-10：以前关卡把「site」当成一个文件找，报缺少文件并让上游白返工一次
+    expect(checkRules([{ path: 'site/index.html', size: 10 }], expects)).toEqual([]);
+    expect(
+      resourceSections({ catalog, tools: withCheck, playbooks: [], defaultModel: 'x' })[1],
+    ).toContain('dir*（目录；应用目录）');
   });
 });

@@ -6,7 +6,7 @@ import type { ToolArgSpec } from './tool-args.ts';
 /** 工具的一个命令行参数（定义见 tool-args.ts） */
 export const ToolArgSpecSchema: z.ZodType<ToolArgSpec> = z.object({
   name: z.string(),
-  kind: z.enum(['text', 'number', 'flag', 'choice', 'path', 'paths', 'list', 'json']),
+  kind: z.enum(['text', 'number', 'flag', 'choice', 'path', 'paths', 'dir', 'list', 'json']),
   required: z.boolean().optional(),
   choices: z.array(z.string()).optional(),
   min: z.number().optional(),

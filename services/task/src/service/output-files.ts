@@ -4,17 +4,25 @@ import type { TaskBody } from '@oasis/contracts/task';
 import type { Deliverable } from '../repo/schema.ts';
 import type { Node } from '../repo/task-store.ts';
 
+/**
+ * 路径模式 → 正则：* 匹配一层里的任意字符，** 跨层。
+ * 不带通配符的模式既指这个文件，也指这个目录里的全部文件：「必须交出 site」「交付 site」说的是目录时，
+ * 目录里有文件就算有。2026-11-10：工具节点检查上游的 in/build/site，上游因此被要求交出「site」，
+ * 关卡把它当成一个文件查，报「缺少文件 out/site」，让节点白返工了一次。
+ */
 export function patternRegExp(pattern: string): RegExp {
+  const plain = !pattern.includes('*');
+  const text = plain ? pattern.replace(/\/+$/, '') : pattern;
   let source = '^';
-  for (let i = 0; i < pattern.length; i += 1) {
-    const char = pattern[i]!;
-    if (char === '*' && pattern[i + 1] === '*') {
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i]!;
+    if (char === '*' && text[i + 1] === '*') {
       source += '.*';
       i += 1;
     } else if (char === '*') source += '[^/]*';
     else source += /[.+?^${}()|[\]\\]/.test(char) ? `\\${char}` : char;
   }
-  return new RegExp(`${source}$`);
+  return new RegExp(plain ? `${source}(?:/.*)?$` : `${source}$`);
 }
 
 export function selectDeliverables(deliverables: Deliverable[], nodes: Node[]): Deliverable[] {

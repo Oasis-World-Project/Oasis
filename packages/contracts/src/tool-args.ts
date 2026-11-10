@@ -4,10 +4,11 @@
 
 /**
  * 参数的形状：text 一段文字；number 数字；flag true / false；choice 几个选项之一；
- * path 沙箱里的一个文件；paths 一个或几个文件；list 几段文字；json 结构化内容（如测试计划）。
+ * path 沙箱里的一个文件；paths 一个或几个文件；dir 沙箱里的一个目录（如网页应用所在的目录）；
+ * list 几段文字；json 结构化内容（如测试计划）。
  */
 export type ToolArgKind =
-  'text' | 'number' | 'flag' | 'choice' | 'path' | 'paths' | 'list' | 'json';
+  'text' | 'number' | 'flag' | 'choice' | 'path' | 'paths' | 'dir' | 'list' | 'json';
 
 export interface ToolArgSpec {
   name: string;
@@ -76,6 +77,10 @@ function problemOf(spec: ToolArgSpec, value: unknown, anyPath: boolean): string 
       return typeof value === 'string' && file.test(value)
         ? undefined
         : '要写沙箱里的文件路径（in/上游节点/…、materials/… 或 out/…）';
+    case 'dir':
+      return typeof value === 'string' && file.test(value)
+        ? undefined
+        : '要写沙箱里的目录路径（in/上游节点/…、materials/… 或 out/…）';
     case 'paths':
     case 'list': {
       const items = listOf(value);
