@@ -51,8 +51,12 @@ export function apply(ctx) {
     if (String(agent.session.id) !== request.sessionId || message.source?.kind !== 'user') return;
     if (!open.has(agent)) return;
     defer(agent, () => {
-      if (open.has(agent) && agent.inbox.remove(message.id))
-        agent.inbox.append('next-step', message);
+      // 只挪还排在下一轮的：挪进下一步时 SDK 会为同一条消息再发一次 inserted，那一次不能再挪。
+      // 2026-11-10：原来不分在哪一边就取出再放回，每放一次又触发一次，成了死循环——节点收到超支提醒或
+      // 追问后不再往下做，内存涨到上限后 dsh 退出（「JSON-RPC input closed」）。
+      if (!open.has(agent) || !agent.inbox.nextTurn.some((m) => m.id === message.id)) return;
+      agent.inbox.remove(message.id);
+      agent.inbox.append('next-step', message);
     });
   });
   // 原生委派工具会在 agent/created 时捕获授权，须在更早的会话发布边界衔接。

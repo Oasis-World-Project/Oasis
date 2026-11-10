@@ -22,6 +22,7 @@
 
 - 沙箱里的 `node-goal` 插件：根会话这一轮还开着时，来自用户的新消息（SDK 的 followup，source 为 user）从「下一轮」挪到「下一步」（dsh 的 steer 边界），持续目标下的长回合也能马上看到提醒和追问。
 - harness 的 dsh 适配器不再按「一条消息一轮」数：消息进了会话历史就算收到，之后要等到它所在那一轮的结束通知才算处理完；没有结束通知仍按失败处理。
+- **2026-11-10 修复：挪消息的死循环。** 插件原来的写法是「收到 inserted 就取出这条消息、放进下一步」。但 dsh 把消息放进「下一步」时会为同一条消息再发一次 inserted，插件于是又取出、又放回，没有尽头：dsh 占满一个核、每秒约 4700 次进出、内存每秒涨约 4.5 MB，这一步的模型回答收到了也不再往下处理，约 3 分半后内存到上限、进程退出，节点报「JSON-RPC input closed」。任何在节点运行中送进去的消息都会触发——超支提醒（1.5 倍、2 倍各一次）和用户的追问。2026-11-10 的小游戏任务里「开发小游戏」节点连续两次失败，时间正好是花费越过份额 1.5 倍和 2 倍的那一刻。改为只挪还排在「下一轮」的消息，第二次 inserted 不再处理。
 
 ### 3D 导演台（桌面端为准，ADR 0019）
 
@@ -35,6 +36,7 @@
 
 - harness 单元测试覆盖适配器的新计数方式（消息插进当前轮、缺结束通知仍失败）。
 - `pnpm sandbox:build && pnpm sandbox:build:3d && pnpm sandbox:check:3d`：在真实 Blender 里验证 oasis_blender 导出可预览 GLB、snapshot 出图和拼图、check 焊点后无误报开口且 glTF 校验通过。插件的即时送达要在真实任务里看（运行中追问后，运行事件里应立刻出现那条用户消息）。
+- 2026-11-10 起插件的即时送达有离线测试：`services/harness/src/adapter/test/native.test.ts` 的「模型调用在途时收到的消息……」用真实 dsh 和断网容器里的假模型，在一次模型调用在途时再发一条消息，要求下一步的请求里看得到它、目标照常完成（`OASIS_NATIVE_IMAGE=oasis/harness-sandbox-base:0.2.1-rc.5 pnpm --filter @oasis/harness exec vitest run src/adapter/test/native.test.ts`，不花钱）。修复前这个用例 90 秒超时。之前这条路径只在回归里用假 dsh 跑过，所以死循环一直没被发现。改了 `node-goal.mjs` 要重建两个沙箱镜像（`pnpm sandbox:build && pnpm sandbox:build:3d`）。
 
 ## 4. 实施记录
 

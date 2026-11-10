@@ -23,6 +23,10 @@ const execution = JSON.parse(readFileSync('/workspace/in/.oasis-execution.json',
 const sessionId = execution.sessionId;
 const persistent = mode === 'persistent';
 const attachmentTest = process.env.OASIS_NATIVE_FAULT === 'attachment';
+// 运行中的消息（超支提醒、追问）：模型的一次调用在途时宿主再发一条，之后的请求里要看得到它
+const steerTest = process.env.OASIS_NATIVE_FAULT === 'steer';
+let steerHeld = false;
+let steerSeen = false;
 if (attachmentTest) {
   const image = spawn('python3', [
     '-c',
@@ -98,6 +102,15 @@ const server = createServer(async (request, reply) => {
     reply.write('data: {"choices":[{"delta":{"content":"incomplete network reply"}}]}\n\n');
     globalThis.setTimeout(() => reply.destroy(), 20);
     return;
+  }
+  if (steerTest && !child && !summarizing) {
+    if (JSON.stringify(body.messages).includes('NATIVE_STEER_MESSAGE')) steerSeen = true;
+    if (n === 2 && !steerHeld) {
+      // 这次调用压住不回，让宿主趁在途时发消息（真实场景：模型正在生成时来了超支提醒）
+      steerHeld = true;
+      process.stderr.write('NATIVE_STEER_READY\n');
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 1500));
+    }
   }
   cap = body.max_tokens ?? body.max_completion_tokens;
   if (!child) reasoning = body.reasoning?.effort ?? body.reasoning_effort;
@@ -298,6 +311,7 @@ server.listen(0, '127.0.0.1', () => {
       compactions,
       checkpointSeen,
       attachmentRecovered,
+      steerSeen,
       compactionSummaries: records.filter((event) => event.type === 'compaction/summary').length,
       failedCompactions: records.filter(
         (event) => event.type === 'compaction/end' && event.data.error,

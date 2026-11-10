@@ -20,6 +20,8 @@ async function runNative(
     networkFault?: boolean;
     contextOverflow?: boolean;
     attachmentRoundTrip?: boolean;
+    /** 模型的一次调用在途时再发一条消息（超支提醒、追问） */
+    steer?: boolean;
   } = {},
 ) {
   const image = process.env.OASIS_NATIVE_IMAGE!;
@@ -74,7 +76,7 @@ async function runNative(
       '--env',
       `OASIS_NATIVE_GENERATION=${options.generation ?? 4}`,
       '--env',
-      `OASIS_NATIVE_FAULT=${options.networkFault ? 'disconnect' : options.contextOverflow ? 'context-overflow' : options.attachmentRoundTrip ? 'attachment' : ''}`,
+      `OASIS_NATIVE_FAULT=${options.networkFault ? 'disconnect' : options.contextOverflow ? 'context-overflow' : options.attachmentRoundTrip ? 'attachment' : options.steer ? 'steer' : ''}`,
       '--memory',
       '2g',
       '--pids-limit',
@@ -91,8 +93,13 @@ async function runNative(
     { stdio: ['pipe', 'pipe', 'pipe'] },
   );
   let stderr = '';
+  let steerReady!: () => void;
+  const steering = new Promise<void>((resolve) => {
+    steerReady = resolve;
+  });
   child.stderr.on('data', (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-8000);
+    if (stderr.includes('NATIVE_STEER_READY')) steerReady();
   });
   const exited = new Promise<number | null>((resolve, reject) => {
     child.once('exit', resolve);
@@ -125,6 +132,10 @@ async function runNative(
     if (options.resume) await agent.resume();
     if (!options.recovering || options.bootstrap)
       await agent.prompt('Carry out the current goal and mark it complete when verified.');
+    if (options.steer) {
+      await steering;
+      await agent.prompt('NATIVE_STEER_MESSAGE: this step has spent more than its share.');
+    }
     expect(await agent.waitIdle(), stderr).toBeUndefined();
     await agent.shutdown();
     expect(await exited, stderr).toBe(0);
@@ -141,6 +152,7 @@ async function runNative(
       expect(stderr).toContain('"failedCompactions":0');
     }
     if (options.attachmentRoundTrip) expect(stderr).toContain('"attachmentRecovered":true');
+    if (options.steer) expect(stderr).toContain('"steerSeen":true');
     return await readFile(join(directory, 'evidence/session.jsonl.zstd'));
   } finally {
     clearTimeout(timer);
@@ -166,6 +178,11 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE)('精确版本 DSH 离线集成'
   it(
     '原生供应商读取到真实连接中断时，保留同一目标重试并完成',
     () => runNative({ networkFault: true }),
+    120_000,
+  );
+  it(
+    '模型调用在途时收到的消息（超支提醒、追问）只挪到下一步一次：下一步看得到，目标照常完成',
+    () => runNative({ steer: true }),
     120_000,
   );
   it(
