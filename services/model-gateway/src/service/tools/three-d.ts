@@ -9,6 +9,51 @@ const GeometryArgs = z.strictObject({
   resolution: z.enum(['512', '1024', '1536']).default('1024'),
   model: optionalModel,
 });
+const GlbFile = z.object({ url: z.url() }).nullish();
+const GeometryResult = z.looseObject({
+  model_glb: GlbFile,
+  model_mesh: GlbFile,
+  model_urls: z.looseObject({ glb: GlbFile, pbr_model: GlbFile }).nullish(),
+});
+/**
+ * fal 上的图生 3D 型号：入参、GLB 放在结果的哪一项、价钱各不相同，差别只写在这张表里，
+ * 目录只列表里有的（ADR 0029 §8）。micro 是这个精度下一次的标价（微美元）。
+ */
+const GEOMETRY_MODELS: Record<
+  string,
+  {
+    input: (image: string, resolution: number) => Record<string, unknown>;
+    glb: (result: z.infer<typeof GeometryResult>) => string | undefined;
+    micro: (resolution: number) => number;
+  }
+> = {
+  'fal-ai/trellis-2': {
+    input: (image_url, resolution) => ({ image_url, resolution }),
+    glb: (r) => r.model_glb?.url,
+    micro: (resolution) => (resolution <= 512 ? 250_000 : resolution <= 1024 ? 300_000 : 350_000),
+  },
+  // 不分精度：单张图、不带 PBR 的标准档。同系列的 rapid 便宜，但回的是 OBJ + MTL + 贴图，没有 GLB
+  'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d': {
+    input: (input_image_url) => ({ input_image_url }),
+    glb: (r) => (r.model_urls?.glb ?? r.model_glb)?.url,
+    micro: () => 375_000,
+  },
+  // 不分精度：标准几何 + 标准贴图
+  'tripo3d/h3.1/image-to-3d': {
+    input: (image_url) => ({ image_url }),
+    glb: (r) => (r.model_urls?.glb ?? r.model_urls?.pbr_model ?? r.model_mesh)?.url,
+    micro: () => 300_000,
+  },
+  // 只有 1024、1536 两档
+  'fal-ai/pixal3d': {
+    input: (image_url, resolution) => ({ image_url, resolution: Math.max(1024, resolution) }),
+    glb: (r) => r.model_glb?.url,
+    micro: (resolution) => (resolution <= 1024 ? 300_000 : 420_000),
+  },
+};
+/** 任务号里没记型号的旧任务：那时只有这一个型号 */
+const GEOMETRY_BEFORE_MEMO = { model: 'fal-ai/trellis-2', micro: 350_000 };
+
 /** Bounded container validation; full geometry and visual checks remain in the harness worker. */
 function glbStream(body: NonNullable<Response['body']>) {
   let header = Buffer.alloc(0),
@@ -90,32 +135,34 @@ export const generate3d: ToolDef = {
   holdMicro: () => 1_000_000,
   long: true,
   provider: 'fal',
-  models: (config) => config.geometryModels ?? [],
+  models: (config) =>
+    (config.geometryModels ?? []).filter((model) => Object.hasOwn(GEOMETRY_MODELS, model)),
+  priceMicro: (model) => GEOMETRY_MODELS[model]?.micro(1024),
   args: GeometryArgs,
   cli: [
     { name: 'image', kind: 'path', required: true, description: '一张参考图' },
-    { name: 'resolution', kind: 'choice', choices: ['512', '1024', '1536'], description: '精度' },
+    {
+      name: 'resolution',
+      kind: 'choice',
+      choices: ['512', '1024', '1536'],
+      description: '精度（trellis-2 三档都有，pixal3d 最低 1024，其余型号不分精度）',
+    },
     MODEL_ARG,
   ],
   modelOf: pickModel,
   async start(deps, args, model) {
     if (!deps.fal) throw new Error('3D 供应商未配置');
+    const spec = GEOMETRY_MODELS[model];
+    if (!spec) throw new Error(`3D 型号 ${model} 还没有对接`);
     const a = GeometryArgs.parse(args),
-      image = a.image[0]!;
+      image = a.image[0]!,
+      resolution = Number(a.resolution);
+    const input = spec.input(`data:${image.mediaType};base64,${image.base64}`, resolution);
     return deps.fal.handle(
       await (
-        await deps.upstream(() =>
-          deps.fal!.submit(
-            model,
-            {
-              image_url: `data:${image.mediaType};base64,${image.base64}`,
-              resolution: Number(a.resolution),
-            },
-            deps.signal,
-            { noRetry: true },
-          ),
-        )
+        await deps.upstream(() => deps.fal!.submit(model, input, deps.signal, { noRetry: true }))
       ).json(),
+      { model, micro: spec.micro(resolution) },
     );
   },
   async cancel(deps, id) {
@@ -139,8 +186,10 @@ export const generate3d: ToolDef = {
     if (state.status !== 'COMPLETED') return { state: 'pending' };
     const result = await deps.fal.result(id);
     if (!result.ok) throw new Error('3D 结果暂不可取');
-    const body = z.object({ model_glb: z.object({ url: z.url() }) }).parse(await result.json());
-    const media = await deps.fal.media(body.model_glb.url);
+    const memo = deps.fal.memo(id) ?? GEOMETRY_BEFORE_MEMO;
+    const url = GEOMETRY_MODELS[memo.model]?.glb(GeometryResult.parse(await result.json()));
+    if (!url) throw new Error('3D 结果里没有 GLB');
+    const media = await deps.fal.media(url);
     if (!media.body) throw new Error('3D 结果无内容流');
     return {
       state: 'completed',
@@ -152,7 +201,7 @@ export const generate3d: ToolDef = {
           unchecked: ['真实尺寸', '背面', '拓扑', '可打印性'],
         },
         files: [{ name: 'model.glb', mediaType: 'model/gltf-binary', body: glbStream(media.body) }],
-        cost: estimate(deps.config.geometryMicroPerGeneration ?? 500_000),
+        cost: estimate(memo.micro),
       },
     };
   },

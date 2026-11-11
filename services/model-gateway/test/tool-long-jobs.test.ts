@@ -311,6 +311,74 @@ describe('音乐长任务', () => {
       lyrics: '[Verse] 测试歌词',
     });
   });
+  it('各型号的入参、格式、价钱照各自的写法：Lyria 把歌词写进 prompt；ACE-Step 只做纯器乐，出 FLAC、按 120 秒算钱', async () => {
+    useTools('key', true);
+    const settledMicro = () =>
+      billingCalls.filter((c) => c.path === 'settle').map((c) => c.body.costMicro);
+    const lyria = (
+      await call('audio.music', {
+        prompt: 'A complete vocal song with accompaniment',
+        instrumental: false,
+        lyrics: '[Verse] 测试歌词',
+        model: 'fal-ai/lyria3/pro',
+      })
+    ).job!.id;
+    expect(falCalls.at(-1)).toEqual({
+      url: 'https://queue.fal.run/fal-ai/lyria3/pro',
+      input: { prompt: 'A complete vocal song with accompaniment\n\nLyrics:\n[Verse] 测试歌词' },
+    });
+    await tools.job({ payerId: PAYER }, lyria, AbortSignal.timeout(1000));
+    expect(settledMicro()).toEqual([80_000]);
+
+    // 真实返回（2026-11-11）：类型写 audio/flac，地址以 .bin 结尾
+    knobs.falResult = {
+      audio: { url: 'https://v3.fal.media/files/b/song.bin', content_type: 'audio/flac' },
+    };
+    const ace = (
+      await call('audio.music', {
+        prompt: `Warm piano ${'x'.repeat(600)}`,
+        instrumental: true,
+        model: 'fal-ai/ace-step-1.5',
+      })
+    ).job!.id;
+    const input = falCalls.at(-1)?.input as { prompt: string; lyrics: string; duration: number };
+    expect(input).toMatchObject({ lyrics: '[Instrumental]', duration: 120 });
+    expect(input.prompt).toHaveLength(512);
+    // 带歌词的歌点名它：提交之前就拒绝
+    const song = { prompt: 'A complete vocal song', instrumental: false, lyrics: '[Verse] 歌词' };
+    const refused = await errorOf(call('audio.music', { ...song, model: 'fal-ai/ace-step-1.5' }));
+    expect(refused).toMatchObject({ code: 'invalid_tool_args' });
+    expect(refused?.message).toContain('只做纯器乐');
+    expect(falCalls.at(-1)?.input).toBe(input);
+    const done = await tools.job({ payerId: PAYER }, ace, AbortSignal.timeout(1000));
+    expect(done.result?.files[0]).toMatchObject({ name: 'music.flac', mediaType: 'audio/flac' });
+    expect(settledMicro()).toEqual([80_000, 72_000]);
+    // 没对接过的型号：目录不列，点名也不提交
+    const holds = billingCalls.length;
+    await expect(
+      call('audio.music', {
+        prompt: 'x'.repeat(12),
+        instrumental: true,
+        model: 'someone/unknown-music',
+      }),
+    ).rejects.toMatchObject({ message: '生成音乐不能用模型 someone/unknown-music' });
+    expect(billingCalls).toHaveLength(holds);
+  });
+  it('供应商没生成（如内容审核拦下）：不收费，把供应商说的原因交回去', async () => {
+    useTools('key', true);
+    knobs.falResultStatus = 422;
+    knobs.falResult = {
+      detail: [{ type: 'content_policy_violation', msg: 'flagged by a content checker' }],
+    };
+    const id = (
+      await call('audio.music', { prompt: 'A warm instrumental track', instrumental: true })
+    ).job!.id;
+    expect(await tools.job({ payerId: PAYER }, id, AbortSignal.timeout(1000))).toMatchObject({
+      status: 'failed',
+      error: '音乐供应商没有生成：flagged by a content checker',
+    });
+    expect(billingCalls.some((c) => c.path === 'settle')).toBe(false);
+  });
   it('提交断连不重新提交；结算失败从已存文件继续而不重新生成或下载', async () => {
     useTools('key', true);
     knobs.falSubmitFails = true;

@@ -234,8 +234,6 @@ await startService({
         speechMicroPerChar: config.TOOL_SPEECH_MICRO_PER_CHAR,
         musicModels: config.TOOL_MUSIC_MODELS,
         geometryModels: config.TOOL_GEOMETRY_MODELS,
-        geometryMicroPerGeneration: config.TOOL_GEOMETRY_MICRO_PER_GENERATION,
-        musicMicroPerGeneration: config.TOOL_MUSIC_MICRO_PER_GENERATION,
       },
       logger,
     });

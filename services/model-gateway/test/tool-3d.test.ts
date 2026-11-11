@@ -87,6 +87,51 @@ describe('3D 生成复用长任务', () => {
     expect(falCalls).toHaveLength(count);
     expect(billingCalls.filter((r) => r.path === 'settle')).toHaveLength(1);
   });
+  it('各型号的入参、GLB 在结果里的位置、价钱照各自的写法', async () => {
+    knobs.geometryMode = true;
+    useTools('key', true);
+    const settledMicro = () =>
+      billingCalls.filter((c) => c.path === 'settle').map((c) => c.body.costMicro);
+    const run = async (model: string, resolution?: string) => {
+      const id = (
+        await call('3d.generate', {
+          image: geometryImage,
+          model,
+          ...(resolution ? { resolution } : {}),
+        })
+      ).job!.id;
+      const submitted = falCalls.findLast((c) => c.input)!;
+      const done = await tools.job({ payerId: PAYER }, id, AbortSignal.timeout(1000));
+      expect(done.status).toBe('completed');
+      return submitted;
+    };
+    // trellis-2：三档精度各有价钱
+    expect((await run('fal-ai/trellis-2', '512')).input).toMatchObject({ resolution: 512 });
+    // 混元：图片的参数名不一样，不分精度
+    knobs.falResult = {
+      model_glb: { url: 'https://v3.fal.media/hunyuan.glb' },
+      model_urls: {
+        glb: { url: 'https://v3.fal.media/hunyuan.glb' },
+        obj: { url: 'https://v3.fal.media/model.obj' },
+      },
+    };
+    const hunyuan = await run('fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', '1536');
+    expect(hunyuan.url).toBe('https://queue.fal.run/fal-ai/hunyuan-3d/v3.1/pro/image-to-3d');
+    expect(Object.keys(hunyuan.input!)).toEqual(['input_image_url']);
+    expect(falCalls.at(-1)?.url).toBe('https://v3.fal.media/hunyuan.glb');
+    // Tripo：model_mesh 可能是 FBX，GLB 在 model_urls
+    knobs.falResult = {
+      model_mesh: { url: 'https://v3.fal.media/model.fbx' },
+      model_urls: { glb: { url: 'https://v3.fal.media/tripo.glb' }, fbx: null },
+    };
+    expect(Object.keys((await run('tripo3d/h3.1/image-to-3d')).input!)).toEqual(['image_url']);
+    expect(falCalls.at(-1)?.url).toBe('https://v3.fal.media/tripo.glb');
+    // pixal3d：没有 512 档
+    knobs.falResult = null;
+    expect((await run('fal-ai/pixal3d', '512')).input).toMatchObject({ resolution: 1024 });
+    expect((await run('fal-ai/pixal3d', '1536')).input).toMatchObject({ resolution: 1536 });
+    expect(settledMicro()).toEqual([250_000, 375_000, 300_000, 300_000, 420_000]);
+  });
   it('坏 GLB 不归档结算，也不重新生成；原请求提交断连保留未知', async () => {
     knobs.geometryMode = true;
     knobs.geometryMalformed = true;

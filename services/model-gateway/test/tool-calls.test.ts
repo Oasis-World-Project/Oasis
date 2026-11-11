@@ -257,6 +257,25 @@ describe('工具目录里的单价', () => {
       rates: [{ model: 'alibaba/wan-2.7', costMicro: 50_000, basis: 'catalog' }],
     });
   });
+  it('fal 的音乐、3D 各型号按自己的标价列；没对接过的型号不列', async () => {
+    const list = await build('k', true).list();
+    const byKey = Object.fromEntries(list.map((t) => [t.key, t]));
+    expect(byKey['audio.music']?.rates).toEqual([
+      { model: 'fal-ai/minimax-music/v2.6', costMicro: 150_000, seconds: null, basis: 'catalog' },
+      { model: 'fal-ai/lyria3/pro', costMicro: 80_000, seconds: null, basis: 'catalog' },
+      { model: 'google/lyria/v3', costMicro: 100_000, seconds: null, basis: 'catalog' },
+      { model: 'fal-ai/ace-step-1.5', costMicro: 72_000, seconds: null, basis: 'catalog' },
+    ]);
+    expect(byKey['3d.generate']).toMatchObject({
+      defaultModel: 'fal-ai/trellis-2',
+      rates: [
+        { model: 'fal-ai/trellis-2', costMicro: 300_000 },
+        { model: 'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', costMicro: 375_000 },
+        { model: 'tripo3d/h3.1/image-to-3d', costMicro: 300_000 },
+        { model: 'fal-ai/pixal3d', costMicro: 300_000 },
+      ],
+    });
+  });
   it('开发阶段不看调用记录：有记录也只用供应商价格和目录兜底值', async () => {
     knobs.typical = {
       ...noHistory(),

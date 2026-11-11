@@ -146,6 +146,8 @@ export const build = (
             }
             if (url.endsWith('/status'))
               return Response.json({ status: knobs.geometryCancelled ? 'CANCELLED' : 'COMPLETED' });
+            if (knobs.falResult && !url.includes('fal.media'))
+              return Response.json(knobs.falResult, { status: knobs.falResultStatus });
             if (knobs.geometryMode) {
               if (!url.includes('fal.media'))
                 return Response.json({ model_glb: { url: 'https://v3.fal.media/model.glb' } });
@@ -193,8 +195,22 @@ export const build = (
     store: mediaStore,
     jobTimeoutMs: 30 * 60_000,
     config: {
-      musicModels: ['fal-ai/minimax-music/v2.6'],
-      geometryModels: withMusic ? ['fal-ai/trellis-2'] : [],
+      // 最后一个没有对接过：目录不列
+      musicModels: [
+        'fal-ai/minimax-music/v2.6',
+        'fal-ai/lyria3/pro',
+        'google/lyria/v3',
+        'fal-ai/ace-step-1.5',
+        'someone/unknown-music',
+      ],
+      geometryModels: withMusic
+        ? [
+            'fal-ai/trellis-2',
+            'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d',
+            'tripo3d/h3.1/image-to-3d',
+            'fal-ai/pixal3d',
+          ]
+        : [],
       imageModels: ['bytedance-seed/seedream-4.5', 'openai/gpt-image-2'],
       inspectModels: ['vision/first', 'vision/second', 'listen/first'],
       inspectMaxTokens: 2048,
@@ -247,6 +263,8 @@ beforeEach(() => {
   knobs.settleFails = false;
   knobs.renewFails = false;
   knobs.falSubmitFails = false;
+  knobs.falResult = null;
+  knobs.falResultStatus = 200;
   falCalls.length = 0;
   mediaFiles.clear();
   upstream.length = 0;

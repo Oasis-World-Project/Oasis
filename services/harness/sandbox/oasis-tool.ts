@@ -15,7 +15,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { basename, dirname, extname, join, resolve, relative, isAbsolute } from 'node:path';
 import { runBatch } from './batch.ts';
-import { appFiles, localImages, localMedia, matchImageExt, targetsFor } from './tool-files.ts';
+import { appFiles, localImages, localMedia, matchExt, startOf, targetsFor } from './tool-files.ts';
 
 /** 这些参数是列表：逗号分隔，或者直接写 JSON 数组 */
 const LIST_ARGS = new Set(['urls', 'options', 'scale', 'ref', 'files', 'steps']);
@@ -142,6 +142,7 @@ async function save(result: ToolResult, out: string | undefined): Promise<void> 
     if (basename(f.name) !== f.name || f.name.includes('\\')) throw new Error('工具文件名不安全');
     const target = targets[i] ?? join('out', f.name);
     await mkdir(dirname(target), { recursive: true });
+    let saved: string;
     if (f.id !== undefined) {
       if (
         !result.job ||
@@ -177,18 +178,18 @@ async function save(result: ToolResult, out: string | undefined): Promise<void> 
       } finally {
         await rm(partial, { force: true });
       }
+      saved = matchExt(target, await startOf(target));
+      if (saved !== target) await rename(target, saved);
     } else {
       const bytes = Buffer.from(f.base64, 'base64');
-      const saved = matchImageExt(target, bytes);
+      saved = matchExt(target, bytes);
       await writeFile(saved, bytes);
-      if (saved !== target)
-        say(
-          `注意：返回的图片实际是 ${extname(saved).slice(1).toUpperCase()}，按实际格式存成了 ${saved}`,
-        );
-      say(`已保存：${saved}`);
-      continue;
     }
-    say(`已保存：${target}`);
+    if (saved !== target)
+      say(
+        `注意：返回的文件实际是 ${extname(saved).slice(1).toUpperCase()}，按实际格式存成了 ${saved}`,
+      );
+    say(`已保存：${saved}`);
   }
   say(`花费：$${(result.costMicro / 1_000_000).toFixed(4)}`);
 }

@@ -36,6 +36,9 @@ export const knobs = {
   archiveFails: false,
   resultDeleteFails: false,
   falSubmitFails: false,
+  /** 假的 fal 结果正文；null 用默认的（一首 MP3，geometryMode 下是 model_glb） */
+  falResult: null as Record<string, unknown> | null,
+  falResultStatus: 200,
   geometryMode: false,
   geometryMalformed: false,
   geometryCancelled: false,

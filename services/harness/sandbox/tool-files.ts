@@ -1,5 +1,5 @@
-// oasis-tool 里和文件打交道的部分：结果存到哪、图片按实际格式改后缀、读本地图片、app.check 带上的应用文件。
-import { readdir, readFile, stat } from 'node:fs/promises';
+// oasis-tool 里和文件打交道的部分：结果存到哪、图片和音频按实际格式改后缀、读本地图片、app.check 带上的应用文件。
+import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, relative, resolve, sep } from 'node:path';
 
 /**
@@ -18,39 +18,67 @@ export function targetsFor(files: { name: string }[], out: string | undefined): 
   return files.map((f, i) => `${stem}-${i + 1}${mixed ? extname(f.name) : ext || extname(f.name)}`);
 }
 
-const IMAGE_EXTS: Record<string, string> = {
+/** 认得文件头的图片、音频格式：后缀 → 格式（.jpg 和 .jpeg 是同一种） */
+const FORMATS: Record<string, string> = {
   '.png': 'png',
   '.jpg': 'jpeg',
   '.jpeg': 'jpeg',
   '.webp': 'webp',
   '.gif': 'gif',
+  '.mp3': 'mp3',
+  '.wav': 'wav',
+  '.flac': 'flac',
+  '.ogg': 'ogg',
 };
 
-/** 文件头对应的图片后缀；不是认得的图片返回 undefined */
-function imageExtOf(bytes: Buffer): string | undefined {
+/** ID3 标签一共多长：10 字节的头加标签体，长度每字节只用低 7 位 */
+const id3Length = (b: Buffer) =>
+  10 + (((b[6]! & 127) << 21) | ((b[7]! & 127) << 14) | ((b[8]! & 127) << 7) | (b[9]! & 127));
+
+/** 文件头对应的后缀；不是认得的图片或音频返回 undefined */
+function extOf(bytes: Buffer): string | undefined {
+  const tag = (from: number, to: number) => bytes.toString('ascii', from, to);
   if (bytes.length >= 8 && bytes.readUInt32BE(0) === 0x89504e47) return '.png';
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
     return '.jpg';
-  if (
-    bytes.length >= 12 &&
-    bytes.toString('ascii', 0, 4) === 'RIFF' &&
-    bytes.toString('ascii', 8, 12) === 'WEBP'
-  )
-    return '.webp';
-  if (bytes.length >= 4 && bytes.toString('ascii', 0, 4) === 'GIF8') return '.gif';
+  if (bytes.length >= 12 && tag(0, 4) === 'RIFF')
+    return tag(8, 12) === 'WEBP' ? '.webp' : tag(8, 12) === 'WAVE' ? '.wav' : undefined;
+  if (bytes.length >= 4 && tag(0, 4) === 'GIF8') return '.gif';
+  if (bytes.length >= 4 && tag(0, 4) === 'fLaC') return '.flac';
+  if (bytes.length >= 4 && tag(0, 4) === 'OggS') return '.ogg';
+  // 开头挂着 ID3 标签的要看标签后面：fal 给生成的音频挂一段内容凭证，后面可能是 FLAC（2026-11-11）
+  if (bytes.length >= 10 && tag(0, 3) === 'ID3')
+    return tag(id3Length(bytes), id3Length(bytes) + 4) === 'fLaC' ? '.flac' : '.mp3';
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0) return '.mp3';
   return undefined;
 }
 
 /**
- * 要存成图片、但内容是另一种图片格式时，按实际格式改后缀（2026-11-05：JPEG 存成 .png，
- * 后面看图报签名无效、节点返工）。不是图片后缀或认不出内容时原样返回。
+ * 要存成图片或音频、但内容是另一种格式时，按实际格式改后缀（2026-11-05：JPEG 存成 .png，
+ * 后面看图报签名无效、节点返工；2026-11-11：音乐型号回的是 FLAC）。不是这些后缀或认不出内容时原样返回。
  */
-export function matchImageExt(target: string, bytes: Buffer): string {
+export function matchExt(target: string, bytes: Buffer): string {
   const ext = extname(target);
-  const actual = imageExtOf(bytes);
-  if (!actual || !(ext.toLowerCase() in IMAGE_EXTS)) return target;
-  if (IMAGE_EXTS[ext.toLowerCase()] === IMAGE_EXTS[actual]) return target;
+  const actual = extOf(bytes);
+  if (!actual || !(ext.toLowerCase() in FORMATS)) return target;
+  if (FORMATS[ext.toLowerCase()] === FORMATS[actual]) return target;
   return `${target.slice(0, -ext.length)}${actual}`;
+}
+
+/** 已经存好的文件开头的一段，够 matchExt 认格式：挂着 ID3 标签的连标签后面几个字节一起读 */
+export async function startOf(path: string): Promise<Buffer> {
+  const file = await open(path);
+  try {
+    const head = Buffer.alloc(16);
+    const { bytesRead } = await file.read(head, 0, 16, 0);
+    if (bytesRead < 10 || head.toString('ascii', 0, 3) !== 'ID3')
+      return head.subarray(0, bytesRead);
+    // 标签大得离谱的不读进来，按没有后续算
+    const whole = Buffer.alloc(Math.min(id3Length(head) + 4, 16 * 1024 * 1024));
+    return whole.subarray(0, (await file.read(whole, 0, whole.length, 0)).bytesRead);
+  } finally {
+    await file.close();
+  }
 }
 
 /** 能交给型号看、听的本地文件：后缀 → 种类和供应商要的格式写法 */

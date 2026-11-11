@@ -30,10 +30,9 @@ export interface ToolConfig {
   tavilyCreditMicro: number;
   /** 配音拿不到实际花费时，每个字估多少钱（微美元） */
   speechMicroPerChar: number;
+  /** fal 上生音乐、图生 3D 的型号，按顺序；只认各自工具里对接过的（ADR 0029 §8） */
   musicModels?: string[];
-  musicMicroPerGeneration?: number;
   geometryModels?: string[];
-  geometryMicroPerGeneration?: number;
 }
 
 /**
@@ -96,6 +95,8 @@ interface ToolBase {
   provider: 'openrouter' | 'tavily' | 'fal' | 'runpod' | 'browserstack' | 'inspector';
   /** 可以选的模型；不需要模型的工具返回空 */
   models: (config: ToolConfig) => string[];
+  /** 型号一次的标价（微美元）：供应商不按调用回报花费的工具（fal）写上，目录按它列各型号的单价 */
+  priceMicro?: (model: string) => number | undefined;
   args: z.ZodType<Record<string, unknown>>;
   /**
    * 命令行参数（ADR 0025）：`oasis-tool <工具> --名字 值` 能写哪些。沙箱里的 oasis-tool 把文件参数

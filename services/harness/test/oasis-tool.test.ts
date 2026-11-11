@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { main, parseArgs } from '../sandbox/oasis-tool.ts';
-import { matchImageExt, targetsFor } from '../sandbox/tool-files.ts';
+import { matchExt, startOf, targetsFor } from '../sandbox/tool-files.ts';
 
 describe('oasis-tool', () => {
   it('解析 --名字 值；列表参数按逗号拆或读 JSON；--out、--file 单独拿出来', () => {
@@ -65,11 +65,45 @@ describe('oasis-tool', () => {
   it('要存成图片但内容是另一种图片格式时按实际格式改后缀；同类或认不出的不动', () => {
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]);
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    expect(matchImageExt('out/首帧.png', jpeg)).toBe('out/首帧.jpg');
-    expect(matchImageExt('out/首帧.jpeg', jpeg)).toBe('out/首帧.jpeg');
-    expect(matchImageExt('out/首帧.png', png)).toBe('out/首帧.png');
-    expect(matchImageExt('out/说明.txt', jpeg)).toBe('out/说明.txt');
-    expect(matchImageExt('out/首帧.png', Buffer.from('hello'))).toBe('out/首帧.png');
+    expect(matchExt('out/首帧.png', jpeg)).toBe('out/首帧.jpg');
+    expect(matchExt('out/首帧.jpeg', jpeg)).toBe('out/首帧.jpeg');
+    expect(matchExt('out/首帧.png', png)).toBe('out/首帧.png');
+    expect(matchExt('out/说明.txt', jpeg)).toBe('out/说明.txt');
+    expect(matchExt('out/首帧.png', Buffer.from('hello'))).toBe('out/首帧.png');
+  });
+
+  it('音频也按实际格式改后缀：挂着 ID3 标签的看标签后面是 FLAC 还是 MP3', async () => {
+    // fal 给生成的音频挂一段 ID3 标签（内容凭证），ACE-Step 的标签后面是 FLAC（2026-11-11 真实返回）
+    const id3 = (body: number) =>
+      Buffer.concat([
+        Buffer.from('ID3\x04\x00\x00\x00\x00', 'latin1'),
+        Buffer.from([body >> 7, body & 127]),
+      ]);
+    const tagged = (after: Buffer) => Buffer.concat([id3(300), Buffer.alloc(300), after]);
+    const flac = tagged(Buffer.from('fLaC\x00\x00\x00\x22', 'latin1'));
+    const mp3 = tagged(Buffer.from([0xff, 0xfb, 0x90, 0x64]));
+    expect(matchExt('out/音乐.mp3', flac)).toBe('out/音乐.flac');
+    expect(matchExt('out/音乐.mp3', mp3)).toBe('out/音乐.mp3');
+    expect(matchExt('out/音乐.flac', Buffer.from('fLaC'))).toBe('out/音乐.flac');
+    expect(matchExt('out/音乐.mp3', Buffer.from('RIFF\x00\x00\x00\x00WAVEfmt ', 'latin1'))).toBe(
+      'out/音乐.wav',
+    );
+    expect(matchExt('out/音乐.mp3', Buffer.from([0xff, 0xfb, 0x90, 0x64]))).toBe('out/音乐.mp3');
+    // 别的后缀（视频、模型）不管
+    expect(matchExt('out/片子.mp4', flac)).toBe('out/片子.mp4');
+
+    // 长任务的文件是先存到盘上的：只读开头够认格式的一段
+    const dir = await mkdtemp(join(tmpdir(), 'oasis-ext-'));
+    try {
+      await writeFile(join(dir, 'a.mp3'), Buffer.concat([flac, Buffer.alloc(4096)]));
+      const start = await startOf(join(dir, 'a.mp3'));
+      expect(start).toHaveLength(314);
+      expect(matchExt('out/a.mp3', start)).toBe('out/a.flac');
+      await writeFile(join(dir, 'b.glb'), Buffer.concat([Buffer.from('glTF'), Buffer.alloc(100)]));
+      expect(await startOf(join(dir, 'b.glb'))).toHaveLength(16);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

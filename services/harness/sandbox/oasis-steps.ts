@@ -48,7 +48,7 @@ const TEXT_OUT = /\.(?:txt|md|json|jsonl|csv)$/i;
 /** oasis-tool 等不到长任务时说的话：取出任务号接着等 */
 const PENDING = /还没做好（任务号 ([a-f0-9-]{36})）/;
 /** oasis-tool 的结果行，不算工具给的文字 */
-const TOOL_LINES = /^(?:花费：|已保存|还没做好|沿用任务号|注意：返回的图片)/;
+const TOOL_LINES = /^(?:花费：|已保存|还没做好|沿用任务号|注意：返回的文件)/;
 
 const GLOB_PATH = /^(?:in|materials|out)\/[^\0\r\n]*\*/;
 
@@ -170,11 +170,12 @@ async function attempt(
   }
 }
 
-const IMAGE_FILE = /\.(?:png|jpe?g|webp)$/i;
+/** oasis-tool 会按实际格式改后缀、oasis-op media.convert 又换得回来的格式 */
+const CONVERTIBLE = /\.(?:png|jpe?g|webp|mp3|wav|flac|ogg)$/i;
 const withoutExt = (path: string) => path.replace(/\.[^./]+$/, '');
 
 /**
- * 图片工具按供应商实际返回的格式存（要 .png 回了 JPEG 就存成 .jpg，见 model-gateway 的 image.generate）。
+ * 图片、音频工具按供应商实际返回的格式存（要 .png 回了 JPEG 就存成 .jpg，要 .mp3 回了 FLAC 就存成 .flac）。
  * AI 节点看「已保存」的路径自己调整；工具节点的下游按计划里写的路径取文件（2026-11-08 真实小样：
  * 关键帧存成 frame.jpg，镜头视频找不到 in/keyframes/03/frame.png）——所以换回 --out 要的格式
  * （oasis-op media.convert），删掉原来那份。换不成算这一步失败。
@@ -184,18 +185,18 @@ export async function conformOut(
   step: Step,
   stdout: string,
 ): Promise<string | undefined> {
-  if (!step.out || !IMAGE_FILE.test(step.out)) return undefined;
+  if (!step.out || !CONVERTIBLE.test(step.out)) return undefined;
   const saved = [...stdout.matchAll(/^已保存：(.+)$/gm)].map((m) => m[1]!.trim());
   const [actual] = saved;
-  if (saved.length !== 1 || !actual || actual === step.out || !IMAGE_FILE.test(actual))
+  if (saved.length !== 1 || !actual || actual === step.out || !CONVERTIBLE.test(actual))
     return undefined;
   if (withoutExt(actual) !== withoutExt(step.out)) return undefined;
   const result = await runner.run(['oasis-op', 'media.convert', '--in', actual, '--out', step.out]);
-  if (result.code !== 0) return `图片存成了 ${actual}，换成 ${step.out} 没成功：${errorOf(result)}`;
+  if (result.code !== 0) return `结果存成了 ${actual}，换成 ${step.out} 没成功：${errorOf(result)}`;
   await rm(join(runner.root, actual), { force: true });
   runner.emit({
     type: 'assistant_text',
-    text: `供应商返回的图片是 ${actual.split('.').pop()!.toUpperCase()}，已按计划换成 ${step.out}。`,
+    text: `供应商返回的文件是 ${actual.split('.').pop()!.toUpperCase()}，已按计划换成 ${step.out}。`,
   });
   return undefined;
 }

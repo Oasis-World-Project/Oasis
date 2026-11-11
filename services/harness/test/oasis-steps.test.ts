@@ -188,7 +188,7 @@ describe('工具步骤执行器', () => {
     await writeFile(join(root, 'out/frame.jpg'), 'jpeg');
     const step = { tool: 'image.generate', args: { prompt: 'p' }, out: 'out/frame.png' };
     const saidJpeg =
-      '生成了 1 张图片\n注意：返回的图片实际是 JPG，按实际格式存成了 out/frame.jpg\n已保存：out/frame.jpg\n';
+      '生成了 1 张图片\n注意：返回的文件实际是 JPG，按实际格式存成了 out/frame.jpg\n已保存：out/frame.jpg\n';
     const { runner, calls, events } = fake([ok(saidJpeg), ok('转成了 png 图片。\n')]);
     expect(await runSteps(runner, [step], new Set(), async () => {})).toBeUndefined();
     expect(calls[1]).toEqual([
@@ -212,8 +212,22 @@ describe('工具步骤执行器', () => {
 
     const broken = fake([fail('解码失败')]);
     expect(await conformOut(broken.runner, step, '已保存：out/frame.jpg\n')).toBe(
-      '图片存成了 out/frame.jpg，换成 out/frame.png 没成功：解码失败',
+      '结果存成了 out/frame.jpg，换成 out/frame.png 没成功：解码失败',
     );
+
+    // 音频一样：音乐型号回的是 FLAC，计划要 MP3
+    await writeFile(join(root, 'out/bgm.flac'), 'flac');
+    const music = {
+      tool: 'audio.music',
+      args: { prompt: 'p', instrumental: true },
+      out: 'out/bgm.mp3',
+    };
+    const audio = fake([ok('转成了 mp3 音频。\n')]);
+    expect(await conformOut(audio.runner, music, '已保存：out/bgm.flac\n')).toBeUndefined();
+    expect(audio.calls).toEqual([
+      ['oasis-op', 'media.convert', '--in', 'out/bgm.flac', '--out', 'out/bgm.mp3'],
+    ]);
+    await expect(readFile(join(root, 'out/bgm.flac'))).rejects.toThrow();
   });
 
   it('进度记在工作目录里：失败后接着做时跳过做完的步骤；步骤改过就从头做', async () => {

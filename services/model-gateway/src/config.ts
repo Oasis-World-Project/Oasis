@@ -76,16 +76,12 @@ export const modelGatewayEnv = {
     .transform((value) => value || undefined),
   FAL_BASE_URL: z.url().default('https://queue.fal.run'),
   FAL_MEDIA_HOSTS: list('fal.media'),
-  TOOL_MUSIC_MODELS: list('fal-ai/minimax-music/v2.6'),
-  // Opt in only after model price/parameters are verified. A Key alone does not enable 3D.
+  // fal 上的型号只认工具里对接过的：入参、结果、标价写在 tools/audio.ts、tools/three-d.ts 的表里
+  TOOL_MUSIC_MODELS: list(
+    'fal-ai/minimax-music/v2.6,fal-ai/lyria3/pro,google/lyria/v3,fal-ai/ace-step-1.5',
+  ),
+  // 图生 3D 填了型号才开放，只有 Key 不算
   TOOL_GEOMETRY_MODELS: list(''),
-  TOOL_GEOMETRY_MICRO_PER_GENERATION: z.coerce
-    .number()
-    .int()
-    .positive()
-    .max(1_000_000)
-    .default(500_000),
-  TOOL_MUSIC_MICRO_PER_GENERATION: z.coerce.number().int().positive().max(500_000).default(150_000),
   TOOL_RESULT_MAX_BYTES: z.coerce
     .number()
     .int()

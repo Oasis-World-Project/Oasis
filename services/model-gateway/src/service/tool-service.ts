@@ -30,8 +30,9 @@ export function createToolService(deps: ToolServiceDeps) {
               : deps.openrouter.configured;
 
   /**
-   * 每个可用型号的典型单价和用时（ADR 0016 §4）：视频按供应商每秒单价；其余优先用调用记录的
-   * 中位数；都没有才用工具目录的兜底值。读不到记录或目录时照样给兜底，不让目录因此不可用。
+   * 每个可用型号的典型单价和用时（ADR 0016 §4）：视频按供应商每秒单价，工具自己有标价的型号
+   * （fal 的音乐、3D）用标价；其余优先用调用记录的中位数；都没有才用工具目录的兜底值。
+   * 读不到记录或目录时照样给兜底，不让目录因此不可用。
    */
   async function ratesOf(tool: ToolDef, models: string[]): Promise<ToolRate[]> {
     const typical = deps.estimateFromHistory
@@ -54,7 +55,11 @@ export function createToolService(deps: ToolServiceDeps) {
           ? videoCatalogRate(entry.pricing_skus ?? {}, entry.supported_resolutions ?? [])
           : undefined;
         if (rate) return { model, ...rate, seconds, basis: 'catalog' };
-      } else if (seen) return { model, costMicro: seen.costMicro, seconds, basis: 'history' };
+      } else {
+        const listed = tool.priceMicro?.(model);
+        if (listed !== undefined) return { model, costMicro: listed, seconds, basis: 'catalog' };
+        if (seen) return { model, costMicro: seen.costMicro, seconds, basis: 'history' };
+      }
       return { model, costMicro: tool.estimateMicro, seconds, basis: 'fallback' };
     });
   }
