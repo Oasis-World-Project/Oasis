@@ -7,16 +7,26 @@ FROM ${NODE_IMAGE}
 ARG DSH_VERSION=0.2.1-rc.5
 # 通用文档/数据工具（ADR 0008 G1）；预装包在独立 venv 内，运行时仍可经出口代理安装任务需要的包。
 ARG APT_RETRIES=3
-RUN apt-get -o Acquire::Retries=${APT_RETRIES} update \
+# 可选的 Debian 镜像站（如 https://mirrors.tuna.tsinghua.edu.cn）：deb.debian.org 太慢时用，只影响构建。
+# 这一层开始时镜像里还没有 CA 证书，https 的镜像站改走 http；包的签名由 apt 自己校验。
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then sed -i "s#http://deb.debian.org#$(printf %s "$APT_MIRROR" | sed 's#^https://#http://#')#g" /etc/apt/sources.list.d/debian.sources; fi \
+ && apt-get -o Acquire::Retries=${APT_RETRIES} update \
  && attempt=0 \
  && until apt-get -o Acquire::Retries=${APT_RETRIES} install -y --no-install-recommends python3 python3-pip python3-venv fonts-noto-cjk \
-    libreoffice-writer=4:25.2.3-2+deb13u8 libreoffice-calc=4:25.2.3-2+deb13u8 libreoffice-impress=4:25.2.3-2+deb13u8 \
+    libreoffice-writer=4:25.2.3-2+deb13u9 libreoffice-calc=4:25.2.3-2+deb13u9 libreoffice-impress=4:25.2.3-2+deb13u9 \
     ffmpeg=7:7.1.5-0+deb13u1 poppler-utils=25.03.0-5+deb13u4 libpango-1.0-0=1.56.3-1 libpangoft2-1.0-0=1.56.3-1 \
-    melt=7.30.0-1+b2 frei0r-plugins=2.3.3-1+b1; do \
+    melt=7.30.0-1+b2 frei0r-plugins=2.3.3-1+b1 \
+    chromium=156.0.8078.79-1~deb13u1 fonts-noto-color-emoji=2.051-0+deb13u1 \
+    pandoc=3.1.11.1+ds-2 sqlite3=3.46.1-7+deb13u2 jq=1.7.1-6+deb13u4 imagemagick=8:7.1.1.43+dfsg1-1+deb13u14 \
+    sox=14.4.2+git20190427-5+b3 git=1:2.47.3-0+deb13u1 ripgrep=14.1.1-1+b4 zip=3.0-15+deb13u1 unzip=6.0-29+deb13u1 \
+    make=4.4.1-2 g++=4:14.2.0-1; do \
       attempt=$((attempt + 1)); \
       if [ "$attempt" -ge "$APT_RETRIES" ]; then exit 1; fi; \
     done \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ # 沙箱以非 root、无特权、/dev/shm 只有 64 MB 运行，也没有显卡：这三项写成 Chromium 的默认参数，命令行和 playwright-core 都用得上
+ && printf 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage --enable-unsafe-swiftshader"\n' > /etc/chromium.d/oasis
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH="/opt/oasis/venv/bin:${PATH}" \
     MPLBACKEND=Agg \
@@ -33,7 +43,8 @@ RUN --mount=type=secret,id=pip_index \
  && printf 'font.family: sans-serif\nfont.sans-serif: Noto Sans CJK JP, DejaVu Sans\naxes.unicode_minus: False\n' > /home/node/.config/matplotlib/matplotlibrc \
  && chown -R node:node /home/node/.config \
  && printf '系统软件（无界面）：\n' > /opt/oasis/software.txt \
- && dpkg-query -W -f='${Package} ${Version}\n' libreoffice-writer libreoffice-calc libreoffice-impress ffmpeg poppler-utils fonts-noto-cjk melt frei0r-plugins >> /opt/oasis/software.txt \
+ && dpkg-query -W -f='${Package} ${Version}\n' libreoffice-writer libreoffice-calc libreoffice-impress ffmpeg poppler-utils fonts-noto-cjk melt frei0r-plugins \
+    chromium fonts-noto-color-emoji pandoc sqlite3 jq imagemagick sox git ripgrep zip unzip make g++ >> /opt/oasis/software.txt \
  && printf '\nPython 包（使用 python3，无需激活环境）：\n' >> /opt/oasis/software.txt \
  && /opt/oasis/venv/bin/python -m pip list --format=freeze >> /opt/oasis/software.txt
 # 不跑安装脚本：dsh 用到的原生组件都是预编译包
@@ -48,6 +59,30 @@ RUN --mount=type=secret,id=npm_registry \
  && npm cache clean --force \
  && mkdir -p /workspace/in /workspace/out \
  && chown -R node:node /workspace
+# 预装的 Node 包从根目录的 /node_modules 找得到：Node 找包时一路往上找，任何目录下的脚本都能直接 import / require，
+# 工作目录里自己装的同名包优先。包装在 /opt/oasis/node 再连过去（npm 不能在根目录下安装）。
+# playwright-core 不自带浏览器，用上面 apt 装的 Chromium。
+ARG PLAYWRIGHT_VERSION=1.64.0
+ARG ESBUILD_VERSION=0.28.2
+ARG TYPESCRIPT_VERSION=6.0.3
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/oasis/browsers \
+    PATH="/node_modules/.bin:${PATH}"
+RUN --mount=type=secret,id=npm_registry \
+    if [ -f /run/secrets/npm_registry ]; then export npm_config_registry="$(cat /run/secrets/npm_registry)"; fi \
+ && mkdir -p /opt/oasis/node && cd /opt/oasis/node \
+ && attempt=0 \
+ && until npm install --ignore-scripts --no-save --fetch-retries=0 --fetch-timeout=60000 \
+      "playwright-core@${PLAYWRIGHT_VERSION}" "esbuild@${ESBUILD_VERSION}" "typescript@${TYPESCRIPT_VERSION}"; do \
+      attempt=$((attempt + 1)); \
+      if [ "$attempt" -ge "$NPM_RETRIES" ]; then exit 1; fi; \
+    done \
+ && npm cache clean --force \
+ && ln -s /opt/oasis/node/node_modules /node_modules \
+ && printf '\nNode 包（任何目录下可直接 import / require；浏览器用 chromium 命令或 playwright-core 的 chromium.launch()）：\nplaywright-core %s\nesbuild %s\ntypescript %s\n' "${PLAYWRIGHT_VERSION}" "${ESBUILD_VERSION}" "${TYPESCRIPT_VERSION}" >> /opt/oasis/software.txt \
+ # playwright-core 按自己的版本号到 PLAYWRIGHT_BROWSERS_PATH 下找浏览器，找不到时报出那个路径：把它连到系统的 Chromium，
+ # 不带参数的 chromium.launch() 就能用；最后真的开一页确认能渲染。
+ && cd /opt/oasis \
+ && node --input-type=module -e 'import { mkdirSync, symlinkSync } from "node:fs"; import path from "node:path"; import { chromium } from "playwright-core"; for (let i = 0; i < 4; i += 1) { try { const browser = await chromium.launch(); const page = await browser.newPage(); await page.setContent("<p id=ok>ok</p>"); const text = await page.textContent("#ok"); await browser.close(); if (text !== "ok") throw new Error("page did not render"); console.log("playwright-core launches the system chromium"); process.exit(0); } catch (error) { const missing = /Executable doesn.t exist at (\S+)/.exec(String(error && error.message)); if (!missing) throw error; mkdirSync(path.dirname(missing[1]), { recursive: true }); symlinkSync("/usr/bin/chromium", missing[1]); } } throw new Error("could not link playwright-core to the system chromium");'
 USER node
 ENV DSH_HOME=/home/node/.dsh \
     DSH_PERMISSION_MODE=danger-full-access \

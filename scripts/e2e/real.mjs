@@ -1,7 +1,7 @@
 // 真模型回归（pnpm e2e --real，docs/engineering/回归测试.md）：模型和工具都用 .env 里真的密钥，
 // 每个场景（含接需求、聊天）花费上限 $1（场景写了 budgetMicro 的按它），超了当场取消任务、判失败。
 // 模型每次回答不一样：只断言用户看得到的结果（任务完成、画布里有成果、内容对得上），不断言调用顺序。
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { literal, query } from './db.mjs';
 import { realShots } from './real-shots.mjs';
@@ -248,6 +248,61 @@ export const REAL_SCENARIOS = {
         writeFileSync(path.join(t.outDir, 'real-tool-成片.mp4'), bytes);
         t.log(`成片 ${film.path}：${(bytes.length / 1024).toFixed(0)} KB，已存到回归目录`);
       }
+      logBill(t);
+    },
+  },
+
+  // 小游戏（ADR 0030）：和 dsh 对比用的同一句话，要求只排一个干活节点，看它在沙箱里从头做到交付。
+  // 记下用时、花费、它自己用了几次浏览器、关卡退回几次；游戏文件留一份在回归目录里，质量由人看。
+  'real-game': {
+    // 2026-11-11 多节点的方案花了 $1.56；留出余量，仍在单次 $5 的授权内
+    budgetMicro: 3_000_000,
+    async run(t) {
+      const started = Date.now();
+      const { taskId } = await t.user.createTask(
+        '做一个网页小游戏：一只橘猫在雨夜屋顶上躲雨滴，两关，难度递增，像素风。要有背景音乐和跳跃、被淋到、过关的音效。' +
+          '工作流要求：只排一个干活节点，从头做到交付（背景音乐也由它自己解决），型号用 DeepSeek V4 Pro；不要别的节点。',
+      );
+      t.track(taskId);
+      const planned = await t.user.waitTask(
+        taskId,
+        (x) => x.status !== 'planning',
+        '方案排好',
+        LONG,
+      );
+      t.log(
+        `方案：${planned.nodes.map((n) => `${n.title}（${n.kind}${n.model ? ` ${n.model}` : ''}）`).join('；')}`,
+      );
+      if (planned.nodes.length !== 1 || planned.nodes[0].kind !== 'work') {
+        await t.user.api.post(`/task/v1/tasks/${taskId}/cancel`).catch(() => {});
+        t.check(false, `规划员没有只排一个干活节点（排了 ${planned.nodes.length} 个），已取消`);
+        return;
+      }
+      const task = await t.user.waitTask(taskId, done, '小游戏交付', 3 * LONG);
+      const node = task.nodes[0];
+      if (node.warning) t.log(`带着提醒交付：${node.warning}`);
+      const count = (extra) =>
+        query(
+          'harness',
+          `select count(*)::int as n from run_events e join runs r on r.id = e.run_id where r.node_id = ${literal(node.id)} and e.kind = 'tool_call'${extra}`,
+        )[0].n;
+      t.log(
+        `用时 ${((Date.now() - started) / 60_000).toFixed(1)} 分钟（从发出需求算起），任务花费 ${usd(task.spentMicro)}；` +
+          `工具调用 ${count('')} 次，其中用到浏览器 ${count(` and e.data->>'arguments' ~ 'chromium|playwright'`)} 次；关卡退回 ${node.reworks} 次`,
+      );
+      const list = await waitFiles(t, taskId, (files) =>
+        files.some((a) => a.application?.kind === 'static'),
+      );
+      t.check(
+        list.some((a) => a.application?.kind === 'static'),
+        `画布里没有可运行的游戏（有：${list.map((a) => a.path).join('、') || '无'}）`,
+      );
+      for (const file of list) {
+        const target = path.join(t.outDir, 'real-game', file.path);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, await t.user.content(file.id));
+      }
+      t.log(`画布：${list.map((a) => a.path).join('、')}；已存到回归目录的 real-game/`);
       logBill(t);
     },
   },

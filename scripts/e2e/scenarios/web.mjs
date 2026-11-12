@@ -1,7 +1,7 @@
 // 回归场景（docs/engineering/回归测试.md）：网页：浏览器关卡、测试计划、应用清单。
 import { literal, query } from '../db.mjs';
 import { marker, writeFiles } from '../fake-provider.mjs';
-import { DEFAULT_MODEL, done, work } from './shared.mjs';
+import { DEFAULT_MODEL, done, sha256, work } from './shared.mjs';
 
 // ---------- 1. 多文件网页：浏览器关卡发现计数错 → 退回修一次 → 桌面端画布里打得开、点得对 ----------
 // 脚本是 ES 模块、互相 import（11-07「检查通过的网页画布里黑屏」就是多文件模块串联引用）
@@ -254,5 +254,143 @@ export const manifest = {
       artifacts.some((a) => a.application?.kind === 'static'),
       `补上清单后画布里应能运行（有：${artifacts.map((a) => a.path).join('、')}）`,
     );
+  },
+};
+
+// ---------- 1d. 一个 AI 从头做到交付（ADR 0030）：自己调工具拿素材、做多文件网页、
+// 用沙箱里的浏览器自己点一遍、再按画布的方式查一次；一次交付，关卡不退回 ----------
+const COVER_PAGE = PAGE.replace(
+  '<p>已经点了',
+  '<img id="cover" src="cover.png" alt="插图" width="160"><p>已经点了',
+);
+/** 节点自己写的浏览器脚本：页面的脚本是 ES 模块，要经 http 打开，所以先在回环地址上起一个静态服务 */
+const PLAY = `import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import path from 'node:path';
+import { chromium } from 'playwright-core';
+const root = '/workspace/out/site';
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
+const server = createServer(async (request, response) => {
+  const name = request.url === '/' ? 'index.html' : request.url.slice(1);
+  try {
+    const body = await readFile(path.join(root, name));
+    response.writeHead(200, { 'content-type': types[path.extname(name)] ?? 'application/octet-stream' });
+    response.end(body);
+  } catch {
+    response.writeHead(404).end();
+  }
+}).listen(0, '127.0.0.1');
+await new Promise((resolve) => server.once('listening', resolve));
+const browser = await chromium.launch();
+const page = await browser.newPage();
+await page.goto('http://127.0.0.1:' + server.address().port + '/');
+await page.click('#inc');
+await page.click('#inc');
+const count = await page.textContent('#count');
+const cover = await page.evaluate(() => document.getElementById('cover').naturalWidth > 0);
+const shot = await page.screenshot();
+await browser.close();
+server.close();
+console.log('BROWSER ' + JSON.stringify({ count, cover, shot: shot.length > 1000 }));
+`;
+
+export const solo = {
+  title: '带插图的计数网页',
+  deliverables: [{ name: '计数网页', form: '静态网页（HTML + CSS + JS）' }],
+  criteria: ['点「加一」计数加一', '页面上有一张插图'],
+  quoteTools: [{ key: 'image.generate', uses: { economy: 1, standard: 1, premium: 1 } }],
+  get request() {
+    return `做一个带插图的计数小网页 ${marker('solo')}`;
+  },
+  plan: ({ pick }) => ({
+    nodes: [
+      work(
+        'solo',
+        'site',
+        '做带插图的计数网页',
+        '做一个带插图的计数网页，交出 out/site/ 整个目录',
+        {
+          model: pick(DEFAULT_MODEL),
+          tools: [{ key: 'image.generate', uses: 1 }],
+          expects: ['site/index.html', 'site/cover.png'],
+          deliver: ['site/**'],
+        },
+      ),
+    ],
+    edges: [],
+    deliverables: { 计数网页: 'site' },
+  }),
+  nodes: {
+    site: {
+      work: [
+        {
+          bash: 'mkdir -p out/site && oasis-tool image.generate --prompt "雨夜屋顶上的橘猫，像素风" --out out/site/cover.png && ls out/site',
+          description: '生成插图',
+        },
+        {
+          bash: writeFiles({
+            'out/site/index.html': COVER_PAGE,
+            'out/site/style.css': STYLE,
+            'out/site/app.js': APP_JS,
+            'out/site/counter.js': counter(1),
+            'out/site/oasis-app.json': JSON.stringify(APP),
+            'out/site/oasis-test.json': JSON.stringify(PAGE_TEST),
+          }),
+          description: '写网页',
+        },
+        {
+          bash: `cat > /tmp/play.mjs <<'EOF'\n${PLAY}EOF\nnode /tmp/play.mjs`,
+          description: '用沙箱里的浏览器自己点一遍',
+        },
+        { bash: 'oasis-tool app.check --dir out/site', description: '按画布的方式查一次' },
+      ],
+    },
+  },
+  async run(t) {
+    const { taskId } = await t.user.createTask(this.request);
+    t.track(taskId);
+    const task = await t.user.waitTask(taskId, done, '网页交付');
+    t.check(task.nodes.length === 1, `应只有一个干活节点，实际 ${task.nodes.length} 个`);
+    const node = task.nodes[0];
+    t.check(node.reworks === 0, `自己校验过的成果关卡不应退回，实际退回 ${node.reworks} 次`);
+    t.check(!node.warning, `不应有提醒：${node.warning}`);
+    t.check(
+      t.provider.calls.some((c) => c.kind === 'image'),
+      '节点没有自己调生图工具',
+    );
+    const site = t.provider.of('solo', 'site');
+    const played = site.find((c) => c.segment === 'work' && c.action === 'bash:3');
+    t.check(
+      played?.previous?.includes('BROWSER {"count":"2","cover":true,"shot":true}'),
+      `节点应能用沙箱里的浏览器打开自己做的页面、点两下、看到插图并截图：${played?.previous ?? '没有记录'}`,
+    );
+    const checked = site.find((c) => c.segment === 'work' && c.action === 'get_goal');
+    t.check(
+      checked?.previous?.includes('浏览器检查通过'),
+      `按画布的方式自查应通过：${checked?.previous ?? '没有记录'}`,
+    );
+    const expected = [
+      'site/app.js',
+      'site/counter.js',
+      'site/cover.png',
+      'site/index.html',
+      'site/oasis-app.json',
+      'site/style.css',
+    ];
+    const artifacts = await t.user.waitArtifacts(taskId, expected);
+    const paths = artifacts.map((a) => a.path).sort();
+    for (const file of expected)
+      t.check(paths.includes(file), `画布里缺 ${file}（有：${paths.join('、')}）`);
+    const cover = artifacts.find((a) => a.path === 'site/cover.png');
+    if (cover)
+      t.check(
+        sha256(await t.user.content(cover.id)) === sha256(t.fixtures.png),
+        '画布里的插图和供应商给的图不一致',
+      );
+    const app = (await t.user.waitApplication(taskId)).find(
+      (a) => a.application?.kind === 'static',
+    );
+    t.check(app, '画布里没有可运行的网页成果');
+    if (app) await t.canvas(taskId, app, PAGE_TEST);
   },
 };

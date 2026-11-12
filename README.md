@@ -31,7 +31,7 @@ pnpm desktop        # 另开一个终端，打开 Electron 桌面窗口（产品
 
 ### Agent 运行（harness）
 
-每次 agent 运行，harness 都会通过本机 Docker 起一个沙箱容器，里面跑精确锁定版本的 DeepSeek Harness（dsh）。第一次用之前先构建沙箱镜像（含 Python 文档/数据处理库、LibreOffice、ffmpeg、PDF 工具和中文字体；需要能访问 npm、Debian 和配置的 Python 软件源）：
+每次 agent 运行，harness 都会通过本机 Docker 起一个沙箱容器，里面跑精确锁定版本的 DeepSeek Harness（dsh）。第一次用之前先构建沙箱镜像（含 Python 文档/数据处理库、LibreOffice、ffmpeg、PDF 工具、中文字体，Chromium 和 playwright-core，以及 git、pandoc、sqlite3、jq、ImageMagick、sox、ripgrep、esbuild、TypeScript 等命令行工具；需要能访问 npm、Debian 和配置的 Python 软件源）：
 
 ```bash
 pnpm sandbox:build
@@ -39,8 +39,8 @@ pnpm sandbox:build:3d
 pnpm sandbox:check
 ```
 
-- `sandbox:check` 在断网、2 核、2 GB 的临时容器中验证文档转换、中文提取、公式重算和软件清单，不调用模型；退出后删除测试文件和容器。预装 Python 库在独立环境里，直接运行 `python3` / `pip` 即可使用。
-- 构建时 Python 软件源读取根目录 `.env` 的 `SANDBOX_PIP_INDEX_URL`，通过 BuildKit secret 传入；未配置则使用 pip 默认源。软件精确版本见 `services/harness/sandbox/requirements.txt` 和 Dockerfile，`oasis-tool list` 会显示构建时实际安装的软件版本。
+- `sandbox:check` 在断网、2 核、2 GB 的临时容器中验证文档转换、中文提取、公式重算、软件清单、命令行工具和浏览器（打开本地页面、按键、读页面状态、WebGL、截图），不调用模型；退出后删除测试文件和容器。预装 Python 库在独立环境里，直接运行 `python3` / `pip` 即可使用；预装的 Node 包在 `/node_modules`，任何目录下的脚本都能直接 `import`。
+- 构建时 Python 软件源读取根目录 `.env` 的 `SANDBOX_PIP_INDEX_URL`，通过 BuildKit secret 传入；未配置则使用 pip 默认源。Debian 镜像站读 `SANDBOX_APT_MIRROR`，未配置则用 deb.debian.org。软件精确版本见 `services/harness/sandbox/requirements.txt` 和 Dockerfile，`oasis-tool list` 会显示构建时实际安装的软件版本。
 - 沙箱容器在内部网络 `oasis-sandbox` 里，**不通外网**，只能访问 `pnpm infra:up` 起的两个代理：
   - 入口代理 `sandbox-ingress`：只放行「调模型」「Jev 决策」「工具」（沙箱里的 `oasis-tool` 命令：生图、视频、配音、转写、联网搜索……）几条路径，转给 model-gateway 的 `/run/v1/*`，凭每次运行专用的临时 Key 计费。
   - 出口代理 `sandbox-egress`：只放行软件包仓库，让节点里的 AI 能 `npm install`、`pip install`。仓库地址和放行的域名在根目录 `.env`（`SANDBOX_NPM_REGISTRY`、`SANDBOX_PIP_INDEX_URL`、`SANDBOX_EGRESS_ALLOW_HOSTS`）：开发机在国内，默认用国内镜像站；部署到海外后换回官方源。

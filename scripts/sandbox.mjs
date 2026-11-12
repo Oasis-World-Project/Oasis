@@ -40,7 +40,7 @@ if (command === 'build' || command === 'build-3d') {
       '-t',
       image,
       ...(threed ? ['--build-arg', `BASE_IMAGE=${base}`] : []),
-      ...(threed && process.env.SANDBOX_APT_MIRROR
+      ...(process.env.SANDBOX_APT_MIRROR
         ? ['--build-arg', `APT_MIRROR=${process.env.SANDBOX_APT_MIRROR}`]
         : []),
       ...(process.env.SANDBOX_PIP_INDEX_URL

@@ -42,7 +42,8 @@ function toolsPart(tools: string[]): string {
     '【工具】',
     ...(tools.length ? [`- 规划建议用：${tools.join('、')}（不限于这些）。`] : []),
     '- `oasis-tool list` 列出全部工具、用法和单价；长任务没等到就按提示 `oasis-tool wait <任务号>`。',
-    '- 交互网页、3D 预览等的文件格式见 in/.oasis-formats.json。沙箱里没有浏览器，网页用 `oasis-tool app.check --dir out/<应用目录>` 在独立浏览器里跑。',
+    '- 交互网页、3D 预览等的文件格式见 in/.oasis-formats.json；沙箱里有什么（浏览器、命令行工具）见 in/.oasis-environment.json，`oasis-tool list` 也列出预装的软件和 Python、Node 包。',
+    '- `oasis-tool app.check --dir out/<应用目录>` 按画布的方式打开网页跑一遍，交付后的检查用的是同一套。',
   ].join('\n');
 }
 

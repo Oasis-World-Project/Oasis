@@ -149,13 +149,14 @@ with tempfile.TemporaryDirectory(prefix="oasis-file-tools-") as tmp:
                 "OASIS_MODEL": "test/model",
             }
             listing = run("oasis-tool", "list", env=tool_env)
-            for name in ["libreoffice-writer", "ffmpeg", "openpyxl", "pandas", "weasyprint"]:
+            for name in ["libreoffice-writer", "ffmpeg", "openpyxl", "pandas", "weasyprint", "chromium", "playwright-core"]:
                 assert name in listing.lower(), name
             for tool, row in [("text.batch", {"id": "1", "prompt": "sample"}), ("jev.decide", {"id": "1", "question": "clear?", "scale": ["bad", "good"]})]:
                 source = root / f"{tool}.jsonl"
                 source.write_text(json.dumps(row))
                 destination = f"out/{tool}.jsonl"
-                run("oasis-tool", tool, "--in", str(source), "--out", destination, cwd=root, env=tool_env)
+                # 每行的花费上限是可选的（2026-11-03 起）：这里给出来，上面的假服务核对它原样传到了请求里
+                run("oasis-tool", tool, "--in", str(source), "--out", destination, "--row_budget_micro", "200000", cwd=root, env=tool_env)
                 source.unlink()
                 run("oasis-tool", tool, "--resume", "true", "--out", destination, cwd=root, env=tool_env)
                 assert json.loads((root / destination).read_text())["status"] == "completed"
@@ -165,6 +166,97 @@ with tempfile.TemporaryDirectory(prefix="oasis-file-tools-") as tmp:
             server.shutdown()
             thread.join()
     print("PASS: oasis-tool list displays installed software", flush=True)
+
+    # 各场景预装的命令行工具：文档、数据、图片、音频、代码项目
+    for command in [
+        ("git", "--version"), ("pandoc", "--version"), ("sqlite3", "--version"), ("jq", "--version"),
+        ("magick", "-version"), ("sox", "--version"), ("rg", "--version"), ("zip", "-v"), ("unzip", "-v"),
+        ("make", "--version"), ("g++", "--version"), ("esbuild", "--version"), ("tsc", "--version"),
+    ]:
+        run(*command)
+    (root / "note.md").write_text("# 标题\n\n正文 **加粗**\n")
+    assert "<strong>加粗</strong>" in run("pandoc", str(root / "note.md"), "-t", "html")
+    assert run("sqlite3", ":memory:", "select 6 * 7;").strip() == "42"
+    assert run("jq", "-r", ".a.b", input='{"a":{"b":"ok"}}').strip() == "ok"
+    run("magick", "-size", "64x48", "xc:#3366cc", str(root / "block.png"))
+    assert Image.open(root / "block.png").size == (64, 48)
+    run("sox", "-n", "-r", "8000", str(root / "tone.wav"), "synth", "0.2", "sine", "440")
+    assert (root / "tone.wav").stat().st_size > 1000
+    (root / "entry.ts").write_text("const n: number = 6 * 7;\nconsole.log(n);\n")
+    run("esbuild", str(root / "entry.ts"), "--bundle", f"--outfile={root / 'entry.js'}")
+    assert run("node", str(root / "entry.js")).strip() == "42"
+    print("PASS: command-line tools for documents, data, images, audio and code projects", flush=True)
+
+    # 浏览器：干活的 AI 用它打开自己做的页面、按键、读页面状态、截图。页面是一个一直在动的小游戏画面。
+    site = root / "site"
+    site.mkdir()
+    (site / "index.html").write_text(
+        """<!doctype html><meta charset="utf-8"><title>躲雨</title>
+<canvas id="stage" width="800" height="600"></canvas><p id="hud">0</p>
+<script>
+const state = (window.state = { x: 0, jumped: false, frames: 0 });
+const ctx = document.getElementById('stage').getContext('2d');
+addEventListener('keydown', (event) => {
+  if (event.code === 'ArrowRight') state.x += 10;
+  if (event.code === 'Space') state.jumped = true;
+});
+function frame() {
+  state.frames += 1;
+  ctx.fillStyle = '#101830'; ctx.fillRect(0, 0, 800, 600);
+  ctx.fillStyle = '#f08a24'; ctx.fillRect(100 + state.x, 480, 48, 64);
+  ctx.fillStyle = '#9cc8ff';
+  for (let i = 0; i < 40; i += 1) ctx.fillRect((i * 53) % 800, (state.frames * 7 + i * 31) % 600, 2, 14);
+  document.getElementById('hud').textContent = String(state.frames);
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+"""
+    )
+    (root / "drive.mjs").write_text(
+        """import { chromium } from 'playwright-core';
+const [url, shot] = process.argv.slice(2);
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+const errors = [];
+page.on('pageerror', (error) => errors.push(String(error)));
+await page.goto(url);
+await page.keyboard.press('ArrowRight');
+await page.keyboard.press('Space');
+await page.waitForFunction(() => window.state.frames > 30);
+const state = await page.evaluate(() => ({
+  ...window.state,
+  webgl: Boolean(document.createElement('canvas').getContext('webgl')),
+}));
+await page.screenshot({ path: shot });
+await browser.close();
+console.log(JSON.stringify({ state, errors }));
+"""
+    )
+    url = (site / "index.html").as_uri()
+    driven = subprocess.run(
+        ["node", str(root / "drive.mjs"), url, str(root / "play.png")],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert driven.returncode == 0, driven.stderr
+    played = json.loads(driven.stdout)
+    assert played["errors"] == [], played
+    assert played["state"]["x"] == 10 and played["state"]["jumped"] and played["state"]["frames"] > 30, played
+    assert played["state"]["webgl"], "WebGL context unavailable"
+    assert len(Image.open(root / "play.png").convert("RGB").getcolors(maxcolors=2**24)) >= 3, "screenshot is one flat colour"
+    run("chromium", "--headless", f"--screenshot={root / 'cli.png'}", "--window-size=800,600", url)
+    assert (root / "cli.png").stat().st_size > 1000
+    peak = Path("/sys/fs/cgroup/memory.peak")
+    pids = Path("/sys/fs/cgroup/pids.peak")
+    usage = ", ".join(
+        f"{label} {value}"
+        for label, value in [
+            ("memory peak", f"{int(peak.read_text()) // 2**20} MiB" if peak.exists() else ""),
+            ("pids peak", pids.read_text().strip() if pids.exists() else ""),
+        ]
+        if value
+    )
+    print(f"PASS: browser drives a local page (keys, page state, WebGL, screenshot); {usage}", flush=True)
     generated_bytes = sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
 
 print(f"PASS: all software checks completed; {generated_bytes} bytes of generated files removed", flush=True)

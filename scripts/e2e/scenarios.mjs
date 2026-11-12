@@ -5,7 +5,7 @@ import { groups } from './scenarios/groups.mjs';
 import { media, video } from './scenarios/media.mjs';
 import { revise, stop, workspace } from './scenarios/revise.mjs';
 import { toolnode } from './scenarios/tools.mjs';
-import { manifest, testplan, web } from './scenarios/web.mjs';
+import { manifest, solo, testplan, web } from './scenarios/web.mjs';
 
 export { PAGE_TEST } from './scenarios/web.mjs';
 
@@ -13,6 +13,7 @@ export const SCENARIOS = {
   web,
   testplan,
   manifest,
+  solo,
   media,
   revise,
   stop,
