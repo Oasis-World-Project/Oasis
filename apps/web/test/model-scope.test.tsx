@@ -1,4 +1,4 @@
-// 「只用国内模型」开关（ADR 0027）：读出当前状态；点一下开、再点一下关，每次都存到服务端。
+// 「只用国内模型」开关：读出当前状态；点一下开、再点一下关，每次都存到服务端。
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';

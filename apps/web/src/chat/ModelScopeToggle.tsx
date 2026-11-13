@@ -1,4 +1,4 @@
-// 「＋」菜单里的「只用国内模型」开关（ADR 0027）：点一下开、再点一下关，按账号记住。
+// 「＋」菜单里的「只用国内模型」开关：点一下开、再点一下关，按账号记住。
 // 打开后这个账号的 AI 团队不用国外厂商的模型和工具型号；关着时所有模型都能用。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MapPin } from 'lucide-react';

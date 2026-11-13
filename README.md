@@ -16,7 +16,7 @@ pnpm dev            # 10 个服务 + 前端开发服务器在本机运行，改�
 pnpm desktop        # 另开一个终端，打开 Electron 桌面窗口（产品以桌面端为准）
 ```
 
-产品以桌面窗口为准（ADR 0019）；http://127.0.0.1:5173 用浏览器也能打开，只保证能用。gateway 在 http://127.0.0.1:8080 。
+产品以桌面窗口为准；http://127.0.0.1:5173 用浏览器也能打开，只保证能用。gateway 在 http://127.0.0.1:8080 。
 
 停止：在跑 `pnpm dev` 的终端按 `Ctrl + C`（服务会优雅退出）；中间件用 `pnpm infra:down` 停掉，数据保留在 Docker 数据卷里，下次 `pnpm infra:up` 接着用。
 
@@ -27,7 +27,7 @@ pnpm desktop        # 另开一个终端，打开 Electron 桌面窗口（产品
 - **登录**：打开 Web 端，输入任意邮箱获取验证码。本地不会真的发邮件，验证码在 Mailpit 收件箱 http://127.0.0.1:8025 里看。新邮箱第一次登录即注册，几秒内到账 $30 额度。
 - **接入模型**：在 `services/model-gateway/.env` 里填上 `OPENROUTER_API_KEY=sk-or-...`，然后重启 `pnpm dev`。这个文件不进 git，Key 不要贴到聊天或提交里。没填 Key 时页面能正常打开，发消息会提示「模型服务还没有配置好」。
 - **地区限制**：OpenRouter 按发出请求的网络判断地区。部分模型（目前是 Claude、GPT、Gemini）在一些地区用不了，界面会提示「这个 AI 在当前网络所在的地区用不了」，这次调用不扣钱。换到这些模型支持的网络，或者部署到海外服务器上就能用。
-- **计费**：每次调用先冻结一笔预估金额，完成后按 OpenRouter 报告的实际花费 × `BILLING_PRICE_MULTIPLIER`（billing 的配置，默认 1.0）扣除，多冻结的部分退回。规则见 [ADR 0002](docs/adr/0002-auth-billing-chat-loop.md)。
+- **计费**：每次调用先冻结一笔预估金额，完成后按 OpenRouter 报告的实际花费 × `BILLING_PRICE_MULTIPLIER`（billing 的配置，默认 1.0）扣除，多冻结的部分退回。规则见 [账号与计费](docs/design/账号与计费.md)。
 
 ### Agent 运行（harness）
 
@@ -44,15 +44,15 @@ pnpm sandbox:check
 - 沙箱容器在内部网络 `oasis-sandbox` 里，**不通外网**，只能访问 `pnpm infra:up` 起的两个代理：
   - 入口代理 `sandbox-ingress`：只放行「调模型」「Jev 决策」「工具」（沙箱里的 `oasis-tool` 命令：生图、视频、配音、转写、联网搜索……）几条路径，转给 model-gateway 的 `/run/v1/*`，凭每次运行专用的临时 Key 计费。
   - 出口代理 `sandbox-egress`：只放行软件包仓库，让节点里的 AI 能 `npm install`、`pip install`。仓库地址和放行的域名在根目录 `.env`（`SANDBOX_NPM_REGISTRY`、`SANDBOX_PIP_INDEX_URL`、`SANDBOX_EGRESS_ALLOW_HOSTS`）：开发机在国内，默认用国内镜像站；部署到海外后换回官方源。
-  - 访问其他任何地址都会失败。设计见 [ADR 0006](docs/adr/0006-tools-and-capability-gateway.md)。
+  - 访问其他任何地址都会失败。设计见 [工具与沙箱](docs/design/工具与沙箱.md)。
 - 算力按沙箱运行时长 × CPU 核数计费（model-gateway 的 `COMPUTE_PRICE_MICRO_PER_CORE_HOUR`，默认每核每小时 $0.015；设为 0 就不计费）。
 - 本机开发时 model-gateway 跑在宿主机上，入口代理经 `host.docker.internal:4108` 访问它。Docker Desktop（Windows / macOS）上默认配置就能通（2026-10-22 在 Windows 上实测）；在 Linux 宿主机上要把 `services/model-gateway/.env` 里的 `HOST` 改成 `0.0.0.0`（这会让局域网也能访问 4108，只在自己电脑上这样做）。
-- harness 的 `/ready` 会检查 Docker、沙箱镜像和网络是否都在。设计见 [ADR 0003](docs/adr/0003-task-workflow.md)。
-- `pnpm dev` 中 harness 使用稳定进程，不随源码变动自动重启；修改它后手动重启开发服务。重启会接管原运行和原生会话，`/workspace` 与会话目录保留在带 Oasis 标签的 named volume 中，任务删除后一起清理。项目依赖装进工作目录（如 `.venv`、`node_modules`），不要修改镜像内的系统环境来保存任务状态。接管依赖暂不可用时保留进度等待恢复，用户停止/取消意图优先处理；详见 [ADR 0015](docs/adr/0015-persistent-node-execution.md)。
+- harness 的 `/ready` 会检查 Docker、沙箱镜像和网络是否都在。设计见 [工具与沙箱](docs/design/工具与沙箱.md)。
+- `pnpm dev` 中 harness 使用稳定进程，不随源码变动自动重启；修改它后手动重启开发服务。重启会接管原运行和原生会话，`/workspace` 与会话目录保留在带 Oasis 标签的 named volume 中，任务删除后一起清理。项目依赖装进工作目录（如 `.venv`、`node_modules`），不要修改镜像内的系统环境来保存任务状态。接管依赖暂不可用时保留进度等待恢复，用户停止/取消意图优先处理；详见 [任务与工作流](docs/design/任务与工作流.md)。
 
 ### 检查（inspector）
 
-判断成果的检查都在 inspector（ADR 0024）：文件解析、音视频解码、网页的浏览器检查（交付关卡、节点里的 `oasis-tool app.check`、外站测试 `website.test`）、模型预览、素材解析。它不调别的服务、不存东西，要检查的内容由调用方给对象存储的临时下载链接，或直接放在请求里。
+判断成果的检查都在 inspector：文件解析、音视频解码、网页的浏览器检查（交付关卡、节点里的 `oasis-tool app.check`、外站测试 `website.test`）、模型预览、素材解析。它不调别的服务、不存东西，要检查的内容由调用方给对象存储的临时下载链接，或直接放在请求里。
 
 - 音视频解码在不联网、限核的检查容器里做，用沙箱基础镜像（`pnpm sandbox:build`）。
 - 网页的浏览器检查在检查浏览器容器里做（Playwright + Chromium，应用和浏览器同容器、无外部网络），第一次用之前构建镜像，可以顺手烟测一遍（不花钱）：
@@ -80,8 +80,8 @@ pnpm browser:smoke
 | canvas | 4106 | 成果、批注、文件 | 经 gateway |
 | harness | 4107 | Agent 运行时（唯一接触 DeepSeek Harness） | 仅内部 |
 | model-gateway | 4108 | 所有模型调用的唯一出口，计量上报 billing | 仅内部 |
-| inspector | 4109 | 检查成果：文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览、素材解析（不调别的服务、不存东西，ADR 0024） | 仅内部 |
-| model-gateway（数字人入口） | 4118 | 只有 `/avatar/v1/chat/completions`，给 LiveAvatar 回调大模型（ADR 0013）；开发期经 `pnpm avatar:tunnel` 和服务器 nginx 暴露为 `https://oasis-dev.elysiumgrid.space/avatar/v1` | 只这一条路径公网可达 |
+| inspector | 4109 | 检查成果：文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览、素材解析（不调别的服务、不存东西） | 仅内部 |
+| model-gateway（数字人入口） | 4118 | 只有 `/avatar/v1/chat/completions`，给 LiveAvatar 回调大模型；开发期经 `pnpm avatar:tunnel` 和服务器 nginx 暴露为 `https://oasis-dev.elysiumgrid.space/avatar/v1` | 只这一条路径公网可达 |
 
 每个服务都有 `/health`（进程存活）、`/ready`（依赖可用）、`/v1/meta`（服务名、版本、提交号）。业务接口放在 `/v1/*`，只给服务之间调用的放在 `/internal/*`（gateway 不转发）。
 
@@ -104,7 +104,7 @@ services/   10 个微服务，各自独立数据库（inspector 不用数据库�
 packages/   contracts（契约）、service-kit（服务启动底座）、design-tokens（设计令牌）、tsconfig
 infra/      本地编排（docker compose）
 scripts/    工程检查、清理、环境初始化
-docs/       工程方向、架构决策记录（ADR）
+docs/       工程方向、现在是怎么做的（design）、回归测试
 ```
 
 ## 常用命令

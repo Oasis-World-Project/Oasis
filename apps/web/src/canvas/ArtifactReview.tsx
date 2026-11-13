@@ -1,4 +1,4 @@
-// 成果页的预览加批注（ADR 0012 §9，外观照原型 ⑨⑩）：顶栏的批注图标打开批注模式——底部悬浮工具条（圈 / 画笔 / 点 / 完成），
+// 成果页的预览加批注（外观照原型 ⑨⑩）：顶栏的批注图标打开批注模式——底部悬浮工具条（圈 / 画笔 / 点 / 完成），
 // 右侧批注列表（点一条翻到那一页、跳到那一刻；可以删），画好一处就在侧栏写意见，写好立即保存；列表底部「发给 AI 团队修改」。
 import type { Annotation, ArtifactBody } from '@oasis/contracts/canvas';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -63,7 +63,7 @@ export function ArtifactReview({
 }) {
   const queryClient = useQueryClient();
   const kind = previewKindOf(artifact.path);
-  // 网页、应用和 3D 模型在运行；桌面端截下当前画面来画（3D 截的是此刻的视角，ADR 0020），浏览器里只能写意见
+  // 网页、应用和 3D 模型在运行；桌面端截下当前画面来画（3D 截的是此刻的视角），浏览器里只能写意见
   const capturable = !!desktop()?.capturePage;
   const surface =
     live || kind === 'page' || kind === 'model'

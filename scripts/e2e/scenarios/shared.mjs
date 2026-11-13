@@ -28,7 +28,7 @@ export function work(scenario, key, title, goal, extra) {
 }
 
 /**
- * 规划员交的方案按成果排（ADR 0030）。场景里按节点和连线写，这里换成成果：干活节点各是一样由 AI 做的成果，
+ * 规划员交的方案按成果排。场景里按节点和连线写，这里换成成果：干活节点各是一样由 AI 做的成果，
  * 连到它的线是它的 needs；其余节点（工具、展开）同在一条生产线里。
  */
 export function outcomes({ nodes, edges = [], deliverables }) {

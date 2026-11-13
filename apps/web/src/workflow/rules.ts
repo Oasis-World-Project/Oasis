@@ -1,5 +1,5 @@
-// 节点的状态怎么显示、现在能做什么（和 task 的规则一致，见 ADR 0004 §3–4），运行记录怎么写成普通话，
-// 以及一样成果做到哪了（AI 自己列的任务清单，ADR 0030 §3.2）。
+// 节点的状态怎么显示、现在能做什么（和 task 的规则一致），运行记录怎么写成普通话，
+// 以及一样成果做到哪了（AI 自己列的任务清单）。
 import type { RunEventBody } from '@oasis/contracts/harness';
 import type {
   NodeBody,
@@ -52,7 +52,7 @@ const ACTIVE: NodeStatus[] = ['running', 'checking'];
 /** 任务这几个状态下工作流不能操作 */
 const FROZEN: TaskBody['status'][] = ['planning', 'accepting', 'succeeded', 'failed', 'cancelled'];
 
-/** 能不能停止、继续、发话；修改方案在排、等确认时也不能（方案按现在的节点排，ADR 0022） */
+/** 能不能停止、继续、发话；修改方案在排、等确认时也不能（方案按现在的节点排） */
 export const canOperate = (task: TaskBody) => !FROZEN.includes(task.status) && !task.revision;
 
 /** 任务状态的叫法：修改时规划员在排方案叫「正在规划修改」，等确认叫「修改方案待确认」 */
@@ -66,7 +66,7 @@ export function taskStatusOf(
   return TASK_STATUS[task.status];
 }
 
-/** 修改方案里每个节点怎么处理（ADR 0022） */
+/** 修改方案里每个节点怎么处理 */
 export const REVISION_CHANGE: Record<RevisionChange, string> = {
   reuse: '沿用',
   continue: '接着改',
@@ -83,10 +83,10 @@ function upstreamReady(task: TaskBody, node: NodeBody): boolean {
     .every((e) => task.nodes.find((n) => n.id === e.from)?.status === 'succeeded');
 }
 
-/** 展开节点、做几版的节点（ADR 0026）：自己不跑，开子节点去做 */
+/** 展开节点、做几版的节点：自己不跑，开子节点去做 */
 const isGroup = (node: NodeBody) => node.kind === 'foreach' || (node.variants?.n ?? 0) > 1;
 
-/** 一个 AI 从头做到交付的成果（ADR 0030 §3.1）：不在生产线里、自己干活的节点 */
+/** 一个 AI 从头做到交付的成果：不在生产线里、自己干活的节点 */
 export const isAgentOutcome = (node: NodeBody) =>
   node.kind === 'work' && !node.parentId && !node.line && !isGroup(node);
 
@@ -94,10 +94,10 @@ export const isAgentOutcome = (node: NodeBody) =>
 export const childrenOf = (task: TaskBody, node: NodeBody) =>
   task.nodes.filter((n) => n.parentId === node.id).sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
 
-/** 一样成果现在能做什么（ADR 0030 §3.2）：停止、继续、发话。节点和连线不能改 */
+/** 一样成果现在能做什么：停止、继续、发话。节点和连线不能改 */
 export function nodeActions(task: TaskBody, node: NodeBody) {
   const open = canOperate(task);
-  // 子节点跟着父节点（ADR 0026）：父节点在跑时可以单独再跑它
+  // 子节点跟着父节点：父节点在跑时可以单独再跑它
   const parent = node.parentId ? task.nodes.find((n) => n.id === node.parentId) : undefined;
   return {
     /** 停下的继续、失败的再试 */
@@ -263,7 +263,7 @@ export interface FrameRow {
   text: string;
 }
 
-/** 中途调整（ADR 0030 §3.7）写成一句：规划员还在答复时是「正在调整」，之后是改了什么 */
+/** 中途调整写成一句：规划员还在答复时是「正在调整」，之后是改了什么 */
 export const adjustText = (node: NodeBody) =>
   node.adjust ? `${node.adjust.asking ? '正在调整' : '调整'}：${node.adjust.note}` : null;
 

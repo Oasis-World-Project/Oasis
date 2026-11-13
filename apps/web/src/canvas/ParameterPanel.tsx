@@ -1,4 +1,4 @@
-// 参数面板（ADR 0012 §12）：成品参数的表单，每项默认「不变」。
+// 参数面板：成品参数的表单，每项默认「不变」。
 // 能预览的改了就在画面上看到（近似效果）；填好后「按这些参数改一版」交给修改对话框。
 import type { RevisionParameter } from '@oasis/contracts/task';
 import { RotateCcw, Sparkles, X } from 'lucide-react';

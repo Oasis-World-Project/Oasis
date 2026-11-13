@@ -1,4 +1,4 @@
-// 桌面端（Electron）给页面开放的接口（ADR 0007 §10）：preload 用 contextBridge 挂在 window.oasisDesktop 上。
+// 桌面端（Electron）给页面开放的接口：preload 用 contextBridge 挂在 window.oasisDesktop 上。
 // 只开放这几个明确的能力；写文件只能写进用户自己选的同步文件夹。
 
 export interface DesktopSyncStatus {
@@ -16,7 +16,7 @@ export interface OasisDesktop {
    * 把一个成果写进同步文件夹的 relativePath（相对路径，不能跳出文件夹）。
    * artifactId：成果 id；同一个成果修改后原地换成新版时是「id@新摘要」，这样会再同步一次。
    * replacesSha256：修改出的新版要替换的旧文件摘要；那里的文件正是旧版（用户没改过）就覆盖，
-   * 否则另存为「名字 (新版).扩展名」（ADR 0012）。
+   * 否则另存为「名字 (新版).扩展名」。
    */
   beginSyncedFile(
     artifactId: string,
@@ -32,7 +32,7 @@ export interface OasisDesktop {
   openSyncFolder(): Promise<void>;
   /**
    * 截取本窗口里这块区域（CSS 像素，相对窗口可视区）当前的真实画面，返回 PNG。
-   * 用于在运行中的应用上批注（ADR 0009 §18）：隔离框里的画面页面自己读不到，只有主进程能截。旧版桌面端没有这个能力。
+   * 用于在运行中的应用上批注：隔离框里的画面页面自己读不到，只有主进程能截。旧版桌面端没有这个能力。
    */
   capturePage?(rect: DesktopCaptureRect): Promise<Uint8Array>;
 }

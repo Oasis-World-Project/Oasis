@@ -16,7 +16,7 @@ export * from './workflow-edit.ts';
 export * from './workflow-plan.ts';
 
 /**
- * 任务单（ADR 0005 §3）：私聊里的 AI 问完需求后给出，用户确认后交给规划员，也会交给每个节点。
+ * 任务单：私聊里的 AI 问完需求后给出，用户确认后交给规划员，也会交给每个节点。
  * 「怎么算做好」会变成节点关卡和整体验收的验收点。
  */
 export const TaskSheet = z.object({
@@ -47,14 +47,14 @@ export type TaskSheet = z.infer<typeof TaskSheet>;
 
 /**
  * POST /internal/tasks：建任务。两种方式，只能选一种：
- * - sheet：用户确认的任务单（私聊接需求），由规划员排出工作流再开跑（ADR 0005）；
+ * - sheet：用户确认的任务单（私聊接需求），由规划员排出工作流再开跑；
  * - plan：直接给出工作流方案，校验后立即开跑（测试和联调用）。
  */
 export const CreateTaskBody = z
   .object({
     /**
      * 调用方事先定好的任务 ID：同一个 ID 再提交一次直接返回已经建好的任务，
-     * 确认任务单超时后重试不会建出第二个（ADR 0005 §2026-11-04）。
+     * 确认任务单超时后重试不会建出第二个。
      */
     id: z.uuid().optional(),
     ownerId: z.uuid(),
@@ -73,7 +73,7 @@ export const CreateTaskBody = z
   });
 export type CreateTaskBody = z.input<typeof CreateTaskBody>;
 
-/** 修改时带上的一条批注（ADR 0012 §9）：在哪个文件、哪里、什么意见，见哪张标注截图 */
+/** 修改时带上的一条批注：在哪个文件、哪里、什么意见，见哪张标注截图 */
 export const RevisionNote = z.object({
   file: z.string().trim().min(1).max(200),
   number: z.number().int().min(1).max(99),
@@ -86,7 +86,7 @@ export const RevisionNote = z.object({
 });
 export type RevisionNote = z.infer<typeof RevisionNote>;
 
-/** 参数面板里改的一项成品参数（ADR 0012 §12），如「字幕字号：大」 */
+/** 参数面板里改的一项成品参数，如「字幕字号：大」 */
 export const RevisionParameter = z.object({
   file: z.string().trim().min(1).max(200),
   name: z.string().trim().min(1).max(40),
@@ -95,7 +95,7 @@ export const RevisionParameter = z.object({
 export type RevisionParameter = z.infer<typeof RevisionParameter>;
 
 /**
- * 修改成果（ADR 0012；2026-11-05 起直接交给 AI 团队）：在原任务里接着改，交付节点带着修改意见
+ * 修改成果（2026-11-05 起直接交给 AI 团队）：在原任务里接着改，交付节点带着修改意见
  * 接着原会话改、下游跟着更新；附件（参考图、标注截图）并进任务素材。不经过任何私聊，
  * 私聊删了也照样能改。只有已结束的任务能改。
  */
@@ -108,7 +108,7 @@ export const TaskRevisionBody = z
     /** 先传到 canvas 的文件 id（参考图、标注截图）；和任务素材同一个上限 */
     attachments: z.array(z.uuid()).max(20).default([]),
     /**
-     * 意见针对的成果是哪些节点交出的（批注所在成果、当前打开的成果；ADR 0021 §7）。
+     * 意见针对的成果是哪些节点交出的（批注所在成果、当前打开的成果）。
      * 只让这些交付节点接着改；没给或都不是交付节点时，只改最下游的交付节点。
      */
     nodeIds: z.array(z.uuid()).max(50).default([]),
@@ -122,10 +122,10 @@ export type TaskRevisionBody = z.input<typeof TaskRevisionBody>;
 export type CreateTaskInput = z.infer<typeof CreateTaskBody>;
 
 export const TaskStatus = z.enum([
-  /** 规划员正在按任务单排工作流（ADR 0005 §4） */
+  /** 规划员正在按任务单排工作流 */
   'planning',
   'running',
-  /** 工作流跑完了，正在对照任务单整体验收（ADR 0005 §5） */
+  /** 工作流跑完了，正在对照任务单整体验收 */
   'accepting',
   'stopped',
   /** 需要用户处理：节点重做超过上限、工作流断开、没排出方案、修改方案等确认 */
@@ -155,7 +155,7 @@ export const Attention = z.object({
     'node_failed',
     'workflow_broken',
     'plan_failed',
-    /** 修改方案排好了，等用户确认（ADR 0022） */
+    /** 修改方案排好了，等用户确认 */
     'revision_plan',
   ]),
   nodeId: z.uuid().nullable(),
@@ -169,7 +169,7 @@ export const NodeBody = z.object({
   title: z.string(),
   kind: z.enum(['work', 'discussion', 'tool', 'foreach']),
   /**
-   * 子节点（ADR 0026）：展开出来的一条、或做几版里的一版，属于哪个节点、第几条 / 第几版；
+   * 子节点：展开出来的一条、或做几版里的一版，属于哪个节点、第几条 / 第几版；
    * 工作流图里的节点为 null（旧版 task 不返回时当作 null）
    */
   parentId: z.uuid().nullable().optional(),
@@ -204,11 +204,11 @@ export const NodeBody = z.object({
   /** 属于哪条生产线（画布把同一条生产线的节点框在一起）；一个 AI 做的成果为 null */
   line: z.object({ key: z.string(), title: z.string() }).nullable().default(null),
   /**
-   * 中途调整（ADR 0030 §3.7）：这样成果提出了调整（asking：规划员还在答复，note 是它要什么），
+   * 中途调整：这样成果提出了调整（asking：规划员还在答复，note 是它要什么），
    * 或被调整过（note 是改了什么）；没有为 null
    */
   adjust: z.object({ asking: z.boolean(), note: z.string() }).nullable().default(null),
-  /** 工具节点要执行的步骤（ADR 0025）；其他节点为 null */
+  /** 工具节点要执行的步骤；其他节点为 null */
   steps: z.array(ToolStep).nullable().default(null),
   /** 讨论节点的参与者、轮数和讨论记录；干活节点为 null */
   discussion: z
@@ -247,7 +247,7 @@ export const EdgeBody = z.object({
 });
 export type EdgeBody = z.infer<typeof EdgeBody>;
 
-/** 一版工作流的概况（ADR 0022） */
+/** 一版工作流的概况 */
 export const WorkflowVersionMeta = z.object({
   version: z.number().int().positive(),
   /** 这一版是按哪条修改意见做出来的；第 1 版为 null */
@@ -262,7 +262,7 @@ export type WorkflowVersionMeta = z.infer<typeof WorkflowVersionMeta>;
 export const RevisionChange = z.enum(['reuse', 'continue', 'fresh', 'new', 'remove']);
 export type RevisionChange = z.infer<typeof RevisionChange>;
 
-/** 进行中的修改（ADR 0022）：规划员在排方案，或方案排好了等用户确认 */
+/** 进行中的修改：规划员在排方案，或方案排好了等用户确认 */
 export const PendingRevision = z.object({
   /** 确认后会成为第几版 */
   version: z.number().int().positive(),
@@ -285,7 +285,7 @@ export const TaskBody = z.object({
   /** 用户确认的任务单（直接给方案建的任务没有） */
   sheet: TaskSheet.nullable(),
   /**
-   * 整体验收结果（ADR 0017：只核对交付文件齐不齐）：unmet 是补过一次仍缺的文件，unchecked 是没检查到的；
+   * 整体验收结果（只核对交付文件齐不齐）：unmet 是补过一次仍缺的文件，unchecked 是没检查到的；
    * 都只是提醒，照样交付。还没验收时为 null。
    */
   acceptance: z
@@ -315,7 +315,7 @@ export const TaskBody = z.object({
   ),
   nodes: z.array(NodeBody),
   edges: z.array(EdgeBody),
-  /** 当前是第几版工作流（ADR 0022）；旧版 task 不返回时当作第 1 版 */
+  /** 当前是第几版工作流；旧版 task 不返回时当作第 1 版 */
   version: z.number().int().positive().default(1),
   /** 冻结的旧版工作流（只读查看） */
   versions: z.array(WorkflowVersionMeta).default([]),
@@ -328,7 +328,7 @@ export const TaskBody = z.object({
 });
 export type TaskBody = z.infer<typeof TaskBody>;
 
-/** 冻结的一版工作流（ADR 0022）：节点和连线照冻结时的样子，只读 */
+/** 冻结的一版工作流：节点和连线照冻结时的样子，只读 */
 export const WorkflowVersionBody = WorkflowVersionMeta.extend({
   nodes: z.array(NodeBody),
   edges: z.array(EdgeBody),
@@ -343,7 +343,7 @@ export const TaskSummary = z.object({
   nodesDone: z.number().int().nonnegative(),
   nodesTotal: z.number().int().nonnegative(),
   spentMicro: z.number().int().nonnegative(),
-  /** 修改中（ADR 0022，在原任务里改） */
+  /** 修改中（在原任务里改） */
   revising: z.boolean().default(false),
   createdAt: z.iso.datetime(),
 });
@@ -352,13 +352,13 @@ export type TaskSummary = z.infer<typeof TaskSummary>;
 export const TaskList = z.object({ tasks: z.array(TaskSummary) });
 
 /**
- * 节点的一次运行（ADR 0007 §6）：节点详情里按时间列出，点开看这次的运行过程。
+ * 节点的一次运行：节点详情里按时间列出，点开看这次的运行过程。
  * work 第一次做或失败后重做；rework 关卡没过后接着原会话改；speech 讨论里一位参与者的一次发言；summary 汇总；
- * pick 做几版挑一版时挑选的那次（ADR 0026）。停止后继续也是一次新运行（接着原会话）。
+ * pick 做几版挑一版时挑选的那次。停止后继续也是一次新运行（接着原会话）。
  */
 export const NodeRunBody = z.object({
   id: z.uuid(),
-  /** adjust：这样成果的 AI 提出了调整，规划员答复的那次（ADR 0030 §3.7） */
+  /** adjust：这样成果的 AI 提出了调整，规划员答复的那次 */
   purpose: z.enum(['work', 'rework', 'speech', 'summary', 'pick', 'adjust']),
   status: z.enum(['pending', 'running', 'succeeded', 'failed', 'cancelled', 'stopped']),
   /** 第几次（含重做） */

@@ -8,7 +8,7 @@
 ## A. 项目速览
 
 - 产品：人 + 多家 AI 共处的社交娱乐空间。当前阶段是 MVP（任务闭环）；不做任何付费，新用户注册送 $30 额度，所有模型和工具调用都从额度里扣。
-- 架构的单一事实源：`docs/engineering/项目工程方向.md`；已做的决定：`docs/adr/`。
+- 架构的单一事实源：`docs/engineering/项目工程方向.md`；现在是怎么做的：`docs/design/`（架构、任务与工作流、工具与沙箱、检查与交付、账号与计费、前端），做法变了就改那里；为什么这么定在提交说明和 git 历史里。
 - 云服务器（开发期数字人入口、怎么连、哪些不能动）：`docs/ops/云服务器.md`。
 - 目录：`apps/`（web、desktop）· `services/`（10 个微服务）· `packages/`（契约、基础设施库、设计令牌、tsconfig）· `infra/`（本地编排）· `scripts/`（检查与清理）· `docs/`。
 
@@ -19,7 +19,7 @@
 | `pnpm dev` | 10 个服务 + Web（Vite，http://127.0.0.1:5173）在本机运行，改代码自动重启 / 热更新 |
 | `pnpm desktop` | 打开 Electron 桌面窗口（加载上面的 Web 地址，需先 `pnpm dev`） |
 | `pnpm stack:up` / `stack:logs` | 中间件 + 10 个服务全部在容器里跑（集成验证）/ 看日志 |
-| `pnpm sandbox:build` · `sandbox:check:ops` | 构建 agent 沙箱镜像 `oasis/harness-sandbox-base:<dsh 版本>`；离线验收镜像里的本地操作 `oasis-op` 和工具节点的步骤执行器（ADR 0025） |
+| `pnpm sandbox:build` · `sandbox:check:ops` | 构建 agent 沙箱镜像 `oasis/harness-sandbox-base:<dsh 版本>`；离线验收镜像里的本地操作 `oasis-op` 和工具节点的步骤执行器 |
 | `pnpm browser:build` · `browser:smoke` | 构建 inspector 的检查浏览器镜像 `oasis/inspector-browser:<Playwright 版本>`；本机烟测（静态网页、Node 应用按交付关卡的路子各查一遍，外站测一次） |
 | `pnpm lint` · `pnpm typecheck` · `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、服务调用无环、依赖方向、死代码、重复率、迁移检查 |
@@ -33,11 +33,11 @@
 ## B. 架构约定
 
 1. **微服务边界**：每个服务独占数据库（同一个 PostgreSQL 实例里的独立 database + 独立账号，其他账号连不上）。服务之间只走 HTTP API 或 NATS 事件；跨服务 import 由 dependency-cruiser 拦截。
-   - **同步调用只往一个方向走（ADR 0024）**：task → harness、model-gateway、inspector；harness → model-gateway；model-gateway → inspector。判断成果的检查（文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览、素材解析）只在 inspector，它不调任何服务、不存东西，检查的内容由调用方给临时下载链接或放在请求里；开容器的检查由付钱的调用方定核数，算力在 model-gateway 冻结、按报回的用量结算。`pnpm check:engineering` 的「服务调用无环」按 `createServiceClient('<对方>')` 画调用图拦截新的环；画布的 canvas → task、canvas → model-gateway 两条边是已知例外，画布重整时再拆。
-2. **共享包**：`packages/*` 只放契约（contracts）、基础设施库（service-kit）、画布运行网页的组装规则（live-page，画布和检查共用，ADR 0021）、设计令牌和 tsconfig，不放业务逻辑。
-3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness（含 `profile/` 下 Oasis 自己的 dsh 组合）；dsh 版本精确锁定在沙箱镜像里。沙箱只能经入口代理访问 model-gateway 的 `/run/v1/*`，以及经出口代理访问明确放行的软件包仓库；不得直连外网、宿主机或内部服务，不得开放其他网络通路（ADR 0003、ADR 0006 §7）。
+   - **同步调用只往一个方向走**：task → harness、model-gateway、inspector；harness → model-gateway；model-gateway → inspector。判断成果的检查（文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览、素材解析）只在 inspector，它不调任何服务、不存东西，检查的内容由调用方给临时下载链接或放在请求里；开容器的检查由付钱的调用方定核数，算力在 model-gateway 冻结、按报回的用量结算。`pnpm check:engineering` 的「服务调用无环」按 `createServiceClient('<对方>')` 画调用图拦截新的环；画布的 canvas → task、canvas → model-gateway 两条边是已知例外，画布重整时再拆。
+2. **共享包**：`packages/*` 只放契约（contracts）、基础设施库（service-kit）、画布运行网页的组装规则（live-page，画布和检查共用）、设计令牌和 tsconfig，不放业务逻辑。
+3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness（含 `profile/` 下 Oasis 自己的 dsh 组合）；dsh 版本精确锁定在沙箱镜像里。沙箱只能经入口代理访问 model-gateway 的 `/run/v1/*`，以及经出口代理访问明确放行的软件包仓库；不得直连外网、宿主机或内部服务，不得开放其他网络通路。
 4. **模型调用**：所有模型调用（聊天、Jev、dsh 里的 agent）都经过 `services/model-gateway`，由它计量并上报 billing。
-5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。全仓库的 TS/JS 文件（含测试和脚本）不超过 500 行，ESLint `max-lines` 拦截（2026-11-08 从四个服务扩到全仓库）；当时已经超长的文件在 `eslint.config.mjs` 的 `LONG_FILES` 里按当时的行数封顶、只许变短，要往里加东西先拆开，拆到 500 行以内就从表里删掉；task 的每种节点是一个插件（`src/service/kinds/`），引擎不认识具体种类，加新种类不改引擎（ADR 0023）。工具节点（`kind: tool`，ADR 0025）不用 AI：harness 起工具运行（`model: oasis/tool` + `steps`），沙箱里跑步骤执行器 `oasis-steps` 而不是 dsh；工具参数的定义只有 `packages/contracts/src/tool-args.ts`、`ops.ts` 一份，网关目录、规划门、沙箱里的 `oasis-op` 共用。展开节点（`kind: foreach`）和做几版挑一版（`variants`）开子节点（ADR 0026）：节点表的 `parent_id`、`slot`；组节点自己不跑、不占名额，引擎在 `engine/groups.ts`、`expand.ts`；并发分两个池（`schedule.ts` 的 `poolUse`）：AI 和工作流图里的节点 ≤ `MAX_PARALLEL_NODES`（3），工具子节点和看图挑选 ≤ `MAX_PARALLEL_TOOL_CHILDREN`（6）。
+5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。全仓库的 TS/JS 文件（含测试和脚本）不超过 500 行，ESLint `max-lines` 拦截（2026-11-08 从四个服务扩到全仓库）；当时已经超长的文件在 `eslint.config.mjs` 的 `LONG_FILES` 里按当时的行数封顶、只许变短，要往里加东西先拆开，拆到 500 行以内就从表里删掉；task 的每种节点是一个插件（`src/service/kinds/`），引擎不认识具体种类，加新种类不改引擎。工具节点（`kind: tool`）不用 AI：harness 起工具运行（`model: oasis/tool` + `steps`），沙箱里跑步骤执行器 `oasis-steps` 而不是 dsh；工具参数的定义只有 `packages/contracts/src/tool-args.ts`、`ops.ts` 一份，网关目录、规划门、沙箱里的 `oasis-op` 共用。展开节点（`kind: foreach`）和做几版挑一版（`variants`）开子节点：节点表的 `parent_id`、`slot`；组节点自己不跑、不占名额，引擎在 `engine/groups.ts`、`expand.ts`；并发分两个池（`schedule.ts` 的 `poolUse`）：AI 和工作流图里的节点 ≤ `MAX_PARALLEL_NODES`（3），工具子节点和看图挑选 ≤ `MAX_PARALLEL_TOOL_CHILDREN`（6）。
 6. **配置外置**：配置全部来自环境变量，每个服务提供 `.env.example`；禁止硬编码地址、端口、密钥；禁止 `if (env === 'local')` 一类分支。
 7. **运行时**：结构化 JSON 日志输出到 stdout；每个服务暴露 `/health` 和 `/ready`；收到 SIGTERM 后处理完在途请求再退出。
 8. **数据库迁移**：dbmate 纯 SQL。文件头写 `-- phase: expand|migrate|contract`，必须有 `-- migrate:down`；expand 迁移必须写 `-- contract-plan:`。`pnpm check:engineering` 会检查这几项。
@@ -47,10 +47,10 @@
     - compose 里每个服务必须同时写 `image: oasis/...`、`build:` 和 `pull_policy: build`：只在本地构建，绝不从镜像仓库拉取，因为 Docker Hub 上的 `oasis` 命名空间不归我们。
     - 脚本里的 `docker build` 必须带 `-t oasis/<组件>:<标签>`。
     - `pnpm check:engineering` 的 images 检查和 pre-commit 钩子会强制执行这一条。
-    - **云渲染 worker 限定例外（用户 2026-10-27 确认）**：仅为 5.9 云渲染 worker，允许将本地构建并验证的 `oasis/harness-render:<精确标签>` 发布到用户明确指定且拥有控制权的私有 registry，由云端凭只读权限按不可变 SHA-256 摘要拉取。远端完整地址可增加 registry 主机与用户自有命名空间，仓库末段必须保持 `oasis/harness-render`；禁止未指定仓库、公开发布、`latest` 和不归用户所有的 Docker Hub `oasis` 命名空间。镜像中不得包含密钥、`.env`、用户文件或会话。本地 Compose 的命名、build、`pull_policy: build` 与沙箱网络边界保持不变。远端发布前必须具备显式发布描述和 registry/仓库/digest 白名单检查，不能整体放宽本地镜像检查。规则允许范围本身不构成创建资源、发布镜像或付费测试的授权，具体执行遵循用户当前授权；详见 ADR 0011 §12.2。
-11. **服务骨架**：每个服务都用 `@oasis/service-kit` 的 `startService` 启动，不自己写监听、探针、信号处理。统一接口：`/health`、`/ready`、`/v1/meta`；业务接口放 `/v1/*`，服务间接口放 `/internal/*`（gateway 不转发）。端口：gateway 8080，其余 4101–4109（见 README）。唯一例外：model-gateway 另开 4118 的数字人入口（同样用 service-kit 的 `createHttpServer`），只有一条路径，给 LiveAvatar 回调大模型；不和主端口合并，因为主端口的 `/internal/*` 只认请求头里的付费人（ADR 0013 §6）。Node 服务的镜像统一用 `infra/images/node-service/Dockerfile` 按 `SERVICE` 参数构建。相对导入写 `.ts` 后缀，只用可擦除的 TS 语法（不用 enum、namespace、参数属性）。
+    - **云渲染 worker 限定例外（用户 2026-10-27 确认）**：仅为 5.9 云渲染 worker，允许将本地构建并验证的 `oasis/harness-render:<精确标签>` 发布到用户明确指定且拥有控制权的私有 registry，由云端凭只读权限按不可变 SHA-256 摘要拉取。远端完整地址可增加 registry 主机与用户自有命名空间，仓库末段必须保持 `oasis/harness-render`；禁止未指定仓库、公开发布、`latest` 和不归用户所有的 Docker Hub `oasis` 命名空间。镜像中不得包含密钥、`.env`、用户文件或会话。本地 Compose 的命名、build、`pull_policy: build` 与沙箱网络边界保持不变。远端发布前必须具备显式发布描述和 registry/仓库/digest 白名单检查，不能整体放宽本地镜像检查。规则允许范围本身不构成创建资源、发布镜像或付费测试的授权，具体执行遵循用户当前授权。
+11. **服务骨架**：每个服务都用 `@oasis/service-kit` 的 `startService` 启动，不自己写监听、探针、信号处理。统一接口：`/health`、`/ready`、`/v1/meta`；业务接口放 `/v1/*`，服务间接口放 `/internal/*`（gateway 不转发）。端口：gateway 8080，其余 4101–4109（见 README）。唯一例外：model-gateway 另开 4118 的数字人入口（同样用 service-kit 的 `createHttpServer`），只有一条路径，给 LiveAvatar 回调大模型；不和主端口合并，因为主端口的 `/internal/*` 只认请求头里的付费人。Node 服务的镜像统一用 `infra/images/node-service/Dockerfile` 按 `SERVICE` 参数构建。相对导入写 `.ts` 后缀，只用可擦除的 TS 语法（不用 enum、namespace、参数属性）。
 12. **前端约定**：
-    - **以桌面端为准（用户 2026-11-07，ADR 0019）**：产品面向 Electron 桌面窗口；功能设计、实现和验收都以桌面端为准。用浏览器直接打开只需能用，不为浏览器单独做降级、兼容或专门功能，也不把「浏览器里做不到」当成限制。
+    - **以桌面端为准（用户 2026-11-07）**：产品面向 Electron 桌面窗口；功能设计、实现和验收都以桌面端为准。用浏览器直接打开只需能用，不为浏览器单独做降级、兼容或专门功能，也不把「浏览器里做不到」当成限制。
     - 颜色、阴影、圆角、字体一律来自 `@oasis/design-tokens`（CSS 变量 + Tailwind 主题），`apps/web/src` 里不写裸色值（`#xxx`、`rgb()` 等）；缺少的令牌先加进 `packages/design-tokens`。`pnpm check:engineering` 的 tokens 检查和 pre-commit 钩子会拦截。
     - 应用主体是「珍珠雾面」，广场和游戏是「午夜蓝 + 金线」（`data-theme="plaza"`），群主题光用 `data-light="coral|mint|sky|honey"`。
     - 侧栏 7 个入口就是全部一级页面；群聊、私聊不显示未读数字或红点（PRD G-02）。
@@ -58,13 +58,13 @@
     - 新依赖在第一次真正用到时才装（TanStack Query、Zustand、Radix 等），不预装。
     - 字体随应用打包（@fontsource），不引用外部字体服务。
     - Electron：保持 contextIsolation、sandbox、禁用 nodeIntegration；需要给页面开放能力时，只能通过 preload 暴露明确的接口。
-13. **登录、额度与事件**（详见 `docs/adr/0002-auth-billing-chat-loop.md`）：
+13. **登录、额度与事件**（详见 `docs/design/账号与计费.md`）：
     - 鉴权只在 gateway 做。业务服务一律用 service-kit 的 `requireUserId` / `requirePayerId` 读 `x-oasis-user-id` / `x-oasis-payer-id`，不自己解析 Cookie。
     - 金额一律用微美元整数（`*Micro` 字段），不用浮点存钱。
     - 任何模型或工具调用都必须经过 model-gateway 的「冻结 → 结算 / 退回」，并在 `x-oasis-payer-id` 里写明谁付钱。
     - 跨服务的事件一律走 outbox（`startOutboxRelay`）+ 持久消费者（`startEventConsumer`）。消费者必须幂等，事件类型写在 `packages/contracts/src/events.ts`。
     - 密钥（`*_PASSWORD`、`*_SECRET_KEY`、`*_ACCESS_KEY`、`*_PEPPER`、`OPENROUTER_API_KEY`）只放在本地 `.env`，不进 git，不写进日志，也不要贴到聊天里。
-14. **用户删除即真删除**（用户 2026-11-05 确定，详见 ADR 0012 §15）：
+14. **用户删除即真删除**（用户 2026-11-05 确定）：
     - 用户在产品里删除的任何东西（任务、成果、聊天消息、附件，以及以后新增的任何可删除对象），数据库记录、对象存储里的文件、缓存、运行存档、派生数据（截图、预览、中间文件、聊天里的引用卡片）必须一起真删除。不做软删除、回收站、「已删除」标记或可恢复机制。用户自己下载到电脑上的文件不管。
     - 跨服务的数据靠删除事件（outbox + 持久消费者）或删除接口清掉；清理失败要能重试，不能留下孤儿数据。
     - 上传了但从没被用上的文件要有清扫（canvas `uploads.claimed_at`，24 小时）；发件箱已投递的行保留 1 天，NATS stream 保留 7 天，到期自动删除。

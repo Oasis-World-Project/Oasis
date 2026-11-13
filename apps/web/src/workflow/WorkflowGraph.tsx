@@ -1,4 +1,4 @@
-// 工作流图（ADR 0030 §3.2）：每样成果一个框。一个 AI 做的成果，框里是它自己列的任务清单；
+// 工作流图：每样成果一个框。一个 AI 做的成果，框里是它自己列的任务清单；
 // 生产线的框里是它的节点。线是「谁要用谁交出的文件」。只能看：平移、缩放、点开详情；位置由 layout.ts 自动排。
 import type { EdgeBody, NodeBody, TaskBody } from '@oasis/contracts/task';
 import { Background, BackgroundVariant, ReactFlow, useReactFlow, type Edge } from '@xyflow/react';
@@ -124,7 +124,7 @@ export function WorkflowGraph({
 }) {
   const { speakersOf, toolName } = speakers;
   const { nodes, edges } = useMemo(() => {
-    // 图上只有工作流图里的节点：展开出来的条目、各版叠在父节点的卡片里（ADR 0026）
+    // 图上只有工作流图里的节点：展开出来的条目、各版叠在父节点的卡片里
     const roots = task.nodes.filter((n) => !n.parentId);
     const shown = new Set(roots.map((n) => n.id));
     const links = task.edges.flatMap((e) =>

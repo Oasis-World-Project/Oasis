@@ -1,4 +1,4 @@
-// 回归场景（docs/engineering/回归测试.md）：动态展开和做几版挑一版（ADR 0026）。
+// 回归场景（docs/engineering/回归测试.md）：动态展开和做几版挑一版。
 import { literal, query } from '../db.mjs';
 import { JPEG_IMAGE_MODEL } from '../fake-media.mjs';
 import { marker, writeFiles } from '../fake-provider.mjs';

@@ -1,5 +1,5 @@
 // 画布（照原型 ⑧）：AI 们交付的所有成果。按类别筛选、搜索，也可以只看某个任务的（?task=）。
-// 桌面端在这里设置同步到电脑的文件夹（ADR 0007 §9–10）。任务卡片可以直接删除任务。
+// 桌面端在这里设置同步到电脑的文件夹。任务卡片可以直接删除任务。
 import type { ArtifactCategory } from '@oasis/contracts/canvas';
 import type { TaskSummary } from '@oasis/contracts/task';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';

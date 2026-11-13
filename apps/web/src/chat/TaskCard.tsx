@@ -113,7 +113,7 @@ function NodeChip({ title, status }: { title: string; status: NodeStatus }) {
 
 type Choice = 'continue' | 'retry' | 'cancel';
 
-/** 每种「需要处理」能做的选择（和 task 的规则一致，见 ADR 0004 / 0005） */
+/** 每种「需要处理」能做的选择（和 task 的规则一致） */
 const DECISIONS: Record<
   Attention['reason'],
   { choice: Exclude<Choice, 'cancel'>; label: string }[]
@@ -124,12 +124,12 @@ const DECISIONS: Record<
     { choice: 'continue', label: '跳过这个节点' },
   ],
   plan_failed: [{ choice: 'retry', label: '重新规划' }],
-  // 修改方案排好了：确认才开跑；「不改了」见下面（ADR 0022）
+  // 修改方案排好了：确认才开跑；「不改了」见下面
   revision_plan: [{ choice: 'continue', label: '确认修改' }],
   workflow_broken: [],
 };
 
-/** 修改方案（ADR 0022）：规划员的说明、每个节点怎么处理 */
+/** 修改方案：规划员的说明、每个节点怎么处理 */
 function RevisionPlan({ revision }: { revision: NonNullable<TaskBody['revision']> }) {
   return (
     <div className="flex flex-col gap-2">
@@ -262,7 +262,7 @@ function useRefreshMessagesOnChange(conversationId: string, status: TaskStatus |
   }, [conversationId, queryClient, status]);
 }
 
-/** 工作流图里的步骤：展开出来的条目、各版算在父节点里（ADR 0026） */
+/** 工作流图里的步骤：展开出来的条目、各版算在父节点里 */
 const stepsOf = (task: TaskBody) => task.nodes.filter((n) => !n.parentId);
 
 function Progress({ task }: { task: TaskBody }) {

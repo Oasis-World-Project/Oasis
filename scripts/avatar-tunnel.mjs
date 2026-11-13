@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 开发期数字人入口的 SSH 反向隧道（ADR 0013 §6）：服务器 127.0.0.1:15200 → 本机 model-gateway 的数字人端口。
+// 开发期数字人入口的 SSH 反向隧道：服务器 127.0.0.1:15200 → 本机 model-gateway 的数字人端口。
 // 服务器上的 nginx 只把 https://oasis-dev.elysiumgrid.space/avatar/v1/chat/completions 转到 15200，其余 404。
 // 用法：pnpm avatar:tunnel（Ctrl+C 结束；断线会自动重连）
 // 主机名取本机 ~/.ssh/config 里的条目，可用 AVATAR_TUNNEL_HOST 覆盖；本机端口可用 AVATAR_LLM_PORT 覆盖。

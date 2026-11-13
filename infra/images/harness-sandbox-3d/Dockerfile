@@ -1,5 +1,5 @@
 # Default task sandbox: base + CPU Blender for authoring/checks. GPU renders go through oasis-tool 3d.render.
-# 3D 工具（ADR 0020）：oasis-3d snapshot/check、Blender 里可 import 的 oasis_blender、gltf-transform（含 Khronos glTF Validator）、trimesh。
+# 3D 工具：oasis-3d snapshot/check、Blender 里可 import 的 oasis_blender、gltf-transform（含 Khronos glTF Validator）、trimesh。
 ARG BASE_IMAGE=oasis/harness-sandbox-base:0.2.1-rc.5
 FROM ${BASE_IMAGE}
 ARG GLTF_TRANSFORM_VERSION=4.5.1

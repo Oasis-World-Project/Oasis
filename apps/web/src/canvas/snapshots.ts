@@ -1,4 +1,4 @@
-// 发给 AI 修改时的标注截图（ADR 0012 §9）：把画面（图片、PDF 页、视频帧、运行中应用的截图）和圈画、编号合成一张 PNG。
+// 发给 AI 修改时的标注截图：把画面（图片、PDF 页、视频帧、运行中应用的截图）和圈画、编号合成一张 PNG。
 // 画面只有浏览器里有，所以在这里合成；同一张画面上的批注合成一张，总数有上限，合成失败的那张就不带。
 import type { Annotation, ArtifactBody } from '@oasis/contracts/canvas';
 import { artifactContentUrl } from '../api/queries.ts';

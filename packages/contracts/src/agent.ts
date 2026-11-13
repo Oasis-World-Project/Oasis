@@ -43,7 +43,7 @@ export type ModelRoute = z.infer<typeof ModelRoute>;
 
 /**
  * AI 团队的档位（2026-11-05 用户决定登记各家最强的型号）：旗舰、强力，加上快速档（私聊用的省钱型号）。
- * 节点用哪一档由规划员按任务判断，提示里只写各档是什么（ADR 0028）。
+ * 节点用哪一档由规划员按任务判断，提示里只写各档是什么。
  */
 export const ModelTier = z.enum(['flagship', 'strong', 'fast']);
 export type ModelTier = z.infer<typeof ModelTier>;
@@ -64,7 +64,7 @@ export type CatalogEntry = z.infer<typeof CatalogEntry>;
 export const Catalog = z.object({ models: z.array(CatalogEntry) });
 
 /**
- * 场景经验手册（ADR 0006 §8）：每类场景一份 Markdown——这类任务一般怎么分工、用哪些工具、
+ * 场景经验手册：每类场景一份 Markdown——这类任务一般怎么分工、用哪些工具、
  * 交付物长什么样、常见的坑。规划员开工前按任务单挑一份附进说明。
  */
 export const Playbook = z.object({

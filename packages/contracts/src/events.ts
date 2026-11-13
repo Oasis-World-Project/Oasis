@@ -80,7 +80,7 @@ export const CallSettled = {
 export type CallSettledData = z.infer<typeof CallSettled.data>;
 
 /**
- * 做成果的 AI 提出跨成果的调整（ADR 0030 §3.7）。网关不调 task：发这条事件，task 让规划员答一次，
+ * 做成果的 AI 提出跨成果的调整。网关不调 task：发这条事件，task 让规划员答一次，
  * 再把答复写回这个长任务（jobId），沙箱里等着取。
  */
 export const AdjustmentRequested = {

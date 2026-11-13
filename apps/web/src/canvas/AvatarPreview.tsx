@@ -1,4 +1,4 @@
-// 数字人成果的实时对话（ADR 0013 §1、§4）：开始后连 LiveAvatar 的 LiveKit 房间，看形象、开麦克风说话或打字提问；
+// 数字人成果的实时对话：开始后连 LiveAvatar 的 LiveKit 房间，看形象、开麦克风说话或打字提问；
 // 右边是对话记录，以及后台每一轮的记录（查了哪些资料、有没有转人工、模型多久出第一个字）；
 // 底部显示已用时长和花费。点结束、关掉页面、LiveAvatar 那边结束都会通知后台结算。
 import { AvatarSessionStarted, AvatarSessionView, type AvatarSpec } from '@oasis/contracts/avatar';

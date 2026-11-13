@@ -1,4 +1,4 @@
-// 数字人会话里 LiveAvatar 推来的事件（ADR 0013）→ 页面上的对话记录、谁在说话、每轮等了多久。纯函数，方便测试。
+// 数字人会话里 LiveAvatar 推来的事件→ 页面上的对话记录、谁在说话、每轮等了多久。纯函数，方便测试。
 // 事件名见 LiveAvatar FULL 模式文档；实测还有逐字推送的 avatar.transcription.chunk。
 
 interface Line {

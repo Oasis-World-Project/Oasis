@@ -1,4 +1,4 @@
-// 每样「一个 AI 做」的成果做到哪了（ADR 0030 §3.2）：从它各次运行的事件里取 AI 自己列的任务清单和最近几步。
+// 每样「一个 AI 做」的成果做到哪了：从它各次运行的事件里取 AI 自己列的任务清单和最近几步。
 // 和节点详情里的运行过程用的是同一份查询（同一个缓存，运行中才增量刷新），不另外拉数据。
 import type { RunEventBody } from '@oasis/contracts/harness';
 import type { NodeBody, NodeRunBody } from '@oasis/contracts/task';
@@ -10,7 +10,7 @@ import { isAgentOutcome, isLiveRun, progressOf, type Progress } from './rules.ts
 const runsOf = (results: { data?: NodeRunBody[] | undefined }[]) => results.map((r) => r.data);
 const eventsOf = (results: { data?: RunEventBody[] | undefined }[]) => results.map((r) => r.data);
 
-/** nodes：现在显示的这一版的节点；before：看旧版工作流时只算这一版冻结之前的运行（ADR 0022） */
+/** nodes：现在显示的这一版的节点；before：看旧版工作流时只算这一版冻结之前的运行 */
 export function useProgress(
   taskId: string,
   nodes: NodeBody[] | undefined,

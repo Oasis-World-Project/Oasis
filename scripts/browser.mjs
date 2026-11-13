@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// inspector 的检查浏览器（ADR 0024）：构建镜像、本机烟测；顺带放着 Android 云真机的免费烟测。
+// inspector 的检查浏览器：构建镜像、本机烟测；顺带放着 Android 云真机的免费烟测。
 // 镜像严格按 oasis/<组件>:<标签> 命名。
 //   pnpm browser:build                     构建 oasis/inspector-browser
 //   pnpm browser:smoke                     静态网页、Node 应用按交付关卡的路子各查一遍（通过、不通过），

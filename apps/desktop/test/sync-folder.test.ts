@@ -1,4 +1,4 @@
-// 桌面端同步文件夹（ADR 0007 §10）：路径跳不出去、不覆盖已有文件、记下同步过的、换文件夹重新同步。
+// 桌面端同步文件夹：路径跳不出去、不覆盖已有文件、记下同步过的、换文件夹重新同步。
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';

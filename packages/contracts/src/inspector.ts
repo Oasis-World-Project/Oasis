@@ -1,4 +1,4 @@
-// inspector 的内部接口（ADR 0024）：判断成果的检查都在这里——文件解析、音视频解码、网页的浏览器检查、
+// inspector 的内部接口：判断成果的检查都在这里——文件解析、音视频解码、网页的浏览器检查、
 // 外站测试、模型预览、用户素材解析。
 // inspector 不调别的服务、不存东西：要检查的内容由调用方给对象存储的临时下载链接（所属服务签发），
 // 或直接放在请求里。要开容器的检查，算力由调用方在 model-gateway 冻结、按报回的实际用量结算。
@@ -109,7 +109,7 @@ export type ComputeUsage = z.infer<typeof ComputeUsage>;
 export const MediaCheckResult = MediaCheckReport.extend({ usage: ComputeUsage });
 export type MediaCheckResult = z.infer<typeof MediaCheckResult>;
 
-// ---- 网页的浏览器检查（ADR 0017、0021）：交付关卡、节点自查 app.check、外站测试共用一套检查浏览器 ----
+// ---- 网页的浏览器检查：交付关卡、节点自查 app.check、外站测试共用一套检查浏览器 ----
 
 /** 检查浏览器容器用几核（付费的调用方定） */
 const BrowserCores = z.number().positive().max(8);

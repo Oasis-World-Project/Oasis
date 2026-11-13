@@ -78,7 +78,7 @@ export function RunHistory({
 }: {
   taskId: string;
   nodeId: string;
-  /** 看旧版工作流时只列这一版冻结之前的运行（ADR 0022） */
+  /** 看旧版工作流时只列这一版冻结之前的运行 */
   before?: string;
   /** 节点在动：运行列表跟着刷新 */
   live: boolean;

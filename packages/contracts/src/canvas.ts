@@ -1,4 +1,4 @@
-// canvas 的接口：用户上传的素材（ADR 0007 §3）。5.5c 再加成果登记。
+// canvas 的接口：用户上传的素材。5.5c 再加成果登记。
 import { AvatarSpec } from './avatar.ts';
 import { z } from 'zod';
 import { ModelPreviewHint } from './model-preview.ts';
@@ -36,7 +36,7 @@ export type UploadBody = z.infer<typeof UploadBody>;
 export const UploadLookupBody = z.object({
   ownerId: z.uuid(),
   ids: z.array(z.uuid()).min(1).max(20),
-  /** 只返回还在的，不因为少了某个就报错（ADR 0012：筛掉已随上一版删除的修订素材） */
+  /** 只返回还在的，不因为少了某个就报错（筛掉已随上一版删除的修订素材） */
   partial: z.boolean().default(false),
   /** 随消息发出：记下文件被用上了，清扫不再删它（2026-11-05 真删除） */
   claim: z.boolean().default(false),
@@ -47,7 +47,7 @@ export const UploadDeleteBody = z.object({
   ids: z.array(z.uuid()).min(1).max(1000),
 });
 export const UploadLookupResult = z.object({ uploads: z.array(UploadBody) });
-/** 内部：这个人的这些文件的临时下载链接（交给 inspector 解析素材，ADR 0024）；必须都在、都是他的 */
+/** 内部：这个人的这些文件的临时下载链接（交给 inspector 解析素材）；必须都在、都是他的 */
 export const UploadLinksBody = z.object({
   ownerId: z.uuid(),
   ids: z.array(z.uuid()).min(1).max(20),
@@ -122,7 +122,7 @@ export const AnnotationShape = z.discriminatedUnion('kind', [
 ]);
 export type AnnotationShape = z.infer<typeof AnnotationShape>;
 
-/** 成果上的一条批注（ADR 0012 §9）：编号、意见，以及在哪（第几页、几秒、引用的原文、画的形状） */
+/** 成果上的一条批注：编号、意见，以及在哪（第几页、几秒、引用的原文、画的形状） */
 export const Annotation = z.object({
   id: z.uuid(),
   number: z.number().int().min(1).max(99),
@@ -134,7 +134,7 @@ export const Annotation = z.object({
   /** 文档里引用的原文 */
   quote: z.string().trim().max(300).nullable(),
   shape: AnnotationShape.nullable(),
-  /** 运行中应用的批注画在哪张截图上（上传文件 id，ADR 0009 §18）；其他成果为 null */
+  /** 运行中应用的批注画在哪张截图上（上传文件 id）；其他成果为 null */
   frame: z.uuid().nullable().default(null),
 });
 export type Annotation = z.infer<typeof Annotation>;
@@ -153,7 +153,7 @@ export const AnnotationList = z
   );
 
 /**
- * 画布里的一个成果（ADR 0007 §8）：任务完成时，负责交付物的节点交出的一个文件，复制进画布。
+ * 画布里的一个成果：任务完成时，负责交付物的节点交出的一个文件，复制进画布。
  */
 export const ArtifactBody = z.object({
   sha256: z
@@ -171,7 +171,7 @@ export const ArtifactBody = z.object({
   category: ArtifactCategory,
   /** 只有经过完整交付文件检查的 oasis-app.json 才带这个字段。 */
   application: ApplicationSpec.nullable().optional(),
-  /** 数字人配置（ADR 0013）；有它时成果页能开实时对话 */
+  /** 数字人配置；有它时成果页能开实时对话 */
   avatar: AvatarSpec.nullable().optional(),
   modelPreview: ModelPreviewHint.optional(),
   /** 属于任务单里的哪样交付物 */
@@ -186,13 +186,13 @@ export const ArtifactBody = z.object({
   models: z.array(z.string()),
   /** 同步到电脑时放在哪：相对同步文件夹的路径，如 小木屋民宿官网首页/首页文案.md */
   syncPath: z.string(),
-  /** 修改出的新版：同一同步路径上被它替换的旧文件摘要（桌面端据此判断能不能覆盖，ADR 0012） */
+  /** 修改出的新版：同一同步路径上被它替换的旧文件摘要（桌面端据此判断能不能覆盖） */
   replacesSha256: z
     .string()
     .regex(/^[a-f0-9]{64}$/)
     .nullable()
     .optional(),
-  /** 用户的批注（ADR 0012 §9）；旧响应缺省为没有 */
+  /** 用户的批注；旧响应缺省为没有 */
   annotations: z.array(Annotation).default([]),
   /** 用户点了「批准」的时间；没批准为 null */
   approvedAt: z.iso.datetime().nullable().default(null),

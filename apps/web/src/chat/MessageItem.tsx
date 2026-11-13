@@ -1,4 +1,4 @@
-// 私聊里的一条消息：文字气泡，或问题卡、任务单卡、任务卡、交付消息、提醒（ADR 0005 §7）。
+// 私聊里的一条消息：文字气泡，或问题卡、任务单卡、任务卡、交付消息、提醒。
 import type { MessageBody } from '@oasis/contracts/conversation';
 import { PencilLine, RotateCcw, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';

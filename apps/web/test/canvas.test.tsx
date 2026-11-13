@@ -250,7 +250,7 @@ describe('网页应用在画布里运行', () => {
       },
     });
 
-  it('打开静态应用：入口网页带上同成果的样式，在只给脚本权限的隔离框里运行；没有平台容器预览（ADR 0021）', async () => {
+  it('打开静态应用：入口网页带上同成果的样式，在只给脚本权限的隔离框里运行；没有平台容器预览', async () => {
     const api = install();
     await open(`/canvas/artifacts/${app[0]!.id}`);
     const frame = await screen.findByTitle('site');

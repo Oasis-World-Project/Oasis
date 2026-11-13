@@ -1,4 +1,4 @@
-// 上传素材到 canvas（ADR 0007 §3）：请求体就是文件本身。用 XHR 是为了拿到上传进度（fetch 拿不到）。
+// 上传素材到 canvas：请求体就是文件本身。用 XHR 是为了拿到上传进度（fetch 拿不到）。
 import { UploadBody } from '@oasis/contracts/canvas';
 import { ErrorBody } from '@oasis/contracts/common';
 import { ApiError } from './client.ts';

@@ -18,7 +18,7 @@ import type { ServiceResource } from './resource.ts';
 const SECOND_NS = 1_000_000_000;
 /**
  * 事件在 stream 里最多留 7 天，过期由 JetStream 自己删：事件里带着用户内容的片段（标题、文件名），
- * 删除是真删除，不能在消息队列里一直留着（ADR 0012 §15）。消费方都是在线消费，7 天足够追上。
+ * 删除是真删除，不能在消息队列里一直留着。消费方都是在线消费，7 天足够追上。
  */
 const STREAM_MAX_AGE_NS = 7 * 24 * 3600 * SECOND_NS;
 

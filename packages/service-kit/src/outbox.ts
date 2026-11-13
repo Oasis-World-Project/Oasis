@@ -7,7 +7,7 @@
 //     created_at timestamptz not null default now(), published_at timestamptz
 //   );
 //   create index outbox_unpublished on outbox (created_at) where published_at is null;
-// 投递过的行留一天（排查用）就删掉：事件里有用户内容的片段，删除要真删除（ADR 0012 §15）。
+// 投递过的行留一天（排查用）就删掉：事件里有用户内容的片段，删除要真删除。
 import type { NatsConnection } from '@nats-io/transport-node';
 import type { EventEnvelope } from '@oasis/contracts/events';
 import type pg from 'pg';

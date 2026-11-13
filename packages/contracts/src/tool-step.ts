@@ -1,4 +1,4 @@
-// 工具节点的一步（ADR 0025）：task 的方案和节点配置、harness 的工具运行共用同一个格式。
+// 工具节点的一步：task 的方案和节点配置、harness 的工具运行共用同一个格式。
 import { z } from 'zod';
 import { STEP_OUT } from './tool-args.ts';
 

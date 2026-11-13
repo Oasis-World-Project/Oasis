@@ -137,7 +137,7 @@ function fakeWorkflow() {
       }
       if (method === 'POST' && path.endsWith('/messages')) return json(202, { result: 'noted' });
       if (method === 'DELETE' && path === base) return new Response(null, { status: 204 });
-      // 冻结的第 1 版（ADR 0022）：只有 A、B 两个节点
+      // 冻结的第 1 版：只有 A、B 两个节点
       if (method === 'GET' && path === `${base}/versions/1`)
         return json(200, {
           version: 1,
@@ -373,7 +373,7 @@ describe('工作流视图', () => {
     expect(await nodeButton(/^出效果图，等上游$/)).toBeTruthy();
   });
 
-  it('修改方案待确认：显示规划员的说明、每个步骤怎么处理，确认后才开跑（ADR 0022）', async () => {
+  it('修改方案待确认：显示规划员的说明、每个步骤怎么处理，确认后才开跑', async () => {
     task = {
       ...task,
       status: 'needs_attention',

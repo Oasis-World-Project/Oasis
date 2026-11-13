@@ -1,4 +1,4 @@
-// 任务的工作流（ADR 0030 §3.2）：每样成果一个框，点开看详情。可以整体运行或停止、停止或继续一样成果；
+// 任务的工作流：每样成果一个框，点开看详情。可以整体运行或停止、停止或继续一样成果；
 // 详情里看 AI 自己列的任务清单和运行过程，追问、补要求。节点和连线不能改。
 import type { TaskBody } from '@oasis/contracts/task';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -51,7 +51,7 @@ export function WorkflowPage() {
     },
   });
   const [selected, setSelected] = useState<string | null | undefined>(undefined);
-  // 看冻结的旧版工作流（ADR 0022）：null 是当前这一版
+  // 看冻结的旧版工作流：null 是当前这一版
   const [viewing, setViewing] = useState<number | null>(null);
   const frozen = useQuery({ ...taskVersionQuery(taskId, viewing ?? 1), enabled: viewing !== null });
   // 旧版只读：照冻结时的节点和连线
@@ -91,7 +91,7 @@ export function WorkflowPage() {
   };
   const selectedId = selected === undefined ? (shown.attention?.nodeId ?? null) : selected;
   const node = shown.nodes.find((n) => n.id === selectedId);
-  // 已经挑好一版的节点下面没做成的那几版不算问题；展开出来的条目、各版算在父节点里（ADR 0026）
+  // 已经挑好一版的节点下面没做成的那几版不算问题；展开出来的条目、各版算在父节点里
   const settledUnder = (n: (typeof shown.nodes)[number]) =>
     shown.nodes.find((p) => p.id === n.parentId)?.status === 'succeeded';
   const issues = shown.nodes.filter(
@@ -227,7 +227,7 @@ export function WorkflowPage() {
           )}
         </div>
 
-        {/* 修改时规划员在看上一版排方案：工作流照旧显示，可以不改了（ADR 0022） */}
+        {/* 修改时规划员在看上一版排方案：工作流照旧显示，可以不改了 */}
         {task.revision?.stage === 'planning' && !old && (
           <div className="absolute left-1/2 top-20 z-10 flex w-[min(440px,calc(100%-32px))] -translate-x-1/2 items-center gap-3 rounded-item bg-glass-active px-4 py-3 shadow-edge-strong backdrop-blur-xl">
             <p role="status" className="m-0 min-w-0 flex-1 text-[13px] leading-relaxed">

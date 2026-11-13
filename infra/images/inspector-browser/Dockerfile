@@ -1,4 +1,4 @@
-# inspector 的检查浏览器（ADR 0024）：应用与 Chromium 同容器、无外部网络；应用文件由 inspector 启动前拷入。
+# inspector 的检查浏览器：应用与 Chromium 同容器、无外部网络；应用文件由 inspector 启动前拷入。
 # 构建（在仓库根目录）：pnpm browser:build
 FROM mcr.microsoft.com/playwright:v1.64.0-noble
 RUN mkdir -p /opt/oasis /workspace/app \

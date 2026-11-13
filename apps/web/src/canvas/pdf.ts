@@ -1,4 +1,4 @@
-// 标注 PDF 和演示文稿时才用到的 pdf.js（ADR 0012 §9）：按需加载，worker 随应用打包，不走 CDN；
+// 标注 PDF 和演示文稿时才用到的 pdf.js：按需加载，worker 随应用打包，不走 CDN；
 // 6.x 本身不再用 eval；不渲染 XFA 表单、不执行 PDF 里的脚本，只把页面画到画布上。
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';

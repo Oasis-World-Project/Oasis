@@ -1,4 +1,4 @@
-// 桌面端把成果同步到电脑（ADR 0007 §10）：页面负责下载（它有登录状态），主进程负责写进用户选的文件夹。
+// 桌面端把成果同步到电脑：页面负责下载（它有登录状态），主进程负责写进用户选的文件夹。
 // 浏览器里没有 window.oasisDesktop，这些都不起作用。
 import type { DesktopSyncStatus, OasisDesktop } from '@oasis/contracts/desktop';
 import type { ArtifactBody } from '@oasis/contracts/canvas';
@@ -32,7 +32,7 @@ export const syncProgress = {
 };
 
 /**
- * 同步记录里这份成果的标识：第一次同步记 id；同一个成果修改后原地换成新版（ADR 0012）时记「id@新摘要」，
+ * 同步记录里这份成果的标识：第一次同步记 id；同一个成果修改后原地换成新版时记「id@新摘要」，
  * 这样电脑上的旧版也会被换掉。
  */
 const syncKeyOf = (artifact: ArtifactBody, synced: ReadonlySet<string>) =>
@@ -72,7 +72,7 @@ export async function syncOnce(
         artifact.syncPath,
         artifact.size,
         artifact.sha256,
-        // 修改出的新版：电脑上那份还是没改过的旧版就覆盖（ADR 0012）
+        // 修改出的新版：电脑上那份还是没改过的旧版就覆盖
         artifact.replacesSha256,
       );
       if (token) {

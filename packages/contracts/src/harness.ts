@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { ApplicationCheckResult } from './inspector.ts';
 import { ToolSteps } from './tool-step.ts';
 
-/** 工具运行（ADR 0025）的 model 写这个：不调模型，harness 不按模型目录准入 */
+/** 工具运行的 model 写这个：不调模型，harness 不按模型目录准入 */
 export const TOOL_RUN_MODEL = 'oasis/tool';
 
 /** 实际运行镜像的软件探测；只描述本地环境，不代表外部供应商能力。 */
@@ -59,7 +59,7 @@ export const StartRunBody = z
     inputs: z.array(RunInputFile).default([]),
     /**
      * 把之前某次运行的产出放进本次沙箱的 in/<as>/ 下（工作流里上游节点交给下游）。
-     * as 可以是两层（展开节点每一条的产出放在 in/<节点>/01/，ADR 0026）。
+     * as 可以是两层（展开节点每一条的产出放在 in/<节点>/01/）。
      * 只能引用同一付费人、已成功的运行。
      */
     inputsFrom: z
@@ -101,7 +101,7 @@ export const StartRunBody = z
      */
     continueFrom: z.uuid().optional(),
     /**
-     * 工具运行（ADR 0025）：不启动 AI，在沙箱里按顺序执行这些工具步骤（每步失败自动重试 2 次）；
+     * 工具运行：不启动 AI，在沙箱里按顺序执行这些工具步骤（每步失败自动重试 2 次）；
      * model 写 {@link TOOL_RUN_MODEL}，prompt 只用来记录。接着原运行做时跳过已经做完的步骤。
      */
     steps: ToolSteps.optional(),
@@ -114,7 +114,7 @@ export type StartRunBody = z.input<typeof StartRunBody>;
 
 /**
  * 接着的那次运行的持久工作目录已经不在了（持久卷被清掉）：接不上原会话。
- * 调用方应改成重新开一个会话做，把上一版产出作为输入带上（task：ADR 0022 的「重新做」）。
+ * 调用方应改成重新开一个会话做，把上一版产出作为输入带上（task：修改时的「重新做」）。
  */
 export const WORKSPACE_UNAVAILABLE = 'workspace_unavailable';
 
@@ -182,7 +182,7 @@ export const RunEventList = z.object({ events: z.array(RunEventBody) });
 export const RunMessageBody = z.object({ text: z.string().trim().min(1).max(20_000) });
 
 /**
- * 一次运行产出包的临时下载链接（给 inspector 检查用，ADR 0024）：只给这次运行的付费人和任务，
+ * 一次运行产出包的临时下载链接（给 inspector 检查用）：只给这次运行的付费人和任务，
  * 运行没有产出时 404。
  */
 export const OutputsLinkBody = z.object({ payerId: z.uuid(), taskId: z.uuid() });
@@ -190,7 +190,7 @@ export const OutputsLink = z.object({ url: z.url(), expiresAt: z.iso.datetime() 
 export type OutputsLink = z.infer<typeof OutputsLink>;
 
 /**
- * 交付关卡的浏览器检查报告（inspector 检查、task 存回这次运行，ADR 0024）：只给这次运行的付费人和任务，
+ * 交付关卡的浏览器检查报告（inspector 检查、task 存回这次运行）：只给这次运行的付费人和任务，
  * 用户在工作流里下载。
  */
 export const ApplicationReportBody = z.object({

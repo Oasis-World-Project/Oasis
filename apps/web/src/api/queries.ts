@@ -112,7 +112,7 @@ export const createDm = (modelKey: string) =>
 export const deleteDm = (conversationId: string) =>
   apiVoid(`/conversation/v1/conversations/${conversationId}`, { method: 'DELETE' });
 
-// ---- 在私聊里接任务（ADR 0005）：接口都返回这次新增的消息 ----
+// ---- 在私聊里接任务：接口都返回这次新增的消息 ----
 const intakePath = (conversationId: string, action: string) =>
   `/conversation/v1/conversations/${conversationId}/intake/${action}`;
 
@@ -136,7 +136,7 @@ export const cancelIntake = (conversationId: string) => intakeCall(conversationI
 /** 确认任务单，交给 AI 团队开始做 */
 export const confirmIntake = (conversationId: string) => intakeCall(conversationId, 'confirm', {});
 
-/** 修改成果（ADR 0012）：修改意见直接交给 AI 团队，在原任务里接着改；不经过私聊 */
+/** 修改成果：修改意见直接交给 AI 团队，在原任务里接着改；不经过私聊 */
 export const reviseTask = (taskId: string, body: TaskRevisionBody) =>
   api(`/task/v1/tasks/${taskId}/revisions`, TaskBody, { method: 'POST', body });
 
@@ -161,7 +161,7 @@ export const taskQuery = (taskId: string) =>
     },
   });
 
-/** 冻结的某一版工作流（ADR 0022）：不会再变，不用刷新 */
+/** 冻结的某一版工作流：不会再变，不用刷新 */
 export const taskVersionQuery = (taskId: string, version: number) =>
   queryOptions({
     queryKey: [...taskKey(taskId), 'version', version],
@@ -180,7 +180,7 @@ export const runTask = (taskId: string) => taskCall(taskId, 'run');
 export const stopTask = (taskId: string) => taskCall(taskId, 'stop');
 export const cancelTask = (taskId: string) => taskCall(taskId, 'cancel');
 
-/** 删除任务：连同成果、工作流和中间产物，不可恢复（ADR 0012） */
+/** 删除任务：连同成果、工作流和中间产物，不可恢复 */
 export const deleteTask = (taskId: string) =>
   apiVoid(`/task/v1/tasks/${taskId}`, { method: 'DELETE' });
 
@@ -201,7 +201,7 @@ export function taskFileUrl(
   return `/api/task/v1/tasks/${taskId}/files/${nodeId}/${encoded}${download ? '?download=1' : ''}`;
 }
 
-// ---- 工作流（ADR 0007 §6）----
+// ---- 工作流----
 const taskPath = (taskId: string) => `/task/v1/tasks/${taskId}`;
 const nodePath = (taskId: string, nodeId: string) => `${taskPath(taskId)}/nodes/${nodeId}`;
 export const applicationReportUrl = (taskId: string, nodeId: string) =>
@@ -215,7 +215,7 @@ export const runNode = (taskId: string, nodeId: string) =>
   taskChange(`${nodePath(taskId, nodeId)}/run`, 'POST');
 export const stopNode = (taskId: string, nodeId: string) =>
   taskChange(`${nodePath(taskId, nodeId)}/stop`, 'POST');
-/** 做几版的节点改用第 version 版（ADR 0026）：下游做完了的会排成修改，等确认 */
+/** 做几版的节点改用第 version 版：下游做完了的会排成修改，等确认 */
 export const pickVersion = (taskId: string, nodeId: string, version: number) =>
   taskChange(`${nodePath(taskId, nodeId)}/pick`, 'POST', { version });
 
@@ -258,7 +258,7 @@ export const workflowNamesQuery = queryOptions({
   staleTime: 5 * 60_000,
 });
 
-/** 「只用国内模型」开关（ADR 0027）：这个账号的 AI 团队用哪些模型 */
+/** 「只用国内模型」开关：这个账号的 AI 团队用哪些模型 */
 export const modelScopeQuery = queryOptions({
   queryKey: ['model-scope'],
   queryFn: () => api('/task/v1/model-scope', ModelScope),
@@ -266,7 +266,7 @@ export const modelScopeQuery = queryOptions({
 export const setModelScope = (scope: ModelScope) =>
   api('/task/v1/model-scope', ModelScope, { method: 'PUT', body: scope });
 
-// ---- 画布（ADR 0007 §8–9）----
+// ---- 画布----
 /** 全部成果（类别和搜索在前端筛，数量也在前端算）；可以只看某个任务的 */
 export const artifactsQuery = (taskId?: string) =>
   queryOptions({
@@ -282,7 +282,7 @@ export const artifactQuery = (id: string) =>
     queryFn: () => api(`/canvas/v1/artifacts/${id}`, ArtifactBody),
   });
 
-/** 批注整份替换（ADR 0012 §9），返回更新后的成果 */
+/** 批注整份替换，返回更新后的成果 */
 export const saveAnnotations = (id: string, annotations: Annotation[]) =>
   api(`/canvas/v1/artifacts/${id}/annotations`, ArtifactBody, {
     method: 'PUT',

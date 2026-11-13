@@ -1,4 +1,4 @@
-// 「发给 AI 团队修改」（ADR 0012；2026-11-05 起不经过私聊）：写下修改意见、可附文件，直接交给这个任务的
+// 「发给 AI 团队修改」（2026-11-05 起不经过私聊）：写下修改意见、可附文件，直接交给这个任务的
 // AI 团队，在原任务里接着原会话改；改好后画布里的成果原地更新。做出这一版的私聊删了也照样能改；
 // 想知道进度，在任意私聊里问 AI 就行。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -31,7 +31,7 @@ export function RevisePanel({
   taskTitle: string;
   /** 当前打开的成果是哪个节点交出的（从成果页发起时才有） */
   nodeId?: string;
-  /** 从参数面板来的成品参数（ADR 0012 §12） */
+  /** 从参数面板来的成品参数 */
   parameters?: RevisionParameter[];
   onClose: () => void;
 }) {
@@ -44,7 +44,7 @@ export function RevisePanel({
   const [request, setRequest] = useState('');
   const files = useAttachments();
   const fileInput = useRef<HTMLInputElement>(null);
-  // 这个任务的成果上的批注（ADR 0012 §9）：默认一起带上
+  // 这个任务的成果上的批注：默认一起带上
   const { data: artifacts = [] } = useQuery(artifactsQuery(taskId));
   const noted = artifacts
     .filter((a) => a.annotations.length > 0)
@@ -69,7 +69,7 @@ export function RevisePanel({
         annotations = toRevisionNotes(noted, built.nameOf);
       }
       setStage(null);
-      // 意见针对哪些节点（ADR 0021 §7）：批注所在成果的节点；参数来自当前成果，或者没批注时意见针对的就是当前成果
+      // 意见针对哪些节点：批注所在成果的节点；参数来自当前成果，或者没批注时意见针对的就是当前成果
       const nodeIds = new Set(
         annotations.length ? noted.flatMap((a) => (a.nodeId ? [a.nodeId] : [])) : ([] as string[]),
       );

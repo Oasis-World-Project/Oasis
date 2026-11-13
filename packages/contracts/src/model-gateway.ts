@@ -58,7 +58,7 @@ export const ModelCapabilities = z.object({
     })
     .optional(),
   /**
-   * 最近的实测（ADR 0030 §3.5）：从 agent 运行里的聊天调用记录算——每秒输出多少 token、
+   * 最近的实测：从 agent 运行里的聊天调用记录算——每秒输出多少 token、
    * 每百万 token 实际多少钱（输入输出合计，含缓存折扣，微美元）、上游出错的比例；调用太少时不给。
    */
   measured: z
@@ -121,7 +121,7 @@ export const RunKeyCreated = z.object({
 });
 export type RunKeyCreated = z.infer<typeof RunKeyCreated>;
 
-// ---- 算力（ADR 0006 §6）：harness 开沙箱前冻结、结束后按实际时长结算，和模型、工具走同一套计量 ----
+// ---- 算力：harness 开沙箱前冻结、结束后按实际时长结算，和模型、工具走同一套计量 ----
 
 /** 开沙箱前冻结：按最长运行时间算 */
 export const ComputeHoldBody = z.object({
@@ -139,7 +139,7 @@ export const ComputeHoldBody = z.object({
     .max(24 * 3600_000),
   /**
    * 节点运行的沙箱、检查用的隔离浏览器，或 inspector 解码音视频的检查容器（调用记录里分开标识；
-   * 检查容器由调用方冻结和结算，ADR 0024）
+   * 检查容器由调用方冻结和结算）
    */
   purpose: z.enum(['run', 'application-check', 'media-check']).default('run'),
 });
@@ -161,7 +161,7 @@ export const ComputeOutcome = z.object({
   chargedMicro: z.number().int().nonnegative().nullable(),
 });
 
-// ---- 工具（ADR 0006）：生图、配音、转写、联网搜索、网页抓取、Jev 判断……都经 model-gateway 计量 ----
+// ---- 工具：生图、配音、转写、联网搜索、网页抓取、Jev 判断……都经 model-gateway 计量 ----
 
 /** 目录里的一个工具：给规划员和节点里的 AI 看 */
 /** 一个型号用一次（一个计费单位）的典型花费和用时（从调用记录算，不写死） */
@@ -204,11 +204,11 @@ export const ToolEntry = z.object({
   long: z.boolean(),
   /** 能不能用（供应商 Key 没配就不能用） */
   available: z.boolean(),
-  /** 可以指定的模型（替某个用户列时已按他的模型范围过滤，ADR 0027）；不需要模型的工具为空 */
+  /** 可以指定的模型（替某个用户列时已按他的模型范围过滤）；不需要模型的工具为空 */
   models: z.array(z.string()),
   defaultModel: z.string().nullable(),
   /**
-   * 命令行参数（ADR 0025）：`oasis-tool <工具> --名字 值` 能写哪些参数。规划门按它校验工具节点，
+   * 命令行参数：`oasis-tool <工具> --名字 值` 能写哪些参数。规划门按它校验工具节点，
    * 工作流页按它展示；旧版网关不返回时当作没有，规划门只核对工具在不在。
    */
   args: z.array(ToolArgSpecSchema).default([]),
@@ -221,7 +221,7 @@ export type ToolEntry = z.infer<typeof ToolEntry>;
 export const ToolList = z.object({ tools: z.array(ToolEntry) });
 
 /**
- * 一个用户让 AI 团队用哪些模型（ADR 0027）。domesticOnly：只用国内厂商的模型——AI 团队的模型和
+ * 一个用户让 AI 团队用哪些模型。domesticOnly：只用国内厂商的模型——AI 团队的模型和
  * 各工具的型号都排除国外厂商的；关着（默认）时不排除任何模型。
  */
 export const ModelScope = z.object({ domesticOnly: z.boolean() });
@@ -262,7 +262,7 @@ export const ToolResult = z.object({
 });
 export type ToolResult = z.infer<typeof ToolResult>;
 
-/** 「提出调整」这个工具的名字（ADR 0030 §3.7）：只有做成果的 AI 能用，规划员的方案里不能写它 */
+/** 「提出调整」这个工具的名字：只有做成果的 AI 能用，规划员的方案里不能写它 */
 export const ADJUST_TOOL = 'workflow.adjust';
 
 /** task 把规划员对「提出调整」的答复写回长任务 */

@@ -18,7 +18,7 @@ const DOCKER_BUILD = /docker\s+(?:buildx\s+)?build\b[^\n]*/g;
 // AGENTS.md B.12：前端颜色只来自设计令牌，应用代码里不写裸色值
 const RAW_COLOR = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch)\(/;
 const TOKEN_CHECKED = /^apps\/web\/src\/.+\.(tsx?|css)$/;
-// ADR 0024：服务之间的同步调用（createServiceClient('<对方>', …)，对方名字写成字面量）不能成环；
+// 服务之间的同步调用（createServiceClient('<对方>', …)，对方名字写成字面量）不能成环；
 // inspector 不调任何服务，检查要的内容由调用方给。已知的环都经过画布（画布读任务的成果和详情、
 // 开数字人会话），留到画布重整时再拆：先放行这两条边，别处再出现环就拦下。
 const SERVICE_CLIENT = /createServiceClient\(\s*['"]([a-z][a-z-]*)['"]/g;
@@ -186,7 +186,7 @@ const CHECKS = {
   naming: { label: '版本后缀命名', fn: checkNaming },
   images: { label: '镜像命名 oasis/', fn: checkImages },
   tokens: { label: '前端只用设计令牌', fn: checkTokens },
-  calls: { label: '服务调用无环（ADR 0024）', fn: checkCalls },
+  calls: { label: '服务调用无环', fn: checkCalls },
   migrations: { label: '数据库迁移 Expand/Contract', fn: checkMigrations },
   deps: {
     label: '依赖方向与循环依赖（dependency-cruiser）',

@@ -1,4 +1,4 @@
-// 参数面板（ADR 0012 §12）：各类成果能改哪些成品参数、怎么写进修改意见、哪些能在浏览器里近似预览。
+// 参数面板：各类成果能改哪些成品参数、怎么写进修改意见、哪些能在浏览器里近似预览。
 // 每项默认「不变」（不在 values 里）；改过的才会变成修改意见里的一行。
 import type { RevisionParameter } from '@oasis/contracts/task';
 import type { PreviewKind } from '../chat/files.ts';
@@ -74,7 +74,7 @@ const FIELDS: Partial<Record<PreviewKind, Field[]>> = {
 
 export const fieldsFor = (kind: PreviewKind): Field[] => FIELDS[kind] ?? [];
 
-/** 数字人（ADR 0013）：改的是配置文件里的人设、形象和声音，没有可近似预览的项 */
+/** 数字人：改的是配置文件里的人设、形象和声音，没有可近似预览的项 */
 export const AVATAR_FIELDS: Field[] = [
   { key: 'tone', label: '语气', kind: 'choice', options: ['更亲切', '更正式', '更简短', '更热情'] },
   { key: 'language', label: '对话语言', kind: 'choice', options: ['中文', '英文', '日文'] },

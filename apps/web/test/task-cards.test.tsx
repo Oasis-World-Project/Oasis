@@ -587,7 +587,7 @@ describe('删除私聊', () => {
   });
 });
 
-describe('修改成果（ADR 0012）', () => {
+describe('修改成果', () => {
   const delivery = (extra: object = {}) =>
     message('delivery', {
       taskId: TASK,

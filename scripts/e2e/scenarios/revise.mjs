@@ -2,7 +2,7 @@
 import { marker, writeFiles } from '../fake-provider.mjs';
 import { DEFAULT_MODEL, done, dropWorkspace, outcomes, work } from './shared.mjs';
 
-// ---------- 3. 修改（ADR 0022、0030 §3.8）：意见指到一样成果 → 做它的 AI 接着原会话改；
+// ---------- 3. 修改：意见指到一样成果 → 做它的 AI 接着原会话改；
 // 没指到 → 规划员排方案 → 用户确认 → 沿用 / 重新做 ----------
 const reviseNodes = (pick) => [
   work('revise', 'copy', '写文案', '写活动文案，交出 out/文案.md', {
@@ -139,7 +139,7 @@ export const revise = {
   },
 };
 
-// ---------- 3b. 中途调整（ADR 0030 §3.7）：做文案的 AI 提一次，规划员答一次——加一样成果、
+// ---------- 3b. 中途调整：做文案的 AI 提一次，规划员答一次——加一样成果、
 // 给还没开始的成果补说明、停掉一样成果；改动马上生效，不问用户 ----------
 const adjustNodes = (pick) => [
   work('adjust', 'copy', '写文案', '写活动文案和备用标题，交出 out/文案.md', {
@@ -338,7 +338,7 @@ export const stop = {
   },
 };
 
-// ---------- 4b. 持久工作目录丢了：修改时接不上原会话，重新开会话做、带上上一版产出（ADR 0022） ----------
+// ---------- 4b. 持久工作目录丢了：修改时接不上原会话，重新开会话做、带上上一版产出 ----------
 const noteNode = (pick) =>
   work('workspace', 'note', '写笔记', '写笔记，交出 out/笔记.md', {
     model: pick(DEFAULT_MODEL),

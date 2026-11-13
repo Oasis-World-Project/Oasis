@@ -1,6 +1,6 @@
 // 节点详情（照原型 ⑬ 的单节点面板）：谁在做、状态、停止和继续、关卡提醒、要做的事、
 // AI 自己列的任务清单、上下游、花费、产出文件、运行过程；还没开始或正在跑的可以追问、补要求。
-// 节点和连线不能改（ADR 0030 §3.2）。工具节点（ADR 0025）没有 AI：显示齿轮和要执行的步骤，不能追问。
+// 节点和连线不能改。工具节点没有 AI：显示齿轮和要执行的步骤，不能追问。
 import type { NodeBody, TaskBody } from '@oasis/contracts/task';
 import { X } from 'lucide-react';
 import { useState } from 'react';
@@ -30,7 +30,7 @@ export function NodePanel({
 }: {
   task: TaskBody;
   node: NodeBody;
-  /** 看旧版工作流：只读，运行记录只列这一版冻结之前的（ADR 0022） */
+  /** 看旧版工作流：只读，运行记录只列这一版冻结之前的 */
   before?: string;
   speakers: ReturnType<typeof useSpeakers>;
   /** 一个 AI 做的成果做到哪了（它自己列的任务清单）；别的节点没有 */
@@ -137,7 +137,7 @@ export function NodePanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
-        {/* 关卡只查文件齐不齐、网页和音视频能不能打开（ADR 0017）；没满足的、没查到的记在节点提醒里 */}
+        {/* 关卡只查文件齐不齐、网页和音视频能不能打开；没满足的、没查到的记在节点提醒里 */}
         <Section title="检查结果">
           <p className="m-0 text-[13px] font-medium">
             {live && node.status === 'checking'

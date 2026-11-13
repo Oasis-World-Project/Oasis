@@ -1,4 +1,4 @@
-// 数字人成果的实时对话页（ADR 0013）：事件 → 对话记录和等待时间；开始、打字提问、结束都走对的接口。
+// 数字人成果的实时对话页：事件 → 对话记录和等待时间；开始、打字提问、结束都走对的接口。
 import { AvatarSpec } from '@oasis/contracts/avatar';
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import { createMemoryHistory } from '@tanstack/react-router';

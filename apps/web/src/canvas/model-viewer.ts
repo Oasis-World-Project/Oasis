@@ -56,7 +56,7 @@ function run(port: MessagePort) {
     last = 0,
     radius = 1;
   let structure = false;
-  // 观看控制（ADR 0012 §12）：只改这个画面里的灯光、视角和线框，不改模型文件
+  // 观看控制：只改这个画面里的灯光、视角和线框，不改模型文件
   let ambient: AmbientLight | undefined,
     sun: DirectionalLight | undefined,
     baseColor = new Color(),

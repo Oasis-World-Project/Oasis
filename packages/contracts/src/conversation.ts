@@ -1,4 +1,4 @@
-// conversation 的对外接口：私聊和在私聊里接任务（ADR 0005；群聊在后续阶段）。
+// conversation 的对外接口：私聊和在私聊里接任务（群聊在后续阶段）。
 import { z } from 'zod';
 import { UploadBody } from './canvas.ts';
 import { TaskSheet } from './task.ts';
@@ -118,7 +118,7 @@ const MessageBase = {
   createdAt: z.iso.datetime(),
 };
 
-/** 私聊里的一条消息：普通文字，或问题卡、任务单卡、任务卡、交付消息、任务提醒（ADR 0005 §7） */
+/** 私聊里的一条消息：普通文字，或问题卡、任务单卡、任务卡、交付消息、任务提醒 */
 export const MessageBody = z.discriminatedUnion('kind', [
   z.object({
     ...MessageBase,
@@ -126,7 +126,7 @@ export const MessageBody = z.discriminatedUnion('kind', [
     data: z.object({
       /** AI 觉得这可能是个任务，回复下面附「当成任务来做」 */
       suggestTask: z.boolean().optional(),
-      /** 用户随消息发的文件（存在 canvas，ADR 0007 §3） */
+      /** 用户随消息发的文件（存在 canvas） */
       attachments: z.array(MessageAttachment).optional(),
       /** 任务原话与补充一经提交即锁定。 */
       intent: z.enum(['chat', 'task']).optional(),

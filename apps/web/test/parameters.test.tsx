@@ -1,4 +1,4 @@
-// 参数面板（ADR 0012 §12）：成品参数怎么写进修改意见、哪些能近似预览、从面板到发出修改。
+// 参数面板：成品参数怎么写进修改意见、哪些能近似预览、从面板到发出修改。
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';

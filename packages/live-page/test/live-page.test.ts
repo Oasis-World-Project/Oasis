@@ -1,4 +1,4 @@
-// 网页在画布里运行（ADR 0009 §17、ADR 0021）：CSP 插在一切脚本之前；同成果文件按相对地址内嵌；
+// 网页在画布里运行：CSP 插在一切脚本之前；同成果文件按相对地址内嵌；
 // ES 模块改写成框里的地址并由 importmap 加载；找不到的列出来。
 import { describe, expect, it } from 'vitest';
 import { LIVE_CSP, LIVE_SANDBOX, livePage, resolveRef, withPolicy } from '../src/index.ts';

@@ -90,7 +90,7 @@ export function installFakeApi(options: {
         return json(200, { conversations: options.dms ?? [] });
       case '/conversation/v1/groups':
         return json(200, { groups: [] });
-      // 「＋」菜单一打开就读「只用国内模型」开关（ADR 0027）：默认关着
+      // 「＋」菜单一打开就读「只用国内模型」开关：默认关着
       case '/task/v1/model-scope':
         return json(200, { domesticOnly: false });
       default:

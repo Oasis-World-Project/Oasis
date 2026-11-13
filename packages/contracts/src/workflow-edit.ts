@@ -1,11 +1,11 @@
-// 用户对工作流能做的操作：给一样成果发话、改用另一版（ADR 0026）、「需要处理」时的选择。
-// 节点和连线不能编辑（ADR 0030 §3.2）。从 task.ts 拆出来，task.ts 原样再导出。
+// 用户对工作流能做的操作：给一样成果发话、改用另一版、「需要处理」时的选择。
+// 节点和连线不能编辑。从 task.ts 拆出来，task.ts 原样再导出。
 import { z } from 'zod';
 
 /** 对节点追问 / 补充要求 */
 export const NodeMessageBody = z.object({ text: z.string().trim().min(1).max(20_000) });
 
-/** 做几版的节点改用另一版（ADR 0026） */
+/** 做几版的节点改用另一版 */
 export const PickVersionBody = z.object({ version: z.number().int().min(1).max(4) });
 export type PickVersionBody = z.infer<typeof PickVersionBody>;
 

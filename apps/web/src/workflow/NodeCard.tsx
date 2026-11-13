@@ -1,4 +1,4 @@
-// 工作流图上的卡片（ADR 0030 §3.2）：一个 AI 做的成果是一个框，里面是它自己列的任务清单（只读）；
+// 工作流图上的卡片：一个 AI 做的成果是一个框，里面是它自己列的任务清单（只读）；
 // 生产线是一个框，框里是它的节点（谁在做、标题、一行说明、状态）。线从左边进、右边出，不能拖。
 import type { NodeBody } from '@oasis/contracts/task';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
@@ -11,7 +11,7 @@ import type { Speaker } from './use-speakers.ts';
 
 type CardData = {
   node: NodeBody;
-  /** 展开出来的条目、各版（ADR 0026）：叠在卡片后面，数做完了几个 */
+  /** 展开出来的条目、各版：叠在卡片后面，数做完了几个 */
   children: NodeBody[];
   state: ReturnType<typeof nodeState>;
   speakers: Speaker[];
@@ -92,7 +92,7 @@ const markOf = (data: CardData): MarkState =>
         ? 'trouble'
         : 'todo';
 
-/** 工具节点的标记：齿轮，没有 AI 头像（ADR 0025） */
+/** 工具节点的标记：齿轮，没有 AI 头像 */
 export function ToolMark({ size }: { size: number }) {
   return (
     <span
@@ -165,7 +165,7 @@ export function NodeCard({ data }: NodeProps<FlowNode>) {
   const trouble = node.status !== 'succeeded' && !!node.warning;
   return (
     <>
-      {/* 展开节点、做几版的节点：后面叠两层，看得出是一叠（ADR 0026） */}
+      {/* 展开节点、做几版的节点：后面叠两层，看得出是一叠 */}
       {group &&
         [8, 4].map((offset) => (
           <span

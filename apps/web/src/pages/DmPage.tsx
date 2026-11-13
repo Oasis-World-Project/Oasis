@@ -1,4 +1,4 @@
-// 和一个 AI 私聊：历史消息 + 流式回复；在这里交代任务、回答问题卡、确认任务单、看进度、拿成果（ADR 0005）。
+// 和一个 AI 私聊：历史消息 + 流式回复；在这里交代任务、回答问题卡、确认任务单、看进度、拿成果。
 // 回复期间输入框锁定；失败的回复会写明原因。
 import type { MessageBody } from '@oasis/contracts/conversation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';

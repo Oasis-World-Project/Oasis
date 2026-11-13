@@ -1,4 +1,4 @@
-// 批注（ADR 0012 §9、0009 §18）：编号和位置的说法、顶栏批注图标进入标注并保存、文档意见带原文、运行中应用截图批注。
+// 批注：编号和位置的说法、顶栏批注图标进入标注并保存、文档意见带原文、运行中应用截图批注。
 import type { Annotation, ArtifactBody } from '@oasis/contracts/canvas';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';

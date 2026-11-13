@@ -22,7 +22,7 @@ import {
 
 type DeliveredFile = DeliveryData['files'][number];
 
-/** 交付了数字人：显示形象和名字，直接去画布里和它对话（ADR 0013） */
+/** 交付了数字人：显示形象和名字，直接去画布里和它对话 */
 function AvatarDeliveries({ taskId }: { taskId: string }) {
   // 交付消息可能比画布登记早一点到：没看到数字人就每 5 秒再取，最多一分钟
   const { data: artifacts = [] } = useQuery({

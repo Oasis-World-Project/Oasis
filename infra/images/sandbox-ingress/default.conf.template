@@ -23,7 +23,7 @@ server {
     include /etc/nginx/conf.d/sandbox-proxy.inc;
   }
 
-  # 沙箱里的 oasis-tool：看工具目录、调用工具（ADR 0006）
+  # 沙箱里的 oasis-tool：看工具目录、调用工具
   location = /v1/tools {
     proxy_pass ${MODEL_GATEWAY_PROTOCOL}://oasis_model_gateway/run/v1/tools;
     include /etc/nginx/conf.d/sandbox-proxy.inc;

@@ -48,7 +48,7 @@ function weakDevice() {
 }
 const button =
   'rounded-full border border-hairline bg-glass-active px-3 py-1.5 text-xs text-ink disabled:opacity-40';
-/** 导演台上的图标按钮（ADR 0020）：悬停有说明，开关类按下时变深 */
+/** 导演台上的图标按钮：悬停有说明，开关类按下时变深 */
 const icon = (on = false) =>
   `flex size-9 items-center justify-center rounded-full border-0 transition-colors ${on ? 'bg-solid text-on-solid' : 'bg-transparent text-ink hover:bg-track'}`;
 const chip = (on: boolean) =>
@@ -116,7 +116,7 @@ function ViewCube({ send }: { send: Send }) {
 }
 
 /**
- * 底部浮动工具条（ADR 0012 §12、ADR 0020）：缩放、适配、复位；线框、地面网格、坐标轴；灯光。
+ * 底部浮动工具条：缩放、适配、复位；线框、地面网格、坐标轴；灯光。
  * 只改查看器里的画面，不改模型文件。结构预览没有材质和灯光，只给缩放和视角。
  */
 function Toolbar({

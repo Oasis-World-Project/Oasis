@@ -1,4 +1,4 @@
-// 批注的纯逻辑（ADR 0012 §9）：编号、位置的说法、编号画在哪、在一张画布上画出来（合成标注截图）。
+// 批注的纯逻辑：编号、位置的说法、编号画在哪、在一张画布上画出来（合成标注截图）。
 import { MAX_ANNOTATIONS, type Annotation, type AnnotationShape } from '@oasis/contracts/canvas';
 import type { RevisionNote } from '@oasis/contracts/task';
 import type { PreviewKind } from '../chat/files.ts';

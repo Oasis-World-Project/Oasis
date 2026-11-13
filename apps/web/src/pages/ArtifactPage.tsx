@@ -1,7 +1,7 @@
 // 画布里打开一个成果（外观照原型 ⑨⑩）：点阵底；顶栏只有返回、批注、下载三个图标（2026-11-04 精简）。
-// 中间预览（图片、视频、音频、PDF、Markdown、文字、网页；其他格式提示下载）。网页和静态应用在本机隔离框里直接运行（ADR 0009 §17）；
-// 带后端的应用不在画布里运行，只能下载（ADR 0021 删掉了画面转发式的平台容器预览）。
-// 批注面板里「发给 AI 团队修改」，直接交给 AI 团队在原任务里接着改（ADR 0012）。
+// 中间预览（图片、视频、音频、PDF、Markdown、文字、网页；其他格式提示下载）。网页和静态应用在本机隔离框里直接运行；
+// 带后端的应用不在画布里运行，只能下载（画面转发式的平台容器预览已经删掉）。
+// 批注面板里「发给 AI 团队修改」，直接交给 AI 团队在原任务里接着改。
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ArrowLeft, Download, LoaderCircle, PencilLine, SlidersHorizontal } from 'lucide-react';
@@ -37,13 +37,13 @@ export function ArtifactPage() {
     enabled: !!artifact,
   });
   const { data: tasks = [] } = useQuery(tasksQuery);
-  // 这份成果正在修改：原任务又跑起来了（ADR 0022，在原任务里改）；改完之前不能再改
+  // 这份成果正在修改：原任务又跑起来了（在原任务里改）；改完之前不能再改
   const ownTask = artifact ? tasks.find((t) => t.id === artifact.taskId) : undefined;
   const revising = ownTask && !SETTLED_STATUSES.has(ownTask.status) ? ownTask : undefined;
   const [reviseOpen, setReviseOpen] = useState(false);
   /** 从参数面板来的修改：参数随对话框一起发 */
   const [parameters, setParameters] = useState<RevisionParameter[]>([]);
-  // 数字人的参数面板（ADR 0013）
+  // 数字人的参数面板
   const [avatarParams, setAvatarParams] = useState(false);
   const [avatarValues, setAvatarValues] = useState<Values>({});
   const pdf = artifact ? pdfCompanion(artifact, siblings) : undefined;

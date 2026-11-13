@@ -27,7 +27,7 @@ denied. After an initial unconfirmed submission, an explicitly approved replacem
 returned a job ID but still failed with `cuda_before=devices_1; cuda_after=init_304`.
 The thread-naming change is insufficient; the remaining denied OS operation needs
 trusted syscall tracing. It is not GPU-render validated. All acceptance endpoints
-have been deleted; keep the profile disabled. See ADR 0011 §19–20 and the receipts.
+have been deleted; keep the profile disabled. See the receipts.
 
 The release allowlist is `infra/render-release.json`. Build, source and test
 receipts are in `out/render-worker-20261028/`; `release-plan.json` records the
@@ -141,8 +141,7 @@ provider POST. A disconnected POST is uncertain, even when no provider id was
 received; it must be audited rather than retried as a new generation.
 
 The existing scanner renews unsettled render holds, then archives and verifies
-both outputs against the worker receipt digests. Billing is metered per job
-(ADR 0011 §21): the user is charged
+both outputs against the worker receipt digests. Billing is metered per job: the user is charged
 `(ceil(executionTime s) + min(ceil(delayTime s), RENDER_STARTUP_ALLOWANCE_SECONDS) + RENDER_IDLE_SECONDS) × RENDER_PRICE_MICRO_PER_SECOND`,
 capped at the frozen `RENDER_HOLD_MICRO`, and the result is delivered as soon as
 that settlement and staging cleanup succeed. A `FAILED`, `CANCELLED` or
@@ -169,7 +168,7 @@ Service configuration is documented in `services/model-gateway/.env.example`.
 `pnpm env:init` adds missing local fields from the existing root keys without
 replacing filled values. Keep `RENDER_PROFILE_VERIFIED=false` until private-image
 pull, fixed resource/price profile, real isolated GPU and signed R2 exchange
-pass (done on 2026-10-30 for endpoint `oasis-render`, see ADR 0011 §21).
+pass (done on 2026-10-30 for endpoint `oasis-render`).
 `RENDER_PRICE_MICRO_PER_SECOND` is the locked per-second price of the GPU pool;
 recheck it when the pool or Runpod pricing changes. Signed-URL and fake-provider
 tests do not prove R2 reachability or real GPU execution.

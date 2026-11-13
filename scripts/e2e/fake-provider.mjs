@@ -247,7 +247,7 @@ export function createFakeProvider(options) {
 
   /**
    * 规划员（第一次规划、规划门退回后修改、修改成果时的规划）：写 out/plan.json，再说一句话；
-   * 答复中途调整（ADR 0030 §3.7）时写 out/adjust.json
+   * 答复中途调整时写 out/adjust.json
    */
   function plannerTurn(res, body, segments) {
     const first = segments[0];

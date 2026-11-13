@@ -1,4 +1,4 @@
-// 输入框里待发送的文件：选中就开始上传；全部传完才能发送，发送后清空（ADR 0007 §5）。
+// 输入框里待发送的文件：选中就开始上传；全部传完才能发送，发送后清空。
 import { MAX_ATTACHMENTS } from '@oasis/contracts/conversation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client.ts';

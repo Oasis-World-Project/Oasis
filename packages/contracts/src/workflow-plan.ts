@@ -52,7 +52,7 @@ export const RequirementSource = z.discriminatedUnion('kind', [
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     quote: z.string().min(1).max(2000),
   }),
-  /** 修改成果时用户写的修改意见（ADR 0012 §3） */
+  /** 修改成果时用户写的修改意见 */
   z.object({ kind: z.literal('revision'), quote: z.string().min(1).max(2000) }),
 ]);
 export const TaskRequirement = z.object({
@@ -82,7 +82,7 @@ export const NodeCommon = {
 };
 
 /**
- * 做 N 版挑 1 版（ADR 0026）：同一个节点同时做 n 版，都做完后按 pick 挑一版交给下游，落选的留着，
+ * 做 N 版挑 1 版：同一个节点同时做 n 版，都做完后按 pick 挑一版交给下游，落选的留着，
  * 用户可以改用另一版。生图、关键帧这类看运气的步骤用。
  */
 export const Variants = z.object({
@@ -120,7 +120,7 @@ export const DiscussionPlanNode = z.object({
 });
 
 /**
- * 工具节点（ADR 0025）：不带 AI，在沙箱里按顺序执行写好的工具步骤（外部工具或本地操作 op.*），
+ * 工具节点：不带 AI，在沙箱里按顺序执行写好的工具步骤（外部工具或本地操作 op.*），
  * 适合参数都能事先写死的机械步骤；每步失败自动重试 2 次。
  */
 export const ToolPlanNode = z.object({
@@ -132,7 +132,7 @@ export const ToolPlanNode = z.object({
   variants: Variants.optional(),
 });
 
-/** 一个展开节点最多展开几条（ADR 0026） */
+/** 一个展开节点最多展开几条 */
 export const FOREACH_MAX = 24;
 
 const branchTitle = { title: z.string().trim().min(1).max(60).optional() };
@@ -148,7 +148,7 @@ export const ForeachBranch = z.discriminatedUnion('kind', [
 export type ForeachBranch = z.infer<typeof ForeachBranch>;
 
 /**
- * 动态展开（ADR 0026）：上游交出一份 JSON 清单（如 shots.json），有几条就开几个分支，每条一个节点，
+ * 动态展开：上游交出一份 JSON 清单（如 shots.json），有几条就开几个分支，每条一个节点，
  * 同时跑；下游拿到每条的产出 in/<key>/01/…、02/…，和一份按顺序排好的 in/<key>/index.json。
  * 条数要等上游定的时候用（按分镜逐个出镜头、按大纲逐章写）。
  */

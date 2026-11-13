@@ -141,8 +141,8 @@ services:
       timeout: 3s
       retries: 20
 
-  # 沙箱入口代理（ADR 0003 §6）：沙箱容器在内部网络 oasis-sandbox 里，不通外网，只能访问它和出口代理；
-  # 它只放行 chat completions、Jev 决策和工具（ADR 0006）几条路径，转到 model-gateway 的 /run/v1/*。
+  # 沙箱入口代理：沙箱容器在内部网络 oasis-sandbox 里，不通外网，只能访问它和出口代理；
+  # 它只放行 chat completions、Jev 决策和工具几条路径，转到 model-gateway 的 /run/v1/*。
   # 本机开发时 model-gateway 跑在宿主机上，经 host.docker.internal 访问；pnpm stack:up 时改为容器里的 model-gateway。
   sandbox-ingress:
     image: oasis/sandbox-ingress:1.29.3
@@ -159,7 +159,7 @@ services:
       timeout: 3s
       retries: 20
 
-  # 沙箱出口代理（ADR 0006 §7）：沙箱装软件包时经它出去，只放行白名单里的软件包仓库（域名），其余一律拒绝。
+  # 沙箱出口代理：沙箱装软件包时经它出去，只放行白名单里的软件包仓库（域名），其余一律拒绝。
   # 开发机在国内，默认用国内镜像站；部署到海外后在 .env 里换回官方源（见根目录 .env.example）。
   sandbox-egress:
     image: oasis/sandbox-egress:1.11.2
@@ -340,7 +340,7 @@ services:
       sandbox-egress:
         condition: service_healthy
 
-  # 检查服务（ADR 0024）：不连数据库和事件，只读对象存储的临时下载链接
+  # 检查服务：不连数据库和事件，只读对象存储的临时下载链接
   inspector:
     <<: *node-service
     image: oasis/inspector:${OASIS_IMAGE_TAG:-local}

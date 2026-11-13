@@ -1,5 +1,5 @@
-// 能标注的预览（ADR 0012 §9）：图片、PDF 页（标注时用 pdf.js 一页一页画）、视频（暂停后在帧上画，
-// 时间轴上的红点是批注）、音频（时间轴上加批注）、运行中的网页和应用（桌面版截下当前画面，在截图上画，ADR 0009 §18）。
+// 能标注的预览：图片、PDF 页（标注时用 pdf.js 一页一页画）、视频（暂停后在帧上画，
+// 时间轴上的红点是批注）、音频（时间轴上加批注）、运行中的网页和应用（桌面版截下当前画面，在截图上画）。
 // 其他格式照常预览，意见在侧栏里写。
 import type { Annotation, AnnotationShape } from '@oasis/contracts/canvas';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
@@ -45,7 +45,7 @@ interface Props {
   pending: Drawn | null;
   onDraw: (drawn: Drawn) => void;
   jump: Jump | null;
-  /** 参数面板的近似预览（ADR 0012 §12）：视频滤镜、音量（只能调低）、倍速 */
+  /** 参数面板的近似预览：视频滤镜、音量（只能调低）、倍速 */
   look?: { filter?: string; volume?: number; rate?: number };
   /** 运行中的应用本身（不传就按文件预览）；截图批注时它保持运行，只是被截图盖住 */
   live?: ReactNode;

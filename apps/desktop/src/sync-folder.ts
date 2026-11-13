@@ -1,6 +1,6 @@
-// 把成果写进用户选的同步文件夹（ADR 0007 §10）。只在主进程里用，页面碰不到文件系统：
+// 把成果写进用户选的同步文件夹。只在主进程里用，页面碰不到文件系统：
 // - 路径只能是同步文件夹里的相对路径，跳不出去；
-// - 已经有同名文件就不覆盖（可能是用户自己改过的），只记为已同步；修改出的新版例外（ADR 0012）：
+// - 已经有同名文件就不覆盖（可能是用户自己改过的），只记为已同步；修改出的新版例外：
 //   那里还是没改过的旧版就覆盖，用户改过就另存为「名字 (新版).扩展名」；
 // - 先写临时文件再改名，写到一半断了不会留下半个文件；
 // - 哪些成果同步过记在桌面端自己的数据目录里，按文件夹分开记（换了文件夹会重新同步一遍）。
@@ -187,7 +187,7 @@ export function createSyncFolder(recordFile: string) {
       serial(async () => {
         const record = await load();
         if (!record.folder) throw new Error('还没选同步文件夹');
-        // 「id」或修改后原地换成新版的「id@新摘要」（ADR 0012）
+        // 「id」或修改后原地换成新版的「id@新摘要」
         if (!/^[0-9a-f-]{36}(@[a-f0-9]{64})?$/i.test(artifactId)) throw new Error('成果 id 不合格');
         if (!Number.isSafeInteger(size) || size < 0 || size > DESKTOP_SYNC_MAX_BYTES)
           throw new Error('文件太大，没有同步');
@@ -204,7 +204,7 @@ export function createSyncFolder(recordFile: string) {
           path.isAbsolute(path.relative(root, parent))
         )
           throw new Error('同步目录包含越界链接');
-        // 修改出的新版（ADR 0012）：那里还是用户没改过的旧版就覆盖；用户改过就另存为「(新版)」
+        // 修改出的新版：那里还是用户没改过的旧版就覆盖；用户改过就另存为「(新版)」
         let overwrite = false;
         if (existsSync(target)) {
           if (!replacesSha256) {

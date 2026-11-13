@@ -1,4 +1,4 @@
-// 盖在画面（图片、PDF 页、暂停的视频帧）上的一层（ADR 0012 §9）：标注模式下拖出圈、画笔画、点编号点；
+// 盖在画面（图片、PDF 页、暂停的视频帧）上的一层：标注模式下拖出圈、画笔画、点编号点；
 // 平时只显示编号，点编号才显示意见（原型：批注默认隐藏）。坐标都是相对画面的 0–1。
 import type { Annotation, AnnotationShape } from '@oasis/contracts/canvas';
 import { useRef, useState, type PointerEvent } from 'react';

@@ -79,7 +79,7 @@ export function StatusTag({
   );
 }
 
-/** 「修改中」标签：任务在按修改意见改（排方案、等确认、新版还没做完，ADR 0022） */
+/** 「修改中」标签：任务在按修改意见改（排方案、等确认、新版还没做完） */
 export function RevisingTag() {
   return (
     <span className="shrink-0 rounded-full border border-accent px-2.5 py-[3px] text-[12px] font-medium leading-none text-accent">

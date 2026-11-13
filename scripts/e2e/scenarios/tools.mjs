@@ -1,9 +1,9 @@
-// 回归场景（docs/engineering/回归测试.md）：工具节点（ADR 0025）。
+// 回归场景（docs/engineering/回归测试.md）：工具节点。
 import { literal, query } from '../db.mjs';
 import { marker } from '../fake-provider.mjs';
 import { done, outcomes, sha256 } from './shared.mjs';
 
-// ---------- 12. 工具节点：不用 AI，按步骤生成两段视频、再在沙箱里拼成片（ADR 0025） ----------
+// ---------- 12. 工具节点：不用 AI，按步骤生成两段视频、再在沙箱里拼成片 ----------
 const SHOTS = ['工具节点镜头一：秋叶', '工具节点镜头二：树梢'];
 const STEPS = [
   { tool: 'video.generate', args: { prompt: SHOTS[0], duration: 5 }, out: 'out/镜头/1.mp4' },

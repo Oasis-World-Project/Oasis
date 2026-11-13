@@ -1,4 +1,4 @@
-// 工作流视图里的展开节点和做几版的节点（ADR 0026）：图上只有父节点的一叠卡片，详情里列出每一条、各版，
+// 工作流视图里的展开节点和做几版的节点：图上只有父节点的一叠卡片，详情里列出每一条、各版，
 // 可以改用另一版。
 import type { TaskBody } from '@oasis/contracts/task';
 import { createMemoryHistory } from '@tanstack/react-router';

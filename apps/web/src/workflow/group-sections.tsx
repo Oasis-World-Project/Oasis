@@ -1,4 +1,4 @@
-// 节点详情里展开节点、做几版的节点（ADR 0026）的几块：展开出来的每一条、各版和挑选理由、「改用这一版」，
+// 节点详情里展开节点、做几版的节点的几块：展开出来的每一条、各版和挑选理由、「改用这一版」，
 // 以及子节点回到它属于的那个节点。
 import type { NodeBody, TaskBody } from '@oasis/contracts/task';
 import { pickVersion, taskFileUrl } from '../api/queries.ts';

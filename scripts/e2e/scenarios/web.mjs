@@ -70,7 +70,7 @@ export const web = {
           seg.text.includes('第 3 步 text #count')
             ? { bash: writeFiles({ 'out/site/counter.js': counter(1) }), description: '修计数' }
             : { text: `修复提示里没有浏览器检查发现的计数问题：${seg.text.slice(0, 200)}` },
-        // 交回前自查：沙箱带着 out/site 的文件经网关交给 inspector，跑和关卡同一套浏览器检查（ADR 0024）
+        // 交回前自查：沙箱带着 out/site 的文件经网关交给 inspector，跑和关卡同一套浏览器检查
         { bash: 'oasis-tool app.check --dir out/site', description: '自查网页' },
       ],
     },
@@ -260,7 +260,7 @@ export const manifest = {
   },
 };
 
-// ---------- 1d. 一个 AI 从头做到交付（ADR 0030）：自己调工具拿素材、做多文件网页、
+// ---------- 1d. 一个 AI 从头做到交付：自己调工具拿素材、做多文件网页、
 // 用沙箱里的浏览器自己点一遍、再按画布的方式查一次；一次交付，关卡不退回 ----------
 const COVER_PAGE = PAGE.replace(
   '<p>已经点了',
