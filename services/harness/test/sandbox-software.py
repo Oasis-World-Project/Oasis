@@ -35,7 +35,7 @@ from weasyprint import HTML
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
-from PIL import Image
+from PIL import Image, ImageFont
 
 with tempfile.TemporaryDirectory(prefix="oasis-file-tools-") as tmp:
     root = Path(tmp)
@@ -93,6 +93,14 @@ with tempfile.TemporaryDirectory(prefix="oasis-file-tools-") as tmp:
     HTML(string=f'<html lang="zh"><style>body{{font-family:"Noto Sans CJK JP"}}</style><p>{text}</p></html>').write_pdf(root / "html.pdf")
     assert text in "".join(run("pdftotext", str(root / "html.pdf"), "-").split())
     print("PASS: Chinese chart fonts and HTML -> PDF", flush=True)
+
+    pixel_font = next(
+        path for path in (line.split(":")[0] for line in run("fc-list", "Unifont", "file").splitlines())
+        if path.endswith(("/unifont.otf", "/unifont.ttf"))
+    )
+    assert ImageFont.truetype(pixel_font, 16).getmask(text).getbbox(), "Unifont has no glyphs for Chinese text"
+    assert pixel_font in Path("/opt/oasis/software.txt").read_text(encoding="utf-8")
+    print("PASS: pixel font Unifont renders Chinese and is listed in the software manifest", flush=True)
 
     run("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(root / "sample.wav"))
     probe = json.loads(run("ffprobe", "-v", "error", "-show_format", "-of", "json", str(root / "sample.wav")))

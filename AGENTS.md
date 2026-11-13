@@ -23,7 +23,7 @@
 | `pnpm browser:build` · `browser:smoke` | 构建 inspector 的检查浏览器镜像 `oasis/inspector-browser:<Playwright 版本>`；本机烟测（静态网页、Node 应用按交付关卡的路子各查一遍，外站测一次） |
 | `pnpm lint` · `pnpm typecheck` · `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、服务调用无环、依赖方向、死代码、重复率、迁移检查 |
-| `pnpm e2e` | 全链路回归：假模型、真容器、真画布，从私聊发任务跑到桌面端画布里打开成果（先停 `pnpm dev`；`--keep` 跑完不停服务；`--real` 真模型、每场景 ≤ $1，生视频的 `real-tool` ≤ $2、6 镜头短片 `real-shots` ≤ $4.5）。见 `docs/engineering/回归测试.md` |
+| `pnpm e2e` | 全链路回归：假模型、真容器、真画布，从私聊发任务跑到桌面端画布里打开成果（先停 `pnpm dev`；`--keep` 跑完不停服务；`--real` 真模型、每场景 ≤ $1，生视频的 `real-tool` ≤ $2、小游戏 `real-game` ≤ $3、6 镜头短片 `real-shots` ≤ $3.9）。见 `docs/engineering/回归测试.md` |
 | `pnpm trace <任务 ID>` | 一个任务的运行、调用、费用来源和画布成果，标出异常（按估算扣费、卡住的调用、没退回的冻结、遗留容器） |
 | `pnpm accept` | 验收模式：服务从当前代码起、不随改动重启，Web 用构建版（先停 `pnpm dev`） |
 | `pnpm cleanup` | 任务收尾清理并报告释放空间：删 `.tmp`、日志、根目录的 `out/` 和 7 天前的构建缓存（`--dry-run` 只列出不删；`--build`、`--docker` 可选） |

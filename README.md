@@ -113,7 +113,7 @@ docs/       工程方向、现在是怎么做的（design）、回归测试
 |---|---|
 | `pnpm lint` / `pnpm typecheck` / `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、依赖方向、死代码、重复率、数据库迁移检查 |
-| `pnpm e2e` | 全链路回归（假模型、真容器、真画布，约 2 分钟，先停 `pnpm dev`）；`--real` 用真模型跑 4 个小场景，每场景 ≤ $1（生视频的 `real-tool` ≤ $2）。见 `docs/engineering/回归测试.md` |
+| `pnpm e2e` | 全链路回归（假模型、真容器、真画布，约 2 分钟，先停 `pnpm dev`）；`--real` 用真模型跑 6 个场景，每场景 ≤ $1（生视频的 `real-tool` ≤ $2、小游戏 `real-game` ≤ $3、6 镜头短片 `real-shots` ≤ $3.9）。见 `docs/engineering/回归测试.md` |
 | `pnpm trace <任务 ID>` | 查一个任务的运行、调用、费用来源和画布成果，并标出异常 |
 | `pnpm accept` | 验收模式：服务从当前代码启动、不随改动重启，Web 用构建版 |
 | `pnpm cleanup` | 清理临时产物并报告释放的空间 |
