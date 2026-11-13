@@ -6,6 +6,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
+import { parseEnv } from 'node:util';
 
 export const ROOT = path.resolve(import.meta.dirname, '../..');
 
@@ -34,15 +35,9 @@ const DEFAULT_PORTS = {
   inspector: 4109,
 };
 
-/** 读一个 .env 文件（只取 KEY=VALUE 行） */
+/** 读一个 .env 文件（规则和 Node 的 --env-file 一样）；没有就是空的 */
 export function readEnv(file) {
-  if (!existsSync(file)) return {};
-  const vars = {};
-  for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
-    if (m) vars[m[1]] = m[2];
-  }
-  return vars;
+  return existsSync(file) ? parseEnv(readFileSync(file, 'utf8')) : {};
 }
 
 export const portOf = (name) =>
@@ -128,7 +123,9 @@ export function createStack(options) {
     out.write(`\n===== ${new Date().toISOString()} 启动 ${name} =====\n`);
     const child = spawn(process.execPath, args, {
       cwd,
-      env: { ...process.env, ...env },
+      // .env 当成真正的环境变量（优先级和 --env-file 一样，低于已有的）：NODE_USE_ENV_PROXY 这类
+      // Node 启动时就读的变量用 --env-file 给不生效（见 scripts/dev-service.mjs）
+      env: { ...readEnv(path.join(cwd, '.env')), ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -167,7 +164,7 @@ export function createStack(options) {
     if (await portBusy(port)) throw new Error(`${name} 的端口 ${port} 被占用（先停掉 pnpm dev）`);
     launch(
       name,
-      ['--env-file-if-exists=.env', 'src/main.ts'],
+      ['src/main.ts'],
       path.join(ROOT, 'services', name),
       options.env?.[name] ?? {},
       path.join(logDir, `${name}.log`),

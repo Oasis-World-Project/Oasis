@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { parseEnv } from 'node:util';
 
 const roots = [
   'src',
@@ -54,13 +55,26 @@ let pending = current;
 const inputArgs = process.argv.slice(2);
 const watching = inputArgs[0] !== '--no-watch';
 if (!watching) inputArgs.shift();
-const args = ['--env-file-if-exists=.env', ...inputArgs];
 if (inputArgs.length === 0) throw new Error('用法：node ../../scripts/dev-service.mjs src/main.ts');
+
+/**
+ * 本地配置 .env 当成真正的环境变量交给服务（已有的环境变量优先，和 --env-file 一样）。
+ * 不用 --env-file：Node 启动时就读的变量（比如让 fetch 走代理的 NODE_USE_ENV_PROXY）写在那里不生效，
+ * model-gateway 配了代理却一直直连 OpenRouter，长回答在 5 分钟左右被掐断（2026-11-14 查明）。
+ */
+function localEnv() {
+  try {
+    return { ...parseEnv(readFileSync('.env', 'utf8')), ...process.env };
+  } catch (error) {
+    if (error.code === 'ENOENT') return process.env;
+    throw error;
+  }
+}
 
 function start() {
   clearTimeout(retryTimer);
   const startedAt = Date.now();
-  child = spawn(process.execPath, args, { stdio: 'inherit' });
+  child = spawn(process.execPath, inputArgs, { stdio: 'inherit', env: localEnv() });
   child.on('error', (error) =>
     console.error(JSON.stringify({ event: 'dev.start_failed', code: error.code })),
   );

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -119,4 +121,42 @@ if(n===1)process.exit(1);else setInterval(()=>{},1000);`,
   process.kill(boots().at(-1).pid, 'SIGKILL');
   await until(() => boots().at(-1)?.n === 3);
   assert.ok(output.includes('dev.retry_scheduled'));
+});
+
+test('.env 里 Node 启动时才读的变量也生效：写了 NODE_USE_ENV_PROXY，fetch 就走配置的代理', async (t) => {
+  const dir = mkdtempSync(path.join(root, '.tmp/dev-service-test-'));
+  // Node 经代理访问一律先发 CONNECT；记下来、回 502 就够了（请求失败没关系，要看的是走没走代理）
+  const tunnels = [];
+  const proxy = createServer();
+  proxy.on('connect', (request, socket) => {
+    tunnels.push(request.url);
+    socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+  });
+  await new Promise((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    proxy.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  mkdirSync(path.join(dir, 'src'));
+  writeFileSync(
+    path.join(dir, '.env'),
+    `NODE_USE_ENV_PROXY=1\nHTTP_PROXY=http://127.0.0.1:${proxy.address().port}\n`,
+  );
+  writeFileSync(
+    path.join(dir, 'src/main.mjs'),
+    "await fetch('http://proxy-check.invalid/', { signal: AbortSignal.timeout(5000) }).catch(() => {});",
+  );
+  // 跑测试的机器自己设了代理的话，会盖过 .env（和 --env-file 一样），这里去掉
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key]) => !/^(https?_proxy|no_proxy|node_use_env_proxy)$/i.test(key),
+    ),
+  );
+  const child = spawn(process.execPath, [launcher, '--no-watch', 'src/main.mjs'], {
+    cwd: dir,
+    env,
+    stdio: 'ignore',
+  });
+  await once(child, 'exit');
+  assert.deepEqual(tunnels, ['proxy-check.invalid:80']);
 });
