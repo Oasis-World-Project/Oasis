@@ -203,9 +203,11 @@ describe('长任务（视频）', () => {
     expect((await errorOf(call('video.generate', { prompt: 'x', duration: 21 })))?.statusCode).toBe(
       400,
     );
-    expect((await errorOf(call('video.generate', { prompt: 'x', resolution: '768p' })))?.code).toBe(
-      'video_parameters_unsupported',
-    );
+    const rejected = await errorOf(call('video.generate', { prompt: 'x', resolution: '768p' }));
+    expect(rejected?.code).toBe('video_parameters_unsupported');
+    // 说清楚哪一项不行、能选什么，AI 才能一次改对
+    expect(rejected?.message).toContain('清晰度 768p 不支持（可选：');
+    expect(rejected?.message).toContain('没有花钱');
     expect(billingCalls).toHaveLength(0);
     knobs.videoCentsPerSecond = '100';
     knobs.videoUsdTariff = false;

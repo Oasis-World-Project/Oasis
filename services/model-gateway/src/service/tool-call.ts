@@ -11,6 +11,7 @@ import { HOLD_MARGIN_MS, type ToolContext } from './tool-context.ts';
 import type { ToolDef } from './tools.ts';
 import { mediaKinds } from './tools/images.ts';
 import { needsModel } from './tools/kit.ts';
+import { videoProblems, videoRejection } from './tools/video.ts';
 
 export function createToolCall(ctx: ToolContext) {
   const { deps, byKey, configured } = ctx;
@@ -76,16 +77,11 @@ export function createToolCall(ctx: ToolContext) {
       let videoEstimateMicro: number | undefined;
       if (tool.key === 'video.generate') {
         const catalogue = await deps.openrouter.listVideoModels().catch(() => []);
+        const usable = models;
         const compatible = catalogue.filter(
-          (entry) =>
-            models.includes(entry.id) &&
-            entry.supported_durations?.includes(Number(args.duration)) &&
-            entry.supported_resolutions?.includes(String(args.resolution)) &&
-            (!args.aspect_ratio ||
-              entry.supported_aspect_ratios?.includes(String(args.aspect_ratio))) &&
-            (!args.first_frame || entry.supported_frame_images?.includes('first_frame')),
+          (entry) => usable.includes(entry.id) && !videoProblems(entry, args).length,
         );
-        models = models.filter((model) => compatible.some((entry) => entry.id === model));
+        models = usable.filter((model) => compatible.some((entry) => entry.id === model));
         const selected = compatible.find((entry) => entry.id === tool.modelOf(args, models));
         const rate = videoSecondRate(
           selected?.pricing_skus ?? {},
@@ -105,7 +101,13 @@ export function createToolCall(ctx: ToolContext) {
           throw new HttpError(
             400,
             'video_parameters_unsupported',
-            '无法确认视频模型支持所选参数/首帧及价格；未提交供应商',
+            videoRejection({
+              catalogue,
+              usable,
+              fitting: models,
+              args,
+              ...(selected ? { unpriced: selected.id } : {}),
+            }),
           );
         videoEstimateMicro = Math.ceil(
           (rate * Number(args.duration) + referenceCost / 100) * 1_000_000,
