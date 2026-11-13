@@ -1,5 +1,5 @@
 // 私聊：建会话、存消息、调模型并把回复流式推给前端。私聊的模型调用由会话主人付费。
-// 每条用户消息先判断是不是在交代任务（ADR 0005 §2）：是就转去接需求，不走普通聊天。
+// 每条用户消息先判断是不是在交代任务：是就转去接需求，不走普通聊天。
 import { ModelRoute } from '@oasis/contracts/agent';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import { UploadLookupResult } from '@oasis/contracts/canvas';
@@ -95,7 +95,7 @@ export function createDmService(deps: {
   /** 交给模型的历史：整段对话，快到窗口时压缩较早部分 */
   context: ContextService;
   replyMaxTokens: number;
-  /** 认出任务的决策模型和两个阈值（ADR 0005 §2） */
+  /** 认出任务的决策模型和两个阈值 */
   detect: { model: string; high: number; low: number };
   logger: Logger;
 }) {

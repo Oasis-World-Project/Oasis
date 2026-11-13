@@ -32,7 +32,7 @@ export const modelGatewayEnv = {
     .int()
     .nonnegative()
     .default(10 * 60_000),
-  /** 浏览器检查（website.test、app.check）在 inspector 里做（ADR 0024） */
+  /** 浏览器检查（website.test、app.check）在 inspector 里做 */
   INSPECTOR_URL: z.url().default('http://127.0.0.1:4109'),
   /**
    * 检查浏览器用几核、一次冻结多久的算力（按调用的任务和节点计费）。检查本身不设时限
@@ -166,7 +166,7 @@ export const modelGatewayEnv = {
     .int()
     .min(60_000)
     .default(30 * 60_000),
-  /** model.ask（问另一个模型，ADR 0030 §3.5）能问的型号，第一个是不指定时用的 */
+  /** model.ask（问另一个模型）能问的型号，第一个是不指定时用的 */
   TOOL_ASK_MODELS: list(
     'deepseek/deepseek-v4-pro-0813,deepseek/deepseek-v4.1-flash,qwen/qwen3.8-max-prime,moonshotai/kimi-k3.1-pro,z-ai/glm-5.3-prime,anthropic/claude-sonnet-5.5,openai/gpt-6.1-sol,google/gemini-4-argon',
   ),
@@ -178,7 +178,7 @@ export const modelGatewayEnv = {
   ),
   /**
    * 国内厂商（模型 ID 里「/」前面的部分）。用户打开「只用国内模型」后，只给他的 AI 团队列这些厂商的
-   * 模型和工具型号（ADR 0027）；不在名单里的都算国外。
+   * 模型和工具型号；不在名单里的都算国外。
    */
   DOMESTIC_MODEL_VENDORS: list(
     'deepseek,qwen,alibaba,moonshotai,bytedance,bytedance-seed,kwaivgi,minimax,stepfun,tencent,xiaomi,z-ai',
@@ -198,7 +198,7 @@ export const modelGatewayEnv = {
   ESTIMATE_NODE_PROMPT_TOKENS: z.coerce.number().int().positive().default(600_000),
   ESTIMATE_NODE_COMPLETION_TOKENS: z.coerce.number().int().positive().default(40_000),
   COMPUTE_PRICE_MICRO_PER_CORE_HOUR: z.coerce.number().int().nonnegative().default(15_000),
-  /** 实时数字人（LiveAvatar，ADR 0013）；没配置时开数字人会话返回 503 */
+  /** 实时数字人（LiveAvatar）；没配置时开数字人会话返回 503 */
   LIVEAVATAR_API_KEY: z
     .string()
     .optional()

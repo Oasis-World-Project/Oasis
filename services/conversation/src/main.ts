@@ -1,5 +1,5 @@
 // conversation：群聊与私聊（MVP 先做私聊）。消息存库，AI 回复经 model-gateway 流式返回；
-// 私聊里认出任务就转去接需求，确认任务单后交给 task（ADR 0005）。
+// 私聊里认出任务就转去接需求，确认任务单后交给 task。
 import { fileURLToPath } from 'node:url';
 import { TASK_STREAM, TaskDeleted, TaskStatusChanged } from '@oasis/contracts/events';
 import {

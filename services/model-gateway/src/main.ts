@@ -172,7 +172,7 @@ await startService({
     });
     const tools = createToolService({
       estimateFromHistory: config.ESTIMATE_FROM_HISTORY,
-      // 浏览器检查在 inspector（ADR 0024）；检查浏览器的算力在这里冻结、结算
+      // 浏览器检查在 inspector；检查浏览器的算力在这里冻结、结算
       checks: {
         inspector: createServiceClient('inspector', config.INSPECTOR_URL, { timeoutMs: 65_000 }),
         compute,

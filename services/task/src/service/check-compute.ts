@@ -1,4 +1,4 @@
-// 检查用的算力（ADR 0024）：inspector 不调别的服务，开检查容器的算力由关卡先在 model-gateway 冻结，
+// 检查用的算力：inspector 不调别的服务，开检查容器的算力由关卡先在 model-gateway 冻结，
 // 再按 inspector 报回的实际用量结算，记在这个任务和节点上（和节点运行的沙箱同一套计量）。
 // 检查没做完不收钱；结算没成功时冻结到期自动退回，不会多扣。
 import { randomUUID } from 'node:crypto';

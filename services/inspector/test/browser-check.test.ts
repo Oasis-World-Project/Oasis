@@ -1,4 +1,4 @@
-// 网页的浏览器检查（ADR 0017、0021、0024）：交付关卡读运行产出包、节点自查用随调用带来的文件、外站测试。
+// 网页的浏览器检查：交付关卡读运行产出包、节点自查用随调用带来的文件、外站测试。
 // 检查浏览器用假的：真容器里的检查由 pnpm browser:smoke 和全链路回归覆盖。
 import { Readable } from 'node:stream';
 import type { BrowserTestPlan } from '@oasis/contracts/ui-test';
@@ -169,7 +169,7 @@ describe('网页的浏览器检查', () => {
     });
   });
 
-  it('静态网页按画布的方式打开：入口换成只放隔离框的外壳，多文件模块也一并装进框里（ADR 0021）', async () => {
+  it('静态网页按画布的方式打开：入口换成只放隔离框的外壳，多文件模块也一并装进框里', async () => {
     const app = staticApp({
       'site/index.html':
         '<script type="importmap">{"imports":{"three":"./js/three.js"}}</script><script type="module" src="./js/app.js"></script>',
@@ -221,7 +221,7 @@ describe('网页的浏览器检查', () => {
     expect(misplaced.start).not.toHaveBeenCalled();
   });
 
-  it('画面一直是一整片纯色时检查不通过（ADR 0021）', async () => {
+  it('画面一直是一整片纯色时检查不通过', async () => {
     const { checks, look } = fixture(staticApp({ 'site/index.html': '<canvas></canvas>' }));
     look.mockResolvedValueOnce({ blank: true, color: '#080808' });
     const result = await checks.checkOutputs(gate());

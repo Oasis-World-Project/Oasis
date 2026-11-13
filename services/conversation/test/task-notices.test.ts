@@ -161,7 +161,7 @@ describe('任务的结果回到私聊', () => {
   });
 });
 
-describe('任务被删除（ADR 0012）', () => {
+describe('任务被删除', () => {
   it('任务删除时它的卡片、交付消息、提醒一起删掉；不是这个人的会话、没有会话的不动', async () => {
     const removed: { conversationId: string; taskId: string }[] = [];
     const notices = createTaskNotices({

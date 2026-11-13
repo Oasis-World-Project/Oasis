@@ -1,4 +1,4 @@
-// 用户随消息发的文件（存在 canvas）：给 AI 看的说明、汇总成任务的素材（ADR 0007 §4）。
+// 用户随消息发的文件（存在 canvas）：给 AI 看的说明、汇总成任务的素材。
 import type { Material } from '@oasis/contracts/canvas';
 import type { MessageAttachment } from '@oasis/contracts/conversation';
 import type { Message } from '../repo/conversation-repo.ts';

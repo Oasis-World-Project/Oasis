@@ -1,4 +1,4 @@
-// 在私聊里接任务（ADR 0005 §2、§3）：认出任务 → 私聊里的 AI 问需求（问题卡）→ 给出任务单 →
+// 在私聊里接任务：认出任务 → 私聊里的 AI 问需求（问题卡）→ 给出任务单 →
 // 用户确认 → 交给 task 建任务（之后由规划员排工作流）。问需求不走 harness：直接经 model-gateway 调模型。
 import { randomUUID } from 'node:crypto';
 import { ModelRoute } from '@oasis/contracts/agent';
@@ -112,7 +112,7 @@ function intakeActions(deps: {
   agent: ServiceClient;
   modelGateway: ServiceClient;
   task: ServiceClient;
-  /** 读用户上传的素材（canvas 签链接、inspector 解析，ADR 0024）；没配时不读 */
+  /** 读用户上传的素材（canvas 签链接、inspector 解析）；没配时不读 */
   readMaterials?: MaterialReader;
   config: IntakeConfig;
   logger: Logger;
@@ -253,8 +253,7 @@ function intakeActions(deps: {
   }
 
   /**
-   * 让私聊里的 AI 走一步：问题、任务单或不做了。每一步只调用一次模型，不重试（ADR 0005
-   * §2026-11-04）：输出受契约约束，小毛病就地整理；要求来源按原文确定性核对并补齐原话和选择；
+   * 让私聊里的 AI 走一步：问题、任务单或不做了。每一步只调用一次模型，不重试：输出受契约约束，小毛病就地整理；要求来源按原文确定性核对并补齐原话和选择；
    * 回答实在用不了（截断、不是 JSON）就按原话和选择直接列出任务单。只有网络、额度这类调用本身
    * 的错误会抛给调用方。
    */

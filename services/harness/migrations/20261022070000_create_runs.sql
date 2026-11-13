@@ -1,7 +1,7 @@
 -- phase: expand
 -- contract-plan: 不适用（harness 的第一批表，没有旧结构需要收缩）
 -- migrate:up
--- 一次 agent 运行 = 一个沙箱容器里的一个 dsh 会话（ADR 0003 §5–6）
+-- 一次 agent 运行 = 一个沙箱容器里的一个 dsh 会话
 create table runs (
   id uuid primary key,
   payer_id uuid not null,

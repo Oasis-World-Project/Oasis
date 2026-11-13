@@ -39,10 +39,10 @@ export function registerRoutes(
     uploads: UploadService;
     artifacts: ArtifactService;
     store: ObjectStore;
-    /** 模型预览前的检查（ADR 0024） */
+    /** 模型预览前的检查 */
     inspector?: ServiceClient;
     task?: ServiceClient;
-    /** 数字人会话（ADR 0013）；没配时不提供 */
+    /** 数字人会话；没配时不提供 */
     modelGateway?: ServiceClient;
   },
   options: {
@@ -111,7 +111,7 @@ export function registerRoutes(
     return sendStored(request, reply, store, { ...row, download: download === '1' });
   });
 
-  // ---- 成果（ADR 0007 §8–9）----
+  // ---- 成果----
   app.get('/v1/artifacts', async (request) => {
     const filter = parseWith(ArtifactQuery, request.query);
     const user = requireUserId(request),
@@ -128,7 +128,7 @@ export function registerRoutes(
     return models ? models.decorate(user, row) : row;
   });
 
-  // ---- 批注与批准（ADR 0012 §9）----
+  // ---- 批注与批准----
   app.put('/v1/artifacts/:id/annotations', async (request) => {
     const { id } = parseWith(IdParams, request.params);
     const { annotations } = parseWith(AnnotationList, request.body);
@@ -221,7 +221,7 @@ export function registerRoutes(
     return { uploads: await uploads.lookup(ownerId, ids, partial, claim) };
   });
 
-  /** 临时下载链接：conversation 交给 inspector 解析素材（ADR 0024） */
+  /** 临时下载链接：conversation 交给 inspector 解析素材 */
   app.post('/internal/uploads/links', async (request) => {
     const { ownerId, ids } = parseWith(UploadLinksBody, request.body);
     return { uploads: await uploads.links(ownerId, ids) };

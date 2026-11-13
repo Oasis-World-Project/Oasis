@@ -17,7 +17,7 @@ const GeometryResult = z.looseObject({
 });
 /**
  * fal 上的图生 3D 型号：入参、GLB 放在结果的哪一项、价钱各不相同，差别只写在这张表里，
- * 目录只列表里有的（ADR 0029 §8）。micro 是这个精度下一次的标价（微美元）。
+ * 目录只列表里有的。micro 是这个精度下一次的标价（微美元）。
  */
 const GEOMETRY_MODELS: Record<
   string,

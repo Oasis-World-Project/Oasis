@@ -1,7 +1,7 @@
 // 执行一次运行：排队 → 签发临时 Key、冻结算力 → 起沙箱（挂上这个会话的持久工作目录）、放入输入 →
 // dsh 握手、交任务 → 记录事件 → 等空闲（期间可追问）→ 取出产出存进对象存储 → 销毁沙箱、作废 Key、结算算力
 // → 写结局并发出 harness.run.finished。依赖暂时不可用时保存原会话，等接管（control.ts）。
-// 工具运行（ADR 0025）不起 dsh：沙箱里跑工具步骤执行器，读它的输出（steps.ts），其余流程相同。
+// 工具运行不起 dsh：沙箱里跑工具步骤执行器，读它的输出（steps.ts），其余流程相同。
 import { RunFinished } from '@oasis/contracts/events';
 import { TOOL_RUN_MODEL } from '@oasis/contracts/harness';
 import { ExecutionModels, RunKeyCreated } from '@oasis/contracts/model-gateway';
@@ -97,7 +97,7 @@ export function createExecution(
     async admit(model, requires = []) {
       await executor.check();
       const environment = await executor.environment?.();
-      // 工具运行（ADR 0025）要镜像里有步骤执行器；不调模型，不按模型目录准入
+      // 工具运行要镜像里有步骤执行器；不调模型，不按模型目录准入
       const tool = model === TOOL_RUN_MODEL;
       const needed = tool ? [...requires, TOOL_STEPS_CAPABILITY] : requires;
       const missing = needed.filter((name) => !environment?.capabilities.includes(name));

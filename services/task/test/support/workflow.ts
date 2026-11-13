@@ -12,7 +12,7 @@ import { events, memoryStore } from './memory-store.ts';
 /** 测试里会整个换掉的假结果 */
 export const fake = {
   rejectNext: false,
-  /** 打开了「只用国内模型」的用户（假 model-gateway 记着，ADR 0027） */
+  /** 打开了「只用国内模型」的用户（假 model-gateway 记着） */
   domesticOnly: new Set<string>(),
   gateResults: [] as (string[] | GateResult | 'throw')[],
   gateWaits: [] as (Promise<void> | undefined)[],
@@ -33,7 +33,7 @@ export let finishedRemote = new Map<string, Record<string, unknown>>();
 /** 这些运行的持久工作目录不在了：接着它们做时 harness 返回 409 workspace_unavailable */
 export let lostWorkspaces = new Set<string>();
 export const harness = Fastify();
-/** 假 model-gateway：能执行的模型；替打开了「只用国内模型」的用户列时只留国内的（ADR 0027） */
+/** 假 model-gateway：能执行的模型；替打开了「只用国内模型」的用户列时只留国内的 */
 harness.get('/internal/v1/models/execution', async (request) => ({
   models: ['deepseek/x', 'openai/blocked']
     .filter(
@@ -166,7 +166,7 @@ harness.get('/internal/v1/tools', async () => ({
     ...fake.tools,
   ],
 }));
-/** 假 model-gateway：规划员对「提出调整」的答复写回哪个长任务（ADR 0030 §3.7） */
+/** 假 model-gateway：规划员对「提出调整」的答复写回哪个长任务 */
 export const answers: { jobId: string; text: string }[] = [];
 harness.post('/internal/v1/tools/jobs/:id/answer', async (request) => {
   answers.push({

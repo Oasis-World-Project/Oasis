@@ -1,4 +1,4 @@
-// 网页的浏览器检查（ADR 0017、0021、0024）：交付关卡、节点自查（app.check）、外站测试共用。
+// 网页的浏览器检查：交付关卡、节点自查（app.check）、外站测试共用。
 // 每次检查开一个检查浏览器容器，用完即删；不设时限（2026-11-04 用户决定）：页面多慢都等，由控制端按页面
 // 是否安定下结论，只有得出结果、浏览器进程退出或调用方断开（用户停止、取消节点）时才结束。
 // inspector 不存东西：交付关卡的报告由 task 存回 harness；核数由付费的调用方定，实际用时报回去由它结算。
@@ -127,7 +127,7 @@ export function createBrowserChecks(deps: {
             },
             screenshots: [],
           };
-      // 画面检查（ADR 0021）：等页面画出来；一直是一整片纯色就算没画出东西
+      // 画面检查：等页面画出来；一直是一整片纯色就算没画出东西
       const look = await box.look();
       result.report.diagnostics = box.diagnostics();
       if (look.blank)

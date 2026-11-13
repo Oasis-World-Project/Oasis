@@ -53,7 +53,7 @@ function internalCaller(request: FastifyRequest): Caller {
 }
 
 const ForUser = z.object({ [OASIS_HEADERS.payerId]: z.uuid().optional() });
-/** 目录是替哪个用户列的（按他的模型范围过滤，ADR 0027）；没带就是平台自己看，列全部 */
+/** 目录是替哪个用户列的（按他的模型范围过滤）；没带就是平台自己看，列全部 */
 const listedFor = (request: FastifyRequest) =>
   parseWith(ForUser, request.headers)[OASIS_HEADERS.payerId];
 const UserIdParams = z.object({ userId: z.uuid() });
@@ -155,7 +155,7 @@ export function registerRoutes(
     decide(internalCaller(request), request, reply),
   );
 
-  /** 工具目录（规划员、节点说明用）；调用工具（ADR 0006） */
+  /** 工具目录（规划员、节点说明用）；调用工具 */
   app.get('/internal/v1/tools', async (request) => ({
     tools: await tools.list(listedFor(request)),
   }));
@@ -164,7 +164,7 @@ export function registerRoutes(
     const models = await services.executionModels();
     return { models: models.filter((model) => allowed(model.id)) };
   });
-  /** 一个用户的模型范围（ADR 0027）：task 替网页读写「只用国内模型」开关 */
+  /** 一个用户的模型范围：task 替网页读写「只用国内模型」开关 */
   app.get('/internal/v1/model-scopes/:userId', async (request) =>
     services.scope.get(parseWith(UserIdParams, request.params).userId),
   );
@@ -185,7 +185,7 @@ export function registerRoutes(
     await tools.cancel(internalCaller(request), parseWith(JobParams, request.params).jobId);
     return { accepted: true };
   });
-  /** task 把规划员对「提出调整」的答复写回长任务（ADR 0030 §3.7） */
+  /** task 把规划员对「提出调整」的答复写回长任务 */
   app.post('/internal/v1/tools/jobs/:jobId/answer', async (request) => {
     await tools.answer(
       parseWith(JobParams, request.params).jobId,
@@ -248,7 +248,7 @@ export function registerRoutes(
     models: await services.unavailableModels(),
   }));
 
-  // ---- 实时数字人（ADR 0013）：canvas 替用户开、结束会话 ----
+  // ---- 实时数字人：canvas 替用户开、结束会话 ----
   app.post('/internal/avatar/sessions', async (request, reply) => {
     const body = parseWith(AvatarSessionStartBody, request.body);
     return reply.code(201).send(await avatars.start(requirePayerId(request), body));

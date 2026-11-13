@@ -1,4 +1,4 @@
-// 数字人每一轮对话的提示组织（ADR 0013 §4）：LiveAvatar 发来对话历史，我们换上自己的系统提示
+// 数字人每一轮对话的提示组织：LiveAvatar 发来对话历史，我们换上自己的系统提示
 // （人设 + 口语规则 + 这一轮检索到的知识要点 + 转人工规则），再交给模型。都是纯函数，方便测试。
 import type { AvatarKnowledgeItem, AvatarSpec } from '@oasis/contracts/avatar';
 import type { ChatCompletionRequest } from '@oasis/contracts/model-gateway';

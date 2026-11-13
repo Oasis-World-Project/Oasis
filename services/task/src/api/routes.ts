@@ -55,7 +55,7 @@ export function registerRoutes(
     return { tasks: await workflows.list(ownerId) };
   });
 
-  /** 这些上传文件里哪些是任务素材（conversation 删私聊时留着它们，ADR 0012 §15） */
+  /** 这些上传文件里哪些是任务素材（conversation 删私聊时留着它们） */
   app.post('/internal/materials/in-use', async (request) => {
     const { ownerId, ids } = parseWith(MaterialsInUseBody, request.body);
     return { ids: await workflows.materialsInUse(ownerId, ids) };
@@ -67,7 +67,7 @@ export function registerRoutes(
     return workflows.getInternal(taskId);
   });
 
-  /** 修改成果：画布上的修改意见直接交给 AI 团队，在原任务里接着改（ADR 0012，不经过私聊） */
+  /** 修改成果：画布上的修改意见直接交给 AI 团队，在原任务里接着改（不经过私聊） */
   app.post('/v1/tasks/:taskId/revisions', async (request) => {
     const { taskId } = parseWith(TaskParams, request.params);
     const body = parseWith(TaskRevisionBody, request.body);
@@ -123,7 +123,7 @@ export function registerRoutes(
     return workflows.stopNode(requireUserId(request), taskId, nodeId);
   });
 
-  /** 做几版的节点改用另一版（ADR 0026）：下游没开始就直接换，做完了的排成修改等确认 */
+  /** 做几版的节点改用另一版：下游没开始就直接换，做完了的排成修改等确认 */
   app.post('/v1/tasks/:taskId/nodes/:nodeId/pick', async (request) => {
     const { taskId, nodeId } = parseWith(NodeParams, request.params);
     const { version } = parseWith(PickVersionBody, request.body);
@@ -142,14 +142,14 @@ export function registerRoutes(
       .send(file.content);
   });
 
-  /** 节点的全部运行（ADR 0007 §6） */
+  /** 节点的全部运行 */
   app.get('/v1/tasks/:taskId/nodes/:nodeId/application-check', async (request, reply) => {
     const { taskId, nodeId } = parseWith(NodeParams, request.params);
     return reply
       .headers(fileResponseHeaders('application/json', 'application-check.json', true))
       .send(await workflows.applicationReport(requireUserId(request), taskId, nodeId));
   });
-  /** 冻结的某一版工作流（ADR 0022），只读 */
+  /** 冻结的某一版工作流，只读 */
   app.get('/v1/tasks/:taskId/versions/:version', async (request) => {
     const { taskId, version } = parseWith(
       TaskParams.extend({ version: z.coerce.number().int().positive() }),
@@ -172,7 +172,7 @@ export function registerRoutes(
   /** 工作流页显示用的名字：型号是哪个 AI、工具叫什么 */
   app.get('/v1/workflow/names', async (request) => workflows.names(requireUserId(request)));
 
-  /** 「只用国内模型」开关（ADR 0027）：这个用户的 AI 团队用哪些模型 */
+  /** 「只用国内模型」开关：这个用户的 AI 团队用哪些模型 */
   app.get('/v1/model-scope', async (request) => modelScopes.get(requireUserId(request)));
   app.put('/v1/model-scope', async (request) =>
     modelScopes.set(requireUserId(request), parseWith(ModelScope, request.body)),

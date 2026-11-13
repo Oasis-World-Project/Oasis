@@ -1,4 +1,4 @@
-// 浏览器检查工具（ADR 0017、0024）：app.check 把沙箱带来的文件交给 inspector，website.test 交网址和计划；
+// 浏览器检查工具：app.check 把沙箱带来的文件交给 inspector，website.test 交网址和计划；
 // 检查浏览器的算力由网关冻结、按 inspector 报回的实际用时结算，记在调用的任务和节点上。
 import { HttpError, type ServiceClient } from '@oasis/service-kit';
 import { describe, expect, it, vi } from 'vitest';
@@ -53,7 +53,7 @@ const call = (
     args,
   );
 
-describe('网页应用自查 app.check（ADR 0017）', () => {
+describe('网页应用自查 app.check', () => {
   it('沙箱带来的文件交给 inspector 检查，--dir 可以带 out/ 前缀；算力按实际用时记在任务和节点上', async () => {
     const { checks, calls, compute } = fakeChecks({
       passed: true,

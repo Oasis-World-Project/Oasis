@@ -1,4 +1,4 @@
-// 中途调整（ADR 0030 §3.7）：做成果的 AI 发现要动别的成果才做得好时提一次（要什么、为什么），规划员答一次，
+// 中途调整：做成果的 AI 发现要动别的成果才做得好时提一次（要什么、为什么），规划员答一次，
 // 同意的改动马上生效，不问用户。这里是给规划员的说明、答复的格式和检查（都是纯函数）；
 // 开运行、把答复写回去在 planning-service.ts，把改动落到工作流上在 engine/adjust.ts。
 // 第一版支持三种改动：加一样成果、给没做完的成果补说明、停掉一样成果；不做合并，不撤销做完的成果。
@@ -105,7 +105,7 @@ function outline({ nodes, edges, deliverables }: CurrentWorkflow): string {
     .join('\n');
 }
 
-/** 给规划员的说明：只讲清现在的工作流、提出的调整和答复格式，同意不同意由它判断（ADR 0028） */
+/** 给规划员的说明：只讲清现在的工作流、提出的调整和答复格式，同意不同意由它判断 */
 export function adjustPrompt(
   input: PlannerResources &
     CurrentWorkflow & { brief: string; sheet: TaskSheet; from: Node; want: string; why: string },

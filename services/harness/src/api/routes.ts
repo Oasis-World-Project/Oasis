@@ -1,5 +1,5 @@
 // harness 只有内部接口（gateway 不转发 /internal）：task 等服务用它启动运行、看进度、追问、停止、取消。
-// harness 不调 model-gateway、inspector：检查由 task 拿产出包链接交给 inspector（ADR 0024）。
+// harness 不调 model-gateway、inspector：检查由 task 拿产出包链接交给 inspector。
 import {
   ApplicationReportBody,
   OutputsLinkBody,
@@ -22,7 +22,7 @@ const REPORT_BODY_LIMIT = 64 * 1024 * 1024;
 
 export function registerRoutes(app: ServiceApp, runs: RunService): void {
   app.get('/internal/execution/environment', () => runs.environment());
-  /** 产出包的临时下载链接：交给 inspector 检查（ADR 0024） */
+  /** 产出包的临时下载链接：交给 inspector 检查 */
   app.post('/internal/runs/:runId/outputs/link', async (request) => {
     const { runId } = parseWith(RunParams, request.params);
     const { payerId, taskId } = parseWith(OutputsLinkBody, request.body);

@@ -186,7 +186,7 @@ const webApp = {
   ],
 };
 
-describe('轻量关卡（ADR 0017）', () => {
+describe('轻量关卡', () => {
   it('普通文字成果只取 inspector 的解析报告，不读正文、不调模型', async () => {
     const harness = harnessWith();
     const inspector = fakeService(() => parsed([{ path: '介绍.md', text: '', valid: true }]));

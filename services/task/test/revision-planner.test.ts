@@ -91,7 +91,7 @@ const problems = (outcomes: unknown[], input = nodes) => {
   return 'problems' in result ? result.problems.join('\n') : '';
 };
 
-describe('修改的规划门（ADR 0022）', () => {
+describe('修改的规划门', () => {
   it('规划员看到修改意见、针对的成果和上一版每样成果的产出、花费、用时', () => {
     const prompt = revisionPlannerPrompt({
       brief: 'b',
@@ -173,7 +173,7 @@ describe('修改的规划门（ADR 0022）', () => {
   });
 });
 
-describe('意见直接交给做成果的 AI（ADR 0030 §3.8）', () => {
+describe('意见直接交给做成果的 AI', () => {
   const direct = (targets: string[], input = nodes) =>
     directRevision({ nodes: input, edges, deliverables, targets });
 

@@ -1,4 +1,4 @@
-// 工具定义共用的部分（ADR 0006）：每个工具 = 参数校验 + 目录信息 + 怎么调供应商、怎么算钱。
+// 工具定义共用的部分：每个工具 = 参数校验 + 目录信息 + 怎么调供应商、怎么算钱。
 import type { Readable } from 'node:stream';
 import type { ToolArgSpec } from '@oasis/contracts/tool-args';
 import type { Logger, ServiceClient } from '@oasis/service-kit';
@@ -32,13 +32,13 @@ export interface ToolConfig {
   tavilyCreditMicro: number;
   /** 配音拿不到实际花费时，每个字估多少钱（微美元） */
   speechMicroPerChar: number;
-  /** fal 上生音乐、图生 3D 的型号，按顺序；只认各自工具里对接过的（ADR 0029 §8） */
+  /** fal 上生音乐、图生 3D 的型号，按顺序；只认各自工具里对接过的 */
   musicModels?: string[];
   geometryModels?: string[];
 }
 
 /**
- * 浏览器检查（website.test、app.check，ADR 0024）：inspector 开检查浏览器，
+ * 浏览器检查（website.test、app.check）：inspector 开检查浏览器，
  * 算力由网关先冻结、按 inspector 报回的实际用时结算。
  */
 export interface BrowserChecks {
@@ -100,13 +100,13 @@ interface ToolBase {
   provider: 'openrouter' | 'tavily' | 'fal' | 'runpod' | 'browserstack' | 'inspector' | 'task';
   /** 可以选的模型；不需要模型的工具返回空 */
   models: (config: ToolConfig) => string[];
-  /** 目录里给各型号附上最近实测的每秒输出和实际单价（聊天型号，ADR 0030 §3.5） */
+  /** 目录里给各型号附上最近实测的每秒输出和实际单价（聊天型号） */
   speedNote?: boolean;
   /** 型号一次的标价（微美元）：供应商不按调用回报花费的工具（fal）写上，目录按它列各型号的单价 */
   priceMicro?: (model: string) => number | undefined;
   args: z.ZodType<Record<string, unknown>>;
   /**
-   * 命令行参数（ADR 0025）：`oasis-tool <工具> --名字 值` 能写哪些。沙箱里的 oasis-tool 把文件参数
+   * 命令行参数：`oasis-tool <工具> --名字 值` 能写哪些。沙箱里的 oasis-tool 把文件参数
    * （path、paths）读成内容再交给 args 校验；规划门按它校验工具节点，工作流页按它展示。
    */
   cli: ToolArgSpec[];

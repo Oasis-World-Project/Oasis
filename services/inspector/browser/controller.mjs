@@ -1,7 +1,7 @@
 /* global process, URL, fetch, setTimeout, clearTimeout, setInterval, Buffer */
 // addInitScript 里的函数在浏览器里执行：
 /* global document, MutationObserver */
-// 检查浏览器容器里唯一的受信控制端（ADR 0024）：起应用、开浏览器，按 inspector 经 stdin 发来的指令检查，
+// 检查浏览器容器里唯一的受信控制端：起应用、开浏览器，按 inspector 经 stdin 发来的指令检查，
 // 结果经 stdout 一行一个 JSON 送回。应用和浏览器只访问本容器的回环地址；外站测试的请求转给 inspector 代取。
 // inspector 断开（检查结束、被停止、inspector 意外退出）时 stdin 关闭，控制端随即退出、容器被自动删除。
 import { spawn } from 'node:child_process';
@@ -202,7 +202,7 @@ try {
   if (!firstPage || firstPage.status() >= 400)
     throw new Error(`首页返回 ${firstPage?.status() ?? '空响应'}`);
   /**
-   * 静态网页（ADR 0021）：inspector 把入口换成了只放隔离框的外壳，框里是和画布一模一样的文档。
+   * 静态网页：inspector 把入口换成了只放隔离框的外壳，框里是和画布一模一样的文档。
    * 测试步骤、安定判断都对着框里的页面做；其他种类直接对着整页。
    */
   const liveFrame = async () => {

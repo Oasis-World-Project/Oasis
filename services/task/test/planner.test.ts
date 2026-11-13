@@ -99,7 +99,7 @@ describe('给规划员的说明', () => {
     expect(revisePrompt(['路径有误'])).toContain('- 路径有误');
   });
 
-  it('按成果排：讲清两种做法是什么；怎么排由它判断、不带倾向，不动手试跑（ADR 0028、0030）', () => {
+  it('按成果排：讲清两种做法是什么；怎么排由它判断、不带倾向，不动手试跑', () => {
     const prompt = plannerPrompt({
       brief: 'b',
       sheet,

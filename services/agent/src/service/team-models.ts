@@ -1,7 +1,7 @@
 // AI 团队（规划员和干活节点）能用的型号（2026-11-05 用户决定）。
 // 私聊用的是 models 表里各家的省钱型号；这里登记各家最强的型号（旗舰、强力），和量过又快又能写代码的快速型号
-// （ADR 0030 §3.5），节点用哪个由规划员判断（ADR 0028）。
-// 型号 ID 照 OpenRouter 目录（2026-11-05 核对）；网络受限时用户可以打开「只用国内模型」，国外厂商的就不列给他的 AI 团队（ADR 0027）。
+//，节点用哪个由规划员判断。
+// 型号 ID 照 OpenRouter 目录（2026-11-05 核对）；网络受限时用户可以打开「只用国内模型」，国外厂商的就不列给他的 AI 团队。
 import type { CatalogEntry } from '@oasis/contracts/agent';
 
 type TeamModel = Omit<CatalogEntry, 'category'> & { tier: 'flagship' | 'strong' | 'fast' };
@@ -153,7 +153,7 @@ export const TEAM_MODELS: TeamModel[] = [
     tags: ['代理任务', '软件工程'],
     providerModel: 'stepfun/step-5-preview',
   },
-  // ---- 快速：2026-11-12 同一句小游戏需求，dsh 桌面版用它 24 分钟做完，用户判断成果更好（ADR 0030 §1）----
+  // ---- 快速：2026-11-12 同一句小游戏需求，dsh 桌面版用它 24 分钟做完，用户判断成果更好----
   {
     key: 'deepseek',
     name: 'DeepSeek V4.1 Flash',

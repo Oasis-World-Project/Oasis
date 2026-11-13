@@ -1,4 +1,4 @@
-// 接需求时读用户上传的素材（ADR 0024）：canvas 核对是不是这个人的、签发临时下载链接，
+// 接需求时读用户上传的素材：canvas 核对是不是这个人的、签发临时下载链接，
 // inspector 下载并解析出正文（图片原图留给看图）。
 import { UploadLinksResult } from '@oasis/contracts/canvas';
 import { MaterialInspectResult } from '@oasis/contracts/inspector';

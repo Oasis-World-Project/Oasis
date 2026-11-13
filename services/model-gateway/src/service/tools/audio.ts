@@ -45,7 +45,7 @@ const lyriaInput = (a: MusicInput) => ({
 });
 
 /**
- * fal 上的音乐型号：入参各不相同，差别只写在这张表里，目录只列表里有的（ADR 0029 §8）。
+ * fal 上的音乐型号：入参各不相同，差别只写在这张表里，目录只列表里有的。
  * micro 是一首的标价（微美元）；sings 为 false 的只做纯器乐。
  */
 const MUSIC_MODELS: Record<

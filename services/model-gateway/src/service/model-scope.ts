@@ -1,4 +1,4 @@
-// 模型范围（ADR 0027）：一个用户可以打开「只用国内模型」，之后给他的 AI 团队列出的模型和工具型号
+// 模型范围：一个用户可以打开「只用国内模型」，之后给他的 AI 团队列出的模型和工具型号
 // 都排除国外厂商的；关着（默认）时不排除任何模型。只管经 OpenRouter 调用的模型（厂商/型号）——
 // 搜索、云渲染这类不按模型厂商分的工具不受影响。国内厂商的名单在配置里（DOMESTIC_MODEL_VENDORS）。
 import type { ModelScope } from '@oasis/contracts/model-gateway';

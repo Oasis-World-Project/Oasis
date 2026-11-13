@@ -1,7 +1,7 @@
 -- phase: expand
 -- contract-plan: 不适用（只新增列、放宽取值范围；旧数据全部仍然合法，没有旧结构需要收缩）
 -- migrate:up
--- reworks：关卡退回修改过几次（最多 1 次，ADR 0004 §2）
+-- reworks：关卡退回修改过几次（最多 1 次）
 alter table nodes add column reworks integer not null default 0;
 
 -- 运行的用途增加：关卡退回后的修改、讨论里的发言、讨论的汇总

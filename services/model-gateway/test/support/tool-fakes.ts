@@ -35,7 +35,7 @@ export const knobs = {
   videoUsdTariff: true,
   /** 视频提交被拒的状态码和原文；null = 接受 */
   videoReject: null as { status: number; body: unknown } | null,
-  /** 测试用户有没有打开「只用国内模型」（ADR 0027） */
+  /** 测试用户有没有打开「只用国内模型」 */
   domesticOnly: false,
   typical: noHistory(),
   /** 各型号的实测（每秒输出、实际单价），默认没有 */

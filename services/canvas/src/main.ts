@@ -1,4 +1,4 @@
-// canvas：画布。存用户上传的素材；任务完成时把成果登记进画布，给前端列出、预览、下载（ADR 0007）。
+// canvas：画布。存用户上传的素材；任务完成时把成果登记进画布，给前端列出、预览、下载。
 import { fileURLToPath } from 'node:url';
 import { TASK_STREAM, TaskDeleted, TaskStatusChanged } from '@oasis/contracts/events';
 import {
@@ -56,7 +56,7 @@ await startService({
       logger: ctx.logger,
       handle: (envelope) => artifacts.onTaskStatus(TaskStatusChanged.data.parse(envelope.data)),
     });
-    // 任务被删除（用户删除或被新版替换）→ 删掉它的成果和修订素材（ADR 0012）
+    // 任务被删除（用户删除或被新版替换）→ 删掉它的成果和修订素材
     const taskDeleted = startEventConsumer({
       connection: eventBus.connection,
       stream: TASK_STREAM,

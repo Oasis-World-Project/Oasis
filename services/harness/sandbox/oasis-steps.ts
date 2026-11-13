@@ -1,4 +1,4 @@
-// oasis-steps：工具节点的步骤执行器（ADR 0025）。harness 起工具运行时沙箱里跑的是它，不起 AI。
+// oasis-steps：工具节点的步骤执行器。harness 起工具运行时沙箱里跑的是它，不起 AI。
 // 按 in/.oasis-steps.json 一步一步执行：外部工具交给 oasis-tool，本地操作（op.*）交给 oasis-op。
 // 每步失败自动重试 2 次；长任务（视频、音乐……）一直等到做完。进度记在 out/.oasis-steps/progress.json，
 // 接管或停止后继续时跳过已经做完的步骤（做到一半的长任务由 oasis-tool 接着原来的提交，不重复收费）。
@@ -81,7 +81,7 @@ export async function globFiles(root: string, pattern: string): Promise<string[]
 }
 
 /**
- * 参数里带 * 的文件路径（如 in/clips/*\/clip.mp4，展开节点每条交来的文件，ADR 0026）运行时换成找到的文件，
+ * 参数里带 * 的文件路径（如 in/clips/*\/clip.mp4，展开节点每条交来的文件）运行时换成找到的文件，
  * 按路径排序（01、02……就是条目顺序）；一个也没找到算这一步失败。
  */
 export async function expandGlobs(

@@ -8,7 +8,7 @@ import { FINAL } from './shared.ts';
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;
 
-/** 展开节点、做几版的节点给前端看的部分（ADR 0026） */
+/** 展开节点、做几版的节点给前端看的部分 */
 function groupParts(node: Node): Pick<NodeBody, 'parentId' | 'slot' | 'foreach' | 'variants'> {
   const c = node.config;
   return {
@@ -88,11 +88,11 @@ export function toRunBody(run: NodeRun): NodeRunBody {
   };
 }
 
-/** 修改中：规划员在排修改方案、等用户确认，或确认后新版还没结束（停下的也算，ADR 0022） */
+/** 修改中：规划员在排修改方案、等用户确认，或确认后新版还没结束（停下的也算） */
 export const isRevising = (task: Snapshot['task']) =>
   !!task.revision || (!FINAL.includes(task.status) && !!task.acceptance?.revision);
 
-/** 进行中的修改给前端看的样子（ADR 0022） */
+/** 进行中的修改给前端看的样子 */
 function toRevisionBody(task: Snapshot['task']): TaskBody['revision'] {
   const r = task.revision;
   if (!r) return null;

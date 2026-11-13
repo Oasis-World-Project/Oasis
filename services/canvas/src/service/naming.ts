@@ -1,4 +1,4 @@
-// 成果的类别（照原型 ⑧）和同步到电脑时的路径（纯函数，ADR 0007 §8、§10）。
+// 成果的类别（照原型 ⑧）和同步到电脑时的路径（纯函数）。
 import type { ArtifactCategory } from '@oasis/contracts/canvas';
 
 const CATEGORY_BY_EXT: Record<string, ArtifactCategory> = {};

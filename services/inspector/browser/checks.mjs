@@ -1,7 +1,7 @@
 /* global Buffer, URL */
 // page.evaluate 里的函数在浏览器里执行：
 /* global document, getComputedStyle, innerWidth, innerHeight, requestAnimationFrame, Image */
-// 检查浏览器里的检查动作（ADR 0017、0021）：按测试计划操作页面、画面检查。由 controller.mjs 驱动；
+// 检查浏览器里的检查动作：按测试计划操作页面、画面检查。由 controller.mjs 驱动；
 // 判断以「页面安定下来」为准，不按秒数：慢机器上帧慢，等的时间自然更长。
 import path from 'node:path';
 
@@ -52,7 +52,7 @@ export const reasonOf = (error) =>
     .trim();
 
 /**
- * 检查动作。target 是被测的页面或框：静态网页（ADR 0021）对着隔离框里的文档，其他种类对着整页；
+ * 检查动作。target 是被测的页面或框：静态网页对着隔离框里的文档，其他种类对着整页；
  * 静态网页重新打开入口后要换成新的框（liveFrame）。
  */
 export function createChecks({
@@ -189,7 +189,7 @@ export function createChecks({
       case 'navigate': {
         const url = new URL(step.path, origin);
         if (url.origin !== origin) throw new Error('导航超出测试目标');
-        // 画布里只运行入口页面（ADR 0021）：静态网页只能重新打开入口
+        // 画布里只运行入口页面：静态网页只能重新打开入口
         if (kind === 'static' && !['/', `/${path.basename(entry)}`].includes(url.pathname))
           throw new Error('画布里只运行入口页面，不能打开别的页面；多页内容请做成同一页里的切换');
         // 入口页面是放进隔离框里运行的，地址上的查询参数和 # 片段到不了页面：悄悄丢掉的话，
@@ -301,7 +301,7 @@ export function createChecks({
   }
 
   /**
-   * 画面检查（ADR 0021）：页面加载完后每隔一段动画帧截一次图，只要不是一整片纯色就算画出来了；
+   * 画面检查：页面加载完后每隔一段动画帧截一次图，只要不是一整片纯色就算画出来了；
    * 一直是纯色时，最多等 LOOK_FRAMES 帧再下结论。截图在一个空白页里解码统计，不碰被测页面。
    */
   const LOOK_FRAMES = 300;

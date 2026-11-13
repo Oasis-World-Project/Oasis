@@ -1,4 +1,4 @@
-// 实时数字人会话表（ADR 0013）。状态只往前走：starting → live → ended；结束、结算、清理各只发生一次。
+// 实时数字人会话表。状态只往前走：starting → live → ended；结束、结算、清理各只发生一次。
 import { and, eq, isNull, ne, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';

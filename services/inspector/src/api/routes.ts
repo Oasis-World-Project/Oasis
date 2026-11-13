@@ -1,5 +1,5 @@
 // inspector 只有内部接口（gateway 不转发 /internal）：task 的关卡、model-gateway 的 app.check 和外站测试、
-// canvas 的模型预览、conversation 的素材解析调它（ADR 0024）。
+// canvas 的模型预览、conversation 的素材解析调它。
 import {
   ApplicationCheckBody,
   ApplicationFilesCheckBody,

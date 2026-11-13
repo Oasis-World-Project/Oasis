@@ -20,7 +20,7 @@ export const isOpen = (r: NodeRun) => r.status === 'pending' || r.status === 'ru
 export const openRuns = (snapshot: Snapshot, nodeId: string) =>
   snapshot.activeRuns.filter((r) => r.nodeId === nodeId && isOpen(r));
 
-/** 上游：子节点看它所在的工作流图节点的上游（ADR 0026） */
+/** 上游：子节点看它所在的工作流图节点的上游 */
 export function upstreamOf(snapshot: Snapshot, node: Node): Node[] {
   return incoming(rootOf(snapshot.nodes, node), snapshot.edges)
     .map((e) => snapshot.nodes.find((n) => n.id === e.fromNodeId))
@@ -29,7 +29,7 @@ export function upstreamOf(snapshot: Snapshot, node: Node): Node[] {
 
 /**
  * 一个上游交来的产出：普通节点是交出产出的那次运行，放进 in/<上游>/；
- * 展开节点是每一条各自的那次运行，放进 in/<上游>/01/、02/……（ADR 0026）
+ * 展开节点是每一条各自的那次运行，放进 in/<上游>/01/、02/……
  */
 export function refsOf(snapshot: Snapshot, upstream: Node): { runId: string; as: string }[] {
   if (upstream.kind !== 'foreach')
@@ -55,7 +55,7 @@ const scopedText = (node: Node) =>
   node.parentId && node.kind === 'tool' ? JSON.stringify(node.config.steps ?? []) : undefined;
 
 /**
- * 直接放进 in/ 的小文件（ADR 0026）：上游展开节点的 in/<上游>/index.json（按顺序列出每一条和它的文件），
+ * 直接放进 in/ 的小文件：上游展开节点的 in/<上游>/index.json（按顺序列出每一条和它的文件），
  * 展开出来的 AI 节点还有 in/_item.json（它负责的这一条）。
  */
 export function inlineInputsOf(snapshot: Snapshot, node: Node): RunInputFile[] {
@@ -107,7 +107,7 @@ export function contextOf(snapshot: Snapshot, node: Node): NodeContext {
 
 /**
  * 上游节点交出的产出（交出它们的那次运行），放进 in/<上游节点名>/；没有产出的上游不放。
- * 修改时重新做的节点再带上上一版自己交出的文件（in/_previous/，ADR 0022）。
+ * 修改时重新做的节点再带上上一版自己交出的文件（in/_previous/）。
  */
 export function inputsOf(snapshot: Snapshot, node: Node) {
   const text = scopedText(node);
@@ -120,7 +120,7 @@ export function inputsOf(snapshot: Snapshot, node: Node) {
 
 /**
  * 接着刚交出产出的那次运行再改：关卡没过、交付文件不齐时修复，用户提出修改意见时按意见改。
- * 修复是单轮的，跑完回到关卡重查（ADR 0017）；用户的修改是一轮新工作，照常用持续目标（ADR 0015）。
+ * 修复是单轮的，跑完回到关卡重查；用户的修改是一轮新工作，照常用持续目标。
  */
 export function reworkStep(node: Node, unmet: string[], revision?: string): Step {
   return {
@@ -139,7 +139,7 @@ export function reworkStep(node: Node, unmet: string[], revision?: string): Step
 }
 
 /**
- * 接不上原会话时重新做这一步（ADR 0022 的「重新做」）：full 是这一步从头做时的完整请求；
+ * 接不上原会话时重新做这一步（修改时的「重新做」）：full 是这一步从头做时的完整请求；
  * 节点上一版交出的产出放进 in/_previous/，关卡发现的问题、用户的修改意见附在后面。
  */
 export function redoOf(node: Node, run: NodeRun, full: RunRequest): Step {

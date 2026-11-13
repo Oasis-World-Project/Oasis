@@ -1,4 +1,4 @@
-// Tavily 的最小客户端：联网搜索和网页抓取（ADR 0006）。换供应商只换这个文件。
+// Tavily 的最小客户端：联网搜索和网页抓取。换供应商只换这个文件。
 export interface SearchClient {
   readonly configured: boolean;
   search(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;

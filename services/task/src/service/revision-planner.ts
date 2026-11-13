@@ -1,4 +1,4 @@
-// 修改的规划（ADR 0022、0030 §3.8）：用户看过成果提了修改意见。
+// 修改的规划：用户看过成果提了修改意见。
 // - 意见指得到由 AI 做的成果：不用规划员，做它的 AI 接着原会话按意见改，用到它的下游跟着更新（directRevision）。
 // - 跨几样成果、指到生产线或定不下来：规划员看上一版决定——沿用、接着原会话改、重新做、加减成果；规划门检查后等用户确认。
 import type { CatalogEntry } from '@oasis/contracts/agent';
@@ -97,7 +97,7 @@ function previousWorkflow(nodes: Node[], edges: Edge[], deliverables: Record<str
     ...(n.model ? { model: n.model } : {}),
     status: n.status,
     goal: n.goal.length > 800 ? `${n.goal.slice(0, 800)}…` : n.goal,
-    // 展开节点、做几版的节点（ADR 0026）：展开了几条、挑了第几版
+    // 展开节点、做几版的节点：展开了几条、挑了第几版
     ...(n.kind === 'foreach'
       ? { foreach: { over: n.config.over, items: n.config.items ?? null } }
       : {}),
@@ -137,7 +137,7 @@ function previousWorkflow(nodes: Node[], edges: Edge[], deliverables: Record<str
   );
 }
 
-/** 给规划员的修改说明（ADR 0022）：只讲事实和方案格式，怎么改由规划员判断 */
+/** 给规划员的修改说明：只讲事实和方案格式，怎么改由规划员判断 */
 export function revisionPlannerPrompt(
   input: PlannerResources & {
     brief: string;
@@ -290,7 +290,7 @@ export function checkRevisionPlan(
         problems.push(`沿用的「${entry.reuse}」不是上一版的节点`);
         continue;
       }
-      // 展开节点没有单独交出产出的运行，看它是不是每一条都做完了（ADR 0026）
+      // 展开节点没有单独交出产出的运行，看它是不是每一条都做完了
       const hasOutputs =
         source.kind === 'foreach'
           ? source.status === 'succeeded'
@@ -329,7 +329,7 @@ export function checkRevisionPlan(
       reused,
     ),
   );
-  // 工具节点直接用的上游文件（ADR 0025）：沿用的上游要已经交出过它；重新做的上游由下面补成必须交出的文件
+  // 工具节点直接用的上游文件：沿用的上游要已经交出过它；重新做的上游由下面补成必须交出的文件
   for (const node of nodes)
     for (const file of kindOf(node).inputFiles?.(node) ?? []) {
       const source = reused.has(file.from) ? old.get(file.from) : undefined;
@@ -351,7 +351,7 @@ export function checkRevisionPlan(
 }
 
 /**
- * 意见指得到由 AI 做的成果时不经过规划员（ADR 0030 §3.8）：这些成果的 AI 接着原会话按意见改；用到它们的下游
+ * 意见指得到由 AI 做的成果时不经过规划员：这些成果的 AI 接着原会话按意见改；用到它们的下游
  * 跟着更新（AI 做的接着原会话，其余重新跑；展开节点内容没变的条目沿用）；别的沿用。
  * targets 是意见针对的节点；没给时只有一样成果就是它。指不到、指到的不是能接着改的 AI 成果时返回 undefined。
  */

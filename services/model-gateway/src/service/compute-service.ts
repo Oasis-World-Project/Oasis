@@ -1,4 +1,4 @@
-// 算力计费（ADR 0006 §6）：harness 开沙箱前按最长运行时间冻结，沙箱销毁后按实际时长 × 核数 × 单价结算。
+// 算力计费：harness 开沙箱前按最长运行时间冻结，沙箱销毁后按实际时长 × 核数 × 单价结算。
 // 和模型、工具共用一套计量（冻结、结算、调用记录、属于任务的发 model-gateway.call.settled）。
 import { HttpError } from '@oasis/service-kit';
 import type { CallsRepo } from '../repo/calls-repo.ts';

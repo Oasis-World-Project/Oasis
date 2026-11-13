@@ -1,4 +1,4 @@
-// 读运行的产出和过程：运行事件、产出包的临时下载链接（给 inspector 检查，ADR 0024）、单个文件、
+// 读运行的产出和过程：运行事件、产出包的临时下载链接（给 inspector 检查）、单个文件、
 // 交付关卡的浏览器检查报告（task 交来留档，用户在工作流里下载）。
 import type { ApplicationReportBody, OutputsLink, RunEventBody } from '@oasis/contracts/harness';
 import { archiveFile, contentTypeOf, HttpError, readLimited } from '@oasis/service-kit';
@@ -27,7 +27,7 @@ export function createOutputs(ctx: RunContext) {
   }
 
   return {
-    /** 交付关卡的浏览器检查报告留档（inspector 检查完由 task 交来，ADR 0024）；再查一次就覆盖 */
+    /** 交付关卡的浏览器检查报告留档（inspector 检查完由 task 交来）；再查一次就覆盖 */
     async saveApplicationReport(id: string, body: z.infer<typeof ApplicationReportBody>) {
       await mine(id, body.payerId, body.taskId);
       await store.put(reportKey(id), Buffer.from(JSON.stringify(body.report)), 'application/json');
@@ -54,7 +54,7 @@ export function createOutputs(ctx: RunContext) {
       }));
     },
 
-    /** 产出包的临时下载链接（交给 inspector 检查，ADR 0024）：只给这次运行的付费人和任务 */
+    /** 产出包的临时下载链接（交给 inspector 检查）：只给这次运行的付费人和任务 */
     async outputsLink(id: string, payerId: string, taskId: string): Promise<OutputsLink> {
       const row = await owned(id);
       if (row.payerId !== payerId || row.taskId !== taskId || !row.outputKey)

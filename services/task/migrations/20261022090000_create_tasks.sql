@@ -1,7 +1,7 @@
 -- phase: expand
 -- contract-plan: 不适用（task 的第一批表，没有旧结构需要收缩）
 -- migrate:up
--- 任务 = 一张工作流图（ADR 0004）。金额都是微美元整数。
+-- 任务 = 一张工作流图。金额都是微美元整数。
 create table tasks (
   id uuid primary key,
   owner_id uuid not null,

@@ -1,4 +1,4 @@
-// 工作流方案的校验，以及把方案变成库里的节点和连线（ADR 0004 §3、§9）。
+// 工作流方案的校验，以及把方案变成库里的节点和连线。
 import { randomUUID } from 'node:crypto';
 import type { PlanNode, WorkflowPlan } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
@@ -28,7 +28,7 @@ export function findCycle(
 }
 
 /**
- * 展开节点、做几版的节点（ADR 0026）：名字后面要接 -01、-v1，留出长度、别和别的节点撞名；
+ * 展开节点、做几版的节点：名字后面要接 -01、-v1，留出长度、别和别的节点撞名；
  * 清单要从普通节点来（展开节点交的是一个个目录）；一次最多开 48 个子节点。
  */
 function groupProblems(plan: WorkflowPlan): string[] {
@@ -111,7 +111,7 @@ export function validatePlan(plan: WorkflowPlan): void {
 }
 
 /**
- * 下游工具节点直接用到的上游文件，成为上游必须交出的文件（ADR 0025）：上游没交出来时关卡让它改一次，
+ * 下游工具节点直接用到的上游文件，成为上游必须交出的文件：上游没交出来时关卡让它改一次，
  * 免得工具节点开跑才发现缺文件。已经写了的不重复加。
  */
 export function withInputExpects<P extends WorkflowPlan>(plan: P): P {
@@ -119,7 +119,7 @@ export function withInputExpects<P extends WorkflowPlan>(plan: P): P {
   const foreach = new Set(plan.nodes.filter((n) => n.kind === 'foreach').map((n) => n.key));
   for (const node of plan.nodes)
     for (const file of kindOf(node).inputFiles?.(node) ?? [])
-      // 带 {{…}} 模板的路径、展开节点交的条目（ADR 0026）事先定不下来，不加
+      // 带 {{…}} 模板的路径、展开节点交的条目事先定不下来，不加
       if (!file.path.includes('{{') && !foreach.has(file.from))
         wanted.set(file.from, (wanted.get(file.from) ?? new Set()).add(file.path));
   if (!wanted.size) return plan;

@@ -1,4 +1,4 @@
-// 接需求（ADR 0005 §3）的纯函数部分：给私聊里的 AI 的说明、解析它按 JSON 给出的回答、把卡片写成文字。
+// 接需求的纯函数部分：给私聊里的 AI 的说明、解析它按 JSON 给出的回答、把卡片写成文字。
 // 这个 AI 只负责读懂需求：问普通人听得懂的问题、写任务单；团队、模型和工具由后台的规划员决定。
 import { AUTO_ANSWER, CUSTOM_ANSWER_PREFIX, IntakeQuestion } from '@oasis/contracts/conversation';
 import type { ChatMessage } from '@oasis/contracts/model-gateway';
@@ -292,7 +292,7 @@ export type ReadReply = { reply: IntakeReply } | { reply: null; problem: string 
 
 /**
  * 读模型的回答：取出 JSON、就地整理后按契约校验。用不了时返回原因（记日志用），
- * 不抛错、也不交回模型重写（ADR 0005 §2026-11-04）。
+ * 不抛错、也不交回模型重写。
  */
 export function readIntakeReply(text: string, mustSheet: boolean): ReadReply {
   const start = text.indexOf('{');

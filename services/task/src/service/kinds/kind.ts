@@ -16,12 +16,12 @@ export interface RunRequest {
   inputsFrom: { runId: string; as: string }[];
   /**
    * 直接放进 in/ 的小文件；不写时开新会话（或换了上游产出）的运行由引擎补上展开节点的清单索引、
-   * 这一条的内容（ADR 0026）
+   * 这一条的内容
    */
   inputs?: RunInputFile[];
   /** 接着哪次运行的会话和工作区 */
   continueFrom?: string;
-  /** 工具运行（ADR 0025）：不起 AI，按顺序执行这些步骤 */
+  /** 工具运行：不起 AI，按顺序执行这些步骤 */
   steps?: ToolStep[];
   meta: RunMeta;
 }
@@ -66,7 +66,7 @@ export interface NodeKindPlugin<K extends NodeKind> {
 
   /** 给工作流页看的、这种节点特有的部分 */
   body(node: NodeOf<K>): Pick<NodeBody, 'discussion' | 'steps'>;
-  /** 修改时能接着上一版的会话改（ADR 0022 的「接着改」） */
+  /** 修改时能接着上一版的会话改（修改时的「接着改」） */
   readonly continuable: boolean;
   /**
    * 关卡没过、整体验收缺文件、用户的修改意见时能接着原会话让 AI 改（没有 AI 的工具节点不能，
@@ -86,7 +86,7 @@ export interface NodeKindPlugin<K extends NodeKind> {
   resume(snapshot: Snapshot, node: NodeOf<K>, last?: NodeRun): Step | 'gate';
   /** 失败后重做同一步 */
   retry(snapshot: Snapshot, node: NodeOf<K>, failed: NodeRun): Step;
-  /** 接不上原会话（持久工作目录不在了）：重新开会话做这一步（ADR 0022 的「重新做」） */
+  /** 接不上原会话（持久工作目录不在了）：重新开会话做这一步（修改时的「重新做」） */
   redo(snapshot: Snapshot, node: NodeOf<K>, run: NodeRun): Step;
   /** 这次运行还是不是节点当前这一步（过期的运行结束了也不推进） */
   current(node: NodeOf<K>, run: NodeRun): boolean;

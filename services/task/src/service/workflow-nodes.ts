@@ -1,5 +1,5 @@
-// 工作流里单个节点的接口（ADR 0004 §7）：看运行过程、给它发话、取交出的文件、停止和继续一样成果。
-// 节点和连线不能编辑（ADR 0030 §3.2）。
+// 工作流里单个节点的接口：看运行过程、给它发话、取交出的文件、停止和继续一样成果。
+// 节点和连线不能编辑。
 import { Readable } from 'node:stream';
 import { RunEventList } from '@oasis/contracts/harness';
 import type { NodeRunBody, TaskBody } from '@oasis/contracts/task';
@@ -34,7 +34,7 @@ export function createNodeApi(api: {
   /** 节点交出的一个文件：只能是它产出清单里有的（经 harness 读对象存储） */
   async function readFile(snapshot: Snapshot, nodeId: string, path: string) {
     let node = nodeOf(snapshot, nodeId);
-    // 展开节点的产出是各条的（ADR 0026）：NN/… 到第 NN 条交出的那次运行里取
+    // 展开节点的产出是各条的：NN/… 到第 NN 条交出的那次运行里取
     if (node.kind === 'foreach') {
       const [slot, ...rest] = path.split('/');
       const child = childrenOf(snapshot.nodes, node).find((c) => pad2(c.slot ?? 0) === slot);
@@ -62,7 +62,7 @@ export function createNodeApi(api: {
   return {
     /** 节点的全部运行（第一次、重做、关卡退回修改、停止后继续、讨论的每次发言） */
     async nodeRuns(ownerId: string, taskId: string, nodeId: string): Promise<NodeRunBody[]> {
-      // 修改时移出工作流的节点也能看（旧版查看，ADR 0022）：运行按任务过滤，归属已经核对
+      // 修改时移出工作流的节点也能看（旧版查看）：运行按任务过滤，归属已经核对
       await owned(ownerId, taskId);
       return (await store.listNodeRuns(taskId, nodeId)).map(toRunBody);
     },
@@ -91,7 +91,7 @@ export function createNodeApi(api: {
     },
 
     /**
-     * 对节点追问 / 补充要求（ADR 0004 §7），只影响这一个节点：
+     * 对节点追问 / 补充要求，只影响这一个节点：
      * - 运行中、能直接插话的节点（干活）：直接插进它的会话；
      * - 还没开始、已停止的节点，以及运行中不能插话的节点（讨论）：记下来（开跑、继续、下一轮时带上）；
      * - 正在过关卡、已结束的：不行。
@@ -150,7 +150,7 @@ export function createNodeApi(api: {
       return readFile(await owned(ownerId, taskId), nodeId, path);
     },
 
-    /** 内部：取节点交出的一个文件（画布登记成果时复制，ADR 0007 §8） */
+    /** 内部：取节点交出的一个文件（画布登记成果时复制） */
     async fileInternal(taskId: string, nodeId: string, path: string) {
       const snapshot = await store.get(taskId);
       if (!snapshot) throw new HttpError(404, 'task_not_found', '没有这个任务');
@@ -164,7 +164,7 @@ export function createNodeApi(api: {
         if (!['stopped', 'failed'].includes(node.status))
           throw new HttpError(409, 'node_not_runnable', `「${node.title}」现在不能继续`);
         const parent = snapshot.nodes.find((n) => n.id === node.parentId);
-        // 子节点（ADR 0026）跟着父节点跑：父节点在跑时才能单独再跑它
+        // 子节点跟着父节点跑：父节点在跑时才能单独再跑它
         if (parent && parent.status !== 'running')
           throw new HttpError(
             409,
@@ -196,7 +196,7 @@ export function createNodeApi(api: {
           await w.setTask({ status: 'stopped', attention: null });
         }
         await engine.startNode(snapshot, w, node, fx);
-        // 组节点（ADR 0026）：把它开出的子节点排上（只跑它下面的，工作流图里的节点不往下跑）
+        // 组节点：把它开出的子节点排上（只跑它下面的，工作流图里的节点不往下跑）
         if (isGroup(node)) await engine.schedule(snapshot, w, fx);
       }),
 

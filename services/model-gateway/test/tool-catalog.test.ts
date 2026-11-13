@@ -1,4 +1,4 @@
-// 工具目录的命令行参数（ADR 0025）：规划门按它校验工具节点，写错了节点开跑才失败，所以和网关实际收的参数对一遍。
+// 工具目录的命令行参数：规划门按它校验工具节点，写错了节点开跑才失败，所以和网关实际收的参数对一遍。
 import { checkToolArgs } from '@oasis/contracts/tool-args';
 import { OPS } from '@oasis/contracts/ops';
 import { describe, expect, it } from 'vitest';

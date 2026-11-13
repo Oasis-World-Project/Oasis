@@ -1,4 +1,4 @@
-// 工具运行（ADR 0025）：不起 dsh、不查模型目录，沙箱里跑步骤执行器；事件、结局、停止后接着做都和 AI 运行一样。
+// 工具运行：不起 dsh、不查模型目录，沙箱里跑步骤执行器；事件、结局、停止后接着做都和 AI 运行一样。
 import { StartRunBody, TOOL_RUN_MODEL } from '@oasis/contracts/harness';
 import { HttpError } from '@oasis/service-kit';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

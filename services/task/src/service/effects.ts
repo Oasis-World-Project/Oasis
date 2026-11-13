@@ -27,7 +27,7 @@ export interface Effects {
   stop: string[];
   cancel: string[];
   abortChecks: { taskId: string; nodeId?: string }[];
-  /** 要读清单、展开的展开节点（ADR 0026） */
+  /** 要读清单、展开的展开节点 */
   expand: { taskId: string; nodeId: string }[];
 }
 
@@ -42,7 +42,7 @@ export const noEffects = (): Effects => ({
   expand: [],
 });
 
-/** 规划员同意的一次中途调整（ADR 0030 §3.7），已经对上了工作流里的节点 */
+/** 规划员同意的一次中途调整，已经对上了工作流里的节点 */
 export interface Adjustment {
   /** 规划员给提出调整的 AI 的答复 */
   reply: string;

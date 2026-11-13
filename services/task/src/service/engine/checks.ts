@@ -1,4 +1,4 @@
-// 关卡和整体验收（ADR 0017：检查只提醒、不拦截）。检查在事务外跑，结果回到事务里推进：
+// 关卡和整体验收（检查只提醒、不拦截）。检查在事务外跑，结果回到事务里推进：
 // 明确没满足的接着原会话改一次（MAX_REWORKS），改过仍没满足、没检查到的都带着提醒往下走。
 import { isGroup } from '../groups.ts';
 import { kindOf, reworkStep } from '../kinds/index.ts';
@@ -6,7 +6,7 @@ import { missingDeliveryFiles, selectDeliverables } from '../output-files.ts';
 import type { Engine } from './shared.ts';
 
 /**
- * 检查明确没满足时最多自动改几次（ADR 0004 §2，2026-11-05 用户重申）：改过之后照常往下走、带提醒交付。
+ * 检查明确没满足时最多自动改几次（2026-11-05 用户重申）：改过之后照常往下走、带提醒交付。
  * 检查只提醒、不拦截——任务只会因为用户停止或网络长时间连不上而停下。
  */
 const MAX_REWORKS = 1;
@@ -46,7 +46,7 @@ export function createChecks(
     const snapshot = await store.get(taskId);
     const node = snapshot?.nodes.find((n) => n.id === nodeId);
     if (!snapshot || node?.status !== 'checking' || node.currentRunId !== runId) return;
-    // 检查轻量化（ADR 0017）：只挡明显坏掉的成果，任务单要求由节点自己对照
+    // 检查轻量化：只挡明显坏掉的成果，任务单要求由节点自己对照
     const { unmet, unchecked } = await gate.check({
       signal,
       payerId: snapshot.task.payerId,
@@ -86,7 +86,7 @@ export function createChecks(
   }
 
   /**
-   * 整体验收（ADR 0005 §5，ADR 0017 起只查交付文件齐不齐）：缺文件的交付节点接着原会话补一次，
+   * 整体验收（只查交付文件齐不齐）：缺文件的交付节点接着原会话补一次，
    * 补过仍缺就带着记录交付。节点关卡已经跑过文件、网页和音视频检查，任务单的要求由节点自己对照。
    */
   async function checkDelivery(taskId: string): Promise<void> {
@@ -125,7 +125,7 @@ export function createChecks(
       });
       // 交付文件不齐：缺文件的交付节点接着原会话补一次；补过之后照常交付，缺的记在验收记录里。
       // 工具节点自己补不了（同样的步骤再跑一遍还是缺），只在下游跟着上游的新产出重跑
-      // 做几版的节点（ADR 0026）也补不了：交的是挑中的那一版
+      // 做几版的节点也补不了：交的是挑中的那一版
       const targets = fresh.nodes.filter(
         (n) => short.has(n.id) && n.currentRunId && kindOf(n).reworkable && !isGroup(n),
       );

@@ -16,7 +16,7 @@ import type { ToolConfig, ToolDef } from './tools.ts';
 export interface ToolServiceDeps {
   /** 单价要不要参考调用记录（开发阶段关掉，只用供应商价格和目录兜底值） */
   estimateFromHistory?: boolean;
-  /** 浏览器检查：inspector 和检查浏览器的算力（ADR 0024） */
+  /** 浏览器检查：inspector 和检查浏览器的算力 */
   checks?: BrowserChecks;
   browserstack?: BrowserStackClient;
   openrouter: ProviderClient;
@@ -24,7 +24,7 @@ export interface ToolServiceDeps {
   inputsOf: (model: string) => string[] | undefined;
   tavily: SearchClient;
   meter: Meter;
-  /** 模型范围：替哪个用户挑模型，就按他的范围过滤（ADR 0027） */
+  /** 模型范围：替哪个用户挑模型，就按他的范围过滤 */
   scope: Pick<ModelScopeService, 'filterFor'>;
   jobs: ToolJobsRepo;
   store: ObjectStore;
@@ -37,7 +37,7 @@ export interface ToolServiceDeps {
   jobTimeoutMs: number;
   config: ToolConfig;
   logger: Logger;
-  /** 数字人形象和声音目录（ADR 0013）；只读、不花钱，不走计量 */
+  /** 数字人形象和声音目录；只读、不花钱，不走计量 */
   avatarCatalog?: AvatarCatalog;
 }
 
@@ -49,7 +49,7 @@ export interface ToolContext {
   byKey: Map<string, ToolDef>;
   /** 工具依赖的供应商配好了没有 */
   configured(tool: ToolDef): boolean;
-  /** 这个工具给这个用户用的模型：按他的模型范围过滤（ADR 0027） */
+  /** 这个工具给这个用户用的模型：按他的模型范围过滤 */
   usableModels(tool: ToolDef, payerId: string | undefined): Promise<string[]>;
   /** 长任务结果文件在对象存储里的位置 */
   resultKey(jobId: string, fileId: string): string;

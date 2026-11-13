@@ -1,5 +1,5 @@
 -- phase: expand
--- contract-plan: Permanent per-user setting (ADR 0027); no legacy columns or dual-write path to remove. Existing tables are per call / per run, none is keyed by user.
+-- contract-plan: Permanent per-user setting; no legacy columns or dual-write path to remove. Existing tables are per call / per run, none is keyed by user.
 -- migrate:up
 create table model_scopes (
   user_id uuid primary key,

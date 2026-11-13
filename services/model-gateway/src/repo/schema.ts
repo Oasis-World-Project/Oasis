@@ -76,7 +76,7 @@ export const toolJobs = pgTable('tool_jobs', {
   finishedAt: at('finished_at'),
 });
 
-/** 一个用户让 AI 团队用哪些模型（ADR 0027）；没有行就是不限制 */
+/** 一个用户让 AI 团队用哪些模型；没有行就是不限制 */
 export const modelScopes = pgTable('model_scopes', {
   userId: uuid('user_id').primaryKey(),
   domesticOnly: boolean('domestic_only').notNull(),

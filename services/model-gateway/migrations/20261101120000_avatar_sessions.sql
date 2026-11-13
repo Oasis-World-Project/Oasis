@@ -1,7 +1,7 @@
 -- phase: expand
 -- contract-plan: 不适用（新表，并放宽调用类型的取值范围，没有旧结构需要收缩）
 -- migrate:up
--- 调用记录多一种：实时数字人（LiveAvatar 会话按实际消耗的积分计费，ADR 0013 §5）
+-- 调用记录多一种：实时数字人（LiveAvatar 会话按实际消耗的积分计费）
 alter table calls drop constraint calls_kind_check;
 alter table calls add constraint calls_kind_check check (kind in ('chat', 'decision', 'tool', 'compute', 'avatar'));
 

@@ -128,7 +128,7 @@ export function registerRoutes(app: ServiceApp, dms: DmService, intake: IntakeSe
     );
   });
 
-  // ---- 在私聊里接任务（ADR 0005）：都返回这次新增的消息 ----
+  // ---- 在私聊里接任务：都返回这次新增的消息 ----
   /** 点了「当成任务来做」：从某条用户消息开始接需求 */
   app.post('/v1/conversations/:id/intake/start', async (request) => {
     const ownerId = requireUserId(request);

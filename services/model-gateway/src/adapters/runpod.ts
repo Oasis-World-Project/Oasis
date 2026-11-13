@@ -134,7 +134,7 @@ export function createRenderClient(options: {
   staging?: ObjectStore;
   archive: ObjectStore;
   fetcher?: typeof fetch;
-  /** 按 GPU 回执计量：执行秒数 + 有上限的启动秒数 + 空闲超时，乘以锁定单价（ADR 0011 §21） */
+  /** 按 GPU 回执计量：执行秒数 + 有上限的启动秒数 + 空闲超时，乘以锁定单价 */
   metering: { microPerSecond: number; startupCapSeconds: number; idleSeconds: number };
 }) {
   const fetcher = options.fetcher ?? fetch;
@@ -303,7 +303,7 @@ export function createRenderClient(options: {
       const gpu = output.device.devices?.[0]?.name;
       const exposure = output.device.exposureAdjustEv ?? 0;
       // 只取回渲染图：worker 的工程包重复带上 .blend 和资产（实测 82 MB），慢网络下取回会让节点超时；
-      // 沙箱里用同一份 scene.json 构建的工程就是可编辑工程（ADR 0011 §23）。
+      // 沙箱里用同一份 scene.json 构建的工程就是可编辑工程。
       const notes = [
         `云 GPU${gpu ? `（${gpu}）` : ''}渲染图已取回并核对摘要`,
         '只取回渲染图，可编辑工程用沙箱里由同一份 scene.json 构建的那份',

@@ -77,7 +77,7 @@ describe('规划（从任务单开始）', () => {
     return run;
   };
 
-  it('花费只累加到任务和成果上：没有预算，不提醒、不暂停（ADR 0030 §3.6）', async () => {
+  it('花费只累加到任务和成果上：没有预算，不提醒、不暂停', async () => {
     const task = await fromSheet();
     await plannerDone(solo('write', '写文案'));
     const node = (await service.get(OWNER, task.id)).nodes[0]!;

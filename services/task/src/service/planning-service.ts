@@ -1,4 +1,4 @@
-// 规划（ADR 0005 §4）：任务从用户确认的任务单开始 → 规划员（一次 harness 运行）把方案写进 out/plan.json
+// 规划：任务从用户确认的任务单开始 → 规划员（一次 harness 运行）把方案写进 out/plan.json
 // → 规划门检查 → 没过就接着原会话改，次数用完交给用户 → 通过就建节点和连线、开跑。
 import { randomUUID } from 'node:crypto';
 import { Catalog, PlaybookList, type Playbook } from '@oasis/contracts/agent';
@@ -56,7 +56,7 @@ export function createPlanning(deps: {
 }) {
   const { store, harness, engine, config, logger } = deps;
 
-  /** 替这个用户向 model-gateway 要目录：它按他的模型范围（「只用国内模型」，ADR 0027）过滤 */
+  /** 替这个用户向 model-gateway 要目录：它按他的模型范围（「只用国内模型」）过滤 */
   const listedFor = (userId: string) => ({ headers: { [OASIS_HEADERS.payerId]: userId } });
 
   /** 这个用户的 AI 团队能挑的模型：已接入、能执行、在他的模型范围里的，带上典型单价 */
@@ -125,7 +125,7 @@ export function createPlanning(deps: {
     fx.plan.push({ task: snapshot.task, runId, ...(revise ? { revise } : {}) });
   }
 
-  /** 上一版工作流：修改的规划要看（ADR 0022） */
+  /** 上一版工作流：修改的规划要看 */
   async function previous(taskId: string) {
     const snapshot = await store.get(taskId);
     if (!snapshot) throw new HttpError(404, 'task_not_found', '没有这个任务');
@@ -253,7 +253,7 @@ export function createPlanning(deps: {
         if (current.status !== 'planning' || current.plannerRunId !== result.runId) return;
         if (!current.revision) return;
         if ('plan' in revised) {
-          // 修改方案排好了：先给用户看，确认了才开跑（ADR 0022）
+          // 修改方案排好了：先给用户看，确认了才开跑
           logger.info({ taskId: current.id, changes: revised.changes }, '修改方案通过规划门');
           await w.setTask({
             revision: {
@@ -333,7 +333,7 @@ export function createPlanning(deps: {
     },
 
     /**
-     * 做成果的 AI 提出了一条调整（ADR 0030 §3.7）：开一次规划员运行来答，记在提出的那样成果上。
+     * 做成果的 AI 提出了一条调整：开一次规划员运行来答，记在提出的那样成果上。
      * 现在不能调整的直接把原因答复回去。同一条重复到达只处理一次。
      */
     async adjust(request: AdjustmentRequestedData): Promise<void> {

@@ -1,4 +1,4 @@
-// 素材：用户随消息发的文件。文件本身存对象存储，库里记是谁的、叫什么（ADR 0007 §3）。
+// 素材：用户随消息发的文件。文件本身存对象存储，库里记是谁的、叫什么。
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { UploadBody } from '@oasis/contracts/canvas';
@@ -98,7 +98,7 @@ export function createUploadService(deps: {
 
     /**
      * 内部：查这些文件，必须都存在且都是这个人的。
-     * partial：只返回还在的（再改新版时筛掉已随上一版删除的修订素材，ADR 0012）
+     * partial：只返回还在的（再改新版时筛掉已随上一版删除的修订素材）
      */
     async lookup(
       ownerId: string,
@@ -123,7 +123,7 @@ export function createUploadService(deps: {
     },
 
     /**
-     * 内部：这个人的这些文件的临时下载链接（交给 inspector 解析素材，ADR 0024）。
+     * 内部：这个人的这些文件的临时下载链接（交给 inspector 解析素材）。
      * 必须都在、都是他的；链接 15 分钟内有效。
      */
     async links(ownerId: string, ids: string[]): Promise<(UploadBody & { url: string })[]> {

@@ -1,5 +1,5 @@
 // 检查类工具：外站浏览器测试、网页应用自查（和交付关卡同一套浏览器检查）、Android 原生应用测试。
-// 浏览器检查都在 inspector（ADR 0024）：网关转交参数，检查浏览器的算力由网关冻结、按 inspector 报回的
+// 浏览器检查都在 inspector：网关转交参数，检查浏览器的算力由网关冻结、按 inspector 报回的
 // 实际用时结算，记在调用的任务和节点上。
 import { randomUUID } from 'node:crypto';
 import {

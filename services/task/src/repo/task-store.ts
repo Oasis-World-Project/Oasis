@@ -42,7 +42,7 @@ export interface Snapshot {
   nodes: Node[];
   edges: Edge[];
   activeRuns: NodeRun[];
-  /** 冻结的旧版（ADR 0022），按版本号排 */
+  /** 冻结的旧版，按版本号排 */
   versions: VersionMeta[];
 }
 
@@ -57,9 +57,9 @@ type TaskPatch = Partial<
     | 'plannerRunId'
     | 'planAttempts'
     | 'acceptance'
-    // 修改成果时附件并进任务素材（ADR 0012）
+    // 修改成果时附件并进任务素材
     | 'materials'
-    // 修改交给规划员、工作流分版本（ADR 0022）
+    // 修改交给规划员、工作流分版本
     | 'version'
     | 'revision'
   >
@@ -128,9 +128,9 @@ type NodePatch = Partial<
     | 'currentRunId'
     | 'startedAt'
     | 'finishedAt'
-    // 修改方案可以给沿用旧 ID 的节点改名（ADR 0022）
+    // 修改方案可以给沿用旧 ID 的节点改名
     | 'key'
-    // 重新展开时沿用的子节点换到新的位置（ADR 0026）
+    // 重新展开时沿用的子节点换到新的位置
     | 'slot'
   >
 >;
@@ -155,14 +155,14 @@ export interface Writer {
   addNode(node: NewNode): Promise<void>;
 
   /**
-   * 修改方案删掉的节点：移出工作流但保留（运行记录还在，旧版能查看；ADR 0022）。
-   * 它的子节点（ADR 0026）一起移出。
+   * 修改方案删掉的节点：移出工作流但保留（运行记录还在，旧版能查看）。
+   * 它的子节点一起移出。
    */
   retireNode(nodeId: string, version: number): Promise<void>;
   addEdge(edge: Pick<Edge, 'id'> & EdgeEnds): Promise<void>;
 
   deleteEdge(edgeId: string): Promise<void>;
-  /** 冻结一版工作流（ADR 0022） */
+  /** 冻结一版工作流 */
   addVersion(row: Omit<WorkflowVersion, 'taskId' | 'frozenAt'>): Promise<void>;
   /** 记一笔花费；这次调用已经记过时返回 false */
   addSpend(record: {
@@ -181,7 +181,7 @@ export interface TaskStore {
   /** 读快照（不加锁，给查询接口用） */
   get(taskId: string): Promise<Snapshot | undefined>;
   listByOwner(ownerId: string, limit: number): Promise<{ task: Task; nodes: Node[] }[]>;
-  /** 冻结的某一版工作流（ADR 0022） */
+  /** 冻结的某一版工作流 */
   getVersion(taskId: string, version: number): Promise<WorkflowVersion | undefined>;
   findRun(runId: string): Promise<NodeRun | undefined>;
   /** 一个节点的全部运行，按开始时间排 */
@@ -196,7 +196,7 @@ export interface TaskStore {
   listStale(status: 'planning' | 'accepting', before: Date): Promise<Task[]>;
   /** 正在过关卡、且交出产出的那次运行结束早于 before 的节点（关卡中途断了，对账时重做） */
   listCheckingNodes(before: Date): Promise<Node[]>;
-  /** 开始早于 before、还没展开的展开节点（读清单中途断了，对账时重读；ADR 0026） */
+  /** 开始早于 before、还没展开的展开节点（读清单中途断了，对账时重读） */
   listExpanding(before: Date): Promise<Node[]>;
   /** 这些上传文件里，哪些是这个人某个任务的素材（删私聊时这些文件要留着） */
   materialsInUse(ownerId: string, uploadIds: string[]): Promise<string[]>;
@@ -339,7 +339,7 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
             if (row) snapshot.nodes.push(...asNodes([row]));
           },
           async retireNode(nodeId, version) {
-            // 连同子节点、子节点的子节点（最多两层，ADR 0026）
+            // 连同子节点、子节点的子节点（最多两层）
             const gone = new Set([nodeId]);
             for (let grew = true; grew;) {
               grew = false;

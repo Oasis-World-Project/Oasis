@@ -1,4 +1,4 @@
-"""Oasis 的 Blender 小工具（ADR 0020）。在 Blender 脚本里直接 `import oasis_blender as ob`：
+"""Oasis 的 Blender 小工具。在 Blender 脚本里直接 `import oasis_blender as ob`：
 
     ob.reset()                                    清空场景，单位米，Z 轴向上
     wood = ob.material("wood", "#C89A6B", roughness=0.7)   只用基础色/粗糙度/金属度，导出不带扩展

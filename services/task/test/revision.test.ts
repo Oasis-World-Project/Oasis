@@ -1,4 +1,4 @@
-// 修改成果直接交给 AI 团队（ADR 0012，2026-11-05）：修改意见整理成文字，附件在 canvas 核对后并进素材。
+// 修改成果直接交给 AI 团队（2026-11-05）：修改意见整理成文字，附件在 canvas 核对后并进素材。
 import type { ServiceClient } from '@oasis/service-kit';
 import { HttpError } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';

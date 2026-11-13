@@ -1,4 +1,4 @@
-// task：工作流控制面（ADR 0004）。管任务的节点图、状态和调度；节点在 harness 里执行，
+// task：工作流控制面。管任务的节点图、状态和调度；节点在 harness 里执行，
 // 收到 harness.run.finished 就推进（讨论下一轮、过关卡），收到 model-gateway.call.settled 就累加花费，
 // 收到 model-gateway.adjustment.requested 就让规划员答复一条中途调整，并定时和 harness 对账。
 import { fileURLToPath } from 'node:url';
@@ -103,7 +103,7 @@ await startService({
       logger,
       handle: async (envelope) => workflows.onCallSettled(CallSettled.data.parse(envelope.data)),
     });
-    // 做成果的 AI 提出了跨成果的调整（ADR 0030 §3.7）：让规划员答一次
+    // 做成果的 AI 提出了跨成果的调整：让规划员答一次
     const adjustmentRequested = startEventConsumer({
       connection: eventBus.connection,
       stream: MODEL_GATEWAY_STREAM,

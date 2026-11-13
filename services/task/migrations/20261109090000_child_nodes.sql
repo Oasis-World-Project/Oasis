@@ -1,7 +1,7 @@
 -- phase: expand
 -- contract-plan: 不需要：只加可空列、放宽三处取值范围（节点种类、运行用途、节点名只在工作流里的节点之间不重复），旧代码读写不受影响。
 -- migrate:up
--- 子节点（ADR 0026）：动态展开的每一条、做几版里的每一版都是一个节点，记下属于哪个节点、第几条 / 第几版。
+-- 子节点：动态展开的每一条、做几版里的每一版都是一个节点，记下属于哪个节点、第几条 / 第几版。
 alter table nodes
   add column parent_id uuid references nodes(id) on delete cascade,
   add column slot integer;

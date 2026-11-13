@@ -1,4 +1,4 @@
-// 节点出口的轻量关卡（ADR 0017）：只挡明显坏掉的成果，结果确定、不调模型。
+// 节点出口的轻量关卡：只挡明显坏掉的成果，结果确定、不调模型。
 // 1. 文件齐不齐：产出非空，方案写明的文件都在，数量和图片尺寸符合，文件能解析（inspector 的解析报告）。
 // 2. 网页能不能打开：有 oasis-app.json 的成果由 inspector 在隔离浏览器里跑一遍（节点自己也能用 app.check
 //    跑同一套），报告存回 harness 供用户下载；交给用户的网页没配 oasis-app.json 也算没满足
@@ -159,7 +159,7 @@ interface MediaFindings {
 export function createGate(deps: {
   harness: ServiceClient;
   inspector: ServiceClient;
-  /** 检查容器的算力：先冻结、按 inspector 报回的用量结算（ADR 0024） */
+  /** 检查容器的算力：先冻结、按 inspector 报回的用量结算 */
   compute: CheckCompute;
   /** 解码检查容器用几核、最多跑多久（这个任务付钱） */
   media: { cores: number; timeoutMs: number };
@@ -176,7 +176,7 @@ export function createGate(deps: {
     ...(input.signal ? { signal: input.signal } : {}),
   });
 
-  /** 这次运行的产出包：harness 签发临时下载链接，inspector 拿它去读（ADR 0024） */
+  /** 这次运行的产出包：harness 签发临时下载链接，inspector 拿它去读 */
   const outputsOf = (input: GateInput) =>
     harness.json(
       'POST',

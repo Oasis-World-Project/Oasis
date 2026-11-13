@@ -1,4 +1,4 @@
-// 提出调整（ADR 0030 §3.7）：做成果的 AI 发现要动别的成果才做得好时提一次（要什么、为什么），
+// 提出调整：做成果的 AI 发现要动别的成果才做得好时提一次（要什么、为什么），
 // task 让规划员答一次，答复写回这个长任务，沙箱里用 oasis-tool wait 取。
 // 网关不调 task（服务调用只往一个方向走）：提交时发事件，答复由 task 调回来写。
 import { AdjustmentRequested } from '@oasis/contracts/events';

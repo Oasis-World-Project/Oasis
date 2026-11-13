@@ -1,4 +1,4 @@
-// inspector：判断成果的检查服务（ADR 0024）。文件解析、音视频解码、网页的浏览器检查、外站测试、
+// inspector：判断成果的检查服务。文件解析、音视频解码、网页的浏览器检查、外站测试、
 // 模型预览、用户素材解析都在这里；它不调别的服务、不存东西：要检查的内容由调用方给对象存储的临时下载链接，
 // 或直接放在请求里。要开容器的检查（解码、浏览器）由调用方付算力：它先冻结，按这里报回的实际用量结算。
 import { createDockerApi, defaultDockerSocket, startService } from '@oasis/service-kit';

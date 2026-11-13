@@ -95,7 +95,7 @@ function fakeDsh(stdin: PassThrough, stdout: PassThrough) {
 }
 
 /**
- * 假的工具步骤执行器（ADR 0025）：按放进沙箱的 in/.oasis-steps.json 报告每一步；工具名带 fail 的那步失败，
+ * 假的工具步骤执行器：按放进沙箱的 in/.oasis-steps.json 报告每一步；工具名带 fail 的那步失败，
  * 带 slow 的那步要很久。和真的执行器一样做完之后不退出，等沙箱被销毁。
  */
 function fakeSteps(stdout: PassThrough, files: { path: string; content: Buffer }[]) {

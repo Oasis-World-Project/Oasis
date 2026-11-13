@@ -1,7 +1,7 @@
 -- phase: expand
 -- contract-plan: 不适用（只新增带默认值的列和新表；旧任务就是第 1 版、没有进行中的修改，即正确值）
 -- migrate:up
--- ADR 0022：修改交给规划员，工作流分版本，先确认再跑。
+-- 修改交给规划员，工作流分版本，先确认再跑。
 -- version：当前是第几版；revision：进行中的修改（规划中 / 待确认），没有时为空
 alter table tasks add column version integer not null default 1;
 alter table tasks add column revision jsonb;

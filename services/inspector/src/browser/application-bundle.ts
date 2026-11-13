@@ -1,4 +1,4 @@
-// 按清单把节点交出的网页组装成检查用的运行包（ADR 0021）：静态网页按画布的方式打开（同一份 live-page 规则），
+// 按清单把节点交出的网页组装成检查用的运行包：静态网页按画布的方式打开（同一份 live-page 规则），
 // 画布里加载不了的文件、清单和测试计划的问题在启动浏览器前就说清楚，交给节点修复。
 import { createHash } from 'node:crypto';
 import { LIVE_SANDBOX, livePage } from '@oasis/live-page';
@@ -26,7 +26,7 @@ export const fail = (reason: string): Failure => ({ passed: false, reason, frame
 const escapeAttr = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 
 /**
- * 静态网页按画布的方式组装（ADR 0021）：入口换成一个只放隔离框的外壳，框里是和画布一模一样的文档。
+ * 静态网页按画布的方式组装：入口换成一个只放隔离框的外壳，框里是和画布一模一样的文档。
  * 浏览器检查跑的就是用户在画布里看到的那份；画布里加载不了的文件直接算没通过。
  */
 async function asCanvasPage(

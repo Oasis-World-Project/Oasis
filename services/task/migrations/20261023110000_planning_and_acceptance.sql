@@ -1,7 +1,7 @@
 -- phase: expand
 -- contract-plan: 不适用（只放宽状态的取值范围、新增可空或带默认值的列和发件箱表，没有旧结构需要收缩）
 -- migrate:up
--- 5.3：任务可以从任务单开始，先由规划员排工作流；跑完对照任务单整体验收（ADR 0005 §4、§5）
+-- 5.3：任务可以从任务单开始，先由规划员排工作流；跑完对照任务单整体验收
 alter table tasks drop constraint tasks_status_check;
 alter table tasks add constraint tasks_status_check
   check (status in ('planning', 'running', 'accepting', 'stopped', 'needs_attention', 'succeeded', 'failed', 'cancelled'));

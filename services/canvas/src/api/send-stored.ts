@@ -1,5 +1,5 @@
 // 从对象存储边读边传一个文件：支持分段请求（Range → 206），视频、音频能拖动进度；
-// 响应头带沙箱和 nosniff（ADR 0007 §2），?download=1 时让浏览器另存。
+// 响应头带沙箱和 nosniff，?download=1 时让浏览器另存。
 import { fileResponseHeaders, parseRange, type ObjectStore } from '@oasis/service-kit';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 

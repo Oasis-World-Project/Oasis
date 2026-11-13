@@ -1,4 +1,4 @@
-// 工具节点（ADR 0025）：规划门怎么查步骤、上游文件怎么变成上游必须交出的文件、开跑交给 harness 什么。
+// 工具节点：规划门怎么查步骤、上游文件怎么变成上游必须交出的文件、开跑交给 harness 什么。
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { TOOL_RUN_MODEL } from '@oasis/contracts/harness';
 import { checkToolArgs } from '@oasis/contracts/tool-args';

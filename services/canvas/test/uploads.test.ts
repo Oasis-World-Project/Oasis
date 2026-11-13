@@ -1,4 +1,4 @@
-// 素材上传：存、下载（只能下自己的、带安全响应头）、内部核对和取内容（ADR 0007 §3）。
+// 素材上传：存、下载（只能下自己的、带安全响应头）、内部核对和取内容。
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import { createService, createServiceClient } from '@oasis/service-kit';
 import { pino } from 'pino';

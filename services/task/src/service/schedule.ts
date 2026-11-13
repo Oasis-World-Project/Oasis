@@ -1,5 +1,5 @@
 // 调度决定（纯函数）：看一眼整张图，算出哪些节点该开跑、任务是否该结束、停下或需要用户处理。
-// 子节点（ADR 0026）没有连线：父节点开跑后就能跑。组节点（展开、做几版）自己不跑、不占名额；
+// 子节点没有连线：父节点开跑后就能跑。组节点（展开、做几版）自己不跑、不占名额；
 // 其余节点分两个池：工具子节点最多 maxToolChildren 个同时跑，其他节点（AI、工作流图里的工具节点）最多 maxParallel 个。
 import type { Attention, NodeStatus, TaskStatus } from '@oasis/contracts/task';
 import type { Edge, Node } from '../repo/task-store.ts';
@@ -24,7 +24,7 @@ export const incoming = (node: Node, edges: Edge[]) => edges.filter((e) => e.toN
 const working = (nodes: Node[]) => nodes.filter((n) => ACTIVE.includes(n.status) && !isGroup(n));
 
 /**
- * 两个并发池各占了几个：工具子节点 + 看图挑选的运行；其他节点 + AI 比较的挑选运行（ADR 0026）。
+ * 两个并发池各占了几个：工具子节点 + 看图挑选的运行；其他节点 + AI 比较的挑选运行。
  * 组节点自己不占名额，只有它开的挑选运行占。
  */
 export function poolUse(nodes: Node[]): { tools: number; others: number } {
@@ -54,7 +54,7 @@ export function decide(input: {
   nodes: Node[];
   edges: Edge[];
   maxParallel: number;
-  /** 工具子节点同时最多几个（ADR 0026，用户 2026-11-08 定 6） */
+  /** 工具子节点同时最多几个（用户 2026-11-08 定 6） */
   maxToolChildren: number;
 }): ScheduleDecision {
   const { nodes, edges } = input;
@@ -89,8 +89,8 @@ export function decide(input: {
     return { start };
 
   // 没有在跑的、也没有能跑的了：全部完成；或者有节点停下着，等用户点运行；或者卡住了需要用户处理。
-  // 已经挑好一版的节点下面没做成的那几版不算（ADR 0026）
-  // 中途调整停掉的成果（ADR 0030 §3.7）不再算在内：它不用做了，不拦着任务完成
+  // 已经挑好一版的节点下面没做成的那几版不算
+  // 中途调整停掉的成果不再算在内：它不用做了，不拦着任务完成
   const dropped = (n: Node) => n.status === 'cancelled' && Boolean(n.config.adjust);
   if (nodes.filter(isRoot).every((n) => n.status === 'succeeded' || dropped(n))) {
     return { start, task: { status: 'succeeded', attention: null } };

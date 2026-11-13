@@ -32,7 +32,7 @@ export interface Typical {
   samples: number;
 }
 
-/** 一个型号最近的实测（ADR 0030 §3.5）：每秒输出、含缓存的实际单价、上游出错的比例 */
+/** 一个型号最近的实测：每秒输出、含缓存的实际单价、上游出错的比例 */
 export interface Measured {
   calls: number;
   tokensPerSecond: number;

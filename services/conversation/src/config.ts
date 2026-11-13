@@ -19,9 +19,9 @@ export const conversationEnv = {
   TASK_URL: z.url(),
   /** 核对用户随消息发的文件 */
   CANVAS_URL: z.url(),
-  /** 接需求时解析用户上传的素材（ADR 0024） */
+  /** 接需求时解析用户上传的素材 */
   INSPECTOR_URL: z.url(),
-  /** 判断「是不是在交代任务」的决策模型（ADR 0005 §2） */
+  /** 判断「是不是在交代任务」的决策模型 */
   TASK_DETECT_MODEL: z.string().min(1).default('typesafe/jev-1.14'),
   /** 概率不低于它就直接开始接需求 */
   TASK_DETECT_HIGH: z.coerce.number().min(0).max(1).default(0.7),
@@ -31,6 +31,6 @@ export const conversationEnv = {
   INTAKE_FALLBACK_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
   /** 最多问几轮（用户定：3） */
   INTAKE_MAX_ROUNDS: z.coerce.number().int().min(1).max(5).default(3),
-  /** 接需求一步的输出上限：留足余量，截断不重来（ADR 0005 §2026-11-04） */
+  /** 接需求一步的输出上限：留足余量，截断不重来 */
   INTAKE_MAX_TOKENS: z.coerce.number().int().min(256).max(32000).default(16000),
 };

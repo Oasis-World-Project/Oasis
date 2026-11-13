@@ -1,4 +1,4 @@
-# Oasis 自己的 dsh 组合（ADR 0003 §5）。镜像构建时从 dsh 自带的 sdk 模板复制出 oasis profile，再叠上这一层。
+# Oasis 自己的 dsh 组合。镜像构建时从 dsh 自带的 sdk 模板复制出 oasis profile，再叠上这一层。
 # 目标、内部规划、后台作业和代理树沿用原生实现；Oasis 只负责隔离、计费与生命周期衔接。
 # 模型一律走 Oasis 的 model-gateway（经沙箱入口代理），凭每次运行专用的临时 Key 计费。
 # 路由凭证由环境注入；完整目录与任务授权经 /workspace/in/.oasis-*.json 注入。

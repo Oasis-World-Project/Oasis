@@ -1,4 +1,4 @@
-// 关卡的文件解析（ADR 0017、0024）：读一次运行的产出包（harness 签发的临时链接），
+// 关卡的文件解析：读一次运行的产出包（harness 签发的临时链接），
 // 只解析要的那几个文件，报告能不能用、尺寸和正文；总长、文件数、总时长超了就截断并标出来。
 import type { InspectedFiles } from '@oasis/contracts/inspector';
 import { readLimited, scanArchive } from '@oasis/service-kit';

@@ -1,4 +1,4 @@
-// 整体验收（只查交付文件齐不齐）和修改（ADR 0022、0030 §3.8：直接交给做成果的 AI，或规划、确认、
+// 整体验收（只查交付文件齐不齐）和修改（直接交给做成果的 AI，或规划、确认、
 // 沿用 / 接着改 / 重新做；版本）。
 import { describe, expect, it, vi } from 'vitest';
 import { events } from './support/memory-store.ts';
@@ -98,7 +98,7 @@ describe('整体验收（从任务单来的任务）', () => {
   });
 
   const plannerRuns = () => submitted.filter((s) => !s.nodeId) as unknown as Submitted[];
-  /** 发起修改后等规划员交到 harness（ADR 0022） */
+  /** 发起修改后等规划员交到 harness */
   const reviseAndWait = async (taskId: string, body: Parameters<typeof service.revise>[1]) => {
     const before = plannerRuns().length;
     const task = await service.revise(taskId, body);

@@ -1,4 +1,4 @@
-// 成果（ADR 0007 §8）：任务完成时把负责交付物的节点交出的文件复制进画布；给前端列出、读取。
+// 成果：任务完成时把负责交付物的节点交出的文件复制进画布；给前端列出、读取。
 import { randomUUID } from 'node:crypto';
 import { PassThrough, Readable } from 'node:stream';
 import { once } from 'node:events';
@@ -105,7 +105,7 @@ function safeApplicationMember(path: string): boolean {
 
 export function createArtifactService(deps: {
   repo: ArtifactsRepo;
-  /** 批注截图存成上传记录（ADR 0009 §18），成果换新版或删除时一起删 */
+  /** 批注截图存成上传记录，成果换新版或删除时一起删 */
   uploads: UploadsRepo;
   store: ObjectStore;
   task: ServiceClient;
@@ -115,7 +115,7 @@ export function createArtifactService(deps: {
 }) {
   const { repo, uploads, store, task, logger } = deps;
 
-  /** 运行中应用的批注截图（ADR 0009 §18）：只被批注引用 */
+  /** 运行中应用的批注截图：只被批注引用 */
   const framesOf = (rows: { annotations: { frame?: string | null }[] }[]) => [
     ...new Set(rows.flatMap((row) => row.annotations.flatMap((a) => (a.frame ? [a.frame] : [])))),
   ];
@@ -218,7 +218,7 @@ export function createArtifactService(deps: {
     await registerAvatars(all);
   }
 
-  /** 数字人配置（ADR 0013）：`*.oasis-avatar.json` 校验通过的记下来；不合格的照普通文件留着 */
+  /** 数字人配置：`*.oasis-avatar.json` 校验通过的记下来；不合格的照普通文件留着 */
   async function registerAvatars(all: Artifact[]) {
     for (const file of all.filter(
       (row) => row.name.endsWith(AVATAR_SPEC_SUFFIX) && !row.avatarSpec,
@@ -258,7 +258,7 @@ export function createArtifactService(deps: {
       const existing = await repo.listByTask(event.taskId);
       const byKey = new Map(existing.map((a) => [`${a.nodeId}/${a.path}`, a]));
       const delivered = deliveredFiles(detail);
-      // 同一任务修改后再次交付（ADR 0012，2026-11-05）：内容变了的原地换成新版，链接和同步路径不变；
+      // 同一任务修改后再次交付（2026-11-05）：内容变了的原地换成新版，链接和同步路径不变；
       // 批注已经交给 AI 处理过，连同截图一起清掉。摘要相同的不再复制（事件重投时什么也不做）。
       // 只看在这一版登记之后才又交付的任务（修改过）；同一次交付的事件重投不再复制
       const finished = detail.finishedAt ? new Date(detail.finishedAt) : null;
@@ -296,7 +296,7 @@ export function createArtifactService(deps: {
         });
         if (inserted) logger.info({ taskId: event.taskId, path: file.path }, '成果已登记进画布');
       }
-      // 修改后的新版不再交付的旧成果（节点删了、文件改名了）从画布删掉（ADR 0022 §5）；
+      // 修改后的新版不再交付的旧成果（节点删了、文件改名了）从画布删掉；
       // 新版什么也没交出时保留上一版
       if (detail.version > 1 && delivered.length) {
         const keep = new Set(delivered.map((f) => `${f.nodeId}/${f.path}`));
@@ -340,8 +340,8 @@ export function createArtifactService(deps: {
     },
 
     /**
-     * 批注整份替换（ADR 0012 §9）：编号不能重复，最多 50 条（契约已校验）。
-     * 新引用的截图必须是这个人自己上传的；不再被引用的截图随之删除（ADR 0009 §18）。
+     * 批注整份替换：编号不能重复，最多 50 条（契约已校验）。
+     * 新引用的截图必须是这个人自己上传的；不再被引用的截图随之删除。
      */
     async setAnnotations(ownerId: string, id: string, annotations: Annotation[]) {
       const current = await service.get(ownerId, id);

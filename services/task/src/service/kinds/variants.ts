@@ -1,4 +1,4 @@
-// 干活节点、工具节点都能「做几版挑一版」（ADR 0026）：这里是两者共用的方案部分。
+// 干活节点、工具节点都能「做几版挑一版」：这里是两者共用的方案部分。
 // 真正开版本、挑选在引擎里（engine/groups.ts、pick.ts）。
 import type { Variants } from '@oasis/contracts/task';
 import { pad2 } from '../groups.ts';

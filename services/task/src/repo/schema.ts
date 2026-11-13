@@ -24,21 +24,21 @@ interface CommonConfig {
   requires?: string[];
   /** 最终验收退回后，等待上游最新产出再在原会话修复。 */
   repairChecks?: string[];
-  /** 用户看过成果后的修改意见（ADR 0012）：开跑时接着原会话按意见改（ADR 0022 起只用于「接着原会话改」的节点） */
+  /** 用户看过成果后的修改意见：开跑时接着原会话按意见改（只用于「接着原会话改」的节点） */
   revision?: string;
-  /** 修改时「重新做」的节点：上一版它交出产出的那次运行，产出放进 in/_previous/（ADR 0022） */
+  /** 修改时「重新做」的节点：上一版它交出产出的那次运行，产出放进 in/_previous/ */
   previousRunId?: string;
   expects?: ExpectedFile[];
   deliver?: string[];
-  /** 属于哪条生产线（ADR 0030）；一个 AI 做的成果没有 */
+  /** 属于哪条生产线；一个 AI 做的成果没有 */
   line?: { key: string; title: string };
-  /** 中途调整（ADR 0030 §3.7）：提出了调整、规划员还在答复（asking），或被调整过什么（note） */
+  /** 中途调整：提出了调整、规划员还在答复（asking），或被调整过什么（note） */
   adjust?: { asking: boolean; note: string };
   /** 用户追加要求的前几条已经交给节点了（讨论在下一轮、停止后在继续时带上之后的新要求） */
   notesSeen?: number;
   /** 节点现在的产出是哪次运行交出来的（下游拿这次运行的产出） */
   outputsRunId?: string;
-  /** 做几版挑一版（ADR 0026）：这样的节点不自己跑，开 n 个版本子节点，都做完后挑一版 */
+  /** 做几版挑一版：这样的节点不自己跑，开 n 个版本子节点，都做完后挑一版 */
   variants?: Variants;
   /** 挑中了第几版、理由（没能按标准挑时给第 1 版，原因写在 warning 里） */
   chosen?: number;
@@ -51,13 +51,13 @@ interface CommonConfig {
   /** 版本子节点：第几版、共几版（AI 版本要走不同的方向） */
   version?: { k: number; n: number };
   /**
-   * 展开出来的一条（ADR 0026）：这一条的内容，和它的指纹（内容、做法、用到的上游产出）。
+   * 展开出来的一条：这一条的内容，和它的指纹（内容、做法、用到的上游产出）。
    * 重新展开时指纹没变、上次做成了的沿用，不重做。
    */
   item?: unknown;
   itemHash?: string;
   /**
-   * 停下的子节点重新排队等名额（ADR 0026）：轮到它时接着停下前的运行做，而不是从头做。
+   * 停下的子节点重新排队等名额：轮到它时接着停下前的运行做，而不是从头做。
    * 工作流图里的节点停下后继续时直接开跑，不用这个。
    */
   resumeOnStart?: boolean;
@@ -83,12 +83,12 @@ export interface DiscussionConfig extends CommonConfig {
   transcript?: TranscriptEntry[];
 }
 
-/** 工具节点（ADR 0025）：不起 AI，在沙箱里按顺序执行这些工具步骤 */
+/** 工具节点：不起 AI，在沙箱里按顺序执行这些工具步骤 */
 export interface ToolConfig extends CommonConfig {
   steps?: ToolStep[];
 }
 
-/** 展开节点（ADR 0026）：按上游的清单每条开一个子节点 */
+/** 展开节点：按上游的清单每条开一个子节点 */
 export interface ForeachConfig extends CommonConfig {
   over?: string;
   count?: number;
@@ -116,10 +116,10 @@ export interface RunRequestRecord {
   model: string;
   prompt: string;
   inputsFrom: { runId: string; as: string }[];
-  /** 直接放进 in/ 的小文件（展开节点的 index.json、这一条的 _item.json，ADR 0026） */
+  /** 直接放进 in/ 的小文件（展开节点的 index.json、这一条的 _item.json） */
   inputs?: RunInputFile[];
   continueFrom?: string;
-  /** 工具运行的步骤（ADR 0025） */
+  /** 工具运行的步骤 */
   steps?: ToolStep[];
 }
 
@@ -128,15 +128,15 @@ export interface RunMeta {
   resumable?: boolean;
   round?: number;
   participant?: string;
-  /** 答复调整的运行（ADR 0030 §3.7）：答复写回哪个长任务、提的是什么、答复和有没有送到 */
+  /** 答复调整的运行：答复写回哪个长任务、提的是什么、答复和有没有送到 */
   adjust?: { jobId: string; want: string; why: string; reply?: string; answered?: boolean };
 }
 
-/** 规划员排的修改方案里一个节点（ADR 0022）：沿用，或完整节点 + 来自哪个旧节点、怎么做 */
+/** 规划员排的修改方案里一个节点：沿用，或完整节点 + 来自哪个旧节点、怎么做 */
 export type RevisionPlanNode =
   { key: string; reuse: string } | (PlanNode & { from?: string; mode: 'continue' | 'fresh' });
 
-/** 进行中的修改（ADR 0022）：规划中没有 plan；通过规划门后带着方案等用户确认 */
+/** 进行中的修改：规划中没有 plan；通过规划门后带着方案等用户确认 */
 export interface RevisionState {
   version: number;
   request: string;
@@ -151,7 +151,7 @@ export interface RevisionState {
     deliverables: Record<string, string>;
   };
   changes?: { key: string; title: string; change: RevisionChange }[];
-  /** 用户在做几版的节点上「改用这一版」（ADR 0026）：确认后先换成这一版，再重做受影响的下游 */
+  /** 用户在做几版的节点上「改用这一版」：确认后先换成这一版，再重做受影响的下游 */
   pick?: { nodeId: string; version: number };
 }
 
@@ -178,7 +178,7 @@ export const tasks = pgTable('tasks', {
   spentMicro: micro('spent_micro').notNull().default(0),
   sheet: jsonb('sheet').$type<TaskSheet>(),
   materials: jsonb('materials').$type<Material[]>().notNull().default([]),
-  /** 当前是第几版工作流（ADR 0022） */
+  /** 当前是第几版工作流 */
   version: integer('version').notNull().default(1),
   /** 进行中的修改（规划中 / 待确认） */
   revision: jsonb('revision').$type<RevisionState>(),
@@ -191,7 +191,7 @@ export const tasks = pgTable('tasks', {
     /** 整体验收没满足、退回交付节点改过几次（最多一次）；不返回给用户 */
     repairs?: number;
     /**
-     * 这一轮是按用户的修改意见改（ADR 0012）：节点和整体验收只查这条意见改好没有、成品还能不能用，
+     * 这一轮是按用户的修改意见改：节点和整体验收只查这条意见改好没有、成品还能不能用，
      * 原任务单在第一轮已经核对过，不再重查；不返回给用户
      */
     revision?: string;
@@ -223,9 +223,9 @@ export const nodes = pgTable('nodes', {
   createdAt: at('created_at').notNull().defaultNow(),
   startedAt: at('started_at'),
   finishedAt: at('finished_at'),
-  /** 修改时被方案删掉：从第几版起不在工作流里（ADR 0022）；在工作流里的为空 */
+  /** 修改时被方案删掉：从第几版起不在工作流里；在工作流里的为空 */
   retiredVersion: integer('retired_version'),
-  /** 子节点（ADR 0026）：属于哪个展开节点 / 做几版的节点，排第几 */
+  /** 子节点：属于哪个展开节点 / 做几版的节点，排第几 */
   parentId: uuid('parent_id'),
   slot: integer('slot'),
 });
@@ -239,7 +239,7 @@ export const edges = pgTable('edges', {
 
 export type NodeRunStatus =
   'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'stopped';
-/** pick：做几版的节点挑一版（ADR 0026） */
+/** pick：做几版的节点挑一版 */
 export type NodeRunPurpose = 'work' | 'rework' | 'speech' | 'summary' | 'pick' | 'adjust';
 export const nodeRuns = pgTable('node_runs', {
   id: uuid('id').primaryKey(),
@@ -257,7 +257,7 @@ export const nodeRuns = pgTable('node_runs', {
   finishedAt: at('finished_at'),
 });
 
-/** 冻结的旧版工作流（ADR 0022）：确认修改时存下，只读查看 */
+/** 冻结的旧版工作流：确认修改时存下，只读查看 */
 export const workflowVersions = pgTable('workflow_versions', {
   taskId: uuid('task_id').notNull(),
   version: integer('version').notNull(),

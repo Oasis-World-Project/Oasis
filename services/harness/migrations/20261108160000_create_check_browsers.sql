@@ -1,5 +1,5 @@
 -- phase: expand
--- contract-plan: 取代 preview_sessions（平台预览已删除，ADR 0021；剩下的只有检查用浏览器）。20261108160100 把旧记录搬过来，20261108160200 删除旧表。
+-- contract-plan: 取代 preview_sessions（平台预览已删除；剩下的只有检查用浏览器）。20261108160100 把旧记录搬过来，20261108160200 删除旧表。
 -- migrate:up
 create table check_browsers (
   id uuid primary key,

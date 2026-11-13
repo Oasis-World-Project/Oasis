@@ -16,7 +16,7 @@ export function createOutside(
 
   /**
    * 接着原会话的运行被 harness 拒绝：原会话的工作目录不在了（持久卷被清掉）。这次运行记成失败，
-   * 这一步重新开一个会话做、带上节点上一版交出的产出（ADR 0022 的「重新做」）；不算节点失败，也不占重做次数。
+   * 这一步重新开一个会话做、带上节点上一版交出的产出（修改时的「重新做」）；不算节点失败，也不占重做次数。
    */
   async function redo(snapshot: Snapshot, w: Writer, runId: string, error: string, fx: Effects) {
     const run = snapshot.activeRuns.find((r) => r.id === runId);

@@ -17,7 +17,7 @@ export const SANDBOX_PATHS = {
   outputs: '/workspace/out',
   /**
    * dsh 的会话存储（含附件），和 /workspace 一起挂在这个会话的持久卷上：关卡退回修改、停止后继续、
-   * 修改、讨论的下一轮时接着原会话（ADR 0015 §9）
+   * 修改、讨论的下一轮时接着原会话
    */
   sessions: '/home/node/.dsh/sessions',
 } as const;
@@ -36,7 +36,7 @@ export const isSessionArchive = (path: string, sessionId?: string) => {
 };
 
 /** 沙箱的环境变量。runKey 是密钥，调用方不得记进日志。 */
-/** 沙箱装软件包的通路：出口代理和仓库地址（ADR 0006 §7） */
+/** 沙箱装软件包的通路：出口代理和仓库地址 */
 export interface SandboxPackages {
   /** 出口代理；没有时沙箱完全不能出站 */
   egressProxy: string | undefined;

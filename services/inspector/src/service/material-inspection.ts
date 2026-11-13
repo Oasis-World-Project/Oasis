@@ -1,4 +1,4 @@
-// 用户上传的素材（ADR 0024）：canvas 核对过所有权、签发了临时下载链接；这里有界下载、
+// 用户上传的素材：canvas 核对过所有权、签发了临时下载链接；这里有界下载、
 // 核对大小和摘要，再用和运行产出同一套解析器读出正文。图片原图交给关卡的看图检查。
 import { createHash } from 'node:crypto';
 import type { MaterialInspectResult, MaterialsInspectBody } from '@oasis/contracts/inspector';

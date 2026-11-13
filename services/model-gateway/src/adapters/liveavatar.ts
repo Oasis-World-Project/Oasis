@@ -1,4 +1,4 @@
-// LiveAvatar（HeyGen 的实时数字人）最小客户端（ADR 0013）。换供应商只换这个文件。
+// LiveAvatar（HeyGen 的实时数字人）最小客户端。换供应商只换这个文件。
 // 管理接口用 X-API-KEY；开始会话用会话令牌（Bearer）。返回统一是 { code, data, message }。
 import { z } from 'zod';
 

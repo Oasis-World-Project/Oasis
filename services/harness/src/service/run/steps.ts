@@ -1,4 +1,4 @@
-// 工具运行（ADR 0025）：沙箱里不起 AI，起的是镜像里的工具步骤执行器 oasis-steps。它按 in/.oasis-steps.json
+// 工具运行：沙箱里不起 AI，起的是镜像里的工具步骤执行器 oasis-steps。它按 in/.oasis-steps.json
 // 一步一步调 oasis-tool / oasis-op（每步失败自动重试），往 stdout 写一行一个 JSON；这里把它们记成运行事件，
 // 读到 done 为止。进度记在工作目录里（out/.oasis-steps/），接管或停止后继续时执行器跳过做完的步骤。
 import { createInterface } from 'node:readline';

@@ -1692,7 +1692,7 @@ describe('接需求', () => {
   });
 });
 
-describe('随消息发文件（ADR 0007 §4）', () => {
+describe('随消息发文件', () => {
   it('附件记在用户消息上；聊天时 AI 知道附了哪些文件；删掉消息时文件在 canvas 里一起彻底删掉', async () => {
     deletedUploads.length = 0;
     claimedUploads.length = 0;

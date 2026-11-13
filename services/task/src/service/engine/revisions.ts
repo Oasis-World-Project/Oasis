@@ -1,4 +1,4 @@
-// 修改（ADR 0022、0030 §3.8）：按修改方案（规划员排的、用户确认过的，或意见直接交给做成果的 AI 时代码排的）
+// 修改：按修改方案（规划员排的、用户确认过的，或意见直接交给做成果的 AI 时代码排的）
 // 改工作流再开跑；用户不改了就回到修改前的样子。
 import { randomUUID } from 'node:crypto';
 import type { PlanNode } from '@oasis/contracts/task';
@@ -28,7 +28,7 @@ export function createRevisions(engine: Engine): Pick<Engine, 'applyRevision' | 
         spentMicro: all.reduce((sum, n) => sum + n.spentMicro, 0),
         createdAt: snapshot.versions.at(-1)?.frozenAt ?? task.createdAt,
       });
-      // 用户在做几版的节点上改用了另一版（ADR 0026）：先换成那一版，下游再按方案重做
+      // 用户在做几版的节点上改用了另一版：先换成那一版，下游再按方案重做
       if (revision.pick) {
         const picked = snapshot.nodes.find((n) => n.id === revision.pick!.nodeId);
         if (picked)
@@ -114,7 +114,7 @@ export function createRevisions(engine: Engine): Pick<Engine, 'applyRevision' | 
       await w.setTask({
         version: revision.version,
         revision: null,
-        // 直接给方案建的任务没有任务单：交付物照旧（「改用这一版」也能用在这种任务上，ADR 0026）
+        // 直接给方案建的任务没有任务单：交付物照旧（「改用这一版」也能用在这种任务上）
         deliverables: task.sheet
           ? task.sheet.deliverables.map((d) => ({
               name: d.name,
@@ -122,7 +122,7 @@ export function createRevisions(engine: Engine): Pick<Engine, 'applyRevision' | 
               nodeId: idOf.get(plan.deliverables[d.name] ?? '') ?? null,
             }))
           : task.deliverables,
-        // 这一轮按修改意见验收（只查意见改好没有，ADR 0012）
+        // 这一轮按修改意见验收（只查意见改好没有）
         acceptance: { unmet: [], revision: revision.request },
         status: 'running',
         attention: null,

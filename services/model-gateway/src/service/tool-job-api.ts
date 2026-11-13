@@ -45,7 +45,7 @@ export function createToolJobApi(ctx: ToolContext) {
         await tick();
       },
       cancel: cancelJob,
-      /** task 把规划员对「提出调整」的答复写回来（ADR 0030 §3.7）：沙箱里等着的 AI 下次查就拿到 */
+      /** task 把规划员对「提出调整」的答复写回来：沙箱里等着的 AI 下次查就拿到 */
       async answer(jobId: string, text: string) {
         const job = await jobs.get(jobId);
         if (job?.tool !== ADJUST_TOOL)

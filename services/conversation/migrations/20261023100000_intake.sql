@@ -1,7 +1,7 @@
 -- phase: expand
 -- contract-plan: 不适用（新增带默认值的列和新表，旧消息都是普通文字，kind 默认 text 即正确值）
 -- migrate:up
--- 消息有了类型：普通文字，或问题卡、任务单卡、任务卡、交付消息、任务提醒（ADR 0005 §7）；data 放卡片内容
+-- 消息有了类型：普通文字，或问题卡、任务单卡、任务卡、交付消息、任务提醒；data 放卡片内容
 alter table messages
   add column kind text not null default 'text'
     check (kind in ('text', 'questions', 'sheet', 'task', 'delivery', 'notice')),

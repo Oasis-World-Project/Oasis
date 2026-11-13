@@ -1,4 +1,4 @@
-// 工具节点的步骤执行器（ADR 0025）：命令怎么拼、失败怎么重试、长任务怎么等、文字结果存到哪、进度怎么接着。
+// 工具节点的步骤执行器：命令怎么拼、失败怎么重试、长任务怎么等、文字结果存到哪、进度怎么接着。
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -263,7 +263,7 @@ describe('工具步骤执行器', () => {
     expect(changed.events.at(-1)).toEqual({ type: 'done', ok: true });
   });
 
-  it('参数里带 * 的路径按条目顺序展开成文件（ADR 0026）；一个也没找到这一步失败', async () => {
+  it('参数里带 * 的路径按条目顺序展开成文件；一个也没找到这一步失败', async () => {
     for (const slot of ['02', '01', '10'])
       await mkdir(join(root, `in/clips/${slot}`), { recursive: true });
     for (const slot of ['02', '01', '10'])

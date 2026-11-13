@@ -1,5 +1,5 @@
 // OpenRouter 的最小客户端：价格表、chat completions（OpenAI 兼容）、结构化决策（Decisions API），
-// 以及多模态：生图、配音、转写和查询某次生成的实际花费（ADR 0006）。
+// 以及多模态：生图、配音、转写和查询某次生成的实际花费。
 // 换供应商只换这个文件。
 import { z } from 'zod';
 import { ModelCapabilities } from '@oasis/contracts/model-gateway';

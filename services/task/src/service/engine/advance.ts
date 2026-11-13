@@ -28,7 +28,7 @@ export function createAdvance(engine: Engine): Advance {
       let lastRunId: string | undefined;
       for (const request of step.requests) {
         const runId = randomUUID();
-        // 开新会话、或拿上游最新产出的运行：带上展开节点的清单索引和这一条的内容（ADR 0026）
+        // 开新会话、或拿上游最新产出的运行：带上展开节点的清单索引和这一条的内容
         const inputs =
           request.inputs ??
           (request.continueFrom && !request.inputsFrom.length
@@ -83,7 +83,7 @@ export function createAdvance(engine: Engine): Advance {
 
     async halt(snapshot, w, node, fx) {
       if (!ACTIVE.includes(node.status)) return;
-      // 组节点（ADR 0026）：在跑的子节点一起停下，挑到一半的挑选也停
+      // 组节点：在跑的子节点一起停下，挑到一半的挑选也停
       if (isGroup(node))
         for (const child of childrenOf(snapshot.nodes, node))
           await engine.halt(snapshot, w, child, fx);
@@ -97,7 +97,7 @@ export function createAdvance(engine: Engine): Advance {
 
     async startNode(snapshot, w, node, fx) {
       if (isGroup(node)) return engine.startGroup(snapshot, w, node, fx);
-      // 停下后重新排队的子节点（ADR 0026）：轮到它时接着停下前的运行做
+      // 停下后重新排队的子节点：轮到它时接着停下前的运行做
       if (node.config.resumeOnStart) {
         const { resumeOnStart: _resume, ...rest } = node.config;
         await w.setNode(node.id, { status: 'stopped', config: rest as Node['config'] });
@@ -153,7 +153,7 @@ export function createAdvance(engine: Engine): Advance {
     },
 
     async schedule(snapshot, w, fx) {
-      // 子节点都结束了的组节点先汇总或开挑选（ADR 0026），再按图找能跑的
+      // 子节点都结束了的组节点先汇总或开挑选，再按图找能跑的
       await engine.settleGroups(snapshot, w, fx);
       const decision = decide({
         taskStatus: snapshot.task.status,
@@ -164,9 +164,9 @@ export function createAdvance(engine: Engine): Advance {
       });
 
       for (const node of decision.start) await engine.startNode(snapshot, w, node, fx);
-      // 开了组节点（ADR 0026）：它刚开出的子节点这一轮就能排上
+      // 开了组节点：它刚开出的子节点这一轮就能排上
       if (decision.start.some(isGroup)) return engine.schedule(snapshot, w, fx);
-      // 规划员还在答复一条调整（ADR 0030 §3.7）：可能要加成果，先不算做完；答复到了会再排一次
+      // 规划员还在答复一条调整：可能要加成果，先不算做完；答复到了会再排一次
       const adjusting = snapshot.activeRuns.some((r) => isOpen(r) && r.purpose === 'adjust');
       if (decision.task?.status === 'succeeded' && adjusting) return;
       if (decision.task?.status === 'succeeded' && snapshot.task.sheet) {
@@ -186,7 +186,7 @@ export function createAdvance(engine: Engine): Advance {
       for (const node of [...snapshot.nodes]) {
         const parent = node.parentId ? byId.get(node.parentId) : undefined;
 
-        // 已经挑好一版的节点下面没做成的那几版不再做（ADR 0026）
+        // 已经挑好一版的节点下面没做成的那几版不再做
         if (node.status === 'failed' && parent?.status !== 'succeeded') {
           await w.setNode(node.id, { status: 'waiting', attempts: 0, reworks: 0, warning: null });
         }

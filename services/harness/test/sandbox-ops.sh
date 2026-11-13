@@ -1,4 +1,4 @@
-# 沙箱镜像里的本地操作和工具步骤执行器验收（ADR 0025），离线跑：pnpm sandbox:check:ops
+# 沙箱镜像里的本地操作和工具步骤执行器验收，离线跑：pnpm sandbox:check:ops
 # 用 ffmpeg 现做几段测试素材（大小、帧率不同，有的没声音），把 6 个操作都跑一遍，再用执行器跑一个只有本地操作的工具节点。
 set -eu
 work="$(mktemp -d)"

@@ -29,7 +29,7 @@ describe('出口关卡', () => {
     expect(rework.runId).not.toBe(first.runId);
     expect(rework.continueFrom).toBe(first.runId);
     expect(rework.prompt).toContain('- 缺少文件 out/*.md');
-    // 修复是单轮的，跑完回到关卡（ADR 0017）
+    // 修复是单轮的，跑完回到关卡
     expect(rework.goal).toBeFalsy();
     expect(await statusOf(task.id)).toMatchObject({ A: 'running', B: 'waiting' });
 

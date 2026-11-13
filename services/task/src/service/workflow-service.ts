@@ -1,4 +1,4 @@
-// 工作流控制面（ADR 0004、0005）的对外接口：任务单 → 规划（planning-service）或直接提交方案 → 调度可以跑的节点 →
+// 工作流控制面的对外接口：任务单 → 规划（planning-service）或直接提交方案 → 调度可以跑的节点 →
 // 收到运行结束就推进（讨论的下一轮、汇总、过关卡、原会话修复、最终验收）→ 实际失败或证据不足时明确交给用户处理。
 // 用户可以随时停止 / 继续整个任务或一样成果、给它发话（单个节点的接口在 workflow-nodes.ts）；节点和连线不能编辑。
 // 节点真正的执行在 harness；推进的规则在 engine/，各种节点怎么跑在 kinds/。
@@ -90,12 +90,12 @@ export function createWorkflowService(deps: EngineDeps) {
     onRunFinished: (result: Parameters<typeof engine.onRunFinished>[0]) =>
       engine.onRunFinished(result),
 
-    /** 做成果的 AI 提出了跨成果的调整（ADR 0030 §3.7）：交给规划员答一次 */
+    /** 做成果的 AI 提出了跨成果的调整：交给规划员答一次 */
     onAdjustmentRequested: (data: AdjustmentRequestedData) => planning.adjust(data),
 
     /**
      * 一次属于任务的调用（模型、工具、沙箱和检查浏览器的算力）结算了：累加到任务和节点上，
-     * 同一次调用只算一次。只记已经花了多少：没有预算、上限和提醒（ADR 0030 §3.6）。
+     * 同一次调用只算一次。只记已经花了多少：没有预算、上限和提醒。
      */
     async onCallSettled(
       data: Pick<CallSettledData, 'callId' | 'taskId' | 'nodeId' | 'chargedMicro'>,
@@ -178,11 +178,11 @@ export function createWorkflowService(deps: EngineDeps) {
         id: task.id,
         title: task.title,
         status: task.status,
-        // 只数工作流图里的节点：展开出来的条目、各版算在父节点里（ADR 0026）
+        // 只数工作流图里的节点：展开出来的条目、各版算在父节点里
         nodesDone: nodes.filter((n) => isRoot(n) && n.status === 'succeeded').length,
         nodesTotal: nodes.filter(isRoot).length,
         spentMicro: task.spentMicro,
-        // 从发出修改到新版交付（或不改了）都算修改中（ADR 0022）
+        // 从发出修改到新版交付（或不改了）都算修改中
         revising: isRevising(task),
         createdAt: task.createdAt.toISOString(),
       }));
@@ -212,7 +212,7 @@ export function createWorkflowService(deps: EngineDeps) {
     },
 
     /**
-     * 修改成果（ADR 0022、0030 §3.8）：在原任务里改；附件并进任务素材。意见指得到由 AI 做的成果时，直接交给
+     * 修改成果：在原任务里改；附件并进任务素材。意见指得到由 AI 做的成果时，直接交给
      * 做它的 AI 接着原会话改、马上开跑；跨几样成果或定不下来时交给规划员看上一版决定怎么改，排好后等用户确认。
      * 新版交付后 canvas 原地更新成果，链接不变。
      */
@@ -270,13 +270,13 @@ export function createWorkflowService(deps: EngineDeps) {
         logger.info({ taskId, direct: Boolean(direct) }, '收到修改意见');
         // 指得到做成果的 AI：直接按意见改
         if (direct) return engine.applyRevision(snapshot, w, fx);
-        // 否则交给规划员看上一版决定怎么改，排好后先给用户确认（ADR 0022）
+        // 否则交给规划员看上一版决定怎么改，排好后先给用户确认
         await planning.begin(snapshot, w, fx);
       });
       return toTaskBody(await owned(body.ownerId, taskId));
     },
 
-    /** 冻结的某一版工作流（ADR 0022） */
+    /** 冻结的某一版工作流 */
     async version(ownerId: string, taskId: string, version: number): Promise<WorkflowVersionBody> {
       await owned(ownerId, taskId);
       const row = await store.getVersion(taskId, version);
@@ -314,21 +314,21 @@ export function createWorkflowService(deps: EngineDeps) {
     async cancel(ownerId: string, taskId: string): Promise<TaskBody> {
       await owned(ownerId, taskId);
       await engine.transact(taskId, async (snapshot, w, fx) => {
-        // 修改还在规划或等确认：取消的是这次修改，不是整个任务（ADR 0022）
+        // 修改还在规划或等确认：取消的是这次修改，不是整个任务
         if (snapshot.task.revision) await engine.cancelRevision(snapshot, w, fx);
         else if (!FINAL.includes(snapshot.task.status)) await engine.cancelAll(snapshot, w, fx);
       });
       return toTaskBody(await owned(ownerId, taskId));
     },
 
-    /** 「需要处理」时的三选一（ADR 0004 §8） */
+    /** 「需要处理」时的三选一 */
     decide: (ownerId: string, taskId: string, { choice }: DecisionBody) =>
       change(ownerId, taskId, async (snapshot, w, fx) => {
         const { task } = snapshot;
         if (task.status !== 'needs_attention' || !task.attention) {
           throw new HttpError(409, 'nothing_to_decide', '这个任务现在不需要你处理');
         }
-        // 修改方案等确认、或修改没排出方案时：「不改了」只取消这次修改；「确认修改」按方案开跑（ADR 0022）
+        // 修改方案等确认、或修改没排出方案时：「不改了」只取消这次修改；「确认修改」按方案开跑
         if (task.revision && choice === 'cancel') return engine.cancelRevision(snapshot, w, fx);
         if (choice === 'cancel') return engine.cancelAll(snapshot, w, fx);
         const { reason, nodeId } = task.attention;
@@ -383,7 +383,7 @@ export function createWorkflowService(deps: EngineDeps) {
           .runGate(node.taskId, node.id, node.currentRunId)
           .catch((err: unknown) => logger.warn({ err, nodeId: node.id }, '关卡重试失败，下次再试'));
       }
-      // 展开节点读清单中途断了（ADR 0026）：再读一次
+      // 展开节点读清单中途断了：再读一次
       for (const node of await store.listExpanding(before)) {
         await engine
           .expand({ taskId: node.taskId, nodeId: node.id })

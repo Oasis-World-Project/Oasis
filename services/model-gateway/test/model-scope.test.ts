@@ -1,4 +1,4 @@
-// 模型范围（ADR 0027）：「只用国内模型」按用户存；替他列模型时只留国内厂商的，关着或不替谁列时不过滤。
+// 模型范围：「只用国内模型」按用户存；替他列模型时只留国内厂商的，关着或不替谁列时不过滤。
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import Fastify from 'fastify';
 import { pino } from 'pino';

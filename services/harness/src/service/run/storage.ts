@@ -1,4 +1,4 @@
-// 沙箱和对象存储之间搬文件：运行结束把 out/ 打包存进对象存储（检查交给 inspector，ADR 0024），
+// 沙箱和对象存储之间搬文件：运行结束把 out/ 打包存进对象存储（检查交给 inspector），
 // 开跑时把上游运行的产出、用户给的素材放进沙箱。会话和工作目录在持久卷里，不经对象存储。
 import { PassThrough, Readable } from 'node:stream';
 import { UploadLookupResult } from '@oasis/contracts/canvas';

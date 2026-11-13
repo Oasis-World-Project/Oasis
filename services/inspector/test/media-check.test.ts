@@ -1,4 +1,4 @@
-// 音视频解码检查（ADR 0024）：开什么样的检查容器、放进去哪些文件、报告怎么对回请求、出错和停止时收拾干净。
+// 音视频解码检查：开什么样的检查容器、放进去哪些文件、报告怎么对回请求、出错和停止时收拾干净。
 // Docker 用假的：真容器里的解码由 pnpm media:smoke、video:smoke 和全链路回归覆盖。
 import { PassThrough, Readable } from 'node:stream';
 import { extractFiles, HttpError, packFiles, type DockerApi } from '@oasis/service-kit';

@@ -19,7 +19,7 @@ export interface RunDeps {
   executor: Executor;
   store: ObjectStore;
   modelGateway: ServiceClient;
-  /** 取用户上传的素材（ADR 0007 §4） */
+  /** 取用户上传的素材 */
   canvas: ServiceClient;
   /** 一次运行的素材加起来最多多大 */
   materialsMaxBytes?: number;
@@ -184,7 +184,7 @@ export interface RunContext {
     inputs: { path: string; content: Buffer }[],
     materials: Material[],
     run: LiveRun,
-    /** steps：工具运行（ADR 0025）要执行的步骤，不起 AI */
+    /** steps：工具运行要执行的步骤，不起 AI */
     mode: { goal: boolean; reasoningEffort?: 'max'; steps?: StartRunBody['steps'] },
     catalog: Catalog,
     recovering?: boolean,

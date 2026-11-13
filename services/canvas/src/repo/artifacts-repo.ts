@@ -25,12 +25,12 @@ export interface ArtifactsRepo {
   syncDirs(ownerId: string, exceptTaskId: string): Promise<string[]>;
   /** 删掉这些成果行（对象已经删掉） */
   removeRows(artifactIds: string[]): Promise<void>;
-  /** 批注整份替换、批准记号（ADR 0012 §9） */
+  /** 批注整份替换、批准记号 */
   setReview(
     id: string,
     patch: Partial<Pick<Artifact, 'annotations' | 'approvedAt'>>,
   ): Promise<Artifact | undefined>;
-  /** 同一任务修改后再次交付（ADR 0012）：内容换成新版，批注和批准清掉，登记时间更新；id、同步路径不变 */
+  /** 同一任务修改后再次交付：内容换成新版，批注和批准清掉，登记时间更新；id、同步路径不变 */
   replaceContent(
     id: string,
     patch: Pick<Artifact, 'size' | 'sha256' | 'contentType' | 'models' | 'replacesSha256'>,

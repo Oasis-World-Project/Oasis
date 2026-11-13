@@ -2,7 +2,7 @@
   "name": "@oasis/task",
   "version": "0.0.0",
   "private": true,
-  "description": "工作流控制面：任务的节点图、状态机、调度、重做、追问路由（ADR 0004）",
+  "description": "工作流控制面：任务的节点图、状态机、调度、重做、追问路由",
   "type": "module",
   "files": [
     "dist",

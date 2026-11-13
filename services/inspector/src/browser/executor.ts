@@ -1,4 +1,4 @@
-// 检查浏览器容器（ADR 0024）：每次检查开一个，应用和 Chromium 同容器、无外部网络，控制端经 stdin/stdout
+// 检查浏览器容器：每次检查开一个，应用和 Chromium 同容器、无外部网络，控制端经 stdin/stdout
 // 说一行一个 JSON 的协议。容器只认第一个接上的连接（StdinOnce）：inspector 断开时控制端退出、
 // 容器被 Docker 自动删除，inspector 意外退出也不留孤儿。
 import { PassThrough } from 'node:stream';
@@ -16,7 +16,7 @@ export interface BrowserBox {
   /** 浏览器进程还在（进程退出或容器被回收后为 false） */
   alive(): boolean;
   test(plan: BrowserTestPlan): Promise<BrowserTestResult>;
-  /** 画面检查：等页面画出来，返回是否一直是一整片纯色（ADR 0021） */
+  /** 画面检查：等页面画出来，返回是否一直是一整片纯色 */
   look(): Promise<{ blank: boolean; color?: string }>;
   ready(): Promise<void>;
   destroy(): Promise<void>;

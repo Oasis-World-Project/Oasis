@@ -14,7 +14,7 @@ import {
 } from './support/tool-fakes.ts';
 import { tools, falCalls, geometryImage, useTools, call, errorOf } from './support/tool-fixture.ts';
 
-describe('提出调整（ADR 0030 §3.7）', () => {
+describe('提出调整', () => {
   const caller = {
     payerId: PAYER,
     taskId: TASK,

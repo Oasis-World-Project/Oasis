@@ -1,4 +1,4 @@
-// 修改成果（ADR 0012；2026-11-05 起直接交给 AI 团队）：用户在画布上写的修改意见、批注和参数整理成一段文字，
+// 修改成果（2026-11-05 起直接交给 AI 团队）：用户在画布上写的修改意见、批注和参数整理成一段文字，
 // 附件在 canvas 核对后并进任务素材，交给原任务接着改。不经过私聊：做出这一版的私聊删了也照样能改，
 // 私聊里的 AI 只在用户问起时查进度。
 import { UploadLookupResult } from '@oasis/contracts/canvas';
@@ -12,7 +12,7 @@ import { HttpError, type ServiceClient } from '@oasis/service-kit';
 import type { z } from 'zod';
 import type { WorkflowService } from './workflow-service.ts';
 
-/** 修改意见的完整文字：用户写的话，加上每条批注一行（ADR 0012 §9）、每项参数一行 */
+/** 修改意见的完整文字：用户写的话，加上每条批注一行、每项参数一行 */
 export function revisionText(
   request: string,
   annotations: RevisionNote[],

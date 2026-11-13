@@ -1,4 +1,4 @@
-// 一次工具调用的计量（ADR 0006）：校验参数 → 冻结额度 → 调供应商 → 按实际花费（或估算）结算。
+// 一次工具调用的计量：校验参数 → 冻结额度 → 调供应商 → 按实际花费（或估算）结算。
 // 长任务提交时冻结并持久化意图，之后由 tool-jobs 推进；生图、看图在供应商限流或地区不可用时换下一个模型。
 import { createHash, randomUUID } from 'node:crypto';
 import type { ToolResult } from '@oasis/contracts/model-gateway';
@@ -156,7 +156,7 @@ export function createToolCall(ctx: ToolContext) {
         models = able;
       }
       const model = tool.modelOf(args, models);
-      // 配了模型却一个也不给用，或点名的模型不在给用的里面：这个用户开着「只用国内模型」（ADR 0027）
+      // 配了模型却一个也不给用，或点名的模型不在给用的里面：这个用户开着「只用国内模型」
       if (tool.models(config).length > 0 && !models.includes(model)) {
         throw new HttpError(
           409,

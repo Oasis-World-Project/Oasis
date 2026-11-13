@@ -1,4 +1,4 @@
-// 规划员（ADR 0005 §4、0030）的纯函数部分：给规划员的说明、规划门（检查它写的 out/plan.json）。
+// 规划员的纯函数部分：给规划员的说明、规划门（检查它写的 out/plan.json）。
 // 规划员只定有几样成果、每样怎么做、用什么型号、谁用谁交出的文件；不排步骤、不估价。
 // 方案通过后变成引擎里的节点和连线：一个 AI 做的成果是一个干活节点，生产线是它的工具节点和展开节点。
 import type { CatalogEntry, Playbook } from '@oasis/contracts/agent';
@@ -100,7 +100,7 @@ export function resourceSections(input: PlannerResources): string[] {
               `调用记录里干一次活约 ${usd(m.node.costMicro)}${m.node.seconds ? `、${Math.max(1, Math.round(m.node.seconds / 60))} 分钟` : ''}`,
             ]
           : []),
-        // 实测（ADR 0030 §3.5）：只写量出来的数，哪个型号更擅长哪类活没有数据，不写
+        // 实测：只写量出来的数，哪个型号更擅长哪类活没有数据，不写
         ...(m.measured
           ? [
               `最近 ${m.measured.calls} 次调用实测每秒输出约 ${m.measured.tokensPerSecond} 个 token、每百万 token 约 ${usd(m.measured.microPerMTok)}（含缓存折扣）${
@@ -168,7 +168,7 @@ export function exampleOutcome(
 
 /**
  * 给规划员的说明：只讲清任务、资源和方案格式，怎么排由规划员自己判断（用户 2026-11-07：规则只留最重要的）。
- * 不带倾向（ADR 0028，用户 2026-11-10）：不说成果越少越好或越多越好，也不替它定用哪一档模型。
+ * 不带倾向（用户 2026-11-10）：不说成果越少越好或越多越好，也不替它定用哪一档模型。
  */
 export function plannerPrompt(
   input: PlannerResources & { brief: string; sheet: TaskSheet },
@@ -289,13 +289,13 @@ export function checkPlan(
     ...outcomeProblems(parsed.data),
     ...workflowProblems(workflow, sheet, catalog, tools, environment),
   ];
-  // 工具节点直接用的上游文件成为上游必须交出的文件（ADR 0025）
+  // 工具节点直接用的上游文件成为上游必须交出的文件
   return problems.length > 0 ? { problems } : { plan: withInputExpects(workflow) };
 }
 
 /**
  * 节点和连线的问题：结构（重名、环、连线）、模型和工具能不能用、交付物有没有人交。
- * fixed 里的节点照搬上一版（修改时沿用的，ADR 0022），不再查模型和工具。
+ * fixed 里的节点照搬上一版（修改时沿用的），不再查模型和工具。
  */
 export function workflowProblems(
   plan: PlannerPlan,

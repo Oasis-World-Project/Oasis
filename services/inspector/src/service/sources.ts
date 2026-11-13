@@ -1,4 +1,4 @@
-// 下载要检查的东西（ADR 0024）：只认配置里放行的对象存储地址——运行产出、用户素材由所属服务
+// 下载要检查的东西：只认配置里放行的对象存储地址——运行产出、用户素材由所属服务
 // （harness、canvas）签发临时链接，inspector 不调这些服务，也不能被当成任意网址的代理。
 import { Readable } from 'node:stream';
 import { HttpError } from '@oasis/service-kit';

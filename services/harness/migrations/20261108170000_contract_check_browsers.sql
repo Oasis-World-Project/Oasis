@@ -1,5 +1,5 @@
 -- phase: contract
--- 网页的浏览器检查搬进 inspector（ADR 0024）：检查浏览器用完即删、算力由调用方结算，不再记在 harness。
+-- 网页的浏览器检查搬进 inspector：检查浏览器用完即删、算力由调用方结算，不再记在 harness。
 -- migrate:up
 drop table check_browsers;
 

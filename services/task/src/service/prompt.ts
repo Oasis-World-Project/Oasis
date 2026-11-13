@@ -1,4 +1,4 @@
-// 拼交给节点的说明（ADR 0004 §6）：任务 → 角色和目标 → 上游交来的东西 → 用户追加的要求 → 少量必要的说明。
+// 拼交给节点的说明：任务 → 角色和目标 → 上游交来的东西 → 用户追加的要求 → 少量必要的说明。
 // 只讲事实和交付要求，怎么做由节点里的模型自己判断（用户 2026-11-07：规则只留最重要的）。
 // 这里是各种节点共用的部分；某种节点自己的说明（干活、讨论发言、汇总）在 kinds/ 里它的插件中。
 import type { RunOutputFile } from '@oasis/contracts/harness';
@@ -23,11 +23,11 @@ export interface NodeContext {
   /** 用户给的素材在沙箱里的路径（materials/…） */
   materials: string[];
   deliver?: string[];
-  /** 修改时重新做：上一版这个节点交出的文件在 in/_previous/（ADR 0022） */
+  /** 修改时重新做：上一版这个节点交出的文件在 in/_previous/ */
   previous?: boolean;
 }
 
-/** 修改时「重新做」的节点：上一版它交出的文件放在 in/ 下的这个目录（ADR 0022） */
+/** 修改时「重新做」的节点：上一版它交出的文件放在 in/ 下的这个目录 */
 export const PREVIOUS_DIR = '_previous';
 
 export const NO_QUESTIONS = '- 没有人会回答问题，拿不准的自己决定。';
@@ -78,7 +78,7 @@ export function resumePrompt(newNotes: string[], interrupted = false): string {
 }
 
 /**
- * 用户看过成果后的修改（ADR 0012，2026-11-05 改为在原任务里接着原会话改）：
+ * 用户看过成果后的修改（2026-11-05 改为在原任务里接着原会话改）：
  * 做这样成果的 AI 和用到它的下游都接着自己上次的会话，只改修改意见涉及的地方。
  * request 是修改意见；规划员排过方案时后面带着它给这一步的安排（见 engine/revisions.ts）。
  */

@@ -1,4 +1,4 @@
-// oasis-tool：沙箱里的 AI 调用 Oasis 工具的命令（ADR 0006）。装在沙箱镜像里，只依赖 Node 自带的能力。
+// oasis-tool：沙箱里的 AI 调用 Oasis 工具的命令。装在沙箱镜像里，只依赖 Node 自带的能力。
 // 经入口代理连 model-gateway，带本次运行的临时 Key；生成的文件（图片、音频……）写到指定位置。
 //
 //   oasis-tool list                                   看有哪些工具、怎么用
@@ -423,7 +423,7 @@ export async function main(argv: string[]): Promise<void> {
     if (!id) throw new Error('wait 后面要写任务号');
     return wait(id, parseArgs(more).out);
   }
-  // 沙箱里的本地操作（ADR 0025）：工具目录里叫 op.*，由 oasis-op 做
+  // 沙箱里的本地操作：工具目录里叫 op.*，由 oasis-op 做
   if (command.startsWith('op.')) {
     const child = spawn('oasis-op', [command.slice(3), ...rest], { stdio: 'inherit' });
     process.exitCode = await new Promise<number>((done) => {

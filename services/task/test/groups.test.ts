@@ -1,4 +1,4 @@
-// 子节点（ADR 0026）的纯函数部分：模板、清单、挑选结果、规划门。
+// 子节点的纯函数部分：模板、清单、挑选结果、规划门。
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { describe, expect, it } from 'vitest';
 import { fillTemplate, listItems } from '../src/service/groups.ts';

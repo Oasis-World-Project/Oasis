@@ -59,7 +59,7 @@ export interface RunsRepo {
   appendEvents(runId: string, events: Pick<RunEvent, 'seq' | 'kind' | 'data'>[]): Promise<void>;
   listEvents(runId: string, afterSeq: number, limit: number): Promise<RunEvent[]>;
   nextSequence(runId: string): Promise<number>;
-  /** 属于这个任务的全部运行（任务被删除时清理，ADR 0012） */
+  /** 属于这个任务的全部运行（任务被删除时清理） */
   listByTask(taskId: string): Promise<Run[]>;
   listBySession(sessionId: string): Promise<Run[]>;
   /** 删掉这些运行（运行事件级联删除） */

@@ -169,10 +169,10 @@ describe('工具目录', () => {
       'video.generate',
       'jev.decide',
       'model.ask',
-      // 提出调整（ADR 0030 §3.7）：平台自己答复，不靠供应商，一直可用
+      // 提出调整：平台自己答复，不靠供应商，一直可用
       'workflow.adjust',
       'text.batch',
-      // 沙箱里的本地操作（ADR 0025）：不调供应商，一直可用
+      // 沙箱里的本地操作：不调供应商，一直可用
       'op.video.concat',
       'op.video.trim',
       'op.video.frames',

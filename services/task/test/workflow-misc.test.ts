@@ -23,7 +23,7 @@ import {
   errorOf,
 } from './support/workflow.ts';
 
-describe('只用国内模型（ADR 0027）', () => {
+describe('只用国内模型', () => {
   const plannerPrompt = async (ownerId: string) => {
     await createPlanned({
       ownerId,
@@ -106,7 +106,7 @@ describe('模型在当前网络用不了', () => {
   });
 });
 
-describe('用户给的素材（ADR 0007 §4）', () => {
+describe('用户给的素材', () => {
   it('每次运行都带上素材，同名的加序号；节点说明里列出素材路径', async () => {
     const task = await service.create({
       ownerId: OWNER,
@@ -130,7 +130,7 @@ describe('用户给的素材（ADR 0007 §4）', () => {
   });
 });
 
-describe('节点详情（ADR 0007 §6）', () => {
+describe('节点详情', () => {
   it('列出节点的每次运行；能看指定那次的运行过程，别的节点的运行看不到', async () => {
     const task = await create(['A', 'B'], [['A', 'B']]);
     const first = runOf('A', task);

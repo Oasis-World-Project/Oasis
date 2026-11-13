@@ -1,4 +1,4 @@
-// 子节点（ADR 0026）：展开节点按清单开子节点、工具子节点另算并发池、做几版挑一版、改用另一版。
+// 子节点：展开节点按清单开子节点、工具子节点另算并发池、做几版挑一版、改用另一版。
 import type { TaskBody } from '@oasis/contracts/task';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {

@@ -1,4 +1,4 @@
-// 模型范围（ADR 0027）：「只用国内模型」开关按用户存在 model-gateway，由它过滤给 AI 团队的模型和
+// 模型范围：「只用国内模型」开关按用户存在 model-gateway，由它过滤给 AI 团队的模型和
 // 工具型号；这里只替网页读写这个开关（gateway 不转发 model-gateway）。
 import { ModelScope } from '@oasis/contracts/model-gateway';
 import type { ServiceClient } from '@oasis/service-kit';

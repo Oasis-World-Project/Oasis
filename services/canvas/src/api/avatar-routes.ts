@@ -1,4 +1,4 @@
-// 数字人成果的实时对话（ADR 0013）：canvas 核对成果是自己的、确实是数字人，再让 model-gateway 开会话。
+// 数字人成果的实时对话：canvas 核对成果是自己的、确实是数字人，再让 model-gateway 开会话。
 // 结束、查看会话直接转给 model-gateway，由它按付费人核对是不是自己的会话。
 import { AvatarSessionStarted, AvatarSessionView, AvatarStopBody } from '@oasis/contracts/avatar';
 import { OASIS_HEADERS } from '@oasis/contracts/common';

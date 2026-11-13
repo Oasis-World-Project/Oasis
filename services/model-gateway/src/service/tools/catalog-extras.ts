@@ -1,5 +1,5 @@
 // 工具目录里不由网关调用的两类条目：text.batch（沙箱里的 oasis-tool 逐行调模型）和沙箱里的本地操作
-// op.*（ADR 0025：oasis-op 用 ffmpeg 做，不调供应商、不花工具钱，只占沙箱算力）。
+// op.*（oasis-op 用 ffmpeg 做，不调供应商、不花工具钱，只占沙箱算力）。
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { OPS } from '@oasis/contracts/ops';
 import { MODEL_ARG } from './kit.ts';

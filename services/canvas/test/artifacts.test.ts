@@ -1,4 +1,4 @@
-// 成果登记进画布（ADR 0007 §8–10）：任务完成时复制交付文件、幂等、同步路径；列表、读取（分段）。
+// 成果登记进画布：任务完成时复制交付文件、幂等、同步路径；列表、读取（分段）。
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import { unzipSync, strFromU8 } from 'fflate';
 import type { TaskStatusChangedData } from '@oasis/contracts/events';
@@ -102,7 +102,7 @@ const task = Fastify();
 let finalFiles: { deliverable: string; nodeId: string; path: string; size: number }[] | undefined;
 /** 任务最近一次交付的时间（修改后再次交付时比成果登记得晚） */
 const finishedAt = new Map<string, string>();
-/** 任务的工作流版本（修改确认过几次，ADR 0022） */
+/** 任务的工作流版本（修改确认过几次） */
 const versions = new Map<string, number>();
 task.get('/internal/tasks/:id', async (request) => {
   const { id } = request.params as { id: string };
@@ -280,7 +280,7 @@ describe('任务完成时登记成果', () => {
     const manifest = repo.rows.find((row) => row.path === 'site/oasis-app.json')!;
     expect(manifest.category).toBe('app');
     expect(manifest.appSpec?.entry).toBe('index.html');
-    // 画面转发式的平台容器预览已删除（ADR 0021）
+    // 画面转发式的平台容器预览已删除
     expect((await get(`/v1/artifacts/${manifest.id}/preview/quote`)).statusCode).toBe(404);
     manifest.appSpec = null;
     await service.onTaskStatus(event(T1));
@@ -449,7 +449,7 @@ describe('类别和同步路径的规则', () => {
   });
 });
 
-describe('修改成果：原地换新版、删除（ADR 0022）', () => {
+describe('修改成果：原地换新版、删除', () => {
   it('同一任务修改后再次交付：内容变了的原地换成新版（链接、同步路径不变，批注和截图清掉）；没变的不动；重投幂等', async () => {
     await service.onTaskStatus(event(T1));
     const copy = repo.rows.find((r) => r.taskId === T1 && r.path === '首页文案.md')!;
@@ -506,7 +506,7 @@ describe('修改成果：原地换新版、删除（ADR 0022）', () => {
     expect(same.replacesSha256).toBeNull();
   });
 
-  it('修改后的新版不再交付的旧成果从画布删掉（ADR 0022 §5）；新版什么也没交出时保留', async () => {
+  it('修改后的新版不再交付的旧成果从画布删掉；新版什么也没交出时保留', async () => {
     await service.onTaskStatus(event(T1));
     expect(
       repo.rows
@@ -542,7 +542,7 @@ describe('修改成果：原地换新版、删除（ADR 0022）', () => {
   });
 });
 
-describe('批注与批准（ADR 0012 §9）', () => {
+describe('批注与批准', () => {
   const send = (
     method: 'PUT' | 'POST' | 'DELETE',
     url: string,

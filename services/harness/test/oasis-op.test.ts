@@ -1,4 +1,4 @@
-// 沙箱里的本地操作 oasis-op（ADR 0025）：参数解析和检查、ffprobe 结果的读法。真正调 ffmpeg 的验收在沙箱镜像里跑
+// 沙箱里的本地操作 oasis-op：参数解析和检查、ffprobe 结果的读法。真正调 ffmpeg 的验收在沙箱镜像里跑
 // （pnpm sandbox:check:ops），本机不一定装了 ffmpeg。
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

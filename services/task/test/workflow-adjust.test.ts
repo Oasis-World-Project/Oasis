@@ -1,4 +1,4 @@
-// 中途调整（ADR 0030 §3.7）：做成果的 AI 提一次，规划员答一次；同意的改动马上生效，答复写回给提出的 AI。
+// 中途调整：做成果的 AI 提一次，规划员答一次；同意的改动马上生效，答复写回给提出的 AI。
 import { describe, expect, it, vi } from 'vitest';
 import {
   OWNER,

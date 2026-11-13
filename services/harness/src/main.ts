@@ -1,5 +1,5 @@
 // harness：Agent 运行时。唯一接触 DeepSeek Harness 的服务（只在 src/adapter/ 里），
-// 每次运行起一个沙箱容器跑 dsh，模型调用经 model-gateway 计费（ADR 0003）。
+// 每次运行起一个沙箱容器跑 dsh，模型调用经 model-gateway 计费。
 import { fileURLToPath } from 'node:url';
 import { HARNESS_STREAM, TASK_STREAM, TaskDeleted } from '@oasis/contracts/events';
 import {
@@ -72,7 +72,7 @@ await startService({
         await runs?.stopAll();
       },
     };
-    // 任务被用户删除：删掉运行存档和记录（ADR 0012）
+    // 任务被用户删除：删掉运行存档和记录
     const taskDeleted = startEventConsumer({
       connection: eventBus.connection,
       stream: TASK_STREAM,

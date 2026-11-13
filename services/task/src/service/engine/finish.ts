@@ -60,7 +60,7 @@ export function createFinish(engine: Engine): Pick<Engine, 'onRunFinished'> {
     }
     // 讨论里其他人还在说：一起停掉
     await engine.endRuns(w, openRuns(snapshot, node.id), 'cancel', fx);
-    // 做几版里的一版没做成（ADR 0026）：不打扰用户，各版都结束后用做成的那几版挑
+    // 做几版里的一版没做成：不打扰用户，各版都结束后用做成的那几版挑
     if (node.config.version) {
       await w.setNode(node.id, {
         status: 'failed',
@@ -84,9 +84,9 @@ export function createFinish(engine: Engine): Pick<Engine, 'onRunFinished'> {
     async onRunFinished(result) {
       const found = await store.findRun(result.runId);
       if (!found) return engine.planning.onFinished(result); // 不是节点的运行：可能是规划员
-      // 规划员答复一条调整的运行（ADR 0030 §3.7）：记在提出的那样成果上，但不是它在干活
+      // 规划员答复一条调整的运行：记在提出的那样成果上，但不是它在干活
       if (found.purpose === 'adjust') return engine.planning.onAdjusted(found, result);
-      // 挑选运行（ADR 0026）：事务外先读它写的结果；读的时候连不上就等对账再来
+      // 挑选运行：事务外先读它写的结果；读的时候连不上就等对账再来
       const pickText =
         found.purpose === 'pick' && result.status === 'succeeded' && found.status !== 'succeeded'
           ? await readPick(result.runId)

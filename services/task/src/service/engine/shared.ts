@@ -1,4 +1,4 @@
-// 工作流引擎（ADR 0004、0005）分成几块：事务里的推进（advance）、运行结束（finish）、关卡与整体验收（checks）、
+// 工作流引擎分成几块：事务里的推进（advance）、运行结束（finish）、关卡与整体验收（checks）、
 // 事务和事务外的副作用（outside）、修改（revisions）。各块通过同一个 Engine 对象互相调用（在 index.ts 组装），
 // 这里只放它们共用的接口和常量，免得文件之间循环 import。引擎不认识具体的节点种类，种类相关的都交给 kinds/。
 import type { RunFinishedData } from '@oasis/contracts/events';
@@ -14,11 +14,11 @@ export interface EngineDeps {
   harness: ServiceClient;
   gate: Gate;
   maxParallel: number;
-  /** 工具子节点的并发池（ADR 0026）；不给时同 maxParallel */
+  /** 工具子节点的并发池；不给时同 maxParallel */
   maxToolChildren?: number;
   /** 规划员要查模型目录 */
   agent: ServiceClient;
-  /** 规划员要查这个用户能用的模型和工具（按他的模型范围，ADR 0027） */
+  /** 规划员要查这个用户能用的模型和工具（按他的模型范围） */
   modelGateway: ServiceClient;
   planning: PlanningConfig;
   logger: Logger;
@@ -78,15 +78,15 @@ export interface Engine {
   /** 停掉进行中的检查（节点被停止、任务被取消时结果作废） */
   abortChecks(intent: { taskId: string; nodeId?: string }): void;
 
-  // ---- 修改（revisions.ts，ADR 0022）
+  // ---- 修改（revisions.ts）
   applyRevision: Decision;
   cancelRevision: Decision;
 
-  // ---- 中途调整（adjust.ts，ADR 0030 §3.7）
+  // ---- 中途调整（adjust.ts）
   /** 把规划员同意的调整落到工作流上：停掉成果、补说明、加成果 */
   applyAdjust: PlanningEngine['applyAdjust'];
 
-  // ---- 子节点（groups.ts、expand.ts，ADR 0026）
+  // ---- 子节点（groups.ts、expand.ts）
   /** 组节点开跑：展开节点去读清单，做几版的节点开出各版；停下、失败过的子节点重新排队 */
   startGroup(snapshot: Snapshot, w: Writer, node: Node, fx: Effects): Promise<void>;
   /** 子节点都结束了：展开节点汇总，做几版的节点开挑选运行（每次调度前做） */
