@@ -28,6 +28,8 @@ export interface Sandbox {
   readonly stderr: Readable;
   /** 把沙箱里某个路径打成 tar 流取出；路径不存在时返回 undefined */
   readArchive(path: string): Promise<Readable | undefined>;
+  /** 在沙箱里跑一条命令（沙箱要在运行，没暂停）并等它结束；退出码不是 0 就报错 */
+  exec(cmd: string[]): Promise<void>;
   /** 销毁沙箱（运行中也立即结束）；可重复调用 */
   destroy(): Promise<void>;
 }
@@ -184,6 +186,17 @@ export function createDockerExecutor(deps: {
       });
       let destroyed: Promise<void> | undefined;
       const destroy = () => (destroyed ??= docker.removeContainer(id));
+      /** 跑一条命令并等它结束（输出丢掉）；退出码不是 0 就报错 */
+      const exec = async (cmd: string[]) => {
+        const started = await docker.exec(id, cmd);
+        started.stream.resume();
+        await new Promise<void>((resolve, reject) => {
+          started.stream.once('end', resolve);
+          started.stream.once('error', reject);
+        });
+        const code = (await docker.inspectExec(started.id)).ExitCode;
+        if (code !== 0) throw new Error(`沙箱里的命令没成功（退出码 ${code}）`);
+      };
       try {
         for (const file of spec.files) await docker.putArchive(id, file.dir, file.tar);
         const connection = await docker.attach(id);
@@ -191,26 +204,21 @@ export function createDockerExecutor(deps: {
         const stderr = new PassThrough();
         demultiplex(connection, stdout, stderr);
         await docker.startContainer(id);
-        if (spec.restore && deps.sessionsDir) {
-          const cleanup = await docker.exec(id, [
+        if (spec.restore && deps.sessionsDir)
+          await exec([
             'node',
             '-e',
             `const fs=require('node:fs');function walk(p){for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=p+'/'+e.name;if(e.isDirectory())walk(f);else if(e.isFile()&&e.name.endsWith('.lock'))fs.unlinkSync(f)}}walk(process.argv[1])`,
             deps.sessionsDir,
-          ]);
-          cleanup.stream.resume();
-          await new Promise<void>((resolve, reject) => {
-            cleanup.stream.once('end', resolve);
-            cleanup.stream.once('error', reject);
+          ]).catch((cause: unknown) => {
+            throw new Error('恢复会话锁清理失败', { cause });
           });
-          if ((await docker.inspectExec(cleanup.id)).ExitCode !== 0)
-            throw new Error('恢复会话锁清理失败');
-        }
         return {
           id,
           stdin: connection,
           stdout,
           stderr,
+          exec,
           readArchive: (path) => docker.getArchive(id, path),
           pause: () => docker.pauseContainer(id),
           destroy,

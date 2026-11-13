@@ -316,7 +316,7 @@ export function createExecution(
           }));
         stopped();
 
-        const saved = await ctx.save(sandbox, id);
+        const saved = await ctx.save(sandbox, id, { companions: true });
         await agent?.shutdown().catch(() => undefined);
         Object.assign(outcome, {
           status: failure ? 'failed' : 'succeeded',

@@ -85,7 +85,7 @@ describe('有界文件预览转换', () => {
     ).rejects.toThrow();
     await expect(preview('empty.csv', Buffer.alloc(0))).rejects.toThrow();
   });
-  it('真实 DOCX XML 转正文；外部图片不读取，javascript 链接留给前端统一清洗', async () => {
+  it('真实 DOCX XML 转正文，图片限在页宽内；外部图片不读取，javascript 链接留给前端统一清洗', async () => {
     const bytes = zip({
       '[Content_Types].xml':
         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
@@ -95,7 +95,12 @@ describe('有界文件预览转换', () => {
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>中文报告 123</w:t></w:r></w:p></w:body></w:document>',
     });
     const result = await preview('报告.docx', bytes);
-    expect(result).toEqual({ kind: 'html', html: '<p>中文报告 123</p>' });
+    expect(result).toEqual({
+      kind: 'html',
+      html: expect.stringMatching(
+        /^<style>[^<]*img\{max-width:100%;height:auto\}[^<]*<\/style><p>中文报告 123<\/p>$/,
+      ),
+    });
   });
   it('ZIP 体积按实际解压计量，并拒绝 DTD、穿越路径及损坏 Office', async () => {
     const small = createPreviewService({ ...defaultPreviewLimits, unzipBytes: 100 });

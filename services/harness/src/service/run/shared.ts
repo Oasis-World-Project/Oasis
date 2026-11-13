@@ -193,8 +193,15 @@ export interface RunContext {
   finish(row: Run, outcome: Omit<RunOutcome, 'finishedAt'>): Promise<void>;
 
   // ---- 搬文件（storage.ts）
-  /** 取出产出（会话和工作目录在持久卷里，不用存） */
-  save(sandbox: Pick<Sandbox, 'readArchive'>, id: string): Promise<Saved>;
+  /**
+   * 取出产出（会话和工作目录在持久卷里，不用存）。companions：正常做完时先给 out/ 里的
+   * Word、PPT 配一份同名 PDF（画布按它预览，和下载的样子一致）；沙箱要在运行才能转。
+   */
+  save(
+    sandbox: Pick<Sandbox, 'readArchive'> & Partial<Pick<Sandbox, 'exec'>>,
+    id: string,
+    options?: { companions?: boolean },
+  ): Promise<Saved>;
   /** 上游运行的产出：解出来放到 in/<as>/ 下 */
   upstreamFiles(row: Run): Promise<{ dir: string; tar: Readable }[]>;
   /** 用户给的素材：向 canvas 取出来，放到 materials/ 下 */

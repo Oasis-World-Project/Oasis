@@ -1,6 +1,6 @@
 // 预览窗和画布共享格式预览；网页在隔离框里真正运行（可切回清洗后的无脚本内容）。
 import { Download, X } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { formatBytes } from '../ui/format.ts';
 import { baseName, previewKindOf } from './files.ts';
 import type { PreviewFile } from './files.ts';
@@ -19,15 +19,22 @@ const ModelPreview = lazy(() =>
 /** 文字类文件最多显示这么多，再多请下载 */
 const TEXT_LIMIT = 200_000;
 
-function PresentationPreview({ file }: { file: PreviewFile }) {
+/**
+ * 演示文稿和 Word 的配套 PDF（同名 .pdf，交付时系统配好）：有就按 PDF 显示，和下载下来的样子一致；
+ * 没有就显示 fallback（Word 退回正文预览）。
+ */
+function CompanionPdf({ file, fallback }: { file: PreviewFile; fallback: ReactNode }) {
   const taskPdf = /^\/api\/task\/v1\/tasks\/[^/]+\/files\/[^/]+\//.test(file.url)
-    ? file.url.replace(/\.pptx?(?=\?|$)/i, '.pdf')
+    ? file.url.replace(/\.(pptx?|docx?)(?=\?|$)/i, '.pdf')
     : undefined;
   const candidate = file.pdfUrl ?? taskPdf;
-  const [ready, setReady] = useState<string | null>(null);
+  const [found, setFound] = useState<{ url: string; ok: boolean } | null>(null);
   useEffect(() => {
     if (!candidate) return;
     const controller = new AbortController();
+    const settle = (ok: boolean) => {
+      if (!controller.signal.aborted) setFound({ url: candidate, ok });
+    };
     void fetch(candidate, {
       credentials: 'same-origin',
       signal: controller.signal,
@@ -35,30 +42,24 @@ function PresentationPreview({ file }: { file: PreviewFile }) {
     })
       .then(async (response) => {
         const reader = response.body?.getReader();
-        if (!reader) return;
+        if (!reader) return settle(false);
         try {
           const chunk = await reader.read();
-          if (
+          settle(
             response.ok &&
-            chunk.value &&
-            new TextDecoder().decode(chunk.value.subarray(0, 5)) === '%PDF-' &&
-            !controller.signal.aborted
-          )
-            setReady(candidate);
+              !!chunk.value &&
+              new TextDecoder().decode(chunk.value.subarray(0, 5)) === '%PDF-',
+          );
         } finally {
           await reader.cancel();
         }
       })
-      .catch(() => {});
+      .catch(() => settle(false));
     return () => controller.abort();
   }, [candidate]);
-  if (ready && ready === candidate)
-    return <iframe title={baseName(file.path)} src={ready} className="size-full border-0" />;
-  return (
-    <p className="m-0 p-6 text-sm text-ink-muted">
-      未找到同一来源的配套 PDF，请下载演示文稿后查看。
-    </p>
-  );
+  if (!candidate || (found?.url === candidate && !found.ok)) return <>{fallback}</>;
+  if (found?.url !== candidate) return <p className="m-0 p-6 text-sm text-ink-muted">正在打开…</p>;
+  return <iframe title={baseName(file.path)} src={candidate} className="size-full border-0" />;
 }
 
 function TextPreview({ url, markdown }: { url: string; markdown: boolean }) {
@@ -150,12 +151,28 @@ export function PreviewBody({ file }: { file: PreviewFile }) {
       );
     case 'document':
       return (
-        <Suspense fallback={<p className="p-6 text-sm text-ink-muted">正在打开…</p>}>
-          <DocumentPreview key={file.url} url={file.url} name={name} />
-        </Suspense>
+        <CompanionPdf
+          key={file.url}
+          file={file}
+          fallback={
+            <Suspense fallback={<p className="p-6 text-sm text-ink-muted">正在打开…</p>}>
+              <DocumentPreview key={file.url} url={file.url} name={name} />
+            </Suspense>
+          }
+        />
       );
     case 'presentation':
-      return <PresentationPreview key={file.url} file={file} />;
+      return (
+        <CompanionPdf
+          key={file.url}
+          file={file}
+          fallback={
+            <p className="m-0 p-6 text-sm text-ink-muted">
+              未找到同一来源的配套 PDF，请下载演示文稿后查看。
+            </p>
+          }
+        />
+      );
     case 'text':
       return <TextPreview url={file.url} markdown={file.path.toLowerCase().endsWith('.md')} />;
     default:

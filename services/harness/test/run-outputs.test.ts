@@ -14,6 +14,7 @@ import {
   issued,
   revoked,
   compute,
+  lifecycle,
   PHOTO,
   BIG,
   service,
@@ -44,6 +45,11 @@ describe('一次 agent 运行：输入和产出', () => {
 
     expect(row.status).toBe('succeeded');
     expect(row.outputs).toMatchObject([{ path: 'result.md', size: Buffer.byteLength('# 成果') }]);
+    // 存产出前先给 Word、PPT 配同名 PDF（画布按 PDF 预览）
+    expect(lifecycle.slice(0, 2)).toEqual([
+      expect.stringMatching(/^exec sh -c [\s\S]*soffice --headless/),
+      'archive',
+    ]);
     expect(stored.has(`runs/${run.id}/outputs.tar`)).toBe(true);
     // 会话在持久工作目录里，对象存储只存产出
     expect([...stored.keys()]).toEqual([`runs/${run.id}/outputs.tar`]);

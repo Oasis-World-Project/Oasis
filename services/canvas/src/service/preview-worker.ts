@@ -111,6 +111,11 @@ function delimited(text: string, delimiter: string): string[][] {
   return rows;
 }
 
+const WORD_STYLE =
+  'body{max-width:820px;margin:24px auto;padding:0 24px;line-height:1.7}' +
+  'img{max-width:100%;height:auto}' +
+  'table{border-collapse:collapse;max-width:100%}td,th{border:1px solid #ccc;padding:4px 8px}';
+
 async function convert(): Promise<FilePreviewBody> {
   const bytes = Buffer.from(data.content);
   const ext = extname(data.name).toLowerCase();
@@ -119,7 +124,9 @@ async function convert(): Promise<FilePreviewBody> {
     const { default: mammoth } = await import('mammoth');
     const result = await mammoth.convertToHtml({ buffer: bytes }, { externalFileAccess: false });
     if (Buffer.byteLength(result.value) > 2 * 1024 * 1024) throw new Error('Word 正文超过预览上限');
-    return { kind: 'html', html: result.value };
+    // 没有配套 PDF 时的退路（如用户上传的 Word）：mammoth 只转正文，图片按原尺寸会撑出页面
+    // （2026-11-13 简报的图表比页面宽好几倍），限制在页宽内，正文按页面宽度排
+    return { kind: 'html', html: `<style>${WORD_STYLE}</style>${result.value}` };
   }
   if (ext === '.xlsx') {
     const { default: readXlsxFile } = await import('read-excel-file/node');

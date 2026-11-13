@@ -8,7 +8,8 @@ export type Surface = 'image' | 'pdf' | 'video' | 'audio' | 'text' | 'app';
 
 export function surfaceOf(kind: PreviewKind, hasPdf: boolean): Surface {
   if (kind === 'image' || kind === 'video' || kind === 'audio') return kind;
-  if (kind === 'pdf' || (kind === 'presentation' && hasPdf)) return 'pdf';
+  // 演示文稿和 Word 有配套 PDF 时，就在 PDF 的页面上圈画
+  if (kind === 'pdf' || ((kind === 'presentation' || kind === 'document') && hasPdf)) return 'pdf';
   return 'text';
 }
 

@@ -7,6 +7,20 @@ import { SANDBOX_PATHS } from '../../adapter/dsh.ts';
 import type { Sandbox } from '../../executor/executor.ts';
 import { isPrivateOutput, StopRun, type RunContext } from './shared.ts';
 
+/**
+ * 给成果里的 Word、PPT 各配一份同名 PDF（已经有同名 PDF 的不动），画布按 PDF 预览。
+ * 以前只有 PPT 靠 AI 自觉配，Word 转成网页预览，版式和图片大小都丢了（2026-11-13 简报）。
+ * 用沙箱里装好的 LibreOffice；单个文件最多转 2 分钟，转不了就算了，不挡产出。
+ * soffice 会读标准输入，不重定向的话会吃掉 find 列出的其余文件名（实测只转了一部分）。
+ */
+const companionPdfs = (dir: string) =>
+  `cd ${dir} 2>/dev/null || exit 0
+find . -type f \\( -iname '*.docx' -o -iname '*.pptx' \\) ! -path '*/.*' | while IFS= read -r f; do
+  [ -e "\${f%.*}.pdf" ] && continue
+  timeout 120 soffice --headless --norestore --convert-to pdf --outdir "$(dirname "$f")" "$f" </dev/null >/dev/null 2>&1 || true
+done
+exit 0`;
+
 export function createStorage(
   ctx: RunContext,
 ): Pick<RunContext, 'save' | 'upstreamFiles' | 'materialFiles'> {
@@ -47,7 +61,13 @@ export function createStorage(
   }
 
   return {
-    async save(sandbox, id) {
+    async save(sandbox, id, options = {}) {
+      if (options.companions)
+        await sandbox
+          .exec?.(['sh', '-c', companionPdfs(SANDBOX_PATHS.outputs)])
+          .catch((err: unknown) =>
+            deps.logger.warn({ runId: id, err }, '给 Word/PPT 配 PDF 没做完，照常存产出'),
+          );
       return { outputs: await archive(sandbox, SANDBOX_PATHS.outputs, `runs/${id}/outputs.tar`) };
     },
 

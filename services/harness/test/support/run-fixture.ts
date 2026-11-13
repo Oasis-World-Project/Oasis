@@ -192,6 +192,7 @@ export const executor: Executor = {
       stdin,
       stdout,
       stderr: new PassThrough(),
+      exec: async (cmd) => void lifecycle.push(`exec ${cmd.join(' ')}`),
       async readArchive(path) {
         lifecycle.push('archive');
         await sleep(fake.archiveDelayMs);
