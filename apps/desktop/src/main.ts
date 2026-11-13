@@ -36,6 +36,9 @@ function isExternal(url: string): boolean {
   }
 }
 
+/** Chromium 自带的 PDF 查看器（扩展编号是固定的）：框里打开 PDF 时会再转到这里显示。 */
+const PDF_VIEWER = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/';
+
 function openInBrowser(url: string): void {
   if (/^https?:\/\//.test(url)) void shell.openExternal(url);
 }
@@ -76,8 +79,11 @@ function createWindow(): BrowserWindow {
     if (disposition !== 'new-window') openInBrowser(url);
     return { action: 'deny' };
   });
+  // 页面里的框只许打开本应用自己的地址（成果文件、配套 PDF）和内置 PDF 查看器，框里的网页想跳去别处
+  // 一律拦下。以前框的跳转全拦，画布里的 PDF 因此一片空白，批注模式用 pdf.js 画才看得到（2026-11-14 查明）。
   win.webContents.on('will-frame-navigate', (event) => {
-    if (!event.isMainFrame) event.preventDefault();
+    if (event.isMainFrame || !isExternal(event.url) || event.url.startsWith(PDF_VIEWER)) return;
+    event.preventDefault();
   });
   win.webContents.on('will-navigate', (event, url) => {
     if (!isExternal(url)) return;
