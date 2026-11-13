@@ -51,7 +51,7 @@ openrouter.post('/chat/completions', async (request, reply) => {
     ': OPENROUTER PROCESSING\n\n',
     `data: ${JSON.stringify({ choices: [{ delta: { content: '你好' } }] })}\n\n`,
     `data: ${JSON.stringify({ choices: [{ delta: { content: '呀' } }] })}\n\n`,
-    `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 3, cost: 0.000042 } })}\n\n`,
+    `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 8, cache_write_tokens: 0 }, cost: 0.000042 } })}\n\n`,
     'data: [DONE]\n\n',
   ].join('');
 });

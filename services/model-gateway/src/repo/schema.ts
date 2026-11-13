@@ -27,6 +27,8 @@ export const calls = pgTable('calls', {
   holdId: uuid('hold_id'),
   promptTokens: integer('prompt_tokens'),
   completionTokens: integer('completion_tokens'),
+  cachedTokens: integer('cached_tokens'),
+  cacheWriteTokens: integer('cache_write_tokens'),
   upstreamCostMicro: bigint('upstream_cost_micro', { mode: 'number' }),
   chargedMicro: bigint('charged_micro', { mode: 'number' }),
   costSource: text('cost_source', { enum: ['provider', 'tokens', 'estimate'] }),

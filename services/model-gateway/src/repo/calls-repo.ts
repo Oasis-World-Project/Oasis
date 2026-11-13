@@ -17,6 +17,8 @@ export type CallOutcome = Pick<
   | 'status'
   | 'promptTokens'
   | 'completionTokens'
+  | 'cachedTokens'
+  | 'cacheWriteTokens'
   | 'upstreamCostMicro'
   | 'chargedMicro'
   | 'costSource'

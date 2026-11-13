@@ -234,9 +234,25 @@ describe('一次模型调用', () => {
       status: 'succeeded',
       promptTokens: 12,
       completionTokens: 3,
+      cachedTokens: 8,
+      cacheWriteTokens: 0,
       upstreamCostMicro: 42,
       costSource: 'provider',
     });
+    // 调用方没给会话编号时不编一个
+    expect(fake.upstreamBodies[0]).not.toHaveProperty('session_id');
+  });
+
+  it('调用方的会话编号原样交给 OpenRouter（session_id），同一会话才固定在吃得到缓存的那家', async () => {
+    const call = await chat.prepare({
+      caller: { payerId: PAYER, runId: RUN },
+      requestId: 'req-session',
+      body: request,
+      sessionId: 'sess-42',
+    });
+    const response = await chat.open(call, new AbortController().signal);
+    await chat.pump(call, response, () => {});
+    expect(fake.upstreamBodies[0]).toMatchObject({ session_id: 'sess-42' });
   });
 
   it('额度不够时返回 402，不会调用上游', async () => {

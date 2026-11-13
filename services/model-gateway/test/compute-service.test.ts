@@ -98,6 +98,8 @@ const repo: CallsRepo = {
       status: 'running',
       promptTokens: null,
       completionTokens: null,
+      cachedTokens: null,
+      cacheWriteTokens: null,
       upstreamCostMicro: null,
       chargedMicro: null,
       costSource: null,

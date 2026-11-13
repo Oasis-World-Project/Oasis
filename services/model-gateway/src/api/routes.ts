@@ -67,11 +67,27 @@ function abortOnClose(reply: FastifyReply): AbortSignal {
   return abort.signal;
 }
 
+/**
+ * 调用方的会话编号：dsh 按 OpenRouter 的约定放在 x-session-id 头里（OpenRouter 限 256 字）。
+ * 格式不对就当没带，不因为它拒绝调用。
+ */
+const SessionId = z
+  .string()
+  .regex(/^[\w.:-]{1,256}$/)
+  .optional()
+  .catch(undefined);
+
 /** OpenAI 兼容的 chat completions：流式时原样转发 SSE。内部和沙箱共用。 */
 function createCompletions(chat: ChatService) {
   return async function completions(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
     const body = parseWith(ChatCompletionRequest, request.body);
-    const prepared = await chat.prepare({ caller, requestId: request.id, body });
+    const sessionId = SessionId.parse(request.headers['x-session-id']);
+    const prepared = await chat.prepare({
+      caller,
+      requestId: request.id,
+      body,
+      ...(sessionId ? { sessionId } : {}),
+    });
     const upstream = await chat.open(prepared, abortOnClose(reply));
     if (!body.stream) return chat.finishJson(prepared, upstream);
 

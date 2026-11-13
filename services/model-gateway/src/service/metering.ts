@@ -289,6 +289,8 @@ export function createMeter(deps: {
           error: error ?? null,
           promptTokens: usage?.prompt_tokens ?? null,
           completionTokens: usage?.completion_tokens ?? null,
+          cachedTokens: usage?.prompt_tokens_details?.cached_tokens ?? null,
+          cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens ?? null,
           upstreamCostMicro: cost.costMicro,
           chargedMicro,
           costSource: cost.source,

@@ -14,6 +14,12 @@ export interface PreparedCall extends MeteredCall {
   extraChars: number;
   price: ModelPrice | undefined;
   reportCost: boolean;
+  /**
+   * 调用方的会话编号（dsh 每次都在 x-session-id 头里带上自己的会话 ID）。原样交给 OpenRouter 的
+   * session_id：同一会话的请求固定送到同一家供应商，才吃得到上一次的缓存；不传时 OpenRouter
+   * 要等发现命中之后才开始固定，中途换家缓存就丢了（2026-11-14 查到网关一直没往下传）。
+   */
+  sessionId?: string;
 }
 
 const decoder = () => new TextDecoder();
@@ -102,6 +108,7 @@ export function createChatService(deps: {
       caller: Caller;
       requestId: string;
       body: ChatCompletionRequest;
+      sessionId?: string;
     }): Promise<PreparedCall> {
       if (!provider.configured) {
         throw new HttpError(503, 'provider_not_configured', '模型服务还没有配置 API Key');
@@ -142,13 +149,21 @@ export function createChatService(deps: {
         extraChars,
         price,
         reportCost: reportCost === true || maxCostMicro !== undefined,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       };
     },
 
     /** 调上游。还没开始返回内容就失败时退回冻结，并抛出给调用方的错误。 */
     open(call: PreparedCall, signal: AbortSignal): Promise<Response> {
       return meter.callUpstream(call, () =>
-        provider.chatCompletions({ ...call.body, usage: { include: true } }, signal),
+        provider.chatCompletions(
+          {
+            ...call.body,
+            usage: { include: true },
+            ...(call.sessionId ? { session_id: call.sessionId } : {}),
+          },
+          signal,
+        ),
       );
     },
 

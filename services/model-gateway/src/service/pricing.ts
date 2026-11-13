@@ -85,6 +85,8 @@ export function estimateHoldMicro(
 export interface Usage {
   prompt_tokens?: number;
   completion_tokens?: number;
+  /** 输入里读缓存的、这次写进缓存的 token（OpenRouter 每次都带，供应商不支持时为 0） */
+  prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
   /** OpenRouter 返回的本次实际花费（美元） */
   cost?: number;
 }
