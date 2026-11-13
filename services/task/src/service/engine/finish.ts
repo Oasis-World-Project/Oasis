@@ -84,6 +84,8 @@ export function createFinish(engine: Engine): Pick<Engine, 'onRunFinished'> {
     async onRunFinished(result) {
       const found = await store.findRun(result.runId);
       if (!found) return engine.planning.onFinished(result); // 不是节点的运行：可能是规划员
+      // 规划员答复一条调整的运行（ADR 0030 §3.7）：记在提出的那样成果上，但不是它在干活
+      if (found.purpose === 'adjust') return engine.planning.onAdjusted(found, result);
       // 挑选运行（ADR 0026）：事务外先读它写的结果；读的时候连不上就等对账再来
       const pickText =
         found.purpose === 'pick' && result.status === 'succeeded' && found.status !== 'succeeded'

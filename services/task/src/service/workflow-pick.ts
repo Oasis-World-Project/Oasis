@@ -1,21 +1,17 @@
 // 「改用这一版」（ADR 0026）：做几版的节点挑好之后，用户可以换成另一版。
 // - 下游还没开始：直接换（在展开里的一条换了，展开节点重新汇总），接着往下跑。
 // - 下游已经做完（任务交付了）：排成一次修改——换版本、受影响的下游重新做（展开的下游指纹没变的条目沿用），
-//   带预估等用户确认（和修改意见走同一个确认流程，ADR 0022）。
+//   等用户确认（和修改意见走同一个确认流程，ADR 0022）。
 // - 下游正在跑：不能换，先等它跑完或停下。
 import type { TaskBody } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
 import type { RevisionPlanNode, RevisionState } from '../repo/schema.ts';
 import type { Snapshot } from '../repo/task-store.ts';
 import { ACTIVE, toTaskBody, type Engine } from './engine/index.ts';
-import { nodeOf } from './graph.ts';
 import { childrenOf, hasVariants, isRoot, rootOf } from './groups.ts';
 import { versionOf } from './pick.ts';
-import { estimatePlan } from './planner.ts';
 import { asPlanNode } from './revision-planner.ts';
-
-const NOT_STARTED = ['draft', 'waiting', 'blocked'];
-const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
+import { nodeOf } from './workflow-nodes.ts';
 
 export function createPickApi(api: {
   engine: Engine;
@@ -30,9 +26,7 @@ export function createPickApi(api: {
       nodeId: string,
       version: number,
     ): Promise<TaskBody> {
-      const { task: owner } = await owned(ownerId, taskId);
-      // 可能要排成修改、算预估：单价事务外先取
-      const pricing = await engine.planning.pricing(owner.payerId);
+      await owned(ownerId, taskId);
       await engine.transact(taskId, async (snapshot, w, fx) => {
         const { task } = snapshot;
         const node = nodeOf(snapshot, nodeId);
@@ -51,7 +45,7 @@ export function createPickApi(api: {
           .filter((id) => id !== root.id)
           .map((id) => nodeOf(snapshot, id));
         const reason = `你改用了第 ${version} 版`;
-        if (downstream.every((n) => NOT_STARTED.includes(n.status))) {
+        if (downstream.every((n) => n.status === 'waiting')) {
           await engine.useVersion(snapshot, w, node, version, reason);
           await engine.schedule(snapshot, w, fx);
           return;
@@ -62,7 +56,7 @@ export function createPickApi(api: {
         const roots = snapshot.nodes.filter(isRoot);
         if (roots.some((r) => !affected.has(r.id) && r.status !== 'succeeded'))
           throw new HttpError(409, 'task_unfinished', '任务还有没做完的节点，先运行完再换');
-        await w.setTask(proposal(snapshot, node.title, nodeId, version, affected, pricing));
+        await w.setTask(proposal(snapshot, node.title, nodeId, version, affected));
       });
       return toTaskBody(await owned(ownerId, taskId));
     },
@@ -75,19 +69,12 @@ export function createPickApi(api: {
     nodeId: string,
     version: number,
     affected: Set<string>,
-    pricing: Awaited<ReturnType<Engine['planning']['pricing']>>,
   ) {
     const { task } = snapshot;
     const roots = snapshot.nodes.filter(isRoot);
     const keyOf = new Map(roots.map((n) => [n.id, n.key]));
     const redo = roots.filter((r) => affected.has(r.id));
-    const estimate = estimatePlan(
-      { nodes: redo.map(asPlanNode), edges: [] },
-      pricing.models,
-      pricing.tools,
-      engine.deps.planning.fallback,
-    ).totalMicro;
-    const summary = `改用「${title}」的第 ${version} 版，受影响的 ${redo.length} 个下游节点重新做（展开出来的条目只重做用到这一版的），预计最多 ${usd(estimate)}`;
+    const summary = `改用「${title}」的第 ${version} 版，受影响的 ${redo.length} 个下游节点重新做（展开出来的条目只重做用到这一版的）`;
     const revision: RevisionState = {
       version: task.version + 1,
       request: `改用「${title}」的第 ${version} 版`,
@@ -109,7 +96,7 @@ export function createPickApi(api: {
           ),
         ),
       },
-      estimateMicro: estimate,
+
       changes: roots.map((r) => ({
         key: r.key,
         title: r.title,

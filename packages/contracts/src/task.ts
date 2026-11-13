@@ -1,5 +1,4 @@
-// task 的接口：提交工作流方案（内部）；查看、运行、停止、取消任务，编辑节点和连线，追问节点（对外，经 gateway 的 /api/task/v1/*）。
-// 设计见 ADR 0004。
+// task 的接口：提交任务单或工作流方案（内部）；查看、运行、停止、取消任务，给一样成果发话、停止和继续它（对外，经 gateway 的 /api/task/v1/*）。
 import { z } from 'zod';
 import { Material } from './canvas.ts';
 import { RunOutputFile } from './harness.ts';
@@ -7,10 +6,8 @@ import { ToolStep } from './tool-step.ts';
 import {
   ExpectedFile,
   NodeCommon,
-  NodeTool,
   OutputPattern,
   Participant,
-  TaskCheck,
   TaskRequirement,
   WorkflowPlan,
 } from './workflow-plan.ts';
@@ -37,22 +34,6 @@ export const TaskSheet = z.object({
   criteria: z.array(z.string().trim().min(1).max(200)).min(1),
   /** 风格与限制 */
   style: z.array(z.string().trim().min(1).max(200)).default([]),
-  /**
-   * 用户在原话里自己说的花费（微美元），没说为 null。只作报价时自定义金额的默认值；
-   * 预算不是上限（ADR 0016 §2）。
-   */
-  budgetMicro: z.number().int().positive().nullable().default(null),
-  /** 用户确认时选的预算（ADR 0016）：AI 团队按它分配力度，花完照样做；旧任务没有 */
-  budget: z
-    .object({
-      tier: z.enum(['economy', 'standard', 'premium', 'custom']),
-      micro: z.number().int().positive(),
-      /** 报价时估的大概用时（分钟） */
-      minutes: z.number().int().positive(),
-      /** 报价草案的步骤（给规划员参考，不是硬性分工） */
-      steps: z.array(z.string().max(300)).max(20).default([]),
-    })
-    .optional(),
   /** AI 自己定的事（技术假设），让用户知道，不用确认 */
   assumptions: z.array(z.string().trim().min(1).max(200)).default([]),
   /** 用户给的素材（文件名） */
@@ -63,39 +44,6 @@ export const TaskSheet = z.object({
   materialWarnings: z.array(z.string().max(500)).optional(),
 });
 export type TaskSheet = z.infer<typeof TaskSheet>;
-
-/** 预算档次（ADR 0016 §2）：省钱 / 标准 / 精细 */
-export const BudgetTier = z.enum(['economy', 'standard', 'premium']);
-export type BudgetTier = z.infer<typeof BudgetTier>;
-
-/**
- * 报价（ADR 0016 §4）：任务单定稿时由便宜的模型列草案，代码按三档配型号、定价、估时。
- * 最低预算就是省钱档；用户自定义的金额不能比它低。
- */
-export const BudgetQuote = z.object({
-  tiers: z
-    .array(
-      z.object({
-        tier: BudgetTier,
-        micro: z.number().int().positive(),
-        minutes: z.number().int().positive(),
-      }),
-    )
-    .length(3),
-  minimumMicro: z.number().int().positive(),
-  /** 草案的步骤，一步一句话 */
-  steps: z.array(z.string().max(300)).max(20),
-  /** 有的单价没有记录也没有供应商价格，用了兜底值 */
-  rough: z.boolean(),
-});
-export type BudgetQuote = z.infer<typeof BudgetQuote>;
-
-/** POST /internal/quotes：给一份任务单报价，付费人付草案那一次模型调用 */
-export const QuoteBody = z.object({
-  ownerId: z.uuid(),
-  brief: z.string().trim().min(1).max(20_000),
-  sheet: TaskSheet,
-});
 
 /**
  * POST /internal/tasks：建任务。两种方式，只能选一种：
@@ -117,8 +65,6 @@ export const CreateTaskBody = z
     brief: z.string().trim().min(1).max(20_000),
     sheet: TaskSheet.optional(),
     plan: WorkflowPlan.optional(),
-    /** 预估花费（微美元），仅用于展示；给任务单时由 task 自己算 */
-    estimateMicro: z.number().int().nonnegative().optional(),
     /** 用户给的素材（存在 canvas）：规划员和每个节点都能在沙箱的 materials/ 下看到 */
     materials: z.array(Material).default([]),
   })
@@ -182,7 +128,7 @@ export const TaskStatus = z.enum([
   /** 工作流跑完了，正在对照任务单整体验收（ADR 0005 §5） */
   'accepting',
   'stopped',
-  /** 需要用户处理：节点重做超过上限、工作流断开、花费超过上限 */
+  /** 需要用户处理：节点重做超过上限、工作流断开、没排出方案、修改方案等确认 */
   'needs_attention',
   'succeeded',
   'failed',
@@ -191,8 +137,6 @@ export const TaskStatus = z.enum([
 export type TaskStatus = z.infer<typeof TaskStatus>;
 
 export const NodeStatus = z.enum([
-  /** 用户新建的节点：不会自动开跑，点「运行」（整体或单个）后才加入 */
-  'draft',
   'waiting',
   'running',
   /** 过关卡中（5.2b） */
@@ -201,23 +145,16 @@ export const NodeStatus = z.enum([
   'failed',
   /** 用户点了停止（5.2c） */
   'stopped',
-  /** 有进来的连线是空的，不会自动开跑 */
-  'blocked',
   'cancelled',
 ]);
 export type NodeStatus = z.infer<typeof NodeStatus>;
 
 export const Attention = z.object({
-  /**
-   * node_failed 节点重做用完还失败；workflow_broken 连线断开；over_budget 花费超过上限；
-   * plan_failed 规划员没排出合格的方案；over_estimate 预估超过了用户在任务单里设的上限
-   */
+  /** node_failed 节点重做用完还失败；workflow_broken 上游没完成、走不下去了；plan_failed 规划员没排出合格的方案 */
   reason: z.enum([
     'node_failed',
     'workflow_broken',
-    'over_budget',
     'plan_failed',
-    'over_estimate',
     /** 修改方案排好了，等用户确认（ADR 0022） */
     'revision_plan',
   ]),
@@ -261,12 +198,16 @@ export const NodeBody = z.object({
   goal: z.string(),
   /** 用的模型；工具节点不用模型，为空字符串 */
   model: z.string(),
-  checks: z.array(TaskCheck),
   expects: z.array(ExpectedFile),
   requires: NodeCommon.requires,
   deliver: z.array(OutputPattern).optional(),
-  /** 要用的外部工具（讨论节点没有；工具节点按步骤列出；旧版 task 不返回时当作没有） */
-  tools: z.array(NodeTool).default([]),
+  /** 属于哪条生产线（画布把同一条生产线的节点框在一起）；一个 AI 做的成果为 null */
+  line: z.object({ key: z.string(), title: z.string() }).nullable().default(null),
+  /**
+   * 中途调整（ADR 0030 §3.7）：这样成果提出了调整（asking：规划员还在答复，note 是它要什么），
+   * 或被调整过（note 是改了什么）；没有为 null
+   */
+  adjust: z.object({ asking: z.boolean(), note: z.string() }).nullable().default(null),
   /** 工具节点要执行的步骤（ADR 0025）；其他节点为 null */
   steps: z.array(ToolStep).nullable().default(null),
   /** 讨论节点的参与者、轮数和讨论记录；干活节点为 null */
@@ -283,7 +224,7 @@ export const NodeBody = z.object({
   status: NodeStatus,
   /** 已经跑了几次（含重做） */
   attempts: z.number().int().nonnegative(),
-  /** 用户在节点开跑前追加的要求 */
+  /** 用户追加的要求 */
   userNotes: z.array(z.string()),
   /** 关卡退回修改过几次（观测指标，不是限额） */
   reworks: z.number().int().nonnegative(),
@@ -329,8 +270,6 @@ export const PendingRevision = z.object({
   request: z.string(),
   /** 规划员给用户的一两句说明 */
   summary: z.string().nullable(),
-  /** 只算要跑的节点 */
-  estimateMicro: z.number().int().nonnegative().nullable(),
   changes: z.array(z.object({ key: z.string(), title: z.string(), change: RevisionChange })),
 });
 export type PendingRevision = z.infer<typeof PendingRevision>;
@@ -341,10 +280,8 @@ export const TaskBody = z.object({
   brief: z.string(),
   status: TaskStatus,
   attention: Attention.nullable(),
-  estimateMicro: z.number().int().nonnegative().nullable(),
+  /** 已经花了多少（只显示；没有预算、预估和上限） */
   spentMicro: z.number().int().nonnegative(),
-  /** 用户显式设置的任务预算；null 表示没有任务预算，仍校验钱包余额 */
-  budgetLimitMicro: z.number().int().nonnegative().nullable(),
   /** 用户确认的任务单（直接给方案建的任务没有） */
   sheet: TaskSheet.nullable(),
   /**
@@ -421,7 +358,8 @@ export const TaskList = z.object({ tasks: z.array(TaskSummary) });
  */
 export const NodeRunBody = z.object({
   id: z.uuid(),
-  purpose: z.enum(['work', 'rework', 'speech', 'summary', 'pick']),
+  /** adjust：这样成果的 AI 提出了调整，规划员答复的那次（ADR 0030 §3.7） */
+  purpose: z.enum(['work', 'rework', 'speech', 'summary', 'pick', 'adjust']),
   status: z.enum(['pending', 'running', 'succeeded', 'failed', 'cancelled', 'stopped']),
   /** 第几次（含重做） */
   attempt: z.number().int().nonnegative(),

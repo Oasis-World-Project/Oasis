@@ -29,14 +29,12 @@ import {
 import { useChatActions } from './use-chat-actions.ts';
 
 const NODE_STATUS: Record<NodeStatus, string> = {
-  draft: '新建',
   waiting: '等待',
   running: '运行中',
   checking: '检查中',
   succeeded: '完成',
   failed: '失败',
   stopped: '已停止',
-  blocked: '断开',
   cancelled: '已取消',
 };
 
@@ -88,7 +86,7 @@ function Ring({
 function NodeChip({ title, status }: { title: string; status: NodeStatus }) {
   const active = status === 'running' || status === 'checking';
   const done = status === 'succeeded';
-  const trouble = status === 'failed' || status === 'blocked';
+  const trouble = status === 'failed';
   return (
     <li
       className={`flex h-8 items-center gap-1.5 rounded-full px-3 text-[12.5px] ${
@@ -125,15 +123,13 @@ const DECISIONS: Record<
     { choice: 'retry', label: '继续' },
     { choice: 'continue', label: '跳过这个节点' },
   ],
-  over_budget: [{ choice: 'continue', label: '解除预算继续' }],
-  over_estimate: [{ choice: 'continue', label: '解除预算继续' }],
   plan_failed: [{ choice: 'retry', label: '重新规划' }],
   // 修改方案排好了：确认才开跑；「不改了」见下面（ADR 0022）
   revision_plan: [{ choice: 'continue', label: '确认修改' }],
   workflow_broken: [],
 };
 
-/** 修改方案（ADR 0022）：规划员的说明、每个节点怎么处理、预计花费（只算要跑的） */
+/** 修改方案（ADR 0022）：规划员的说明、每个节点怎么处理 */
 function RevisionPlan({ revision }: { revision: NonNullable<TaskBody['revision']> }) {
   return (
     <div className="flex flex-col gap-2">
@@ -161,11 +157,6 @@ function RevisionPlan({ revision }: { revision: NonNullable<TaskBody['revision']
           </li>
         ))}
       </ul>
-      {revision.estimateMicro !== null && (
-        <p className="m-0 text-[12.5px] text-ink-muted">
-          预计约 {formatCost(revision.estimateMicro)}（只算要重跑的步骤，沿用的不花钱）
-        </p>
-      )}
     </div>
   );
 }
@@ -208,9 +199,6 @@ export function TaskDecisions({ task, compact = false }: { task: TaskBody; compa
           {attention.message}
         </p>
       )}
-      {attention.reason === 'workflow_broken' && (
-        <p className="m-0 text-[12.5px] text-ink-muted">工作流里有连线断开了，接好之后再运行。</p>
-      )}
       <CardActions>
         {DECISIONS[attention.reason].map(({ choice, label }, index) => (
           <CardButton
@@ -246,13 +234,8 @@ export function TaskDecisions({ task, compact = false }: { task: TaskBody; compa
 
 function Spend({ task }: { task: TaskBody }) {
   return (
-    <p className="m-0 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] text-ink-muted">
-      <span>
-        已花 <span className="font-display text-ink">{formatCost(task.spentMicro)}</span>
-      </span>
-      {task.estimateMicro !== null && task.status !== 'succeeded' && (
-        <span>预计约 {formatCost(task.estimateMicro)}</span>
-      )}
+    <p className="m-0 text-[13px] text-ink-muted">
+      已花 <span className="font-display text-ink">{formatCost(task.spentMicro)}</span>
     </p>
   );
 }

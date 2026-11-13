@@ -77,9 +77,6 @@ export function createGroups(engine: Engine): Groups {
         status: 'waiting',
         config: {
           ...base,
-          ...(base.budgetMicro
-            ? { budgetMicro: Math.max(1, Math.round(base.budgetMicro / n)) }
-            : {}),
           version: { k, n },
         },
         parentId: group.id,

@@ -32,7 +32,19 @@ export interface Typical {
   samples: number;
 }
 
-/** 从成功的调用记录算出的典型用量（ADR 0016 §4：估价不写死单价） */
+/** 一个型号最近的实测（ADR 0030 §3.5）：每秒输出、含缓存的实际单价、上游出错的比例 */
+export interface Measured {
+  calls: number;
+  tokensPerSecond: number;
+  /** 每百万 token 实际多少钱（输入输出合计，微美元） */
+  microPerMTok: number;
+  failureRate: number;
+}
+
+/** 调用少于这么多次的型号不给实测 */
+const MIN_MEASURED_CALLS = 30;
+
+/** 从成功的调用记录算出的典型用量（单价不写死） */
 export interface TypicalUsage {
   /** 工具：每个型号一次调用 */
   tools: Map<string, Typical>;
@@ -50,6 +62,8 @@ export interface CallsRepo {
   /** 最近一次聊天、工具或决策调用因「地区不可用」失败的模型（之后没再成功过） */
   regionBlockedModels(): Promise<string[]>;
   typicalUsage(): Promise<TypicalUsage>;
+  /** 各型号从 since 起的实测：只算 agent 运行里的聊天调用（私聊的用法不一样，不混在一起） */
+  measured(since: Date): Promise<Map<string, Measured>>;
   /** 很久以前开始、一直没收尾的聊天和决策调用（网关中途重启时在途的请求） */
   staleRunning(before: Date, limit?: number): Promise<Call[]>;
   computeForRun(runId: string, payerId: string): Promise<Call[]>;
@@ -152,6 +166,40 @@ export function createCallsRepo(pool: pg.Pool): CallsRepo {
                 completion: Math.round(Number(tokens.completion)),
               },
       };
+    },
+
+    async measured(since) {
+      const spoken = sql`status = 'succeeded' and completion_tokens > 0 and finished_at is not null`;
+      const billed = sql`status = 'succeeded' and cost_source = 'provider'`;
+      const { rows } = await db.execute<Record<string, string | null>>(sql`
+        select model,
+          count(*) filter (where status <> 'running') as calls,
+          count(*) filter (where status = 'failed' and error like '上游%') as failed,
+          sum(completion_tokens) filter (where ${spoken}) as completion,
+          sum(extract(epoch from finished_at - created_at)) filter (where ${spoken}) as seconds,
+          sum(upstream_cost_micro) filter (where ${billed}) as cost,
+          sum(coalesce(prompt_tokens, 0) + coalesce(completion_tokens, 0))
+            filter (where ${billed}) as tokens
+        from calls
+        where kind = 'chat' and run_id is not null and created_at >= ${since}
+        group by model
+      `);
+      return new Map(
+        rows.flatMap((row) => {
+          const calls = Number(row.calls);
+          const seconds = Number(row.seconds);
+          const tokens = Number(row.tokens);
+          if (!row.model || calls < MIN_MEASURED_CALLS || !(seconds > 0) || !(tokens > 0))
+            return [];
+          const measured: Measured = {
+            calls,
+            tokensPerSecond: Math.round(Number(row.completion) / seconds),
+            microPerMTok: Math.round((Number(row.cost) / tokens) * 1_000_000),
+            failureRate: Number(row.failed) / calls,
+          };
+          return [[row.model, measured] as const];
+        }),
+      );
     },
 
     async finish(id, outcome, event) {

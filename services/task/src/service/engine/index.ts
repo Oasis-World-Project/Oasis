@@ -1,5 +1,6 @@
 // 组装工作流引擎：各块拿到同一个 Engine 对象，互相调用时才去取（先建对象，再把各块装进去）。
 import { createPlanning } from '../planning-service.ts';
+import { createAdjust } from './adjust.ts';
 import { createAdvance } from './advance.ts';
 import { createChecks } from './checks.ts';
 import { createExpand } from './expand.ts';
@@ -19,6 +20,7 @@ export function createEngine(deps: EngineDeps): Engine {
     engine: {
       transact: (taskId, decide) => engine.transact(taskId, decide),
       schedule: (snapshot, w, fx) => engine.schedule(snapshot, w, fx),
+      applyAdjust: (...args) => engine.applyAdjust(...args),
     },
     config: deps.planning,
     logger: deps.logger,
@@ -30,6 +32,7 @@ export function createEngine(deps: EngineDeps): Engine {
     createFinish(engine),
     createChecks(engine),
     createRevisions(engine),
+    createAdjust(engine),
     createGroups(engine),
     createExpand(engine),
   );

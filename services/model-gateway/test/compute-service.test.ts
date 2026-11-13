@@ -120,6 +120,7 @@ const repo: CallsRepo = {
   regionBlockedModels: async () => [],
   staleRunning: async () => [],
   typicalUsage: async () => ({ tools: new Map(), nodes: new Map(), nodeTokens: null }),
+  measured: async () => new Map(),
 };
 
 let billingUrl = '';

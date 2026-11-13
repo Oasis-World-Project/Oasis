@@ -220,6 +220,7 @@ export const build = (
       transcribeModels: ['openai/whisper-large-v3'],
       jevModel: 'typesafe/jev-1.14',
       decideChatModels: ['alibaba/judge-1'],
+      askModels: ['alibaba/ask-1', 'openai/ask-2'],
       tavilyCreditMicro: 8_000,
       speechMicroPerChar: 20,
     },
@@ -243,6 +244,7 @@ afterAll(async () => {
 beforeEach(() => {
   knobs.videoReject = null;
   knobs.typical = noHistory();
+  knobs.measured = new Map();
   knobs.renderReceiptMissing = false;
   knobs.renderBusy = false;
   knobs.renderStatusGone = false;

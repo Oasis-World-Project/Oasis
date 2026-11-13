@@ -105,7 +105,7 @@ describe('工作流调度', () => {
     expect(redo.continueFrom).toBeUndefined();
     expect(redo.goal).toBe(true);
     expect(redo.inputsFrom).toEqual([{ runId: first, as: '_previous' }]);
-    expect(redo.prompt).toContain('你是 Oasis 工作流里的一个节点');
+    expect(redo.prompt).toContain('你是 Oasis 里负责「A」的 AI');
     expect(redo.prompt).toContain('【重新做】');
     expect(redo.prompt).toContain('in/_previous/');
     expect(redo.prompt).toContain('- 标题不对');

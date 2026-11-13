@@ -230,6 +230,7 @@ await startService({
         videoModels: config.TOOL_VIDEO_MODELS,
         jevModel: config.TOOL_JEV_MODEL,
         decideChatModels: config.TOOL_DECIDE_CHAT_MODELS,
+        askModels: config.TOOL_ASK_MODELS,
         tavilyCreditMicro: config.TAVILY_CREDIT_MICRO,
         speechMicroPerChar: config.TOOL_SPEECH_MICRO_PER_CHAR,
         musicModels: config.TOOL_MUSIC_MODELS,
@@ -302,9 +303,17 @@ await startService({
           prompt: config.ESTIMATE_NODE_PROMPT_TOKENS,
           completion: config.ESTIMATE_NODE_COMPLETION_TOKENS,
         };
-        return [...priceBook.current().values()].flatMap((price) =>
-          price.capabilities ? [withNodeRate(price, usage, assumed)] : [],
-        );
+        const measured = config.ESTIMATE_FROM_HISTORY
+          ? await meter.measured().catch((err: unknown) => {
+              logger.warn({ err }, '读不到调用记录，型号不带实测');
+              return undefined;
+            })
+          : undefined;
+        return [...priceBook.current().values()].flatMap((price) => {
+          if (!price.capabilities) return [];
+          const seen = measured?.get(price.capabilities.id);
+          return [{ ...withNodeRate(price, usage, assumed), ...(seen ? { measured: seen } : {}) }];
+        });
       },
     });
   },

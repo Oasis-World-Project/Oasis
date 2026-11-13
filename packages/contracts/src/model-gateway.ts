@@ -47,7 +47,7 @@ export const ModelCapabilities = z.object({
   input: z.array(z.enum(['text', 'image'])).min(1),
   reasoning: z.boolean(),
   /**
-   * 这个型号负责一个干活节点的典型花费和用时（ADR 0016 §4）：有调用记录用记录的中位数，
+   * 这个型号负责一个干活节点的典型花费和用时：有调用记录用记录的中位数，
    * 没有就按价格表 × 所有节点的典型 token 用量估；都没有时不给。
    */
   node: z
@@ -55,6 +55,18 @@ export const ModelCapabilities = z.object({
       costMicro: z.number().int().nonnegative(),
       seconds: z.number().int().nonnegative().nullable(),
       basis: z.enum(['history', 'catalog']),
+    })
+    .optional(),
+  /**
+   * 最近的实测（ADR 0030 §3.5）：从 agent 运行里的聊天调用记录算——每秒输出多少 token、
+   * 每百万 token 实际多少钱（输入输出合计，含缓存折扣，微美元）、上游出错的比例；调用太少时不给。
+   */
+  measured: z
+    .object({
+      calls: z.number().int().positive(),
+      tokensPerSecond: z.number().int().nonnegative(),
+      microPerMTok: z.number().int().nonnegative(),
+      failureRate: z.number().min(0).max(1),
     })
     .optional(),
 });
@@ -152,7 +164,7 @@ export const ComputeOutcome = z.object({
 // ---- 工具（ADR 0006）：生图、配音、转写、联网搜索、网页抓取、Jev 判断……都经 model-gateway 计量 ----
 
 /** 目录里的一个工具：给规划员和节点里的 AI 看 */
-/** 一个型号用一次（一个计费单位）的典型花费和用时（ADR 0016 §4：估价不写死单价） */
+/** 一个型号用一次（一个计费单位）的典型花费和用时（从调用记录算，不写死） */
 export const ToolRate = z.object({
   model: z.string(),
   /** 每个计费单位大约多少钱（微美元） */
@@ -249,6 +261,12 @@ export const ToolResult = z.object({
   job: z.object({ id: z.uuid() }).optional(),
 });
 export type ToolResult = z.infer<typeof ToolResult>;
+
+/** 「提出调整」这个工具的名字（ADR 0030 §3.7）：只有做成果的 AI 能用，规划员的方案里不能写它 */
+export const ADJUST_TOOL = 'workflow.adjust';
+
+/** task 把规划员对「提出调整」的答复写回长任务 */
+export const ToolJobAnswerBody = z.object({ text: z.string().min(1).max(20_000) });
 
 /** 长任务的进度：还在做 / 做好了（带结果）/ 失败了（带原因） */
 export const ToolJobBody = z.object({

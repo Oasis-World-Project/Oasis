@@ -1,11 +1,11 @@
 // 展开节点（ADR 0026）：上游交出一份 JSON 清单，有几条就开几个子节点（each 是每条的做法：干活或工具），
 // 同时跑；都做完后产出按条目号放进 NN/，下游拿到 in/<key>/01/…、02/… 和 in/<key>/index.json。
-// 它自己不跑（引擎按组节点处理，engine/groups.ts、expand.ts），这里只管方案、估价和展示。
+// 它自己不跑（引擎按组节点处理，engine/groups.ts、expand.ts），这里只管方案和展示。
 // - 规划门：做法本身按它的种类查；参数里带 {{…}} 模板的等展开时再查（缺参数也等那时）。
-// - 估价：预计条数 × 每条（每条做几版的已经乘进去）。
+
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import type { ForeachBranch, PlanNode } from '@oasis/contracts/task';
-import { HttpError } from '@oasis/service-kit';
+
 import type { ForeachConfig } from '../../repo/schema.ts';
 import { hasTemplate } from '../groups.ts';
 import type { NodeKindPlugin } from './kind.ts';
@@ -15,7 +15,7 @@ import { work } from './work.ts';
 type ForeachPlan = Extract<PlanNode, { kind: 'foreach' }>;
 type BranchPlan = Extract<PlanNode, { kind: 'work' | 'tool' }>;
 
-/** 每条的做法 → 一个方案节点（规划门和估价按它的种类查） */
+/** 每条的做法 → 一个方案节点（规划门按它的种类查） */
 const branchPlan = (plan: { key: string; title: string; each: ForeachBranch }): BranchPlan =>
   ({ ...plan.each, key: plan.key, title: plan.each.title ?? plan.title }) as BranchPlan;
 
@@ -64,12 +64,6 @@ export const foreach: NodeKindPlugin<'foreach'> = {
     return branch.kind === 'work' ? work.models(branch) : [];
   },
   toolProblems,
-  estimate(plan, rates) {
-    const branch = branchPlan(plan);
-    const each =
-      branch.kind === 'tool' ? tool.estimate(branch, rates) : work.estimate(branch, rates);
-    return plan.count * each;
-  },
   config: (plan): ForeachConfig => ({ over: plan.over, count: plan.count, each: plan.each }),
   plan: (node, common) => ({
     ...common,
@@ -78,18 +72,7 @@ export const foreach: NodeKindPlugin<'foreach'> = {
     count: node.config.count ?? 1,
     each: node.config.each!,
   }),
-  edit(_node, body) {
-    if (
-      body.participants !== undefined ||
-      body.rounds !== undefined ||
-      body.tools !== undefined ||
-      body.steps !== undefined ||
-      body.variants !== undefined
-    )
-      throw new HttpError(400, 'invalid_node', '展开节点每条怎么做写在做法里，要改请提修改意见');
-    return {};
-  },
-  body: () => ({ tools: [], discussion: null, steps: null }),
+  body: () => ({ discussion: null, steps: null }),
   continuable: false,
   reworkable: false,
   switchable: false,

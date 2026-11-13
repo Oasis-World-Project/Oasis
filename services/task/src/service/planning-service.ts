@@ -1,38 +1,46 @@
 // 规划（ADR 0005 §4）：任务从用户确认的任务单开始 → 规划员（一次 harness 运行）把方案写进 out/plan.json
-// → 规划门检查 → 没过就接着原会话改，次数用完交给用户 → 通过就建节点和连线、算预估、开跑。
+// → 规划门检查 → 没过就接着原会话改，次数用完交给用户 → 通过就建节点和连线、开跑。
 import { randomUUID } from 'node:crypto';
 import { Catalog, PlaybookList, type Playbook } from '@oasis/contracts/agent';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
-import type { RunFinishedData } from '@oasis/contracts/events';
+import type { AdjustmentRequestedData, RunFinishedData } from '@oasis/contracts/events';
 import { RunBody, ExecutionEnvironment } from '@oasis/contracts/harness';
-import { ExecutionModels, ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
-import type { WorkflowOptions } from '@oasis/contracts/task';
+import {
+  ADJUST_TOOL,
+  ExecutionModels,
+  ToolList,
+  type ToolEntry,
+} from '@oasis/contracts/model-gateway';
+import type { WorkflowNames } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
-import type { Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
+import type { NodeRun, Snapshot, TaskStore, Writer } from '../repo/task-store.ts';
+import {
+  ADJUST_FILE,
+  adjustNote,
+  adjustPrompt,
+  adjustRefusal,
+  checkAdjust,
+  replyOf,
+  workflowOf,
+} from './adjust.ts';
 import type { Effects, Engine, PlannerJob } from './effects.ts';
-import { isRoot } from './groups.ts';
 import { materialPaths } from './materials.ts';
 import { planToRows } from './plan.ts';
 import {
-  BUDGET_CHECK_ATTEMPTS,
-  budgetProblems,
   checkPlan,
-  estimatePlan,
   PLAN_FILE,
   plannerPrompt,
   revisePrompt,
   type PlannerPlan,
+  type PricedModel,
 } from './planner.ts';
-import type { Fallback, PricedModel } from './quote.ts';
-import { checkRevisionPlan, estimateRevision, revisionPlannerPrompt } from './revision-planner.ts';
+import { checkRevisionPlan, revisionPlannerPrompt } from './revision-planner.ts';
 
 export interface PlanningConfig {
   /** 规划员型号：不分档，一律最强型号（用户 2026-11-07 决定） */
   planner: string;
   /** 节点默认用的模型 */
   defaultModel: string;
-  /** 什么记录都没有时的估价兜底 */
-  fallback: Fallback;
 }
 
 const RUN_FINAL = ['succeeded', 'failed', 'cancelled', 'stopped'];
@@ -65,19 +73,34 @@ export function createPlanning(deps: {
       const model = listed.get(m.providerModel);
       if (!model) return [];
       // 节点里能直接读什么（文字、图片）照供应商目录，各档次的型号都有；不用手写的清单
-      return [{ ...m, inputs: model.input, ...(model.node ? { node: model.node } : {}) }];
+      return [
+        {
+          ...m,
+          inputs: model.input,
+          ...(model.node ? { node: model.node } : {}),
+          ...(model.measured ? { measured: model.measured } : {}),
+        },
+      ];
     });
   }
 
   /** 目录不可读时等待恢复，不能把未知当成没有工具而编造替代方案。 */
-  async function tools(userId: string): Promise<ToolEntry[]> {
+  async function allTools(userId: string): Promise<ToolEntry[]> {
     return deps.modelGateway
       .json('GET', '/internal/v1/tools', { ...listedFor(userId), schema: ToolList })
       .then((r) => r.tools.filter((t) => t.available));
   }
 
+  /** 规划员排方案能用的工具：「提出调整」只给做成果的 AI 用，方案里不能写 */
+  const tools = async (userId: string) =>
+    (await allTools(userId)).filter((t) => t.key !== ADJUST_TOOL);
+
+  /** 把答复写回提出调整的那个长任务（model-gateway），沙箱里等着的 AI 就拿到了 */
+  const answer = (jobId: string, text: string) =>
+    deps.modelGateway.json('POST', `/internal/v1/tools/jobs/${jobId}/answer`, { body: { text } });
+
   /**
-   * 场景经验手册（ADR 0016 §6）：不再让 Jev 逐份判断，全部放进规划员的 in/playbooks/，
+   * 场景经验手册：不再让 Jev 逐份判断，全部放进规划员的 in/playbooks/，
    * 说明里列名字和适用范围，由规划员自己挑着读。读不到手册就不附，规划照常进行。
    */
   async function playbooks(taskId: string): Promise<Playbook[]> {
@@ -106,18 +129,7 @@ export function createPlanning(deps: {
   async function previous(taskId: string) {
     const snapshot = await store.get(taskId);
     if (!snapshot) throw new HttpError(404, 'task_not_found', '没有这个任务');
-    // 只看工作流图里的节点：展开出来的条目、各版跟着父节点（ADR 0026）
-    const roots = snapshot.nodes.filter(isRoot);
-    const keyOf = new Map(roots.map((n) => [n.id, n.key]));
-    return {
-      nodes: roots,
-      edges: snapshot.edges,
-      deliverables: Object.fromEntries(
-        snapshot.task.deliverables.flatMap((d) =>
-          d.nodeId && keyOf.has(d.nodeId) ? [[d.name, keyOf.get(d.nodeId)!]] : [],
-        ),
-      ),
-    };
+    return workflowOf(snapshot);
   }
 
   /** 交给 harness（事务外）。harness 明确拒绝时按规划员失败处理。 */
@@ -179,10 +191,10 @@ export function createPlanning(deps: {
     }
   }
 
-  /** 读规划员写的方案；没有这个文件返回 undefined */
-  async function readPlan(runId: string): Promise<string | undefined> {
+  /** 读规划员写在 out/ 里的文件（方案、对调整的答复）；没有这个文件返回 undefined */
+  async function readOut(runId: string, file = PLAN_FILE): Promise<string | undefined> {
     try {
-      const response = await harness.stream('GET', `/internal/runs/${runId}/files/${PLAN_FILE}`);
+      const response = await harness.stream('GET', `/internal/runs/${runId}/files/${file}`);
       return await response.text();
     } catch (err) {
       if (err instanceof HttpError && err.statusCode === 404) return undefined;
@@ -190,33 +202,14 @@ export function createPlanning(deps: {
     }
   }
 
-  /**
-   * 方案通过了：建节点和连线，算预估，按预算给每个节点分一份，开跑。
-   * 预算只是参考（ADR 0016 §2）：预估再高也不暂停、不设上限。
-   */
-  async function adopt(
-    snapshot: Snapshot,
-    w: Writer,
-    fx: Effects,
-    plan: PlannerPlan,
-    toolList: ToolEntry[],
-    models: PricedModel[],
-  ) {
-    const { task } = snapshot;
-    const sheet = task.sheet!;
-    const { totalMicro, perNode } = estimatePlan(plan, models, toolList, config.fallback);
-    const budget = sheet.budget?.micro;
-    const rows = planToRows(plan, (key) =>
-      budget && totalMicro > 0
-        ? Math.max(1, Math.round((budget * (perNode.get(key) ?? 0)) / totalMicro))
-        : undefined,
-    );
+  /** 方案通过了：建节点和连线，开跑 */
+  async function adopt(snapshot: Snapshot, w: Writer, fx: Effects, plan: PlannerPlan) {
+    const sheet = snapshot.task.sheet!;
+    const rows = planToRows(plan);
     for (const node of rows.nodes) await w.addNode(node);
     for (const edge of rows.edges) await w.addEdge(edge);
     const idOf = new Map(rows.nodes.map((n) => [n.key, n.id]));
     await w.setTask({
-      estimateMicro: totalMicro,
-      budgetLimitMicro: null,
       deliverables: sheet.deliverables.map((d) => ({
         name: d.name,
         form: d.form,
@@ -244,34 +237,17 @@ export function createPlanning(deps: {
         : undefined;
     if (task.revision) {
       const before = await previous(task.id);
-      let revised: ReturnType<typeof checkRevisionPlan> =
+      const revised: ReturnType<typeof checkRevisionPlan> =
         result.status === 'succeeded'
-          ? checkRevisionPlan(await readPlan(result.runId), {
+          ? checkRevisionPlan(await readOut(result.runId), {
               sheet: task.sheet!,
               catalog: models,
               tools: toolList,
               ...(environment ? { environment } : {}),
               nodes: before.nodes,
+              edges: before.edges,
             })
           : { problems: [`规划员没跑完：${result.error ?? result.status}`] };
-      if ('plan' in revised && task.planAttempts <= BUDGET_CHECK_ATTEMPTS) {
-        const total = estimateRevision(
-          revised.plan,
-          revised.workflow,
-          models,
-          toolList,
-          config.fallback,
-        );
-        const fresh = new Set(
-          revised.changes.filter((c) => c.change !== 'reuse').map((c) => c.key),
-        );
-        const work = {
-          ...revised.workflow,
-          nodes: revised.workflow.nodes.filter((n) => fresh.has(n.key)),
-        };
-        const over = budgetProblems(work, task.sheet!, total, toolList);
-        if (over.length) revised = { problems: over };
-      }
       return engine.transact(task.id, async (snapshot, w, fx) => {
         const current = snapshot.task;
         if (current.status !== 'planning' || current.plannerRunId !== result.runId) return;
@@ -284,13 +260,6 @@ export function createPlanning(deps: {
               ...current.revision,
               plan: revised.plan,
               changes: revised.changes,
-              estimateMicro: estimateRevision(
-                revised.plan,
-                revised.workflow,
-                models,
-                toolList,
-                config.fallback,
-              ),
             },
             status: 'needs_attention',
             attention: { reason: 'revision_plan', nodeId: null, message: revised.plan.summary },
@@ -309,22 +278,16 @@ export function createPlanning(deps: {
         });
       });
     }
-    let checked: ReturnType<typeof checkPlan> =
+    const checked: ReturnType<typeof checkPlan> =
       result.status === 'succeeded'
-        ? checkPlan(await readPlan(result.runId), task.sheet!, models, toolList, environment)
+        ? checkPlan(await readOut(result.runId), task.sheet!, models, toolList, environment)
         : { problems: [`规划员没跑完：${result.error ?? result.status}`] };
-    // 估价远超预算多半是数量写错了：前几次退回去核对，之后照收（预算只是参考）
-    if ('plan' in checked && task.planAttempts <= BUDGET_CHECK_ATTEMPTS) {
-      const { totalMicro } = estimatePlan(checked.plan, models, toolList, config.fallback);
-      const over = budgetProblems(checked.plan, task.sheet!, totalMicro, toolList);
-      if (over.length) checked = { problems: over };
-    }
     await engine.transact(task.id, async (snapshot, w, fx) => {
       const current = snapshot.task;
       if (current.status !== 'planning' || current.plannerRunId !== result.runId) return;
       if ('plan' in checked) {
         logger.info({ taskId: current.id, nodes: checked.plan.nodes.length }, '方案通过规划门');
-        return adopt(snapshot, w, fx, checked.plan, toolList, models);
+        return adopt(snapshot, w, fx, checked.plan);
       }
       if (result.status === 'succeeded') {
         logger.info(
@@ -357,30 +320,138 @@ export function createPlanning(deps: {
     submit,
     onFinished,
 
-    /** 报价和估价用的单价：这个用户能用的模型目录和工具目录，带单价 */
-    pricing: async (userId: string) => ({
-      models: await catalog(userId),
-      tools: await tools(userId),
-    }),
+    /** 这个用户现在能用的工具（展开节点核对每条的参数用） */
+    tools,
 
-    /** 编辑节点时能选的模型和工具：和规划员看到的一样 */
-    async options(userId: string): Promise<WorkflowOptions> {
-      const [models, available] = await Promise.all([catalog(userId), tools(userId)]);
+    /** 工作流页显示用的名字：型号是哪个 AI、工具叫什么 */
+    async names(userId: string): Promise<WorkflowNames> {
+      const [models, available] = await Promise.all([catalog(userId), allTools(userId)]);
       return {
-        models: models.map(({ key, name, vendor, providerModel }) => ({
-          key,
-          name,
-          vendor,
-          providerModel,
-        })),
-        tools: available.map(({ key, name, description, unit, estimateMicro }) => ({
-          key,
-          name,
-          description,
-          unit,
-          estimateMicro,
-        })),
+        models: models.map(({ key, name, providerModel }) => ({ key, name, providerModel })),
+        tools: available.map(({ key, name }) => ({ key, name })),
       };
+    },
+
+    /**
+     * 做成果的 AI 提出了一条调整（ADR 0030 §3.7）：开一次规划员运行来答，记在提出的那样成果上。
+     * 现在不能调整的直接把原因答复回去。同一条重复到达只处理一次。
+     */
+    async adjust(request: AdjustmentRequestedData): Promise<void> {
+      const before = await store.get(request.taskId);
+      if (!before) return;
+      const earlier = await store.listNodeRuns(request.taskId, request.nodeId);
+      if (earlier.some((r) => r.meta.adjust?.jobId === request.jobId)) return;
+      const { payerId } = before.task;
+      const resources = {
+        catalog: await catalog(payerId),
+        tools: await tools(payerId),
+        playbooks: [],
+        defaultModel: config.defaultModel,
+        environment: await harness.json('GET', '/internal/execution/environment', {
+          schema: ExecutionEnvironment,
+        }),
+      };
+      let refusal: string | undefined;
+      await engine.transact(request.taskId, async (snapshot, w, fx) => {
+        const node = snapshot.nodes.find((n) => n.id === request.nodeId);
+        refusal = adjustRefusal(snapshot, node, request.runId);
+        if (refusal || !node) return;
+        const record = {
+          model: config.planner,
+          prompt: adjustPrompt({
+            ...resources,
+            ...workflowOf(snapshot),
+            brief: snapshot.task.brief,
+            sheet: snapshot.task.sheet!,
+            from: node,
+            want: request.want,
+            why: request.why,
+          }),
+          inputsFrom: [],
+        };
+        const runId = randomUUID();
+        await w.addRun({
+          id: runId,
+          nodeId: node.id,
+          attempt: node.attempts,
+          purpose: 'adjust',
+          status: 'pending',
+          meta: { adjust: { jobId: request.jobId, want: request.want, why: request.why } },
+          request: record,
+        });
+        await w.setNode(node.id, {
+          config: { ...node.config, adjust: adjustNote(request.want, true) },
+        });
+        fx.submit.push({ runId, task: snapshot.task, nodeId: node.id, request: record });
+      });
+      if (refusal) await answer(request.jobId, refusal);
+    },
+
+    /**
+     * 答复调整的那次规划员运行结束了：按它的答复改工作流，再把答复写回给提出的 AI。
+     * 答复先记在运行上再写回；写回失败时事件会重投，那时只补发没送到的答复。
+     */
+    async onAdjusted(
+      found: NodeRun,
+      result: Pick<RunFinishedData, 'runId' | 'status' | 'error' | 'outputs' | 'summary'>,
+    ): Promise<void> {
+      const meta = found.meta.adjust;
+      if (!meta) return;
+      let reply = meta.reply;
+      if (found.status === 'pending' || found.status === 'running') {
+        const task = (await store.get(found.taskId))?.task;
+        if (!task) return;
+        const gate =
+          result.status === 'succeeded'
+            ? {
+                text: await readOut(result.runId, ADJUST_FILE),
+                catalog: await catalog(task.payerId),
+                tools: await tools(task.payerId),
+                environment: await harness.json('GET', '/internal/execution/environment', {
+                  schema: ExecutionEnvironment,
+                }),
+              }
+            : undefined;
+        const deliver: { runId: string; text: string }[] = [];
+        await engine.transact(found.taskId, async (snapshot, w, fx) => {
+          const run = snapshot.activeRuns.find((r) => r.id === found.id);
+          if (!run) return; // 已经处理过
+          const { status, revision, sheet } = snapshot.task;
+          const checked = !gate
+            ? { problems: [`规划员没跑完：${result.error ?? result.status}`] }
+            : status !== 'running' || revision || !sheet
+              ? { problems: ['任务已经不在运行'] }
+              : checkAdjust(gate.text, { ...gate, ...workflowOf(snapshot), sheet });
+          reply =
+            'problems' in checked
+              ? `这次调整没有生效：${checked.problems.slice(0, 3).join('；')}`
+              : replyOf(checked);
+          await w.setRun(run.id, {
+            status: result.status,
+            summary: result.summary,
+            error: result.error,
+            outputs: result.outputs,
+            finishedAt: new Date(),
+            meta: { ...run.meta, adjust: { ...meta, reply } },
+          });
+          const from = snapshot.nodes.find((n) => n.id === run.nodeId);
+          if (from)
+            await w.setNode(from.id, { config: { ...from.config, adjust: adjustNote(reply) } });
+          logger.info({ taskId: found.taskId, nodeId: run.nodeId, reply }, '规划员答复了调整');
+          if ('problems' in checked) await engine.schedule(snapshot, w, fx);
+          else await engine.applyAdjust(snapshot, w, fx, checked, deliver);
+        });
+        for (const d of deliver)
+          await harness
+            .json('POST', `/internal/runs/${d.runId}/messages`, { body: { text: d.text } })
+            .catch((err: unknown) =>
+              logger.warn({ err, runId: d.runId }, '调整的说明没送到正在做的 AI'),
+            );
+      }
+      if (!reply || meta.answered) return;
+      await answer(meta.jobId, reply);
+      const answered = { ...found.meta, adjust: { ...meta, reply, answered: true } };
+      await store.transact(found.taskId, (_snapshot, w) => w.setRun(found.id, { meta: answered }));
     },
 
     /** 对账：规划员的结束事件丢了就补上；harness 根本没收到就重新开一次 */

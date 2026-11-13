@@ -161,7 +161,6 @@ describe('方案校验', () => {
       role: '',
       goal: '定方向',
       model: 'm',
-      checks: ['给出明确建议'],
       expects: ['*.md'],
       participants: names.map((name) => ({ name, model: 'm', stance: '' })),
       rounds: 2,
@@ -171,7 +170,6 @@ describe('方案校验', () => {
     );
     const [row] = planToRows({ nodes: [discussion(['甲', '乙'])], edges: [] }).nodes;
     expect(row?.config).toMatchObject({
-      checks: ['给出明确建议'],
       expects: ['*.md'],
       rounds: 2,
       round: 0,
@@ -253,20 +251,19 @@ describe('调度决定', () => {
     expect(done.task?.status).toBe('succeeded');
   });
 
-  it('有空的进线就是断开，永远不自动跑；跑不下去时任务需要用户处理', () => {
-    const [a, c] = [node('A', 'succeeded'), node('C')];
+  it('上游取消了、下游永远等不到：任务需要用户处理', () => {
+    const [a, c] = [node('A', 'cancelled'), node('C')];
     const result = decide({
       taskStatus: 'running',
       nodes: [a, c],
-      edges: [edge(a, null), edge(null, c)],
+      edges: [edge(a, c)],
       maxParallel: 3,
       maxToolChildren: 6,
     });
-    expect(result.blocked).toEqual([c]);
     expect(result.start).toEqual([]);
     expect(result.task).toMatchObject({
       status: 'needs_attention',
-      attention: { reason: 'workflow_broken' },
+      attention: { reason: 'workflow_broken', nodeId: null },
     });
   });
 

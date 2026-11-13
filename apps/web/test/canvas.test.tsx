@@ -59,7 +59,7 @@ function fakeCanvas(list = ARTIFACTS, tasks: TaskSummary[] = []) {
       const one = list.find((a) => path === `/canvas/v1/artifacts/${a.id}`);
       if (one) return json(200, one);
       if (path.endsWith('/content')) return new Response('# 山里的小木屋');
-      if (path === '/task/v1/workflow/options') return json(200, { models: [], tools: [] });
+      if (path === '/task/v1/workflow/names') return json(200, { models: [], tools: [] });
       return undefined;
     },
   });
@@ -169,7 +169,7 @@ describe('画布', () => {
                 ],
               })
             : json(503, { error: { code: 'unavailable', message: '不可用' } });
-        if (path === '/task/v1/workflow/options') return json(200, { models: [], tools: [] });
+        if (path === '/task/v1/workflow/names') return json(200, { models: [], tools: [] });
       },
     });
     await open('/canvas');

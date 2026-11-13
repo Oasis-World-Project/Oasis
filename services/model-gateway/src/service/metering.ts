@@ -120,6 +120,8 @@ export function createMeter(deps: {
     regionBlockedModels: () => repo.regionBlockedModels(),
     /** 从调用记录算出的典型用量，估价用 */
     typicalUsage: () => repo.typicalUsage(),
+    /** 各型号最近 30 天的实测（每秒输出、含缓存的实际单价、上游出错的比例） */
+    measured: () => repo.measured(new Date(Date.now() - 30 * 24 * 3600_000)),
 
     /** 没产生费用就失败了（如长任务在供应商那边失败）：退回冻结，记下原因 */
     fail: release,

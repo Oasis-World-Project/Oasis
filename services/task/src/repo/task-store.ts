@@ -53,8 +53,6 @@ type TaskPatch = Partial<
     | 'attention'
     | 'finishedAt'
     | 'spentMicro'
-    | 'budgetLimitMicro'
-    | 'estimateMicro'
     | 'deliverables'
     | 'plannerRunId'
     | 'planAttempts'
@@ -96,7 +94,6 @@ export function statusEvent(before: Pick<Task, 'status' | 'attention'>, after: T
     title: after.title,
     status: after.status,
     attention: after.attention,
-    estimateMicro: after.estimateMicro,
     spentMicro: after.spentMicro,
     changedAt: new Date().toISOString(),
   });
@@ -156,15 +153,14 @@ export interface Writer {
   ): Promise<void>;
   setRun(runId: string, patch: RunPatch): Promise<void>;
   addNode(node: NewNode): Promise<void>;
-  /** 删除节点：它的进出连线留下断开的一端；两端都空了的连线一起删掉 */
-  deleteNode(nodeId: string): Promise<void>;
+
   /**
    * 修改方案删掉的节点：移出工作流但保留（运行记录还在，旧版能查看；ADR 0022）。
    * 它的子节点（ADR 0026）一起移出。
    */
   retireNode(nodeId: string, version: number): Promise<void>;
   addEdge(edge: Pick<Edge, 'id'> & EdgeEnds): Promise<void>;
-  setEdge(edgeId: string, ends: EdgeEnds): Promise<void>;
+
   deleteEdge(edgeId: string): Promise<void>;
   /** 冻结一版工作流（ADR 0022） */
   addVersion(row: Omit<WorkflowVersion, 'taskId' | 'frozenAt'>): Promise<void>;
@@ -342,24 +338,6 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
               .returning();
             if (row) snapshot.nodes.push(...asNodes([row]));
           },
-          async deleteNode(nodeId) {
-            // 连线的外键是 on delete set null：删掉节点，连线就留下断开的一端
-            await tx.delete(nodes).where(eq(nodes.id, nodeId));
-            await tx
-              .delete(edges)
-              .where(
-                and(eq(edges.taskId, taskId), isNull(edges.fromNodeId), isNull(edges.toNodeId)),
-              );
-            // 子节点随父节点级联删除（ADR 0026）
-            for (const child of snapshot.nodes.filter((n) => n.parentId === nodeId))
-              await writer.deleteNode(child.id);
-            snapshot.nodes = snapshot.nodes.filter((n) => n.id !== nodeId);
-            for (const e of snapshot.edges) {
-              if (e.fromNodeId === nodeId) e.fromNodeId = null;
-              if (e.toNodeId === nodeId) e.toNodeId = null;
-            }
-            snapshot.edges = snapshot.edges.filter((e) => e.fromNodeId || e.toNodeId);
-          },
           async retireNode(nodeId, version) {
             // 连同子节点、子节点的子节点（最多两层，ADR 0026）
             const gone = new Set([nodeId]);
@@ -383,11 +361,6 @@ export function createTaskStore(pool: pg.Pool): TaskStore {
               .values({ ...edge, taskId })
               .returning();
             if (row) snapshot.edges.push(row);
-          },
-          async setEdge(edgeId, ends) {
-            await tx.update(edges).set(ends).where(eq(edges.id, edgeId));
-            const edge = snapshot.edges.find((e) => e.id === edgeId);
-            if (edge) Object.assign(edge, ends);
           },
           async deleteEdge(edgeId) {
             await tx.delete(edges).where(eq(edges.id, edgeId));

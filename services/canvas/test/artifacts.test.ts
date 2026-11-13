@@ -64,9 +64,7 @@ function taskBody(id: string) {
     brief: '',
     status: 'succeeded',
     attention: null,
-    estimateMicro: null,
     spentMicro: 0,
-    budgetLimitMicro: null,
     sheet: null,
     materials: [],
     acceptance: { unmet: [] },
@@ -207,7 +205,6 @@ const event = (taskId: string, status: TaskStatusChangedData['status'] = 'succee
   title: '小木屋：首页?',
   status,
   attention: null,
-  estimateMicro: null,
   spentMicro: 0,
   changedAt: '2026-10-24T08:00:00.000Z',
 });

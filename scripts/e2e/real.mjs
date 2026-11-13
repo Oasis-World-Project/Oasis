@@ -161,7 +161,7 @@ export const REAL_SCENARIOS = {
             (n) =>
               `${n.title}（${n.kind}${n.steps ? `：${n.steps.map((s) => s.tool).join(' → ')}` : ''}）`,
           )
-          .join('；')}，估价 ${usd(planned.estimateMicro ?? 0)}`,
+          .join('；')}`,
       );
       const tools = planned.nodes.filter((n) => n.kind === 'tool');
       const videos = tools.flatMap((n) => n.steps).filter((s) => s.tool === 'video.generate');
@@ -252,7 +252,7 @@ export const REAL_SCENARIOS = {
     },
   },
 
-  // 小游戏（ADR 0030）：和 dsh 对比用的同一句话，要求只排一个干活节点，看它在沙箱里从头做到交付。
+  // 小游戏（ADR 0030）：和 dsh 对比用的同一句话，规划员应排成一样由一个 AI 从头做到交付的成果。
   // 记下用时、花费、它自己用了几次浏览器、关卡退回几次；游戏文件留一份在回归目录里，质量由人看。
   'real-game': {
     // 2026-11-11 多节点的方案花了 $1.56；留出余量，仍在单次 $5 的授权内
@@ -260,8 +260,7 @@ export const REAL_SCENARIOS = {
     async run(t) {
       const started = Date.now();
       const { taskId } = await t.user.createTask(
-        '做一个网页小游戏：一只橘猫在雨夜屋顶上躲雨滴，两关，难度递增，像素风。要有背景音乐和跳跃、被淋到、过关的音效。' +
-          '工作流要求：只排一个干活节点，从头做到交付（背景音乐也由它自己解决），型号用 DeepSeek V4 Pro；不要别的节点。',
+        '做一个网页小游戏：一只橘猫在雨夜屋顶上躲雨滴，两关，难度递增，像素风。要有背景音乐和跳跃、被淋到、过关的音效。',
       );
       t.track(taskId);
       const planned = await t.user.waitTask(
@@ -275,7 +274,10 @@ export const REAL_SCENARIOS = {
       );
       if (planned.nodes.length !== 1 || planned.nodes[0].kind !== 'work') {
         await t.user.api.post(`/task/v1/tasks/${taskId}/cancel`).catch(() => {});
-        t.check(false, `规划员没有只排一个干活节点（排了 ${planned.nodes.length} 个），已取消`);
+        t.check(
+          false,
+          `规划员没有排成一个 AI 做到底（排了 ${planned.nodes.length} 个节点），已取消`,
+        );
         return;
       }
       const task = await t.user.waitTask(taskId, done, '小游戏交付', 3 * LONG);

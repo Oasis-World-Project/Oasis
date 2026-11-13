@@ -162,17 +162,16 @@ describe('任务单来源与默认答案', () => {
           deliverables: [{ name: '表', form: 'XLSX' }],
           criteria: ['好'],
           style: [],
-          budgetMicro: null,
           assumptions: [],
           requirements: [],
-          // 模型抄来的旧预算：不能出现在新任务单上
+          // 模型自己多写的预算：任务单上没有这一项
           budget: { tier: 'standard', micro: 10_000_000, minutes: 60, steps: [] },
         },
       }),
       true,
     );
     expect(long.reply?.type === 'sheet' && long.reply.sheet.title).toHaveLength(60);
-    expect(long.reply?.type === 'sheet' && long.reply.sheet.budget).toBeUndefined();
+    expect(long.reply?.type === 'sheet' && long.reply.sheet).not.toHaveProperty('budget');
     expect(readIntakeReply('好的', false)).toEqual({
       reply: null,
       problem: '回答里没有 JSON 对象',
@@ -475,8 +474,7 @@ const createdTasks: Record<string, unknown>[] = [];
 let taskFailsOnce = false;
 const task = Fastify();
 /** task 给任务单的报价；null 表示这次没报出来 */
-let quoteReply: unknown = null;
-const quoteRequests: Record<string, unknown>[] = [];
+
 /** 用户的任务（私聊里的 AI 被问起时回答进度）；哪些文件是任务素材 */
 let ownerTasks: unknown[] = [];
 let inUse: string[] = [];
@@ -484,10 +482,7 @@ task.get('/internal/owners/:ownerId/tasks', async () => ({ tasks: ownerTasks }))
 task.post('/internal/materials/in-use', async (request) => ({
   ids: (request.body as { ids: string[] }).ids.filter((id) => inUse.includes(id)),
 }));
-task.post('/internal/quotes', async (request) => {
-  quoteRequests.push(request.body as Record<string, unknown>);
-  return { quote: quoteReply };
-});
+
 task.post('/internal/tasks', async (request, reply) => {
   createdTasks.push(request.body as Record<string, unknown>);
   if (taskFailsOnce) {
@@ -502,9 +497,7 @@ task.post('/internal/tasks', async (request, reply) => {
     brief: 'b',
     status: 'planning',
     attention: null,
-    estimateMicro: null,
     spentMicro: 0,
-    budgetLimitMicro: null,
     nodes: [],
     edges: [],
     createdAt: new Date().toISOString(),
@@ -578,8 +571,7 @@ beforeEach(() => {
   taskFailsOnce = false;
   decisionCalls = 0;
   visionCalls = 0;
-  quoteReply = null;
-  quoteRequests.length = 0;
+
   ownerTasks = [];
   inUse = [];
   intakeStatus = 0;
@@ -609,7 +601,6 @@ beforeEach(() => {
       fallbackModel: 'deepseek/fallback',
       maxRounds: 3,
       maxTokens: 2000,
-      quoteTimeoutMs: 180_000,
     },
     logger,
   });
@@ -1028,7 +1019,6 @@ const sheet = (title = '小木屋首页') =>
       deliverables: [{ name: '首页开头文案', form: 'Markdown' }],
       criteria: ['不超过 80 字', '语气温馨'],
       style: ['面向家庭'],
-      budgetMicro: null,
       assumptions: ['用中文'],
       materials: [],
     },
@@ -1126,7 +1116,6 @@ describe('接需求', () => {
         fallbackModel: 'fallback',
         maxRounds: 3,
         maxTokens: 2000,
-        quoteTimeoutMs: 180_000,
       },
       logger: pino({ level: 'silent' }),
     });
@@ -1185,7 +1174,6 @@ describe('接需求', () => {
         fallbackModel: 'fallback',
         maxRounds: 3,
         maxTokens: 2000,
-        quoteTimeoutMs: 180_000,
       },
       logger: pino({ level: 'silent' }),
     });
@@ -1312,7 +1300,6 @@ describe('接需求', () => {
         intakeId: oldIntake,
         intro: '',
         sheet: { title: '3D 马车' },
-        quote: null,
         status: 'confirmed',
         taskId: TASK_ID,
       },
@@ -1607,53 +1594,6 @@ describe('接需求', () => {
     // 确认后回到普通聊天
     taskProbability = 0.1;
     expect(lastDone(await send('谢谢')).kind).toBe('text');
-  });
-
-  it('任务单附三档报价；确认时按选的档把预算写进任务单，自定义不能低于最低预算', async () => {
-    quoteReply = {
-      tiers: [
-        { tier: 'economy', micro: 400_000, minutes: 6 },
-        { tier: 'standard', micro: 1_200_000, minutes: 12 },
-        { tier: 'premium', micro: 3_000_000, minutes: 25 },
-      ],
-      minimumMicro: 400_000,
-      steps: ['写初稿', '润色'],
-      rough: false,
-    };
-    await begin();
-    intakeReplies = [sheet()];
-    await intake.answer({
-      conversation: await conversation(),
-      ownerId: OWNER,
-      answers: {},
-      skip: true,
-      requestId: 'r',
-    });
-    expect(quoteRequests[0]).toMatchObject({ ownerId: OWNER, sheet: { title: '小木屋首页' } });
-    expect(repo.rows.find((r) => r.kind === 'sheet')?.data).toMatchObject({ quote: quoteReply });
-    const low = await intake
-      .confirm({
-        conversation: await conversation(),
-        ownerId: OWNER,
-        budget: { tier: 'custom', customMicro: 100_000 },
-        requestId: 'r',
-      })
-      .catch((e: unknown) => e);
-    expect((low as HttpError).statusCode).toBe(400);
-    expect(createdTasks).toHaveLength(0);
-    await intake.confirm({
-      conversation: await conversation(),
-      ownerId: OWNER,
-      budget: { tier: 'custom', customMicro: 2_000_000 },
-      requestId: 'r',
-    });
-    // 自定义 $2 落在标准和精细之间：用时按标准档估
-    expect(createdTasks[0]).toMatchObject({
-      sheet: {
-        budget: { tier: 'custom', micro: 2_000_000, minutes: 12, steps: ['写初稿', '润色'] },
-      },
-    });
-    expect(createdTasks[0]!.brief).toContain('预算（参考，不是上限）：约 $2.00');
   });
 
   it('确认失败后再点：带同一个任务 ID 重交，task 不会建出第二个；改过的任务单换新 ID', async () => {

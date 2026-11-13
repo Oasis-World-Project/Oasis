@@ -10,8 +10,59 @@ import {
   jobRows,
   jobs,
   mediaFiles,
+  emitted,
 } from './support/tool-fakes.ts';
 import { tools, falCalls, geometryImage, useTools, call, errorOf } from './support/tool-fixture.ts';
+
+describe('提出调整（ADR 0030 §3.7）', () => {
+  const caller = {
+    payerId: PAYER,
+    taskId: TASK,
+    nodeId: '00000000-0000-4000-8000-0000000000a1',
+    runId: '00000000-0000-4000-8000-0000000000b1',
+  };
+  const submit = () =>
+    tools.call({
+      caller,
+      key: 'workflow.adjust',
+      args: { want: '加一样成果：宣传海报', why: '任务单里要海报，没有人做' },
+      requestId: 'r',
+      signal: new AbortController().signal,
+    });
+
+  it('提交时发事件给 task；task 写回规划员的答复后才算完成，不花钱', async () => {
+    useTools('key', true);
+    const id = (await submit()).job!.id;
+    expect(emitted.at(-1)).toMatchObject({
+      type: 'model-gateway.adjustment.requested',
+      data: {
+        jobId: id,
+        taskId: TASK,
+        nodeId: caller.nodeId,
+        runId: caller.runId,
+        want: '加一样成果：宣传海报',
+        why: '任务单里要海报，没有人做',
+      },
+    });
+    expect(await tools.job(caller, id, AbortSignal.timeout(3000))).toEqual({ status: 'pending' });
+    await tools.answer(id, '同意：加了「宣传海报」。');
+    expect(await tools.job(caller, id, AbortSignal.timeout(3000))).toMatchObject({
+      status: 'completed',
+      result: { text: '同意：加了「宣传海报」。', costMicro: 0 },
+    });
+    expect(jobRows.get(id)).toMatchObject({ status: 'completed', cost: { costMicro: 0 } });
+  });
+
+  it('不在工作流里的调用（私聊）不能提，也不冻结', async () => {
+    useTools('key', true);
+    const holds = billingCalls.length;
+    expect(await errorOf(call('workflow.adjust', { want: 'x', why: 'y' }))).toMatchObject({
+      statusCode: 409,
+      code: 'not_in_workflow',
+    });
+    expect(billingCalls).toHaveLength(holds);
+  });
+});
 
 describe('任务删除回收工具结果', () => {
   async function completed(taskId = TASK) {

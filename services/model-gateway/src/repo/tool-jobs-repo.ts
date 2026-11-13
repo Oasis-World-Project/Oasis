@@ -1,8 +1,9 @@
 // 长任务的提交、文件持久化、结算与清理共用同一行；租约防止多个进程重复处理。
+import type { EventEnvelope } from '@oasis/contracts/events';
 import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { toolJobs, toolRunControls, toolTaskDeletions } from './schema.ts';
+import { outbox, toolJobs, toolRunControls, toolTaskDeletions } from './schema.ts';
 export type ToolJob = typeof toolJobs.$inferSelect;
 export class ToolAdmissionError extends Error {}
 export interface ToolJobsRepo {
@@ -29,10 +30,15 @@ export interface ToolJobsRepo {
   pending(limit: number): Promise<ToolJob[]>;
   expired(now: Date, limit: number): Promise<ToolJob[]>;
   finish(id: string, status: 'completed' | 'failed', error?: string): Promise<boolean>;
+  /** 写一条事件进发件箱（平台自己答复的工具提交时用） */
+  emit(event: EventEnvelope): Promise<void>;
 }
 export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
   const db = drizzle(pool);
   return {
+    async emit(event) {
+      await db.insert(outbox).values({ id: event.id, subject: event.type, payload: event });
+    },
     async taskDeleted(taskId) {
       const rows = await db
         .select()

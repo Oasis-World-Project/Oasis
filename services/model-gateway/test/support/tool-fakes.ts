@@ -3,7 +3,13 @@ import { Readable } from 'node:stream';
 import type { EventEnvelope } from '@oasis/contracts/events';
 import { checkedParts, type ObjectStore } from '@oasis/service-kit';
 import Fastify from 'fastify';
-import type { Call, CallOutcome, CallsRepo, TypicalUsage } from '../../src/repo/calls-repo.ts';
+import type {
+  Call,
+  CallOutcome,
+  CallsRepo,
+  Measured,
+  TypicalUsage,
+} from '../../src/repo/calls-repo.ts';
 import type { ToolJob, ToolJobsRepo } from '../../src/repo/tool-jobs-repo.ts';
 
 /** 测试里会改的开关和计数（ES 模块导出的变量在别的文件里不能赋值，所以集中放在一个对象里） */
@@ -32,6 +38,8 @@ export const knobs = {
   /** 测试用户有没有打开「只用国内模型」（ADR 0027） */
   domesticOnly: false,
   typical: noHistory(),
+  /** 各型号的实测（每秒输出、实际单价），默认没有 */
+  measured: new Map<string, Measured>(),
   renderCleanupFails: false,
   archiveFails: false,
   resultDeleteFails: false,
@@ -102,8 +110,8 @@ fake.post('/api/v1/chat/completions', async (request, reply) => {
     return reply.code(403).send({ error: { message: 'not available in your region' } });
   if (knobs.visionStatus === 429 && (request.body as { model: string }).model === 'vision/first')
     return reply.code(429).send({ error: { message: 'temporarily rate-limited upstream' } });
-  // 聊天模型回答快速判断：按要求只回一个 JSON（前后带点废话也要认得出）
-  if ((request.body as { model: string }).model === 'alibaba/judge-1')
+  // 快速判断（只回一个 JSON，前后带点废话也要认得出）和「问另一个模型」的聊天型号：回答测试里设好的那句
+  if (/\/(judge|ask)-/.test((request.body as { model: string }).model))
     return {
       choices: [{ message: { content: knobs.judgeAnswer } }],
       usage: { cost: 0.0003 },
@@ -223,6 +231,7 @@ export const repo: CallsRepo = {
   regionBlockedModels: async () => [],
   staleRunning: async () => [],
   typicalUsage: async () => knobs.typical,
+  measured: async () => knobs.measured,
   async finish(id, outcome, event) {
     recordedCalls.set(id, outcome);
     finished.push(outcome);
@@ -232,7 +241,10 @@ export const repo: CallsRepo = {
 
 export const jobRows = new Map<string, ToolJob>();
 export const deletedTasks = new Set<string>();
+/** 长任务提交时发出的事件（提出调整） */
+export const emitted: { type: string; data: unknown }[] = [];
 export const jobs: ToolJobsRepo = {
+  emit: async (event) => void emitted.push(event),
   taskDeleted: async (taskId) => deletedTasks.has(taskId),
   async markTaskDeleted(taskId) {
     deletedTasks.add(taskId);

@@ -1,4 +1,4 @@
-// 调度决定（纯函数）：看一眼整张图，算出哪些节点该开跑、哪些断开了或接好了、任务是否该结束、停下或需要用户处理。
+// 调度决定（纯函数）：看一眼整张图，算出哪些节点该开跑、任务是否该结束、停下或需要用户处理。
 // 子节点（ADR 0026）没有连线：父节点开跑后就能跑。组节点（展开、做几版）自己不跑、不占名额；
 // 其余节点分两个池：工具子节点最多 maxToolChildren 个同时跑，其他节点（AI、工作流图里的工具节点）最多 maxParallel 个。
 import type { Attention, NodeStatus, TaskStatus } from '@oasis/contracts/task';
@@ -13,10 +13,6 @@ const FINAL: readonly NodeStatus[] = ['succeeded', 'failed', 'cancelled'];
 export interface ScheduleDecision {
   /** 可以开跑的节点（已按并发上限截取） */
   start: Node[];
-  /** 新发现断开的节点（有进来的连线是空的） */
-  blocked: Node[];
-  /** 断开的线已经接好、回到等待的节点 */
-  unblocked: Node[];
   /** 任务该进入的状态（不需要改时为 undefined） */
   task?: { status: TaskStatus; attention: Attention | null };
 }
@@ -63,27 +59,16 @@ export function decide(input: {
 }): ScheduleDecision {
   const { nodes, edges } = input;
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const blocked: Node[] = [];
-  const unblocked: Node[] = [];
   const ready: Node[] = [];
-  // 新建（draft）的节点不自动开跑，等用户点运行
-  for (const node of nodes.filter((n) => n.status === 'waiting' || n.status === 'blocked')) {
+  for (const node of nodes.filter((n) => n.status === 'waiting')) {
     if (node.parentId) {
-      if (node.status === 'waiting' && byId.get(node.parentId)?.status === 'running')
-        ready.push(node);
+      if (byId.get(node.parentId)?.status === 'running') ready.push(node);
       continue;
     }
     const links = incoming(node, edges);
-    if (links.some((e) => e.fromNodeId === null)) {
-      if (node.status === 'waiting') blocked.push(node);
-      continue;
-    }
-    if (node.status === 'blocked') unblocked.push(node);
-    if (links.every((e) => byId.get(e.fromNodeId ?? '')?.status === 'succeeded')) {
-      ready.push(node);
-    }
+    if (links.every((e) => byId.get(e.fromNodeId ?? '')?.status === 'succeeded')) ready.push(node);
   }
-  // 任务不在整体运行（如只运行了一个节点）：工作流图里的节点不往下跑，但正在跑的组节点要把子节点跑完
+  // 任务不在整体运行（如只继续了一样成果）：工作流图里的节点不往下跑，但正在跑的组节点要把子节点跑完
   const running = input.taskStatus === 'running';
   const busy = working(nodes);
   let { tools, others } = poolUse(nodes);
@@ -101,39 +86,30 @@ export function decide(input: {
     }
   }
   if (!running || busy.length > 0 || ready.length > 0 || nodes.some((n) => settling(nodes, n)))
-    return { start, blocked, unblocked };
+    return { start };
 
-  // 没有在跑的、也没有能跑的了：全部完成；或者有节点停下 / 新建着，等用户点运行；或者卡住了需要用户处理。
+  // 没有在跑的、也没有能跑的了：全部完成；或者有节点停下着，等用户点运行；或者卡住了需要用户处理。
   // 已经挑好一版的节点下面没做成的那几版不算（ADR 0026）
-  if (nodes.filter(isRoot).every((n) => n.status === 'succeeded')) {
-    return { start, blocked, unblocked, task: { status: 'succeeded', attention: null } };
+  // 中途调整停掉的成果（ADR 0030 §3.7）不再算在内：它不用做了，不拦着任务完成
+  const dropped = (n: Node) => n.status === 'cancelled' && Boolean(n.config.adjust);
+  if (nodes.filter(isRoot).every((n) => n.status === 'succeeded' || dropped(n))) {
+    return { start, task: { status: 'succeeded', attention: null } };
   }
   const relevant = nodes.filter((n) => !n.parentId || byId.get(n.parentId)?.status !== 'succeeded');
   const failed = relevant.find((n) => n.status === 'failed');
-  const broken = [...blocked, ...nodes.filter((n) => n.status === 'blocked')].find(
-    (n) => !unblocked.includes(n),
-  );
-  if (!failed && !broken && relevant.some((n) => n.status === 'stopped' || n.status === 'draft')) {
-    return { start, blocked, unblocked, task: { status: 'stopped', attention: null } };
+  if (!failed && relevant.some((n) => n.status === 'stopped')) {
+    return { start, task: { status: 'stopped', attention: null } };
   }
   const attention: Attention = failed
     ? { reason: 'node_failed', nodeId: failed.id, message: `「${failed.title}」没能完成` }
-    : broken
-      ? {
-          reason: 'workflow_broken',
-          nodeId: broken.id,
-          message: `「${broken.title}」前面的连线断开了`,
-        }
-      : {
-          reason: 'workflow_broken',
-          nodeId: null,
-          message: '有节点的上游没有完成，工作流走不下去了',
-        };
+    : {
+        reason: 'workflow_broken',
+        nodeId: null,
+        message: '有节点的上游没有完成，工作流走不下去了',
+      };
   const stuck = relevant.some((n) => !FINAL.includes(n.status));
   return {
     start,
-    blocked,
-    unblocked,
     task: stuck || failed ? { status: 'needs_attention', attention } : undefined,
   };
 }

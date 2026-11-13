@@ -1,4 +1,5 @@
-// 整体验收（只查交付文件齐不齐）和修改（ADR 0022：规划、确认、沿用 / 接着改 / 重新做、版本）。
+// 整体验收（只查交付文件齐不齐）和修改（ADR 0022、0030 §3.8：直接交给做成果的 AI，或规划、确认、
+// 沿用 / 接着改 / 重新做；版本）。
 import { describe, expect, it, vi } from 'vitest';
 import { events } from './support/memory-store.ts';
 import {
@@ -9,7 +10,6 @@ import {
   plans,
   gateCalls,
   service,
-  work,
   create,
   createPlanned,
   type Submitted,
@@ -19,6 +19,17 @@ import {
   keyOf,
   errorOf,
 } from './support/workflow.ts';
+
+/** 一样由一个 AI 做的成果 */
+const agent = (key: string, extra: Record<string, unknown> = {}) => ({
+  key,
+  title: key,
+  how: 'agent',
+  goal: `做 ${key}`,
+  model: 'deepseek/x',
+  deliver: ['*.md'],
+  ...extra,
+});
 
 describe('整体验收（从任务单来的任务）', () => {
   const start = async (
@@ -39,7 +50,6 @@ describe('整体验收（从任务单来的任务）', () => {
         ],
         criteria,
         style: [],
-        budgetMicro: null,
         assumptions: [],
         materials: [],
       },
@@ -48,8 +58,7 @@ describe('整体验收（从任务单来的任务）', () => {
     plans.set(
       planner.runId,
       JSON.stringify({
-        nodes: [work('home'), work('poster')],
-        edges,
+        outcomes: [agent('home'), agent('poster', { needs: edges.map((e) => e.from) })],
         deliverables: { 首页文案: 'home', 海报文案: 'poster' },
       }),
     );
@@ -112,48 +121,98 @@ describe('整体验收（从任务单来的任务）', () => {
     return task;
   };
 
-  it('修改交给规划员看上一版决定怎么改，用户确认后才开跑：接着原会话改、重新做（上一版产出在 in/_previous/）', async () => {
+  it('意见指到一样由 AI 做的成果：不经过规划员，做它的 AI 接着原会话改，用到它的下游跟着更新', async () => {
     const task = await delivered([{ from: 'home', to: 'poster' }]);
     const firstHome = runOf('home', task).runId;
     const firstPoster = runOf('poster', task).runId;
     const SHOT = '7a7a7a7a-7a7a-4a7a-8a7a-7a7a7a7a7a7a';
     const homeId = keyOf(task, 'home');
-    const revised = await reviseAndWait(task.id, {
+    const planners = plannerRuns().length;
+    const running = await service.revise(task.id, {
       ownerId: OWNER,
       request: '标题改短\n批注：\n1.「home.md」画面右上：去掉这句（见截图 批注-home-截图1.png）',
       materials: [{ uploadId: SHOT, name: '批注-home-截图1.png', size: 4 }],
       nodeIds: [homeId],
     });
-    expect(revised).toMatchObject({
+    // 马上开跑，不等确认；工作流成了第 2 版，第 1 版冻结
+    expect(running).toMatchObject({
       id: task.id,
-      status: 'planning',
-      version: 1,
-      revision: { version: 2, stage: 'planning', request: expect.stringContaining('标题改短') },
+      status: 'running',
+      version: 2,
+      revision: null,
+      revising: true,
     });
-    expect(revised.materials).toEqual([{ uploadId: SHOT, name: '批注-home-截图1.png', size: 4 }]);
-    // 规划中工作流还是上一版
-    expect(revised.nodes.map((n) => `${n.key}=${n.status}`)).toEqual([
-      'home=succeeded',
-      'poster=succeeded',
-    ]);
+    expect(running.versions).toMatchObject([{ version: 1, request: null }]);
+    expect(running.materials).toEqual([{ uploadId: SHOT, name: '批注-home-截图1.png', size: 4 }]);
     // 任务列表标出「修改中」；修改附件算任务素材，删私聊时留着
     expect((await service.list(OWNER))[0]).toMatchObject({ id: task.id, revising: true });
     expect(
       await service.materialsInUse(OWNER, [SHOT, '6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b']),
     ).toEqual([SHOT]);
+    // 节点 ID 不变（成果和运行记录接得上）；做首页的 AI 接着原会话按意见改
+    expect(keyOf(running, 'home')).toBe(homeId);
+    const home = runOf('home', task) as Submitted & {
+      materials: { uploadId: string; path: string }[];
+    };
+    expect(home.continueFrom).toBe(firstHome);
+    expect(home.prompt).toContain('标题改短');
+    expect(home.prompt).not.toContain('AI 团队给你这一步的安排');
+    expect(home.materials).toContainEqual({
+      uploadId: SHOT,
+      path: 'materials/批注-home-截图1.png',
+    });
+    expect(runsOf('poster', task)).toHaveLength(1);
+    await finish(home.runId, 'succeeded', { outputs: [{ path: 'home.md', size: 10 }] });
+    // 用到首页的海报跟着更新：也接着自己的原会话，拿上游的新产出
+    const poster = runOf('poster', task);
+    expect(poster).toMatchObject({
+      continueFrom: firstPoster,
+      inputsFrom: [{ runId: home.runId, as: 'home' }],
+    });
+    expect(poster.prompt).toContain('标题改短');
+    await finish(poster.runId, 'succeeded', { outputs: [{ path: 'poster.md', size: 10 }] });
+    expect(await service.get(OWNER, task.id)).toMatchObject({ status: 'succeeded', version: 2 });
+    expect((await service.list(OWNER)).map((t) => [t.id, t.revising])).toEqual([[task.id, false]]);
+    expect(plannerRuns()).toHaveLength(planners);
+    // 冻结的第 1 版能看，节点和线照旧
+    const first = await service.version(OWNER, task.id, 1);
+    expect(first.nodes.map((n) => n.key)).toEqual(['home', 'poster']);
+    expect(first.edges).toHaveLength(1);
+    expect((await errorOf(() => service.version(OWNER, task.id, 2))).status).toBe(404);
+  });
+
+  it('意见没指到哪样成果：交给规划员看上一版决定怎么改，用户确认后才开跑：接着原会话改、重新做（上一版产出在 in/_previous/）', async () => {
+    const task = await delivered([{ from: 'home', to: 'poster' }]);
+    const firstHome = runOf('home', task).runId;
+    const firstPoster = runOf('poster', task).runId;
+    const revised = await reviseAndWait(task.id, {
+      ownerId: OWNER,
+      request: '两份都换个语气',
+      materials: [],
+    });
+    expect(revised).toMatchObject({
+      id: task.id,
+      status: 'planning',
+      version: 1,
+      revision: { version: 2, stage: 'planning', request: '两份都换个语气' },
+    });
+    // 规划中工作流还是上一版
+    expect(revised.nodes.map((n) => `${n.key}=${n.status}`)).toEqual([
+      'home=succeeded',
+      'poster=succeeded',
+    ]);
     const planner = plannerRuns().at(-1)!;
-    expect(planner.prompt).toContain('【修改意见】\n标题改短');
-    expect(planner.prompt).toContain('是这些节点交出的：home');
+    expect(planner.prompt).toContain('【修改意见】\n两份都换个语气');
+    expect(planner.prompt).toContain('没指到具体成果');
     expect(planner.prompt).toContain('"home.md"');
     expect(planner.prompt).toContain('"home → poster"');
 
     await planned({
       summary: '首页接着原会话改标题，海报按新首页重新写。',
-      nodes: [
-        { ...work('home'), from: 'home', mode: 'continue' },
-        { ...work('poster'), from: 'poster' },
+      outcomes: [
+        { ...agent('home', { goal: '把标题改短' }), mode: 'continue' },
+        { ...agent('poster', { needs: ['home'] }), mode: 'fresh' },
       ],
-      edges: [{ from: 'home', to: 'poster' }],
       deliverables: { 首页文案: 'home', 海报文案: 'poster' },
     });
     const pending = await service.get(OWNER, task.id);
@@ -162,31 +221,24 @@ describe('整体验收（从任务单来的任务）', () => {
       attention: { reason: 'revision_plan', message: '首页接着原会话改标题，海报按新首页重新写。' },
       revision: {
         stage: 'confirm',
-        estimateMicro: 6_000,
         changes: [
           { key: 'home', change: 'continue' },
           { key: 'poster', change: 'fresh' },
         ],
       },
     });
+    expect(pending.revision).not.toHaveProperty('estimateMicro');
     // 确认前不跑任何节点
     expect(runsOf('home', task)).toHaveLength(1);
     expect(runsOf('poster', task)).toHaveLength(1);
 
     const running = await service.decide(OWNER, task.id, { choice: 'continue' });
     expect(running).toMatchObject({ status: 'running', version: 2, revision: null });
-    expect(running.versions).toMatchObject([{ version: 1, request: null }]);
-    // 节点 ID 不变（成果和运行记录接得上）
-    expect(keyOf(running, 'home')).toBe(homeId);
-    const home = runOf('home', task) as Submitted & {
-      materials: { uploadId: string; path: string }[];
-    };
+    // 接着原会话改：带着意见和规划员给这一步的安排
+    const home = runOf('home', task);
     expect(home.continueFrom).toBe(firstHome);
-    expect(home.prompt).toContain('标题改短');
-    expect(home.materials).toContainEqual({
-      uploadId: SHOT,
-      path: 'materials/批注-home-截图1.png',
-    });
+    expect(home.prompt).toContain('两份都换个语气');
+    expect(home.prompt).toContain('AI 团队给你这一步的安排：\n把标题改短');
     expect(runsOf('poster', task)).toHaveLength(1);
     await finish(home.runId, 'succeeded', { outputs: [{ path: 'home.md', size: 10 }] });
     // 重新做：新会话，拿上游新产出，上一版自己的产出放在 in/_previous/
@@ -201,12 +253,6 @@ describe('整体验收（从任务单来的任务）', () => {
     expect(poster.prompt).toContain('【上一版】');
     await finish(poster.runId, 'succeeded', { outputs: [{ path: 'poster.md', size: 10 }] });
     expect(await service.get(OWNER, task.id)).toMatchObject({ status: 'succeeded', version: 2 });
-    expect((await service.list(OWNER)).map((t) => [t.id, t.revising])).toEqual([[task.id, false]]);
-    // 冻结的第 1 版能看，节点和线照旧
-    const first = await service.version(OWNER, task.id, 1);
-    expect(first.nodes.map((n) => n.key)).toEqual(['home', 'poster']);
-    expect(first.edges).toHaveLength(1);
-    expect((await errorOf(() => service.version(OWNER, task.id, 2))).status).toBe(404);
 
     // 规划中不能再发起修改；「不改了」回到修改前的样子
     await reviseAndWait(task.id, { ownerId: OWNER, request: '再改', materials: [] });
@@ -223,28 +269,28 @@ describe('整体验收（从任务单来的任务）', () => {
     expect(cancelled).toContain(plannerRuns().at(-1)!.runId);
   });
 
-  it('沿用、新增、删除节点；规划门挡住拿不到新产出的沿用，退回规划员', async () => {
-    const task = await delivered();
+  it('沿用、新增、删除成果；规划门挡住拿不到新产出的沿用，退回规划员', async () => {
+    const task = await delivered([{ from: 'home', to: 'poster' }]);
     await reviseAndWait(task.id, { ownerId: OWNER, request: '海报换成一句宣传语', materials: [] });
     const planners = plannerRuns().length;
-    // 沿用的节点的上游要重新做：它拿不到新产出
+    // 沿用的成果用到的上游要重新做：它拿不到新产出
     await planned({
       summary: 's',
-      nodes: [{ key: 'home', reuse: 'home' }, { ...work('slogan') }],
-      edges: [{ from: 'slogan', to: 'home' }],
-      deliverables: { 首页文案: 'home', 海报文案: 'slogan' },
+      outcomes: [
+        { ...agent('home'), mode: 'fresh' },
+        { key: 'poster', reuse: true },
+      ],
+      deliverables: { 首页文案: 'home', 海报文案: 'poster' },
     });
     await vi.waitFor(() => expect(plannerRuns()).toHaveLength(planners + 1));
-    expect(plannerRuns().at(-1)!.prompt).toContain('沿用的「home」的上游「slogan」要重新做');
+    expect(plannerRuns().at(-1)!.prompt).toContain('沿用的「poster」的上游「home」要重新做');
     expect((await service.get(OWNER, task.id)).status).toBe('planning');
     await planned({
       summary: '首页不动，海报换成宣传语。',
-      nodes: [{ key: 'home', reuse: 'home' }, { ...work('slogan') }],
-      edges: [],
+      outcomes: [{ key: 'home', reuse: true }, agent('slogan')],
       deliverables: { 首页文案: 'home', 海报文案: 'slogan' },
     });
     expect((await service.get(OWNER, task.id)).revision).toMatchObject({
-      estimateMicro: 3_000,
       changes: [
         { key: 'home', change: 'reuse' },
         { key: 'slogan', change: 'new' },
@@ -266,7 +312,7 @@ describe('整体验收（从任务单来的任务）', () => {
       outputs: [{ path: 'slogan.md', size: 9 }],
     });
     expect(await service.get(OWNER, task.id)).toMatchObject({ status: 'succeeded' });
-    // 删掉的节点留在第 1 版里，运行记录还能看
+    // 删掉的成果留在第 1 版里，运行记录还能看
     expect((await service.version(OWNER, task.id, 1)).nodes.map((n) => n.key)).toEqual([
       'home',
       'poster',
@@ -281,11 +327,10 @@ describe('整体验收（从任务单来的任务）', () => {
     await reviseAndWait(task.id, { ownerId: OWNER, request: '换个语气', materials: [] });
     await planned({
       summary: '都重新写。',
-      nodes: [
-        { ...work('home'), from: 'home' },
-        { ...work('poster'), from: 'poster' },
+      outcomes: [
+        { ...agent('home'), mode: 'fresh' },
+        { ...agent('poster'), mode: 'fresh' },
       ],
-      edges: [],
       deliverables: { 首页文案: 'home', 海报文案: 'poster' },
     });
     expect((await service.get(OWNER, task.id)).status).toBe('needs_attention');

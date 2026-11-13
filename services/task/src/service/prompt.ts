@@ -23,21 +23,8 @@ export interface NodeContext {
   /** 用户给的素材在沙箱里的路径（materials/…） */
   materials: string[];
   deliver?: string[];
-  /** 交付前的自查清单（方案里的 checks；ADR 0017：节点自己对照，系统不再逐条打分） */
-  checks?: string[];
   /** 修改时重新做：上一版这个节点交出的文件在 in/_previous/（ADR 0022） */
   previous?: boolean;
-  /** 预算和进度（ADR 0016 §5）：只是参考，节点自己决定做几版、什么时候停手 */
-  budget?: {
-    /** 分给这个节点的份额；旧节点没有 */
-    nodeMicro?: number;
-    /** 用户选的整个任务预算；旧任务没有 */
-    taskMicro?: number;
-    /** 报价时估的整个任务用时（分钟） */
-    taskMinutes?: number;
-    spentMicro: number;
-    elapsedMinutes: number;
-  };
 }
 
 /** 修改时「重新做」的节点：上一版它交出的文件放在 in/ 下的这个目录（ADR 0022） */
@@ -45,7 +32,7 @@ export const PREVIOUS_DIR = '_previous';
 
 export const NO_QUESTIONS = '- 没有人会回答问题，拿不准的自己决定。';
 
-/** 说明里的上下文几段：任务、任务单、角色、目标（goalLabel 是这一段的标题）、要交的文件、上游、素材、追加要求、自查 */
+/** 说明里的上下文几段：任务、任务单、角色、目标（goalLabel 是这一段的标题）、要交的文件、上游、素材、追加要求 */
 export function contextParts(c: NodeContext, goalLabel: string): string[] {
   const parts = [`【整个任务】\n${c.brief}`];
   if (c.sheet) parts.push(`【用户确认的任务单】\n${JSON.stringify(c.sheet)}`);
@@ -78,9 +65,7 @@ export function contextParts(c: NodeContext, goalLabel: string): string[] {
   if (c.userNotes.length > 0) {
     parts.push(`【用户追加的要求】\n${c.userNotes.map((n) => `- ${n}`).join('\n')}`);
   }
-  if (c.checks?.length) {
-    parts.push(`【交付前看一眼】\n${c.checks.map((t) => `- ${t}`).join('\n')}`);
-  }
+
   return parts;
 }
 
@@ -94,15 +79,15 @@ export function resumePrompt(newNotes: string[], interrupted = false): string {
 
 /**
  * 用户看过成果后的修改（ADR 0012，2026-11-05 改为在原任务里接着原会话改）：
- * 交付节点和它的下游都接着自己上次的会话，只改修改意见涉及的地方。
+ * 做这样成果的 AI 和用到它的下游都接着自己上次的会话，只改修改意见涉及的地方。
+ * request 是修改意见；规划员排过方案时后面带着它给这一步的安排（见 engine/revisions.ts）。
  */
-export function revisionPrompt(request: string, plan?: string): string {
+export function revisionPrompt(request: string): string {
   return [
     '用户看了成果，提出修改意见（批注截图在 materials/ 下，编号与批注一致）：',
     '',
     request,
     '',
-    ...(plan ? ['AI 团队给你这一步的安排：', plan, ''] : []),
     '在上次成果的基础上改：只动意见涉及的地方；上游有更新以 in/ 里最新的为准；和你无关的意见不用管。改完在 out/ 交齐全部成果（没改的也要在），update_goal complete，用一两句话说明改了什么。',
   ].join('\n');
 }

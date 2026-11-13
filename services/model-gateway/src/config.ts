@@ -166,6 +166,10 @@ export const modelGatewayEnv = {
     .int()
     .min(60_000)
     .default(30 * 60_000),
+  /** model.ask（问另一个模型，ADR 0030 §3.5）能问的型号，第一个是不指定时用的 */
+  TOOL_ASK_MODELS: list(
+    'deepseek/deepseek-v4-pro-0813,deepseek/deepseek-v4.1-flash,qwen/qwen3.8-max-prime,moonshotai/kimi-k3.1-pro,z-ai/glm-5.3-prime,anthropic/claude-sonnet-5.5,openai/gpt-6.1-sol,google/gemini-4-argon',
+  ),
   /** jev.decide 用的决策模型 */
   TOOL_JEV_MODEL: z.string().min(1).default('typesafe/jev-1.14'),
   /** 上面的决策模型用不了时（如「只用国内模型」）回答 jev.decide 的聊天模型：三个国内的轻量型号 */

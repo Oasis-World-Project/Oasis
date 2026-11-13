@@ -1,35 +1,30 @@
-// 任务的工作流（照原型 ⑬）：节点图 + 单个节点的详情。可以整体运行或停止、单独运行或停止一个节点，
-// 加节点、删节点、接线、改节点；节点详情里看运行过程、追问、补要求（ADR 0007 §6）。
+// 任务的工作流（ADR 0030 §3.2）：每样成果一个框，点开看详情。可以整体运行或停止、停止或继续一样成果；
+// 详情里看 AI 自己列的任务清单和运行过程，追问、补要求。节点和连线不能改。
 import type { TaskBody } from '@oasis/contracts/task';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useRouter } from '@tanstack/react-router';
 import { ReactFlowProvider } from '@xyflow/react';
-import { ArrowLeft, Plus } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
+import { useState } from 'react';
 import {
-  addEdge,
-  addNode,
   cancelTask,
-  deleteEdge,
   deleteTask,
   runTask,
   stopTask,
   taskQuery,
   taskVersionQuery,
-  updateEdge,
-  updateNode,
 } from '../api/queries.ts';
 import { ApiError } from '../api/client.ts';
 import { ConfirmButton, RevisingTag } from '../chat/parts.tsx';
 import { TaskDecisions } from '../chat/TaskCard.tsx';
 import { ChatActionsContext } from '../chat/use-chat-actions.ts';
 import { formatCost } from '../ui/format.ts';
-import { NodeEditor, type EditorResult } from '../workflow/NodeEditor.tsx';
 import { NodePanel } from '../workflow/NodePanel.tsx';
-import { canEditWorkflow, taskStatusOf } from '../workflow/rules.ts';
+import { canOperate, taskStatusOf } from '../workflow/rules.ts';
+import { useProgress } from '../workflow/use-progress.ts';
 import { useSpeakers } from '../workflow/use-speakers.ts';
 import { useWorkflowActions } from '../workflow/use-workflow-actions.ts';
-import { WorkflowGraph, type GraphHandlers } from '../workflow/WorkflowGraph.tsx';
+import { WorkflowGraph } from '../workflow/WorkflowGraph.tsx';
 
 const route = getRouteApi('/shell/canvas/tasks/$taskId');
 
@@ -56,29 +51,12 @@ export function WorkflowPage() {
     },
   });
   const [selected, setSelected] = useState<string | null | undefined>(undefined);
-  const [editing, setEditing] = useState<'new' | string | null>(null);
   // 看冻结的旧版工作流（ADR 0022）：null 是当前这一版
   const [viewing, setViewing] = useState<number | null>(null);
   const frozen = useQuery({ ...taskVersionQuery(taskId, viewing ?? 1), enabled: viewing !== null });
-
-  const handlers = useMemo<GraphHandlers>(
-    () => ({
-      onPick: setSelected,
-      onConnect: (from, to) => {
-        // 有断开的线头就接上它，没有就新拉一条
-        const loose =
-          task?.edges.find((e) => e.from === from && !e.to) ??
-          task?.edges.find((e) => !e.from && e.to === to);
-        void actions.run('edge', () =>
-          loose
-            ? updateEdge(taskId, loose.id, loose.from ? { to } : { from })
-            : addEdge(taskId, from, to),
-        );
-      },
-      onDeleteEdge: (edgeId) => void actions.run('edge', () => deleteEdge(taskId, edgeId)),
-    }),
-    [actions, task?.edges, taskId],
-  );
+  // 旧版只读：照冻结时的节点和连线
+  const old = viewing !== null ? frozen.data : undefined;
+  const progress = useProgress(taskId, old?.nodes ?? task?.nodes, old?.frozenAt);
 
   if (isPending || isError) {
     return (
@@ -93,8 +71,7 @@ export function WorkflowPage() {
     );
   }
 
-  // 旧版只读：照冻结时的节点和连线，按已结束的任务显示（不能运行、编辑、处理）
-  const old = viewing !== null ? frozen.data : undefined;
+  // 旧版按已结束的任务显示（不能运行、处理）
   const shown: TaskBody = old
     ? {
         ...task,
@@ -108,13 +85,9 @@ export function WorkflowPage() {
         spentMicro: old.spentMicro,
       }
     : task;
-  const graphHandlers: GraphHandlers = old
-    ? { onPick: setSelected, onConnect: () => undefined, onDeleteEdge: () => undefined }
-    : handlers;
   const pickVersion = (version: number | null) => {
     setViewing(version);
     setSelected(null);
-    setEditing(null);
   };
   const selectedId = selected === undefined ? (shown.attention?.nodeId ?? null) : selected;
   const node = shown.nodes.find((n) => n.id === selectedId);
@@ -130,33 +103,12 @@ export function WorkflowPage() {
         shown.attention?.nodeId === n.id),
   );
   const steps = shown.nodes.filter((n) => !n.parentId);
-  const editingNode =
-    editing && editing !== 'new' ? task.nodes.find((n) => n.id === editing) : undefined;
   const done = steps.filter((n) => n.status === 'succeeded').length;
-  const open = canEditWorkflow(shown);
+  const open = canOperate(shown);
   const status = taskStatusOf(task);
   const busy = actions.busy !== null;
-  const hasDrafts = task.nodes.some((n) => n.status === 'draft');
   const back = () =>
     window.history.length > 1 ? router.history.back() : void router.navigate({ to: '/canvas' });
-
-  async function save(result: EditorResult) {
-    if (result.changes && editingNode) {
-      const changes = result.changes;
-      if (await actions.run('save', () => updateNode(taskId, editingNode.id, changes)))
-        setEditing(null);
-      return;
-    }
-    if (!result.node) return;
-    const created = await actions.run('save', () => addNode(taskId, result.node!));
-    if (!created) return;
-    const added = created.nodes.find((n) => n.key === result.node!.key);
-    setEditing(null);
-    if (added) {
-      setSelected(added.id);
-      if (result.after) await actions.run('edge', () => addEdge(taskId, result.after!, added.id));
-    }
-  }
 
   return (
     // 「需要处理」的选择和私聊里的任务卡共用一个组件，它要的操作上下文在这里给
@@ -184,7 +136,7 @@ export function WorkflowPage() {
         ) : task.status === 'planning' && task.nodes.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2">
             <p className="m-0 text-[15px] font-medium">AI 团队正在搭建工作流</p>
-            <p className="m-0 text-sm text-ink-muted">排好分工和顺序后，节点会出现在这里。</p>
+            <p className="m-0 text-sm text-ink-muted">排好后，每样成果会出现在这里。</p>
           </div>
         ) : (
           <ReactFlowProvider>
@@ -192,7 +144,8 @@ export function WorkflowPage() {
               task={shown}
               selected={selectedId}
               speakers={speakers}
-              handlers={graphHandlers}
+              progress={progress}
+              onPick={setSelected}
             />
           </ReactFlowProvider>
         )}
@@ -214,7 +167,7 @@ export function WorkflowPage() {
           </span>
         </div>
 
-        {/* 右上：进度、花费、整体运行 / 停止、加节点、取消 */}
+        {/* 右上：进度、花费、整体运行 / 停止、取消 */}
         <div className="absolute right-4 top-4 z-10 flex flex-wrap items-center justify-end gap-1.5">
           <span className="inline-flex h-10 items-center gap-2 rounded-full bg-glass-active px-4 text-[13px] shadow-edge-strong backdrop-blur-xl">
             <span className="font-display">
@@ -225,37 +178,15 @@ export function WorkflowPage() {
           </span>
           {open && (
             <>
-              <button
-                type="button"
-                onClick={() => setEditing('new')}
-                // 模型和工具的目录还没拿到时打不开编辑窗
-                disabled={busy || !speakers.options}
-                className={`${pill} bg-glass-active text-ink shadow-edge-strong`}
-              >
-                <Plus size={15} aria-hidden="true" />
-                加节点
-              </button>
               {task.status === 'running' ? (
-                <>
-                  {hasDrafts && (
-                    <button
-                      type="button"
-                      onClick={() => void actions.run('run', () => runTask(taskId))}
-                      disabled={busy}
-                      className={`${pill} bg-glass-active text-ink shadow-edge-strong`}
-                    >
-                      把新节点加进来
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => void actions.run('stop', () => stopTask(taskId))}
-                    disabled={busy}
-                    className={`${pill} bg-solid text-on-solid`}
-                  >
-                    全部停止
-                  </button>
-                </>
+                <button
+                  type="button"
+                  onClick={() => void actions.run('stop', () => stopTask(taskId))}
+                  disabled={busy}
+                  className={`${pill} bg-solid text-on-solid`}
+                >
+                  全部停止
+                </button>
               ) : (
                 <button
                   type="button"
@@ -349,11 +280,9 @@ export function WorkflowPage() {
         )}
 
         {/* 需要处理 / 出错提示 */}
-        {(issues.length > 0 ||
-          shown.status === 'needs_attention' ||
-          (actions.error && editing === null)) && (
+        {(issues.length > 0 || shown.status === 'needs_attention' || actions.error) && (
           <div className="absolute left-4 top-20 z-10 max-h-[calc(100%-112px)] w-[min(280px,calc(100%-32px))] overflow-y-auto overscroll-contain">
-            {actions.error && editing === null && (
+            {actions.error && (
               <p
                 role="alert"
                 className="m-0 mb-2 rounded-item bg-glass-active px-4 py-2.5 text-[13px] text-accent shadow-edge-strong"
@@ -407,25 +336,10 @@ export function WorkflowPage() {
             node={node}
             {...(old ? { before: old.frozenAt } : {})}
             speakers={speakers}
+            progress={progress.get(node.id)}
             actions={actions}
             onPick={setSelected}
-            onEdit={() => setEditing(node.id)}
             onClose={() => setSelected(null)}
-          />
-        )}
-
-        {editing !== null && speakers.options && (
-          <NodeEditor
-            task={task}
-            node={editingNode}
-            options={speakers.options}
-            busy={actions.busy === 'save'}
-            error={actions.error}
-            onSave={(r) => void save(r)}
-            onClose={() => {
-              setEditing(null);
-              actions.clearError();
-            }}
           />
         )}
       </section>

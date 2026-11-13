@@ -4,7 +4,7 @@
 // - 停止后继续：把这一轮没说完的重新说；都说完了就开下一轮或汇总。
 // - 接不上自己原来的会话（工作目录不在了）：重新开会话说，带上完整题目和之前几轮的全部发言。
 // - 运行中用户的追问不插进会话，记下来，下一轮带上。
-import { HttpError } from '@oasis/service-kit';
+
 import type { DiscussionConfig } from '../../repo/schema.ts';
 import type { NodeOf, Snapshot } from '../../repo/task-store.ts';
 import { contextParts, NO_QUESTIONS, type NodeContext } from '../prompt.ts';
@@ -163,8 +163,7 @@ export const discussion: NodeKindPlugin<'discussion'> = {
   texts: (plan) => [plan.goal, plan.role, ...plan.participants.map((p) => p.stance)],
   models: (plan) => [plan.model, ...plan.participants.map((p) => p.model)],
   toolProblems: () => [],
-  estimate: (plan, rates) =>
-    (plan.participants.length * plan.rounds + 1) * (rates.speech + rates.compute),
+
   config: (plan): DiscussionConfig => ({
     participants: plan.participants,
     rounds: plan.rounds,
@@ -177,20 +176,7 @@ export const discussion: NodeKindPlugin<'discussion'> = {
     participants: node.config.participants ?? [],
     rounds: node.config.rounds ?? 1,
   }),
-  edit(node, body) {
-    if (body.tools !== undefined) throw new HttpError(400, 'invalid_node', '只有干活节点能用工具');
-    if (body.steps !== undefined) throw new HttpError(400, 'invalid_node', '只有工具节点有步骤');
-    const problems = body.participants
-      ? duplicateNames(body.title ?? node.title, body.participants)
-      : [];
-    if (problems.length) throw new HttpError(400, 'invalid_node', problems.join('；'));
-    return {
-      ...(body.participants ? { participants: body.participants } : {}),
-      ...(body.rounds ? { rounds: body.rounds } : {}),
-    };
-  },
   body: (node) => ({
-    tools: [],
     discussion: {
       participants: node.config.participants ?? [],
       rounds: node.config.rounds ?? 1,

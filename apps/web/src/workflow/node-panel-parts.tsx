@@ -1,9 +1,8 @@
-// 节点详情面板的几块：小标题、上下游（谁交来什么、交给谁，能加上游、删连线）、追问和补要求的输入框。
+// 节点详情面板的几块：小标题、上下游（谁交来什么、交给谁，只读）、追问和补要求的输入框。
 import type { NodeBody, TaskBody } from '@oasis/contracts/task';
-import { ArrowUp, Link2Off, X } from 'lucide-react';
+import { ArrowUp } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { addEdge, deleteEdge, messageNode } from '../api/queries.ts';
-import { nodeActions } from './rules.ts';
+import { messageNode } from '../api/queries.ts';
 import type { WorkflowActions } from './use-workflow-actions.ts';
 
 export function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -20,29 +19,11 @@ const chip =
 export const smallButton =
   'h-8 rounded-full border-0 bg-track px-3 text-[12.5px] font-medium text-ink disabled:cursor-not-allowed disabled:opacity-40';
 
-/** 上下游：谁交来什么、交给谁；还没开始的节点可以加上游、删连线（拖线之外的另一种接法） */
-export function Links({
-  task,
-  node,
-  actions,
-}: {
-  task: TaskBody;
-  node: NodeBody;
-  actions: WorkflowActions;
-}) {
-  const titleOf = (id: string | null) => task.nodes.find((n) => n.id === id)?.title ?? '（空）';
-  const incoming = task.edges.filter((e) => e.to === node.id);
-  const outgoing = task.edges.filter((e) => e.from === node.id);
-  const editable = nodeActions(task, node).acceptsInput;
-  const busy = actions.busy !== null;
-  const candidates = task.nodes.filter(
-    (n) =>
-      n.id !== node.id &&
-      nodeActions(task, n).givesOutput &&
-      !incoming.some((e) => e.from === n.id),
-  );
-  const remove = (edgeId: string) => void actions.run('edge', () => deleteEdge(task.id, edgeId));
-
+/** 上下游：谁交来什么、交给谁 */
+export function Links({ task, node }: { task: TaskBody; node: NodeBody }) {
+  const nodeOf = (id: string | null) => task.nodes.find((n) => n.id === id);
+  const incoming = task.edges.filter((e) => e.to === node.id && nodeOf(e.from));
+  const outgoing = task.edges.filter((e) => e.from === node.id && nodeOf(e.to));
   return (
     <>
       <Section title="从上游拿到">
@@ -51,81 +32,26 @@ export function Links({
         )}
         <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
           {incoming.map((edge) => {
-            const from = task.nodes.find((n) => n.id === edge.from);
+            const from = nodeOf(edge.from);
             return (
-              <li key={edge.id} className={`${chip} ${edge.from ? '' : 'text-accent'}`}>
-                {edge.from ? (
-                  <span className="truncate">
-                    {from?.title}
-                    {from && from.outputs.length > 0 && (
-                      <span className="text-ink-muted"> · {from.outputs.length} 个文件</span>
-                    )}
-                  </span>
-                ) : (
-                  <>
-                    <Link2Off size={13} aria-hidden="true" />
-                    前面的线断了
-                  </>
-                )}
-                {editable && (
-                  <button
-                    type="button"
-                    onClick={() => remove(edge.id)}
-                    disabled={busy}
-                    aria-label={`删掉来自${titleOf(edge.from)}的连线`}
-                    className="-mr-1.5 flex size-6 items-center justify-center rounded-full border-0 bg-transparent text-ink-muted hover:text-ink"
-                  >
-                    <X size={13} aria-hidden="true" />
-                  </button>
-                )}
+              <li key={edge.id} className={chip}>
+                <span className="truncate">
+                  {from?.title}
+                  {from && from.outputs.length > 0 && (
+                    <span className="text-ink-muted"> · {from.outputs.length} 个文件</span>
+                  )}
+                </span>
               </li>
             );
           })}
         </ul>
-        {editable && candidates.length > 0 && (
-          <label className="flex items-center gap-2 text-[12.5px] text-ink-muted">
-            加一个上游
-            <select
-              value=""
-              disabled={busy}
-              onChange={(e) => {
-                const from = e.target.value;
-                if (from) void actions.run('edge', () => addEdge(task.id, from, node.id));
-              }}
-              className="h-8 min-w-0 flex-1 rounded-full border-0 bg-glass-active px-3 text-[12.5px] text-ink shadow-edge-strong"
-            >
-              <option value="">选一个节点…</option>
-              {candidates.map((n) => (
-                <option key={n.id} value={n.id}>
-                  {n.title}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
       </Section>
       {outgoing.length > 0 && (
         <Section title="交给下游">
           <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
             {outgoing.map((edge) => (
-              <li key={edge.id} className={`${chip} ${edge.to ? '' : 'text-accent'}`}>
-                {edge.to ? (
-                  <span className="truncate">{titleOf(edge.to)}</span>
-                ) : (
-                  <>
-                    <Link2Off size={13} aria-hidden="true" />
-                    后面的线断了
-                    <button
-                      type="button"
-                      onClick={() => remove(edge.id)}
-                      disabled={busy}
-                      aria-label="删掉断开的连线"
-                      className="-mr-1.5 flex size-6 items-center justify-center rounded-full border-0 bg-transparent text-ink-muted hover:text-ink"
-                    >
-                      <X size={13} aria-hidden="true" />
-                    </button>
-                  </>
-                )}
+              <li key={edge.id} className={chip}>
+                <span className="truncate">{nodeOf(edge.to)?.title}</span>
               </li>
             ))}
           </ul>

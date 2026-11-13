@@ -127,18 +127,6 @@ export function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
             nodes.set(n.id, row);
             snap.nodes.push(row);
           },
-          async deleteNode(id) {
-            for (const child of snap.nodes.filter((n) => n.parentId === id))
-              await w.deleteNode(child.id);
-            nodes.delete(id);
-            snap.nodes = snap.nodes.filter((n) => n.id !== id);
-            for (const e of [...edges.values()].filter((x) => x.taskId === taskId)) {
-              if (e.fromNodeId === id) e.fromNodeId = null;
-              if (e.toNodeId === id) e.toNodeId = null;
-              if (!e.fromNodeId && !e.toNodeId) edges.delete(e.id);
-            }
-            snap.edges = [...edges.values()].filter((e) => e.taskId === taskId);
-          },
           async retireNode(id, version) {
             for (const child of snap.nodes.filter((n) => n.parentId === id))
               await w.retireNode(child.id, version);
@@ -160,7 +148,7 @@ export function memoryStore(): TaskStore & { runs: Map<string, NodeRun> } {
             edges.set(edge.id, row);
             snap.edges.push(row);
           },
-          setEdge: async (id, ends) => void Object.assign(edges.get(id) as Edge, ends),
+
           async deleteEdge(id) {
             edges.delete(id);
             snap.edges = snap.edges.filter((e) => e.id !== id);

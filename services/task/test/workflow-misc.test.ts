@@ -36,7 +36,6 @@ describe('只用国内模型（ADR 0027）', () => {
         deliverables: [{ name: 'd', form: 'f' }],
         criteria: ['c'],
         style: [],
-        budgetMicro: null,
         assumptions: [],
         materials: [],
       },
@@ -44,27 +43,20 @@ describe('只用国内模型（ADR 0027）', () => {
     return (submitted.findLast((x) => !x.nodeId) as { prompt: string }).prompt;
   };
 
-  it('开关经 task 读写；打开后这个用户的规划员和编辑节点时都只看到国内模型，别的用户不受影响', async () => {
+  it('开关经 task 读写；打开后这个用户的规划员只看到国内模型，别的用户不受影响', async () => {
     const scopes = createModelScopes(createServiceClient('model-gateway', harnessUrl));
     expect(await scopes.get(OWNER)).toEqual({ domesticOnly: false });
     expect(await plannerPrompt(OWNER)).toContain('openai/blocked（GPT');
-    expect((await service.options(OWNER)).models.map((m) => m.providerModel)).toEqual([
-      'deepseek/x',
-      'openai/blocked',
-    ]);
 
     expect(await scopes.set(OWNER, { domesticOnly: true })).toEqual({ domesticOnly: true });
     expect(await scopes.get(OWNER)).toEqual({ domesticOnly: true });
     const prompt = await plannerPrompt(OWNER);
     expect(prompt).toContain('deepseek/x（DeepSeek');
     expect(prompt).not.toContain('openai/blocked');
-    const options = await service.options(OWNER);
-    expect(options.models.map((m) => m.providerModel)).toEqual(['deepseek/x']);
-    expect(options.tools.map((t) => t.key)).toEqual(['image.generate']);
     expect(await plannerPrompt(STRANGER)).toContain('openai/blocked（GPT');
 
     await scopes.set(OWNER, { domesticOnly: false });
-    expect((await service.options(OWNER)).models).toHaveLength(2);
+    expect(await plannerPrompt(OWNER)).toContain('openai/blocked（GPT');
   });
 });
 

@@ -119,7 +119,7 @@ async function list(): Promise<void> {
   const { tools } = (await request('/tools')) as { tools: ToolEntry[] };
   const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro < 10_000 ? 4 : 3)}`;
   for (const tool of tools.filter((t) => t.available)) {
-    // 每个型号的单价和用时（ADR 0016）：节点按预算用 --model 选，默认第一个
+    // 每个型号的单价和用时：节点用 --model 选，默认第一个
     const rates = (tool.rates ?? [])
       .map(
         (r) =>

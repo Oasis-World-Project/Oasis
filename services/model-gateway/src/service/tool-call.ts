@@ -2,7 +2,7 @@
 // 长任务提交时冻结并持久化意图，之后由 tool-jobs 推进；生图、看图在供应商限流或地区不可用时换下一个模型。
 import { createHash, randomUUID } from 'node:crypto';
 import type { ToolResult } from '@oasis/contracts/model-gateway';
-import { HttpError } from '@oasis/service-kit';
+import { createEnvelope, HttpError } from '@oasis/service-kit';
 import { ToolAdmissionError } from '../repo/tool-jobs-repo.ts';
 import { AVATAR_CATALOG_TOOL } from './avatar-catalog.ts';
 import { upstreamError, type Caller } from './metering.ts';
@@ -10,6 +10,7 @@ import { videoSecondRate } from './pricing.ts';
 import { HOLD_MARGIN_MS, type ToolContext } from './tool-context.ts';
 import type { ToolDef } from './tools.ts';
 import { mediaKinds } from './tools/images.ts';
+import { needsModel } from './tools/kit.ts';
 
 export function createToolCall(ctx: ToolContext) {
   const { deps, byKey, configured } = ctx;
@@ -60,7 +61,10 @@ export function createToolCall(ctx: ToolContext) {
         const prior = await jobs.byRequest(input.idempotencyKey);
         if (prior) return resume(prior.id);
       }
-      if (!configured(tool) || (tool.provider !== 'tavily' && !tool.models(config).length)) {
+      const { taskId, nodeId, runId } = input.caller;
+      if (tool.provider === 'task' && !(taskId && nodeId && runId))
+        throw new HttpError(409, 'not_in_workflow', `${tool.name}只有工作流里做成果的 AI 能用`);
+      if (!configured(tool) || (needsModel(tool) && !tool.models(config).length)) {
         throw new HttpError(503, 'tool_unavailable', `${tool.name}还没有配置好，现在用不了`);
       }
 
@@ -250,6 +254,8 @@ export function createToolCall(ctx: ToolContext) {
               const providerJobId = await tool.start(
                 {
                   ...toolDeps,
+                  jobId: id,
+                  emit: (type, data) => jobs.emit(createEnvelope('model-gateway', type, data)),
                   signal: AbortSignal.any([
                     input.signal,
                     AbortSignal.timeout(deps.submitTimeoutMs ?? 60_000),

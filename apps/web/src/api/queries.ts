@@ -8,7 +8,6 @@ import {
   ConversationList,
   IntakeResult,
   MessageList,
-  type IntakeConfirmBody,
 } from '@oasis/contracts/conversation';
 import { MeBody, VerifyCodeResult } from '@oasis/contracts/identity';
 import { RunEventList, type RunEventBody } from '@oasis/contracts/harness';
@@ -17,14 +16,11 @@ import {
   NodeRunList,
   TaskBody,
   TaskList,
-  WorkflowOptions,
+  WorkflowNames,
   WorkflowVersionBody,
   type DecisionBody,
-  type PlanNode,
   type TaskRevisionBody,
   type TaskStatus,
-  type UpdateEdgeBody,
-  type UpdateNodeBody,
 } from '@oasis/contracts/task';
 import { queryOptions } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -137,9 +133,8 @@ export const answerIntake = (
 
 export const cancelIntake = (conversationId: string) => intakeCall(conversationId, 'cancel', {});
 
-/** 确认任务单，带上选的预算（ADR 0016）：三档之一或自定义金额（微美元） */
-export const confirmIntake = (conversationId: string, budget: IntakeConfirmBody) =>
-  intakeCall(conversationId, 'confirm', budget);
+/** 确认任务单，交给 AI 团队开始做 */
+export const confirmIntake = (conversationId: string) => intakeCall(conversationId, 'confirm', {});
 
 /** 修改成果（ADR 0012）：修改意见直接交给 AI 团队，在原任务里接着改；不经过私聊 */
 export const reviseTask = (taskId: string, body: TaskRevisionBody) =>
@@ -212,7 +207,7 @@ const nodePath = (taskId: string, nodeId: string) => `${taskPath(taskId)}/nodes/
 export const applicationReportUrl = (taskId: string, nodeId: string) =>
   `/api${nodePath(taskId, nodeId)}/application-check`;
 
-/** 改工作流的接口都返回改完的任务 */
+/** 这几个操作都返回最新的任务 */
 const taskChange = (path: string, method: string, body?: unknown) =>
   api(path, TaskBody, { method, body: body ?? {} });
 
@@ -220,18 +215,6 @@ export const runNode = (taskId: string, nodeId: string) =>
   taskChange(`${nodePath(taskId, nodeId)}/run`, 'POST');
 export const stopNode = (taskId: string, nodeId: string) =>
   taskChange(`${nodePath(taskId, nodeId)}/stop`, 'POST');
-export const addNode = (taskId: string, node: PlanNode) =>
-  taskChange(`${taskPath(taskId)}/nodes`, 'POST', node);
-export const updateNode = (taskId: string, nodeId: string, body: UpdateNodeBody) =>
-  taskChange(nodePath(taskId, nodeId), 'PATCH', body);
-export const deleteNode = (taskId: string, nodeId: string) =>
-  taskChange(nodePath(taskId, nodeId), 'DELETE');
-export const addEdge = (taskId: string, from: string, to: string) =>
-  taskChange(`${taskPath(taskId)}/edges`, 'POST', { from, to });
-export const updateEdge = (taskId: string, edgeId: string, body: UpdateEdgeBody) =>
-  taskChange(`${taskPath(taskId)}/edges/${edgeId}`, 'PATCH', body);
-export const deleteEdge = (taskId: string, edgeId: string) =>
-  taskChange(`${taskPath(taskId)}/edges/${edgeId}`, 'DELETE');
 /** 做几版的节点改用第 version 版（ADR 0026）：下游做完了的会排成修改，等确认 */
 export const pickVersion = (taskId: string, nodeId: string, version: number) =>
   taskChange(`${nodePath(taskId, nodeId)}/pick`, 'POST', { version });
@@ -268,10 +251,10 @@ export const runEventsQuery = (taskId: string, nodeId: string, runId: string, li
     refetchInterval: live ? 2_000 : false,
   });
 
-/** 编辑节点时能选的模型和工具 */
-export const workflowOptionsQuery = queryOptions({
-  queryKey: ['workflow-options'],
-  queryFn: () => api('/task/v1/workflow/options', WorkflowOptions),
+/** 工作流页显示用的名字：型号是哪个 AI、工具叫什么 */
+export const workflowNamesQuery = queryOptions({
+  queryKey: ['workflow-names'],
+  queryFn: () => api('/task/v1/workflow/names', WorkflowNames),
   staleTime: 5 * 60_000,
 });
 

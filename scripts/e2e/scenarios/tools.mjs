@@ -1,7 +1,7 @@
 // 回归场景（docs/engineering/回归测试.md）：工具节点（ADR 0025）。
 import { literal, query } from '../db.mjs';
 import { marker } from '../fake-provider.mjs';
-import { done, sha256 } from './shared.mjs';
+import { done, outcomes, sha256 } from './shared.mjs';
 
 // ---------- 12. 工具节点：不用 AI，按步骤生成两段视频、再在沙箱里拼成片（ADR 0025） ----------
 const SHOTS = ['工具节点镜头一：秋叶', '工具节点镜头二：树梢'];
@@ -18,27 +18,25 @@ export const toolnode = {
   title: '两段拼成片',
   deliverables: [{ name: '成片', form: 'MP4' }],
   criteria: ['两段镜头拼成一段能播放的成片'],
-  quoteTools: [{ key: 'video.generate', uses: { economy: 10, standard: 10, premium: 10 } }],
   get request() {
     return `生成两段 5 秒镜头，再拼成成片 ${marker('toolnode')}`;
   },
-  plan: () => ({
-    nodes: [
-      {
-        key: 'cut',
-        title: '出片',
-        kind: 'tool',
-        role: '',
-        goal: `${marker('toolnode', 'cut')} 生成两段镜头，拼成 out/成片.mp4`,
-        steps: STEPS,
-        checks: [],
-        expects: ['成片.mp4'],
-        deliver: ['成片.mp4'],
-      },
-    ],
-    edges: [],
-    deliverables: { 成片: 'cut' },
-  }),
+  plan: () =>
+    outcomes({
+      nodes: [
+        {
+          key: 'cut',
+          title: '出片',
+          kind: 'tool',
+          goal: `${marker('toolnode', 'cut')} 生成两段镜头，拼成 out/成片.mp4`,
+          steps: STEPS,
+          expects: ['成片.mp4'],
+          deliver: ['成片.mp4'],
+        },
+      ],
+      edges: [],
+      deliverables: { 成片: 'cut' },
+    }),
   nodes: {},
   async run(t) {
     const { taskId } = await t.user.createTask(this.request);
@@ -50,8 +48,7 @@ export const toolnode = {
       `应是 3 步的工具节点：${node?.kind}`,
     );
     t.check(!node?.warning, `工具节点不应有提醒：${node?.warning}`);
-    // 估价按目录：两段 × 5 秒 × 每秒 $0.05，加一次算力
-    t.check(task.estimateMicro >= 500_000, `估价应含两段视频的钱：${task.estimateMicro}`);
+
     // 不起 AI：这个节点没有任何模型调用；视频提交了两次
     const asked = t.provider.calls.filter((c) => c.scenario === 'toolnode' && c.kind === 'node');
     t.check(asked.length === 0, `工具节点不应调用模型（调用了 ${asked.length} 次）`);

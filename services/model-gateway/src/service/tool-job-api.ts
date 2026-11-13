@@ -1,7 +1,7 @@
 // 长任务的对外接口：查进度、取结果文件、取消、云渲染的上传与提交、费用回执对账、任务删除时清理。
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
-import type { ToolJobBody } from '@oasis/contracts/model-gateway';
+import { ADJUST_TOOL, type ToolJobBody } from '@oasis/contracts/model-gateway';
 import { HttpError } from '@oasis/service-kit';
 import { RenderArgs } from '../adapters/runpod.ts';
 import type { Caller, MeteredCall } from './metering.ts';
@@ -45,6 +45,17 @@ export function createToolJobApi(ctx: ToolContext) {
         await tick();
       },
       cancel: cancelJob,
+      /** task 把规划员对「提出调整」的答复写回来（ADR 0030 §3.7）：沙箱里等着的 AI 下次查就拿到 */
+      async answer(jobId: string, text: string) {
+        const job = await jobs.get(jobId);
+        if (job?.tool !== ADJUST_TOOL)
+          throw new HttpError(404, 'tool_job_not_found', '没有这个任务号');
+        if (job.status !== 'pending') return;
+        await jobs.mergeCall(jobId, { providerReceipt: { answer: text } });
+        await processOne(jobId).catch((err: unknown) =>
+          deps.logger.warn({ err, jobId }, '答复已记下，结算等巡检重试'),
+        );
+      },
       async cancelRun(caller: Caller, runId: string) {
         await jobs.cancelRun(runId, caller.payerId, caller.taskId);
         for (const job of await jobs.forRun(runId)) await cancelJob(caller, job.id);

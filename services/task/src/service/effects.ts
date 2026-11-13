@@ -1,5 +1,6 @@
 // 事务里做决定、事务外执行的副作用，以及工作流引擎给规划模块用的接口。
-import type { NodeRun, Snapshot, Task, Writer } from '../repo/task-store.ts';
+import type { PlanNode } from '@oasis/contracts/task';
+import type { Node, NodeRun, Snapshot, Task, Writer } from '../repo/task-store.ts';
 
 /** 要提交给 harness 的一次节点运行 */
 export interface Submission {
@@ -41,11 +42,33 @@ export const noEffects = (): Effects => ({
   expand: [],
 });
 
-/** 工作流引擎给规划模块用的两件事：在事务里做决定，以及找出能跑的节点开跑 */
+/** 规划员同意的一次中途调整（ADR 0030 §3.7），已经对上了工作流里的节点 */
+export interface Adjustment {
+  /** 规划员给提出调整的 AI 的答复 */
+  reply: string;
+  /** 要加的成果：落成的节点和连线，以及成果的标题 */
+  added: { nodes: PlanNode[]; edges: { from: string; to: string }[]; titles: string[] };
+  /** 补说明的成果 */
+  instructed: { node: Node; text: string }[];
+  /** 停掉的节点（整条生产线时是线上的每个节点） */
+  stopped: Node[];
+  /** 任务单上的交付物改由谁交付：交付物名 → 节点 key */
+  deliverables: Record<string, string>;
+}
+
+/** 工作流引擎给规划模块用的几件事：在事务里做决定、找出能跑的节点开跑、把中途调整落到工作流上 */
 export interface Engine {
   transact(
     taskId: string,
     fn: (snapshot: Snapshot, w: Writer, fx: Effects) => Promise<void>,
   ): Promise<void>;
   schedule(snapshot: Snapshot, w: Writer, fx: Effects): Promise<void>;
+  /** deliver：要马上送进正在做的 AI 会话里的说明，事务提交后再发 */
+  applyAdjust(
+    snapshot: Snapshot,
+    w: Writer,
+    fx: Effects,
+    adjustment: Adjustment,
+    deliver: { runId: string; text: string }[],
+  ): Promise<void>;
 }

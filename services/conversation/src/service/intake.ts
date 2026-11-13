@@ -44,7 +44,7 @@ export function intakeResponseFormat(mustSheet: boolean) {
   };
 }
 
-/** 会话里发过的一个文件：AI 从中挑这次要用的素材（ADR 0016 §8） */
+/** 会话里发过的一个文件：AI 从中挑这次要用的素材 */
 export interface IntakeFile {
   uploadId: string;
   name: string;
@@ -81,7 +81,7 @@ function system(name: string): string {
 - 只问普通人听得懂的需求问题：给谁看、用在哪、什么风格、多长多少、必须包含什么、有没有素材或限制。技术问题（文件格式细节、工具、实现方式）你自己定，写进任务单的 assumptions。
 - 每次最多 4 道选择题，每题 2–5 个选项，标出你推荐的默认项（default）。不要列「你看着办」，界面会自带；用户回答 ${AUTO_ANSWER} 就是「你看着办」，按你推荐的来。
 - 已经清楚的不要重复问。还缺的信息是问用户还是你自己定（写进 assumptions），由你判断；信息够了就给任务单。
-- deliverables 只列用户要的成果。为了做它顺带产生的东西（预览图、效果图、参考图、草图、中间文件）不单独列成交付物，除非用户明确要了；它们留在工作流里，不放进画布。
+- deliverables 只列用户要单独拿到手的成果。已经装在另一样成果里的组成部分（网页或游戏里的配乐、音效、插图，视频里的配音、字幕，文档里的图表）和为了做它顺带产生的东西（预览图、效果图、参考图、草图、中间文件）不单独列成交付物，除非用户明确要单独拿到这些文件；它们留在工作流里，不放进画布。
 - deliverables.form 必须写到实际文件格式（如 DOCX + PDF、PPTX + 同名 PDF、PNG、XLSX、JSONL），不要只写“报告”“图片”。用户指定格式时遵从；格式影响使用时可问用途，已有合理默认值则写进 assumptions。
 - 实时数字人（能语音对话的虚拟前台、客服、讲解员、助教等）：Oasis 交付一份数字人配置，用户直接在画布里和它对话；deliverables.form 写「数字人配置（.oasis-avatar.json）」。形象从现成的写实形象库里挑（或用用户在 LiveAvatar 后台自建的形象），不用另做网页，也不另外生成形象图。只问角色和语气、对话语言、要回答哪些问题和资料、什么情况转人工（转人工时它说一句话）、形象偏好（性别、着装、横屏还是竖屏）。
 - 数量要求明确写“至少”或“正好”；图片尺寸/比例、营销平台和 A/B 版本写进交付物或 criteria。不得把文件数量和数据集有效行数混为一谈。
@@ -96,10 +96,10 @@ function system(name: string): string {
 
 三种回答：
 {"type":"questions","intro":"一句话开场","questions":[{"id":"q1","text":"问题","options":[{"id":"a","label":"选项"},{"id":"b","label":"选项"}],"default":"a"}],"materialIds":null}
-{"type":"sheet","intro":"一句话说明","sheet":{"title":"不超过60字","deliverables":[{"name":"交付物名称","form":"实际格式如DOCX+PDF"}],"criteria":["如何验收，1–8条"],"style":["风格与限制"],"budgetMicro":null,"assumptions":["不改变用户要求的制作选择"],"requirements":[{"id":"r1","text":"一条有效用户要求，最多1000字","sources":[{"kind":"request","quote":"从用户原话取出的连续原文，不要照抄本占位示例"}]}]},"materialIds":null}
+{"type":"sheet","intro":"一句话说明","sheet":{"title":"不超过60字","deliverables":[{"name":"交付物名称","form":"实际格式如DOCX+PDF"}],"criteria":["如何验收，1–8条"],"style":["风格与限制"],"assumptions":["不改变用户要求的制作选择"],"requirements":[{"id":"r1","text":"一条有效用户要求，最多1000字","sources":[{"kind":"request","quote":"从用户原话取出的连续原文，不要照抄本占位示例"}]}]},"materialIds":null}
 {"type":"cancel","intro":"一句话回应"}
 
-说明：题目 id 用 q1、q2…，选项 id 用 a–e。budgetMicro 只有用户在原话里明确说了打算花多少钱才填（只作自定义预算的默认值，预算不是上限；用户确认时会自己选预算档），单位是百万分之一美元（1 美元 = 1000000），否则填 null。`;
+说明：题目 id 用 q1、q2…，选项 id 用 a–e。`;
 }
 
 type InspectedFile = Extract<IntakeTurn, { kind: 'materials' }>['files'][number];
@@ -279,8 +279,6 @@ function tidyReply(raw: unknown): unknown {
         : sheet.requirements,
       materials: [],
       materialWarnings: undefined,
-      // 预算由用户确认时选档、服务端写入；模型抄来的旧预算（如上个任务的）不能显示在新任务单上
-      budget: undefined,
     };
   }
   const hasSheet = isRecord(out.sheet);
@@ -336,13 +334,7 @@ export function sheetText(sheet: TaskSheet): string {
     `怎么算做好：\n${list(sheet.criteria)}`,
   ];
   if (sheet.style.length > 0) parts.push(`风格与限制：\n${list(sheet.style)}`);
-  if (sheet.budget) {
-    parts.push(
-      `预算（参考，不是上限）：约 $${(sheet.budget.micro / 1_000_000).toFixed(2)}，预计 ${sheet.budget.minutes} 分钟左右`,
-    );
-  } else if (sheet.budgetMicro !== null) {
-    parts.push(`用户说的花费（参考）：$${(sheet.budgetMicro / 1_000_000).toFixed(2)}`);
-  }
+
   if (sheet.assumptions.length > 0) parts.push(`AI 自己定的事：\n${list(sheet.assumptions)}`);
   if (sheet.materials.length > 0) parts.push(`素材：\n${list(sheet.materials)}`);
   if (sheet.requirements?.length)

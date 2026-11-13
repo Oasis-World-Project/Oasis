@@ -5,9 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, FilePen, Terminal, Wrench } from 'lucide-react';
 import { useState } from 'react';
 import { nodeRunsQuery, runEventsQuery } from '../api/queries.ts';
-import { RUN_STATUS, runLabel, stepsOf, type Step } from './rules.ts';
-
-const LIVE: NodeRunBody['status'][] = ['pending', 'running'];
+import { isLiveRun, RUN_STATUS, runLabel, stepsOf, type Step } from './rules.ts';
 
 function StepLine({ step, toolName }: { step: Step; toolName: (key: string) => string }) {
   if (step.kind === 'said') {
@@ -51,7 +49,7 @@ function RunSteps({
   run: NodeRunBody;
   toolName: (key: string) => string;
 }) {
-  const live = LIVE.includes(run.status);
+  const live = isLiveRun(run);
   const { data, isPending, isError } = useQuery(runEventsQuery(taskId, nodeId, run.id, live));
   const steps = stepsOf(data ?? []);
   if (isPending) return <p className="m-0 text-[12.5px] text-ink-muted">正在加载…</p>;

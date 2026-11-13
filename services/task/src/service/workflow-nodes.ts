@@ -1,33 +1,21 @@
-// 工作流里单个节点和连线的接口（ADR 0004 §3、§7）：看运行过程、追问、取交出的文件、
-// 改还没开始的节点和连线、只运行或只停止一个节点。
-import { randomUUID } from 'node:crypto';
+// 工作流里单个节点的接口（ADR 0004 §7）：看运行过程、给它发话、取交出的文件、停止和继续一样成果。
+// 节点和连线不能编辑（ADR 0030 §3.2）。
 import { Readable } from 'node:stream';
 import { RunEventList } from '@oasis/contracts/harness';
-import type {
-  NodeRunBody,
-  PlanNode,
-  TaskBody,
-  UpdateEdgeBody,
-  UpdateNodeBody,
-} from '@oasis/contracts/task';
+import type { NodeRunBody, TaskBody } from '@oasis/contracts/task';
 import { HttpError } from '@oasis/service-kit';
-import type { Snapshot, Writer } from '../repo/task-store.ts';
+import type { Node, Snapshot, Writer } from '../repo/task-store.ts';
 import type { Effects } from './effects.ts';
 import { ACTIVE, toRunBody, type Engine } from './engine/index.ts';
-import {
-  checkDeleteEdge,
-  checkNewEdge,
-  checkNewNode,
-  edgeChanges,
-  edgeOf,
-  nodeChanges,
-  nodeOf,
-  requireNotStarted,
-} from './graph.ts';
 import { childrenOf, isGroup, isToolChild, pad2 } from './groups.ts';
 import { kindOf } from './kinds/index.ts';
-import { nodeRow } from './plan.ts';
 import { poolUse } from './schedule.ts';
+
+export function nodeOf(snapshot: Snapshot, nodeId: string): Node {
+  const node = snapshot.nodes.find((n) => n.id === nodeId);
+  if (!node) throw new HttpError(404, 'node_not_found', '没有这个节点');
+  return node;
+}
 
 export function createNodeApi(api: {
   engine: Engine;
@@ -42,17 +30,6 @@ export function createNodeApi(api: {
 }) {
   const { engine, owned, change } = api;
   const { store, harness, maxParallel, maxToolChildren } = engine.deps;
-
-  /** 子节点（ADR 0026）跟着父节点：不能单独改、删 */
-  function requireRoot(snapshot: Snapshot, node: Snapshot['nodes'][number], action: string) {
-    const parent = snapshot.nodes.find((n) => n.id === node.parentId);
-    if (parent)
-      throw new HttpError(
-        409,
-        'node_is_child',
-        `「${node.title}」是「${parent.title}」开出来的，不能单独${action}`,
-      );
-  }
 
   /** 节点交出的一个文件：只能是它产出清单里有的（经 harness 读对象存储） */
   async function readFile(snapshot: Snapshot, nodeId: string, path: string) {
@@ -130,13 +107,9 @@ export function createNodeApi(api: {
       await store.transact(taskId, async (snapshot, w) => {
         const node = nodeOf(snapshot, nodeId);
         if (!kindOf(node).listens)
-          throw new HttpError(
-            409,
-            'node_not_listening',
-            '工具节点没有 AI，不读留言；要改做法，在它开跑前编辑步骤',
-          );
+          throw new HttpError(409, 'node_not_listening', '工具节点没有 AI，不读留言');
         const notable =
-          ['draft', 'waiting', 'blocked', 'stopped'].includes(node.status) ||
+          ['waiting', 'stopped'].includes(node.status) ||
           (node.status === 'running' && !kindOf(node).live);
         if (notable) {
           await w.setNode(node.id, { userNotes: [...node.userNotes, text] });
@@ -184,45 +157,12 @@ export function createNodeApi(api: {
       return readFile(snapshot, nodeId, path);
     },
 
-    /** 新建节点：先是「新建」状态，不会自动开跑 */
-    createNode: (ownerId: string, taskId: string, body: PlanNode) =>
-      change(ownerId, taskId, async (snapshot, w) => {
-        checkNewNode(snapshot, body);
-        await w.addNode(nodeRow(body, randomUUID(), 'draft'));
-      }),
-
-    /** 改还没开始的节点 */
-    updateNode: (ownerId: string, taskId: string, nodeId: string, body: UpdateNodeBody) =>
-      change(ownerId, taskId, async (snapshot, w) => {
-        const node = nodeOf(snapshot, nodeId);
-        requireRoot(snapshot, node, '修改');
-        requireNotStarted(node, '修改');
-        await w.setNode(node.id, nodeChanges(node, body));
-      }),
-
-    /** 删还没开始的节点：它的进出连线留下断开的线头 */
-    deleteNode: (ownerId: string, taskId: string, nodeId: string) =>
-      change(ownerId, taskId, async (snapshot, w, fx) => {
-        const node = nodeOf(snapshot, nodeId);
-        requireRoot(snapshot, node, '删除');
-        requireNotStarted(node, '删除');
-        await w.deleteNode(node.id);
-        await engine.schedule(snapshot, w, fx);
-      }),
-
-    /** 只运行这一个节点：跑完不自动往下（任务在整体运行时除外） */
+    /** 继续一样停下的成果（失败的再试）：别的成果不受影响，跑完不自动往下（任务在整体运行时除外） */
     runNode: (ownerId: string, taskId: string, nodeId: string) =>
       change(ownerId, taskId, async (snapshot, w, fx) => {
         const node = nodeOf(snapshot, nodeId);
-        if (!['draft', 'waiting', 'stopped', 'failed'].includes(node.status)) {
-          throw new HttpError(
-            409,
-            'node_not_runnable',
-            node.status === 'blocked'
-              ? `「${node.title}」前面的连线没接上`
-              : `「${node.title}」现在不能运行`,
-          );
-        }
+        if (!['stopped', 'failed'].includes(node.status))
+          throw new HttpError(409, 'node_not_runnable', `「${node.title}」现在不能继续`);
         const parent = snapshot.nodes.find((n) => n.id === node.parentId);
         // 子节点（ADR 0026）跟着父节点跑：父节点在跑时才能单独再跑它
         if (parent && parent.status !== 'running')
@@ -268,29 +208,6 @@ export function createNodeApi(api: {
           throw new HttpError(409, 'node_not_running', `「${node.title}」没有在跑`);
         }
         await engine.halt(snapshot, w, node, fx);
-        await engine.schedule(snapshot, w, fx);
-      }),
-
-    createEdge: (ownerId: string, taskId: string, from: string, to: string) =>
-      change(ownerId, taskId, async (snapshot, w, fx) => {
-        checkNewEdge(snapshot, from, to);
-        await w.addEdge({ id: randomUUID(), fromNodeId: from, toNodeId: to });
-        await engine.schedule(snapshot, w, fx);
-      }),
-
-    /** 接上线头 / 改连线的一端 */
-    updateEdge: (ownerId: string, taskId: string, edgeId: string, body: UpdateEdgeBody) =>
-      change(ownerId, taskId, async (snapshot, w, fx) => {
-        const edge = edgeOf(snapshot, edgeId);
-        await w.setEdge(edge.id, edgeChanges(snapshot, edge, body));
-        await engine.schedule(snapshot, w, fx);
-      }),
-
-    deleteEdge: (ownerId: string, taskId: string, edgeId: string) =>
-      change(ownerId, taskId, async (snapshot, w, fx) => {
-        const edge = edgeOf(snapshot, edgeId);
-        checkDeleteEdge(snapshot, edge);
-        await w.deleteEdge(edge.id);
         await engine.schedule(snapshot, w, fx);
       }),
   };

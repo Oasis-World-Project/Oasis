@@ -1,7 +1,7 @@
 // 回归场景（docs/engineering/回归测试.md）：图文和视频：长任务工具、媒体检查。
 import { literal, query } from '../db.mjs';
 import { marker } from '../fake-provider.mjs';
-import { DEFAULT_MODEL, done, sha256, work } from './shared.mjs';
+import { DEFAULT_MODEL, done, outcomes, sha256, work } from './shared.mjs';
 
 // ---------- 2. 图文交付：生图工具 → 下游节点用上游的图写 DOCX ----------
 export const media = {
@@ -11,27 +11,26 @@ export const media = {
     { name: '说明文档', form: 'DOCX' },
   ],
   criteria: ['海报和说明文档都交付', '说明文档里插着海报'],
-  quoteTools: [{ key: 'image.generate', uses: { economy: 1, standard: 1, premium: 2 } }],
   get request() {
     return `做一张活动海报（PNG）和一份插着海报的说明文档（DOCX）${marker('media')}`;
   },
-  plan: ({ pick }) => ({
-    nodes: [
-      work('media', 'poster', '画海报', '用 image.generate 生成海报，交出 out/海报.png', {
-        model: pick(DEFAULT_MODEL),
-        tools: [{ key: 'image.generate', uses: 1 }],
-        expects: ['海报.png'],
-        deliver: ['海报.png'],
-      }),
-      work('media', 'doc', '写说明', '用 in/poster/海报.png 写说明文档，交出 out/说明.docx', {
-        model: pick(DEFAULT_MODEL),
-        expects: ['说明.docx'],
-        deliver: ['说明.docx'],
-      }),
-    ],
-    edges: [{ from: 'poster', to: 'doc' }],
-    deliverables: { 活动海报: 'poster', 说明文档: 'doc' },
-  }),
+  plan: ({ pick }) =>
+    outcomes({
+      nodes: [
+        work('media', 'poster', '画海报', '用 image.generate 生成海报，交出 out/海报.png', {
+          model: pick(DEFAULT_MODEL),
+          expects: ['海报.png'],
+          deliver: ['海报.png'],
+        }),
+        work('media', 'doc', '写说明', '用 in/poster/海报.png 写说明文档，交出 out/说明.docx', {
+          model: pick(DEFAULT_MODEL),
+          expects: ['说明.docx'],
+          deliver: ['说明.docx'],
+        }),
+      ],
+      edges: [{ from: 'poster', to: 'doc' }],
+      deliverables: { 活动海报: 'poster', 说明文档: 'doc' },
+    }),
   nodes: {
     poster: {
       work: [
@@ -82,22 +81,21 @@ export const video = {
   title: '落叶短片',
   deliverables: [{ name: '短片', form: 'MP4' }],
   criteria: ['交出能播放的短片'],
-  quoteTools: [{ key: 'video.generate', uses: { economy: 5, standard: 5, premium: 10 } }],
   get request() {
     return `生成一段 5 秒的落叶短片 ${marker('video')}`;
   },
-  plan: ({ pick }) => ({
-    nodes: [
-      work('video', 'clip', '生成短片', '用 video.generate 生成 5 秒短片，交出 out/片段.mp4', {
-        model: pick(DEFAULT_MODEL),
-        tools: [{ key: 'video.generate', uses: 5 }],
-        expects: ['片段.mp4'],
-        deliver: ['片段.mp4'],
-      }),
-    ],
-    edges: [],
-    deliverables: { 短片: 'clip' },
-  }),
+  plan: ({ pick }) =>
+    outcomes({
+      nodes: [
+        work('video', 'clip', '生成短片', '用 video.generate 生成 5 秒短片，交出 out/片段.mp4', {
+          model: pick(DEFAULT_MODEL),
+          expects: ['片段.mp4'],
+          deliver: ['片段.mp4'],
+        }),
+      ],
+      edges: [],
+      deliverables: { 短片: 'clip' },
+    }),
   nodes: {
     clip: {
       work: [

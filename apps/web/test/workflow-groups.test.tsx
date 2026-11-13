@@ -27,9 +27,9 @@ function node(nodeId: string, key: string, title: string, extra: object = {}) {
     role: '',
     goal: `${title}的说明`,
     model: '',
-    checks: [],
     expects: [],
-    tools: [],
+    line: null,
+    adjust: null,
     discussion: null,
     steps: [],
     status: 'succeeded',
@@ -61,9 +61,7 @@ function baseTask(): TaskBody {
     brief: '',
     status: 'succeeded',
     attention: null,
-    estimateMicro: 30_000,
     spentMicro: 9_000,
-    budgetLimitMicro: null,
     sheet: null,
     materials: [],
     version: 1,
@@ -111,7 +109,7 @@ function fakeWorkflow() {
     extra: (method, path, body) => {
       const base = `/task/v1/tasks/${TASK}`;
       if (method === 'GET' && path === base) return json(200, task);
-      if (method === 'GET' && path === '/task/v1/workflow/options')
+      if (method === 'GET' && path === '/task/v1/workflow/names')
         return json(200, { models: [], tools: [] });
       if (method === 'GET' && path.endsWith('/runs')) return json(200, { runs: [] });
       if (method === 'GET' && path.includes('/events')) return json(200, { events: [] });
@@ -125,8 +123,7 @@ function fakeWorkflow() {
             version: 2,
             stage: 'confirm',
             request: '改用「海报」的第 1 版',
-            summary: '改用「海报」的第 1 版，受影响的 0 个下游节点重新做，预计最多 $0.00',
-            estimateMicro: 0,
+            summary: '改用「海报」的第 1 版，受影响的 0 个下游节点重新做',
             changes: [],
           },
           revising: true,
@@ -190,6 +187,6 @@ describe('展开节点和做几版的节点', () => {
     expect(within(panel).getAllByRole('button', { name: '改用这一版' })).toHaveLength(1);
     fireEvent.click(within(panel).getByRole('button', { name: '改用这一版' }));
     await waitFor(() => expect(picked).toEqual({ version: 1 }));
-    expect(await within(panel).findByText(/预计最多 \$0\.00/)).toBeTruthy();
+    expect(await within(panel).findByText(/受影响的 0 个下游节点重新做/)).toBeTruthy();
   });
 });

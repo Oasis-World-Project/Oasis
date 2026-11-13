@@ -1,4 +1,5 @@
-// 修改（ADR 0022）：用户确认规划员排的修改方案后按方案改工作流再开跑；用户不改了就回到修改前的样子。
+// 修改（ADR 0022、0030 §3.8）：按修改方案（规划员排的、用户确认过的，或意见直接交给做成果的 AI 时代码排的）
+// 改工作流再开跑；用户不改了就回到修改前的样子。
 import { randomUUID } from 'node:crypto';
 import type { PlanNode } from '@oasis/contracts/task';
 import { childrenOf, isGroup, isRoot } from '../groups.ts';
@@ -59,7 +60,7 @@ export function createRevisions(engine: Engine): Pick<Engine, 'applyRevision' | 
         }
         const { from, mode, ...planNode } = entry;
         const source = from ? byKey.get(from) : undefined;
-        const row = nodeRow(planNode as PlanNode, source?.id ?? randomUUID(), 'waiting');
+        const row = nodeRow(planNode as PlanNode, source?.id ?? randomUUID());
         idOf.set(entry.key, row.id);
         if (!source) {
           await w.addNode(row);
@@ -76,13 +77,17 @@ export function createRevisions(engine: Engine): Pick<Engine, 'applyRevision' | 
           role: row.role,
           goal: row.goal,
           model: row.model,
-          // 接着改：接着上一版的会话，按意见和这次的安排改；重新做：新会话，上一版产出放进 in/_previous/
+          // 接着改：接着上一版的会话，按意见改（规划员给这一步写了安排的，一起带上）；
+          // 重新做：新会话，上一版产出放进 in/_previous/
           config:
             mode === 'continue'
               ? {
                   ...row.config,
                   ...(outputsRunId ? { outputsRunId } : {}),
-                  revision: revision.request,
+                  revision:
+                    row.goal === source.goal
+                      ? revision.request
+                      : `${revision.request}\n\nAI 团队给你这一步的安排：\n${row.goal}`,
                 }
               : { ...row.config, ...(outputsRunId ? { previousRunId: outputsRunId } : {}) },
           status: 'waiting',
@@ -123,7 +128,7 @@ export function createRevisions(engine: Engine): Pick<Engine, 'applyRevision' | 
         attention: null,
         finishedAt: null,
       });
-      logger.info({ taskId: task.id, version: revision.version }, '用户确认了修改方案，开跑');
+      logger.info({ taskId: task.id, version: revision.version }, '按修改方案开跑');
       await engine.schedule(snapshot, w, fx);
     },
 

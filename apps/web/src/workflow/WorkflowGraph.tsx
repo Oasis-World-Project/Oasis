@@ -1,66 +1,69 @@
-// 工作流图：节点和连线（React Flow 负责平移、缩放和拖线），位置由 layout.ts 自动排。
-// 拖线规则和 task 一致：只能接到还没开始的节点；有断开的线头时，拖出来的线优先接上它。
-import type { EdgeBody, TaskBody } from '@oasis/contracts/task';
-import {
-  Background,
-  BackgroundVariant,
-  BaseEdge,
-  EdgeLabelRenderer,
-  getBezierPath,
-  ReactFlow,
-  useReactFlow,
-  type Connection,
-  type Edge,
-  type EdgeProps,
-} from '@xyflow/react';
+// 工作流图（ADR 0030 §3.2）：每样成果一个框。一个 AI 做的成果，框里是它自己列的任务清单；
+// 生产线的框里是它的节点。线是「谁要用谁交出的文件」。只能看：平移、缩放、点开详情；位置由 layout.ts 自动排。
+import type { EdgeBody, NodeBody, TaskBody } from '@oasis/contracts/task';
+import { Background, BackgroundVariant, ReactFlow, useReactFlow, type Edge } from '@xyflow/react';
 import '@xyflow/react/dist/base.css';
 import { Minus, Plus, Scan } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
-import { NodeCard, StubCard, type FlowNode, type StubNode } from './NodeCard.tsx';
-import { layout, NODE_H, NODE_W } from './layout.ts';
-import { childrenOf, nodeActions, nodeState } from './rules.ts';
+import {
+  AgentCard,
+  LineFrame,
+  NodeCard,
+  type AgentNode,
+  type FlowNode,
+  type LineNode,
+} from './NodeCard.tsx';
+import {
+  AGENT_W,
+  agentHeight,
+  layout,
+  LINE_PAD,
+  LINE_TITLE,
+  NODE_H,
+  NODE_W,
+  type Layout,
+} from './layout.ts';
+import {
+  adjustText,
+  childrenOf,
+  frameRows,
+  isAgentOutcome,
+  nodeState,
+  type FrameRow,
+  type Progress,
+} from './rules.ts';
 import type { useSpeakers } from './use-speakers.ts';
 
-type FlowEdge = Edge<{ deletable: boolean; onDelete: (edgeId: string) => void }, 'flow'>;
-
-/** 选中连线时在线中间出现「删除连线」 */
-function FlowEdgeLine(props: EdgeProps<FlowEdge>) {
-  const [path, labelX, labelY] = getBezierPath(props);
-  return (
-    <>
-      <BaseEdge path={path} markerEnd={props.markerEnd} interactionWidth={18} />
-      {props.selected && props.data?.deletable && (
-        <EdgeLabelRenderer>
-          <button
-            type="button"
-            onClick={() => props.data?.onDelete(props.id)}
-            className="nodrag nopan pointer-events-auto absolute h-8 rounded-full border-0 bg-solid px-3 text-[12.5px] font-medium text-on-solid shadow-raised"
-            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
-          >
-            删除连线
-          </button>
-        </EdgeLabelRenderer>
-      )}
-    </>
-  );
-}
-
-const nodeTypes = { step: NodeCard, stub: StubCard };
-const edgeTypes = { flow: FlowEdgeLine };
+const nodeTypes = { step: NodeCard, agent: AgentCard, line: LineFrame };
 
 function edgeClass(task: TaskBody, edge: EdgeBody): string {
-  if (!edge.from || !edge.to) return 'oasis-edge-broken';
   const target = task.nodes.find((n) => n.id === edge.to);
   if (target?.status === 'running' || target?.status === 'checking') return 'oasis-edge-active';
   if (target?.status === 'succeeded') return 'oasis-edge-done';
   return 'oasis-edge-wait';
 }
 
-export interface GraphHandlers {
-  onPick: (nodeId: string | null) => void;
-  /** 拖了一条线：from 的产出交给 to */
-  onConnect: (from: string, to: string) => void;
-  onDeleteEdge: (edgeId: string) => void;
+/** 图上的一块：一条生产线（line 不为空，装着它的节点），或单独的一个节点 */
+interface Block {
+  id: string;
+  line: NodeBody['line'];
+  nodes: NodeBody[];
+}
+
+function blocksOf(roots: NodeBody[]): Block[] {
+  const blocks: Block[] = [];
+  for (const node of roots) {
+    const block = node.line && blocks.find((b) => b.line?.key === node.line?.key);
+    if (block) block.nodes.push(node);
+    else {
+      blocks.push({
+        id: node.line ? `line-${node.line.key}` : node.id,
+        line: node.line,
+        nodes: [node],
+      });
+    }
+  }
+  return blocks;
 }
 
 function ZoomControls() {
@@ -92,7 +95,7 @@ function ZoomControls() {
   );
 }
 
-/** 节点数变了（加了、删了节点）就重新适应屏幕 */
+/** 图上的块数变了（规划好了、修改后多了少了成果）就重新适应屏幕 */
 function FitOnChange({ count }: { count: number }) {
   const flow = useReactFlow();
   useEffect(() => {
@@ -109,99 +112,142 @@ export function WorkflowGraph({
   task,
   selected,
   speakers,
-  handlers,
+  progress,
+  onPick,
 }: {
   task: TaskBody;
   selected: string | null;
   speakers: ReturnType<typeof useSpeakers>;
-  handlers: GraphHandlers;
+  /** 每样「一个 AI 做」的成果做到哪了（任务清单、最近几步） */
+  progress: Map<string, Progress>;
+  onPick: (nodeId: string | null) => void;
 }) {
-  // 图上只有工作流图里的节点：展开出来的条目、各版叠在父节点的卡片里（ADR 0026）
-  const roots = useMemo(() => task.nodes.filter((n) => !n.parentId), [task]);
+  const { speakersOf, toolName } = speakers;
   const { nodes, edges } = useMemo(() => {
-    const links = task.edges
-      .filter((e) => e.from && e.to)
-      .map((e) => ({ from: e.from as string, to: e.to as string }));
-    const positions = layout(
-      roots.map((n) => n.id),
-      links,
+    // 图上只有工作流图里的节点：展开出来的条目、各版叠在父节点的卡片里（ADR 0026）
+    const roots = task.nodes.filter((n) => !n.parentId);
+    const shown = new Set(roots.map((n) => n.id));
+    const links = task.edges.flatMap((e) =>
+      e.from && e.to && shown.has(e.from) && shown.has(e.to) ? [{ from: e.from, to: e.to }] : [],
     );
-    const flowNodes: (FlowNode | StubNode)[] = roots.map((node) => {
-      const actions = nodeActions(task, node);
-      return {
-        id: node.id,
-        type: 'step',
-        position: positions.get(node.id) ?? { x: 0, y: 0 },
-        data: {
-          node,
-          children: childrenOf(task, node),
-          state: nodeState(node),
-          speakers: speakers.speakersOf(node),
-          toolName: speakers.toolName,
-          selected: node.id === selected,
-          acceptsInput: actions.acceptsInput,
-          givesOutput: actions.givesOutput,
-          onPick: (id: string) => handlers.onPick(id === selected ? null : id),
-        },
-        width: NODE_W,
-        height: NODE_H,
-        draggable: false,
-        selectable: false,
-        // 不可拖、不可选的节点 React Flow 默认不接收鼠标；卡片本身是按钮，要能点
-        style: { pointerEvents: 'all' },
-      };
-    });
-    const flowEdges: FlowEdge[] = [];
-    for (const edge of task.edges) {
-      // 断开的线头：在缺的那一端放一个小圈
-      let from = edge.from;
-      let to = edge.to;
-      const anchor = positions.get(edge.from ?? edge.to ?? '');
-      if (!anchor) continue;
-      if (!from || !to) {
-        const stubId = `stub-${edge.id}`;
-        const side = from ? 'out' : 'in';
-        flowNodes.push({
-          id: stubId,
-          type: 'stub',
-          position: {
-            x: side === 'out' ? anchor.x + NODE_W + 48 : anchor.x - 72,
-            y: anchor.y + NODE_H / 2 - 12,
-          },
-          data: { side },
-          width: 24,
-          height: 24,
-          draggable: false,
-          selectable: false,
-        });
-        if (side === 'out') to = stubId;
-        else from = stubId;
-      }
-      const target = task.nodes.find((n) => n.id === edge.to);
-      flowEdges.push({
-        id: edge.id,
-        type: 'flow',
-        source: from as string,
-        target: to as string,
-        className: edgeClass(task, edge),
-        animated: edgeClass(task, edge) === 'oasis-edge-active',
-        data: {
-          deletable: !target || nodeActions(task, target).acceptsInput,
-          onDelete: handlers.onDeleteEdge,
-        },
-      });
-    }
-    return { nodes: flowNodes, edges: flowEdges };
-  }, [task, roots, selected, speakers, handlers]);
+    const blocks = blocksOf(roots);
+    const blockOf = new Map(blocks.flatMap((b) => b.nodes.map((n) => [n.id, b.id] as const)));
+    // 框里的几行：被调整过的先写调整了什么，再是任务清单
+    const rowsOf = new Map(
+      roots.filter(isAgentOutcome).map((n) => {
+        const adjusted = adjustText(n);
+        const rows: FrameRow[] = adjusted ? [{ mark: 'adjust', text: adjusted }] : [];
+        return [n.id, [...rows, ...frameRows(progress.get(n.id), toolName)]];
+      }),
+    );
 
-  const isValidConnection = (connection: Connection | Edge) => {
-    if (connection.source === connection.target) return false;
-    const from = task.nodes.find((n) => n.id === connection.source);
-    const to = task.nodes.find((n) => n.id === connection.target);
-    if (!from || !to) return false;
-    if (!nodeActions(task, from).givesOutput || !nodeActions(task, to).acceptsInput) return false;
-    return !task.edges.some((e) => e.from === from.id && e.to === to.id);
-  };
+    // 生产线里面先排一遍，得出框有多大；再把所有块排一遍
+    const inner = new Map<string, Layout>();
+    for (const block of blocks) {
+      if (!block.line) continue;
+      const own = new Set(block.nodes.map((n) => n.id));
+      inner.set(
+        block.id,
+        layout(
+          block.nodes.map((n) => ({ id: n.id, w: NODE_W, h: NODE_H })),
+          links.filter((l) => own.has(l.from) && own.has(l.to)),
+        ),
+      );
+    }
+    const sizeOf = (block: Block) => {
+      const within = inner.get(block.id);
+      if (within)
+        return { w: within.width + LINE_PAD * 2, h: within.height + LINE_TITLE + LINE_PAD };
+      const rows = rowsOf.get(block.id);
+      return rows ? { w: AGENT_W, h: agentHeight(rows.length) } : { w: NODE_W, h: NODE_H };
+    };
+    const outer = layout(
+      blocks.map((b) => ({ id: b.id, ...sizeOf(b) })),
+      links.flatMap((l) => {
+        const from = blockOf.get(l.from);
+        const to = blockOf.get(l.to);
+        return from && to && from !== to ? [{ from, to }] : [];
+      }),
+    );
+
+    const card = (node: NodeBody) => ({
+      node,
+      children: childrenOf(task, node),
+      state: nodeState(node),
+      speakers: speakersOf(node),
+      toolName,
+      selected: node.id === selected,
+      onPick: (id: string) => onPick(id === selected ? null : id),
+    });
+    // 不可拖、不可选的节点 React Flow 默认不接收鼠标；卡片本身是按钮，要能点
+    const fixed = { draggable: false, selectable: false } as const;
+    const clickable = { ...fixed, style: { pointerEvents: 'all' } } as const;
+    const flowNodes: (FlowNode | AgentNode | LineNode)[] = [];
+    for (const block of blocks) {
+      const position = outer.positions.get(block.id) ?? { x: 0, y: 0 };
+      const { w: width, h: height } = sizeOf(block);
+      const within = inner.get(block.id);
+      if (within && block.line) {
+        // 框要排在它的节点前面：React Flow 按这个顺序认父子、定前后
+        flowNodes.push({
+          id: block.id,
+          type: 'line',
+          position,
+          width,
+          height,
+          data: {
+            title: block.line.title,
+            done: block.nodes.filter((n) => n.status === 'succeeded').length,
+            total: block.nodes.length,
+          },
+          ...fixed,
+        });
+        for (const node of block.nodes) {
+          const at = within.positions.get(node.id) ?? { x: 0, y: 0 };
+          flowNodes.push({
+            id: node.id,
+            type: 'step',
+            parentId: block.id,
+            position: { x: at.x + LINE_PAD, y: at.y + LINE_TITLE },
+            width: NODE_W,
+            height: NODE_H,
+            data: card(node),
+            ...clickable,
+          });
+        }
+        continue;
+      }
+      const node = block.nodes[0]!;
+      const rows = rowsOf.get(node.id);
+      flowNodes.push(
+        rows
+          ? {
+              id: node.id,
+              type: 'agent',
+              position,
+              width,
+              height,
+              ...clickable,
+              data: { ...card(node), rows },
+            }
+          : { id: node.id, type: 'step', position, width, height, ...clickable, data: card(node) },
+      );
+    }
+    const flowEdges: Edge[] = task.edges.flatMap((edge) => {
+      if (!edge.from || !edge.to || !shown.has(edge.from) || !shown.has(edge.to)) return [];
+      const className = edgeClass(task, edge);
+      return [
+        {
+          id: edge.id,
+          source: edge.from,
+          target: edge.to,
+          className,
+          animated: className === 'oasis-edge-active',
+        },
+      ];
+    });
+    return { nodes: flowNodes, edges: flowEdges };
+  }, [task, selected, speakersOf, toolName, progress, onPick]);
 
   return (
     <div className="oasis-flow absolute inset-0">
@@ -209,17 +255,17 @@ export function WorkflowGraph({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
         nodesDraggable={false}
+        nodesConnectable={false}
         nodesFocusable={false}
+        edgesFocusable={false}
+        elementsSelectable={false}
         deleteKeyCode={null}
         fitView
         fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
         minZoom={0.3}
         maxZoom={1.6}
-        isValidConnection={isValidConnection}
-        onConnect={(c) => c.source && c.target && handlers.onConnect(c.source, c.target)}
-        onPaneClick={() => handlers.onPick(null)}
+        onPaneClick={() => onPick(null)}
       >
         <Background
           variant={BackgroundVariant.Dots}
@@ -228,7 +274,7 @@ export function WorkflowGraph({
           color="var(--oasis-hairline)"
         />
         <ZoomControls />
-        <FitOnChange count={roots.length} />
+        <FitOnChange count={nodes.length} />
       </ReactFlow>
     </div>
   );

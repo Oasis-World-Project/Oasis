@@ -154,7 +154,7 @@ export async function signIn(options) {
       if (!sheet) throw new Error(`没收到任务单：${JSON.stringify(messages).slice(0, 500)}`);
       const confirmed = await api.post(
         `/conversation/v1/conversations/${dm.id}/intake/confirm`,
-        { tier: 'standard' },
+        {},
         { timeoutMs: 120_000 },
       );
       const card = confirmed.messages.find(
@@ -163,7 +163,7 @@ export async function signIn(options) {
       const taskId = card?.data.taskId;
       if (!taskId)
         throw new Error(`确认任务单后没拿到任务：${JSON.stringify(confirmed).slice(0, 500)}`);
-      return { taskId, conversationId: dm.id, quote: sheet.data.quote };
+      return { taskId, conversationId: dm.id };
     },
 
     task: (taskId) => api.get(`/task/v1/tasks/${taskId}`),

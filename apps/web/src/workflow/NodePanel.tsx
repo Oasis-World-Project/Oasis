@@ -1,27 +1,20 @@
-// 节点详情（照原型 ⑬ 的单节点面板）：谁在做、状态和操作、关卡提醒、要做的事、上下游、
-// 工具和花费、产出文件、运行过程；还没开始或正在跑的节点可以追问、补要求。
-// 工具节点（ADR 0025）没有 AI：显示齿轮和要执行的步骤，不能追问。
+// 节点详情（照原型 ⑬ 的单节点面板）：谁在做、状态、停止和继续、关卡提醒、要做的事、
+// AI 自己列的任务清单、上下游、花费、产出文件、运行过程；还没开始或正在跑的可以追问、补要求。
+// 节点和连线不能改（ADR 0030 §3.2）。工具节点（ADR 0025）没有 AI：显示齿轮和要执行的步骤，不能追问。
 import type { NodeBody, TaskBody } from '@oasis/contracts/task';
 import { X } from 'lucide-react';
 import { useState } from 'react';
-import {
-  deleteNode,
-  runNode,
-  stopNode,
-  taskFileUrl,
-  applicationReportUrl,
-} from '../api/queries.ts';
+import { runNode, stopNode, taskFileUrl, applicationReportUrl } from '../api/queries.ts';
 import { FileChip } from '../chat/FileChip.tsx';
 import { FilePreview, type PreviewFile } from '../chat/FilePreview.tsx';
-import { ConfirmButton } from '../chat/parts.tsx';
 import { TaskDecisions } from '../chat/TaskCard.tsx';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { GroupSections, ParentLink } from './group-sections.tsx';
-import { ToolMark } from './NodeCard.tsx';
+import { Mark, ToolMark } from './NodeCard.tsx';
 import { Ask, Links, Section, smallButton } from './node-panel-parts.tsx';
 import { RunHistory } from './RunHistory.tsx';
-import { nodeState, nodeActions, stepArgs, waitingOn } from './rules.ts';
+import { nodeState, nodeActions, stepArgs, waitingOn, type Progress } from './rules.ts';
 import type { useSpeakers } from './use-speakers.ts';
 import type { WorkflowActions } from './use-workflow-actions.ts';
 
@@ -29,8 +22,8 @@ export function NodePanel({
   task,
   node,
   speakers,
+  progress,
   actions,
-  onEdit,
   onClose,
   onPick,
   before,
@@ -40,8 +33,9 @@ export function NodePanel({
   /** 看旧版工作流：只读，运行记录只列这一版冻结之前的（ADR 0022） */
   before?: string;
   speakers: ReturnType<typeof useSpeakers>;
+  /** 一个 AI 做的成果做到哪了（它自己列的任务清单）；别的节点没有 */
+  progress?: Progress | undefined;
   actions: WorkflowActions;
-  onEdit: () => void;
   onClose: () => void;
   onPick: (nodeId: string) => void;
 }) {
@@ -134,28 +128,10 @@ export function NodePanel({
               停止
             </button>
           )}
-          {allowed.edit && (
-            <button type="button" className={smallButton} disabled={busy} onClick={onEdit}>
-              编辑
-            </button>
-          )}
-          {allowed.remove && (
-            <ConfirmButton
-              label="删除"
-              question="删掉这个节点？"
-              confirmLabel="删除"
-              disabled={busy}
-              onConfirm={() =>
-                void actions
-                  .run('node-delete', () => deleteNode(task.id, node.id))
-                  .then((r) => r && onClose())
-              }
-            />
-          )}
         </div>
         {node.status === 'succeeded' && (
           <p className="m-0 rounded-item bg-track px-3 py-2 text-[12px] leading-relaxed text-ink-muted">
-            已经跑完的节点不能修改、追问或删除。
+            已经做完了，不能再追问。要改，到成果上提修改意见。
           </p>
         )}
       </div>
@@ -173,6 +149,13 @@ export function NodePanel({
                 : '尚无检查结果。'}
           </p>
         </Section>
+        {node.adjust && (
+          <Section title={node.adjust.asking ? '正在调整（规划员在答复）' : '中途调整'}>
+            <p className="m-0 whitespace-pre-wrap break-words text-[13px] leading-relaxed">
+              {node.adjust.note}
+            </p>
+          </Section>
+        )}
         {task.attention?.nodeId === node.id && <TaskDecisions task={task} compact />}
         <ParentLink task={task} node={node} onPick={onPick} />
         <GroupSections task={task} node={node} actions={actions} onPick={onPick} />
@@ -212,16 +195,26 @@ export function NodePanel({
             {node.goal}
           </p>
         </Section>
-        {node.checks.length > 0 && (
-          <Section title="交付前自查（节点自己对照）">
-            <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[13px] leading-relaxed">
-              {node.checks.map((c, i) => (
-                <li key={i}>{typeof c === 'string' ? c : c.text}</li>
+        {progress?.todos && progress.todos.length > 0 && (
+          <Section title="它自己列的任务清单">
+            <ol className="m-0 flex list-none flex-col gap-1.5 p-0">
+              {progress.todos.map((todo, i) => (
+                <li
+                  key={i}
+                  className={`flex items-start gap-2 text-[13px] leading-relaxed ${
+                    todo.state === 'done' ? 'text-ink-muted' : ''
+                  }`}
+                >
+                  <span className="flex h-[21px] items-center">
+                    <Mark state={todo.state} size={14} />
+                  </span>
+                  <span className="min-w-0 break-words">{todo.text}</span>
+                </li>
               ))}
-            </ul>
+            </ol>
           </Section>
         )}
-        <Links task={task} node={node} actions={actions} />
+        <Links task={task} node={node} />
         {node.userNotes.length > 0 && (
           <Section title="你补的要求">
             <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[13px] leading-relaxed">
@@ -268,16 +261,7 @@ export function NodePanel({
             </p>
           </Section>
         )}
-        <Section title={node.discussion ? '花费' : '工具和花费'}>
-          {!node.discussion && (
-            <p className="m-0 text-[13px] leading-relaxed">
-              {node.tools.length > 0
-                ? node.tools
-                    .map((t) => `${speakers.toolName(t.key)}（预计 ${t.uses} 次）`)
-                    .join('、')
-                : '没有分外部工具，只写字、写代码、跑命令。'}
-            </p>
-          )}
+        <Section title="花费">
           <p className="m-0 text-[13px] text-ink-muted">
             已花 <span className="font-display text-ink">{formatCost(node.spentMicro)}</span>
             {node.attempts > 1 && ` · 跑了 ${node.attempts} 次`}

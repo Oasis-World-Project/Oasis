@@ -2,7 +2,7 @@
 import { literal, query } from '../db.mjs';
 import { JPEG_IMAGE_MODEL } from '../fake-media.mjs';
 import { marker, writeFiles } from '../fake-provider.mjs';
-import { DEFAULT_MODEL, done, work } from './shared.mjs';
+import { DEFAULT_MODEL, done, outcomes, work } from './shared.mjs';
 
 // ---------- 13. 按 12 个镜头的分镜出片：分镜 → 每镜关键帧（两版挑一版）→ 每镜图生视频 → 拼成片 ----------
 const COUNT = 12;
@@ -31,87 +31,85 @@ const shots12 = {
   title: '十二镜头短片',
   deliverables: [{ name: '成片', form: 'MP4' }],
   criteria: ['按分镜的 12 个镜头拼成一段能播放的成片'],
-  quoteTools: [
-    { key: 'image.generate', uses: { economy: 24, standard: 24, premium: 24 } },
-    { key: 'video.generate', uses: { economy: 48, standard: 48, premium: 48 } },
-  ],
+
   get request() {
     return `按 12 个镜头的分镜做一段短片：每镜先出关键帧（两版挑一版），再图生视频，最后拼成成片 ${marker('shots12')}`;
   },
-  plan: ({ pick }) => ({
-    nodes: [
-      work('shots12', 'storyboard', '写分镜', '写 12 个镜头的分镜，交出 out/shots.json', {
-        model: pick(DEFAULT_MODEL),
-        expects: ['shots.json'],
-      }),
-      {
-        key: 'keys',
-        title: '关键帧',
-        kind: 'foreach',
-        goal: '每个镜头一张关键帧',
-        over: 'in/storyboard/shots.json',
-        count: COUNT,
-        each: {
-          kind: 'tool',
-          title: '关键帧 {{index}}',
-          goal: '镜头 {{index}} 的关键帧',
-          steps: [
-            // 用要 PNG 回 JPEG 的假模型：工具步骤要把图换回计划写的 frame.png，下游才找得到
-            {
-              tool: 'image.generate',
-              args: { prompt: '{{item.prompt}}', model: JPEG_IMAGE_MODEL },
-              out: 'out/frame.png',
-            },
-          ],
-          expects: ['frame.png'],
-          variants: { n: 2, pick: '构图最贴合镜头描述' },
-        },
-      },
-      {
-        key: 'clips',
-        title: '镜头视频',
-        kind: 'foreach',
-        goal: '每个镜头用关键帧做首帧生成视频',
-        over: 'in/storyboard/shots.json',
-        count: COUNT,
-        each: {
-          kind: 'tool',
-          title: '镜头 {{index}}',
-          goal: '镜头 {{index}} 的视频',
-          steps: [
-            {
-              tool: 'video.generate',
-              args: {
-                prompt: '{{item.prompt}}',
-                first_frame: 'in/keys/{{index}}/frame.png',
-                duration: '{{item.seconds}}',
+  plan: ({ pick }) =>
+    outcomes({
+      nodes: [
+        work('shots12', 'storyboard', '写分镜', '写 12 个镜头的分镜，交出 out/shots.json', {
+          model: pick(DEFAULT_MODEL),
+          expects: ['shots.json'],
+        }),
+        {
+          key: 'keys',
+          title: '关键帧',
+          kind: 'foreach',
+          goal: '每个镜头一张关键帧',
+          over: 'in/storyboard/shots.json',
+          count: COUNT,
+          each: {
+            kind: 'tool',
+            title: '关键帧 {{index}}',
+            goal: '镜头 {{index}} 的关键帧',
+            steps: [
+              // 用要 PNG 回 JPEG 的假模型：工具步骤要把图换回计划写的 frame.png，下游才找得到
+              {
+                tool: 'image.generate',
+                args: { prompt: '{{item.prompt}}', model: JPEG_IMAGE_MODEL },
+                out: 'out/frame.png',
               },
-              out: 'out/clip.mp4',
-            },
-          ],
-          expects: ['clip.mp4'],
+            ],
+            expects: ['frame.png'],
+            variants: { n: 2, pick: '构图最贴合镜头描述' },
+          },
         },
-      },
-      {
-        key: 'film',
-        title: '拼成片',
-        kind: 'tool',
-        goal: '按镜头顺序拼成成片',
-        steps: [
-          { tool: 'op.video.concat', args: { in: 'in/clips/*/clip.mp4' }, out: 'out/成片.mp4' },
-        ],
-        expects: ['成片.mp4'],
-        deliver: ['成片.mp4'],
-      },
-    ],
-    edges: [
-      { from: 'storyboard', to: 'keys' },
-      { from: 'storyboard', to: 'clips' },
-      { from: 'keys', to: 'clips' },
-      { from: 'clips', to: 'film' },
-    ],
-    deliverables: { 成片: 'film' },
-  }),
+        {
+          key: 'clips',
+          title: '镜头视频',
+          kind: 'foreach',
+          goal: '每个镜头用关键帧做首帧生成视频',
+          over: 'in/storyboard/shots.json',
+          count: COUNT,
+          each: {
+            kind: 'tool',
+            title: '镜头 {{index}}',
+            goal: '镜头 {{index}} 的视频',
+            steps: [
+              {
+                tool: 'video.generate',
+                args: {
+                  prompt: '{{item.prompt}}',
+                  first_frame: 'in/keys/{{index}}/frame.png',
+                  duration: '{{item.seconds}}',
+                },
+                out: 'out/clip.mp4',
+              },
+            ],
+            expects: ['clip.mp4'],
+          },
+        },
+        {
+          key: 'film',
+          title: '拼成片',
+          kind: 'tool',
+          goal: '按镜头顺序拼成成片',
+          steps: [
+            { tool: 'op.video.concat', args: { in: 'in/clips/*/clip.mp4' }, out: 'out/成片.mp4' },
+          ],
+          expects: ['成片.mp4'],
+          deliver: ['成片.mp4'],
+        },
+      ],
+      edges: [
+        { from: 'storyboard', to: 'keys' },
+        { from: 'storyboard', to: 'clips' },
+        { from: 'keys', to: 'clips' },
+        { from: 'clips', to: 'film' },
+      ],
+      deliverables: { 成片: 'film' },
+    }),
   nodes: {
     storyboard: {
       work: [

@@ -135,19 +135,13 @@ export function withInputExpects<P extends WorkflowPlan>(plan: P): P {
   };
 }
 
-/** 方案里的一个节点 → 库里的一行（status 由调用方定：方案里的是等待，用户新建的是新建） */
-export function nodeRow(
-  n: PlanNode,
-  id: string,
-  status: 'waiting' | 'draft',
-  budgetMicro?: number,
-) {
+/** 方案里的一个节点 → 库里的一行（等待开跑） */
+export function nodeRow(n: PlanNode, id: string) {
   const config: NodeConfig = {
-    ...(budgetMicro ? { budgetMicro } : {}),
     ...(n.requires ? { requires: n.requires } : {}),
-    checks: n.checks,
     expects: n.expects,
     ...(n.deliver === undefined ? {} : { deliver: n.deliver }),
+    ...(n.line ? { line: n.line } : {}),
     ...kindOf(n).config(n),
   };
   return {
@@ -158,17 +152,15 @@ export function nodeRow(
     role: n.role,
     goal: n.goal,
     model: n.model,
-    status,
+    status: 'waiting' as const,
     config,
   };
 }
 
-/** 把方案变成节点和连线的行（节点名 → 生成的节点 ID）；budgetOf 给出每个节点分到的预算 */
-export function planToRows(plan: WorkflowPlan, budgetOf?: (key: string) => number | undefined) {
+/** 把方案变成节点和连线的行（节点名 → 生成的节点 ID） */
+export function planToRows(plan: WorkflowPlan) {
   const ids = new Map(plan.nodes.map((n) => [n.key, randomUUID()]));
-  const nodes = plan.nodes.map((n) =>
-    nodeRow(n, ids.get(n.key) as string, 'waiting', budgetOf?.(n.key)),
-  );
+  const nodes = plan.nodes.map((n) => nodeRow(n, ids.get(n.key) as string));
   const edges = plan.edges.map((e) => ({
     id: randomUUID(),
     fromNodeId: ids.get(e.from) as string,

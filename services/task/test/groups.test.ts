@@ -1,16 +1,16 @@
-// 子节点（ADR 0026）的纯函数部分：模板、清单、挑选结果、规划门和估价。
+// 子节点（ADR 0026）的纯函数部分：模板、清单、挑选结果、规划门。
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { describe, expect, it } from 'vitest';
 import { fillTemplate, listItems } from '../src/service/groups.ts';
 import { parsePick, pickRequest } from '../src/service/pick.ts';
-import { checkPlan, estimatePlan } from '../src/service/planner.ts';
+import { checkPlan } from '../src/service/planner.ts';
+import { outcomePlan } from './support/outcomes.ts';
 
 const sheet = {
   title: 't',
   deliverables: [{ name: '成片', form: 'MP4' }],
   criteria: [],
   style: [],
-  budgetMicro: null,
   assumptions: [],
   materials: [],
 };
@@ -67,7 +67,6 @@ const tools: ToolEntry[] = [
     args: [{ name: 'in', kind: 'paths', required: true, min: 2, max: 50, description: '视频' }],
   }),
 ];
-const fallback = { workRun: 1_000, speechRun: 1_000, computeRun: 10_000, nodeSeconds: 600 };
 
 const storyboard = {
   key: 'storyboard',
@@ -129,7 +128,7 @@ const edges = [
   { from: 'clips', to: 'film' },
 ];
 const planText = (nodes: unknown[], deliverables = { 成片: 'film' }, links = edges) =>
-  JSON.stringify({ nodes, edges: links, deliverables });
+  JSON.stringify(outcomePlan({ nodes, edges: links, deliverables }));
 
 describe('模板和清单', () => {
   it('{{index}} 换成两位数条目号，{{item.字段}} 换成字段；缺的字段记下来', () => {
@@ -181,7 +180,7 @@ describe('模板和清单', () => {
   });
 });
 
-describe('规划门和估价', () => {
+describe('规划门', () => {
   it('按分镜出视频的方案能过：模板参数等展开时再查，展开节点的条目不成为上游必须交出的文件', () => {
     const result = checkPlan(planText([storyboard, keyframes, clips, film]), sheet, catalog, tools);
     expect(result).toHaveProperty('plan');
@@ -211,16 +210,6 @@ describe('规划门和估价', () => {
     expect(problems).toContain('不能由展开节点「clips」直接交出');
     expect(problems).toContain('不能来自展开节点「keys」');
     expect(problems).toContain('会和「clips」开出来的子节点撞名');
-  });
-
-  it('估价：预计条数 × 每条；做几版的每条乘版数再加一次挑选', () => {
-    const result = checkPlan(planText([storyboard, keyframes, clips, film]), sheet, catalog, tools);
-    const plan = (result as Extract<typeof result, { plan: unknown }>).plan;
-    const { perNode } = estimatePlan(plan, [], tools, fallback);
-    // 关键帧：4 条 ×（2 版 ×（生图 0.10 + 算力 0.01）+ 看图 0.002 + 算力 0.01）
-    expect(perNode.get('keys')).toBe(4 * (2 * (100_000 + 10_000) + 2_000 + 10_000));
-    // 视频：秒数写成模板，按默认 5 秒估
-    expect(perNode.get('clips')).toBe(4 * (5 * 50_000 + 10_000));
   });
 });
 

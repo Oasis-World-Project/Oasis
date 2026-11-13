@@ -1,5 +1,5 @@
-// 工作流方案（ADR 0004、0023、0025）：节点名、要交出的文件、关卡、三种节点（干活、讨论、工具）和连线。
-// 规划员写、规划门查、task 按它建节点；从 task.ts 拆出来，task.ts 原样再导出。
+// 工作流方案：规划员按成果排（每样成果由一个 AI 从头做到交付，或由一条生产线做出来），规划门查过后
+// 变成引擎里的节点和连线（一个 AI = 一个干活节点；生产线 = 工具节点、展开节点）。task.ts 原样再导出。
 import { z } from 'zod';
 import { ToolSteps } from './tool-step.ts';
 
@@ -32,18 +32,6 @@ export const ExpectedFile = z.union([
 ]);
 export type ExpectedFile = z.infer<typeof ExpectedFile>;
 
-/** 新检查显式声明所需文件；旧字符串仍可读取。文件模式仅指本节点/最终清单。 */
-export const TaskCheck = z.union([
-  z.string().trim().min(1).max(300),
-  z.object({
-    id: z.string().regex(/^[\w-]{1,60}$/),
-    text: z.string().trim().min(1),
-    requirementIds: z.array(z.string().max(60)).default([]),
-    files: z.array(OutputPattern).default([]),
-  }),
-]);
-export type TaskCheck = z.infer<typeof TaskCheck>;
-
 export const RequirementSource = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('request'), quote: z.string().min(1).max(2000) }),
   z.object({
@@ -73,7 +61,7 @@ export const TaskRequirement = z.object({
   sources: z.array(RequirementSource).min(1),
 });
 
-/** 两种节点共有的部分 */
+/** 各种节点共有的部分 */
 export const NodeCommon = {
   key: NodeKey,
   /** 给用户看的名字，如「写文案」 */
@@ -82,26 +70,16 @@ export const NodeCommon = {
   role: z.string().max(2000).default(''),
   /** 这个节点要做的事（讨论节点就是讨论的题目） */
   goal: z.string().trim().min(1).max(20_000),
-  /** 交付前的自查清单（普通话）：写进节点的说明，由节点自己对照，关卡不逐条打分（ADR 0017） */
-  checks: z.array(TaskCheck).default([]),
+
   /** 关卡的规则检查：这些文件必须在 out/ 里且不是空的 */
   expects: z.array(ExpectedFile).default([]),
   /** 规划明确依赖的本地执行能力，由运行环境目录核对。 */
   requires: z.array(z.string().min(1).max(100)).optional(),
   /** 显式选择最终交付文件；缺省保留历史任务行为。 */
   deliver: z.array(OutputPattern).optional(),
+  /** 属于哪条生产线（一样成果由几个节点做出来时，画布把它们框在一起）；一个 AI 做的成果没有 */
+  line: z.object({ key: NodeKey, title: z.string().trim().min(1).max(60) }).optional(),
 };
-
-/** 节点要用的外部工具（ADR 0006 §5）：工具名和预计用几次（用来估算花费，不是硬上限） */
-export const NodeTool = z.object({
-  key: z.string().regex(/^[a-z0-9]+(\.[a-z0-9_-]+)+$/, '工具名形如 image.generate'),
-  /** 批量工具按输入行计数，其余工具按目录单位计数（视频按秒）。 */
-  uses: z.number().int().min(1).default(1),
-  /** 打算用的型号（ADR 0016：按预算选）；不填按工具目录的默认型号估价 */
-  model: z.string().min(1).max(200).optional(),
-});
-export type NodeTool = z.infer<typeof NodeTool>;
-export const NodeTools = z.array(NodeTool);
 
 /**
  * 做 N 版挑 1 版（ADR 0026）：同一个节点同时做 n 版，都做完后按 pick 挑一版交给下游，落选的留着，
@@ -120,8 +98,6 @@ export const WorkPlanNode = z.object({
   kind: z.literal('work'),
   /** 供应商型号，如 deepseek/deepseek-v4.1-flash */
   model: z.string().min(1).max(200),
-  /** 生图、联网搜索之类的外部工具；节点说明里只列这些 */
-  tools: NodeTools.default([]),
   variants: Variants.optional(),
 });
 
@@ -193,7 +169,7 @@ export const ForeachPlanNode = z.object({
   each: ForeachBranch,
 });
 
-/** 方案里的节点；用户新建节点也用它（节点名在任务里不能重复，新建的节点不会自动开跑） */
+/** 引擎里的节点（节点名在任务里不能重复） */
 export const PlanNode = z.discriminatedUnion('kind', [
   WorkPlanNode,
   DiscussionPlanNode,
@@ -210,3 +186,40 @@ export const WorkflowPlan = z.object({
   edges: z.array(PlanEdge).default([]),
 });
 export type WorkflowPlan = z.infer<typeof WorkflowPlan>;
+
+/**
+ * 一样成果由一个 AI 做：一个沙箱、一次持续会话里从头做到交付，步骤、素材、校验都由它自己定。
+ * 落到引擎里是一个干活节点，key 就是节点名。
+ */
+export const AgentOutcome = z.object({
+  key: NodeKey,
+  title: NodeCommon.title,
+  how: z.literal('agent'),
+  /** 这样成果要做成什么、交出什么文件 */
+  goal: NodeCommon.goal,
+  model: z.string().min(1).max(200),
+  expects: NodeCommon.expects,
+  requires: NodeCommon.requires,
+  deliver: NodeCommon.deliver,
+  /** 要用哪些节点交出的文件：别的成果的 key，或生产线里交出文件的那个节点的 key；放进它的 in/<key>/ */
+  needs: z.array(NodeKey).default([]),
+});
+
+/** 一样成果由一条生产线做：工具节点、展开节点按连线接起来；连线的起点可以是别的成果里的节点 */
+export const LineOutcome = z.object({
+  key: NodeKey,
+  title: NodeCommon.title,
+  how: z.literal('line'),
+  nodes: z.array(z.discriminatedUnion('kind', [ToolPlanNode, ForeachPlanNode])).min(1),
+  edges: z.array(PlanEdge).default([]),
+});
+
+export const Outcome = z.discriminatedUnion('how', [AgentOutcome, LineOutcome]);
+export type Outcome = z.infer<typeof Outcome>;
+
+/** 规划员写的方案：有几样成果、每样怎么做，任务单上每样交付物由哪个节点交出 */
+export const OutcomePlan = z.object({
+  outcomes: z.array(Outcome).min(1),
+  deliverables: z.record(z.string(), NodeKey),
+});
+export type OutcomePlan = z.infer<typeof OutcomePlan>;

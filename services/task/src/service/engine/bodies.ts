@@ -53,10 +53,11 @@ export function toNodeBody(node: Node, nodes?: Node[]): NodeBody {
     role: node.role,
     goal: node.goal,
     model: node.model,
-    checks: c.checks ?? [],
     expects: c.expects ?? [],
     ...(c.requires ? { requires: c.requires } : {}),
     ...(c.deliver === undefined ? {} : { deliver: c.deliver }),
+    line: c.line ?? null,
+    adjust: c.adjust ?? null,
     ...kindOf(node).body(node),
     status: node.status,
     attempts: node.attempts,
@@ -100,7 +101,6 @@ function toRevisionBody(task: Snapshot['task']): TaskBody['revision'] {
     stage: r.plan ? 'confirm' : 'planning',
     request: r.request,
     summary: r.plan?.summary ?? null,
-    estimateMicro: r.estimateMicro ?? null,
     changes: r.changes ?? [],
   };
 }
@@ -119,9 +119,7 @@ export function toTaskBody({ task, nodes, edges, versions }: Snapshot): TaskBody
     brief: task.brief,
     status: task.status,
     attention: task.attention,
-    estimateMicro: task.estimateMicro,
     spentMicro: task.spentMicro,
-    budgetLimitMicro: task.budgetLimitMicro,
     sheet: task.sheet,
     materials: task.materials,
     // 验收返工次数、这轮的修改意见只给控制面用，不返回；修改还没验收时没有验收记录

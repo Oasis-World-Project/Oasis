@@ -3,16 +3,16 @@
 // 交给用户处理（和干活节点一样）。
 // - 开跑：一次工具运行，带上上游交来的文件；做完照常过关卡，关卡只提醒、不返工（没有 AI 能改）。
 // - 停止后继续、失败后再试：接着原运行的工作目录，做完的步骤不重做，做到一半的长任务接着原来的提交。
-// - 估价：每步按工具单价 × 计费单位数（视频的秒数、生图的张数），加一次沙箱算力。
+
 import { TOOL_RUN_MODEL } from '@oasis/contracts/harness';
 import { checkToolArgs, listOf } from '@oasis/contracts/tool-args';
 import type { ToolStep } from '@oasis/contracts/tool-step';
-import { HttpError } from '@oasis/service-kit';
+
 import type { ToolConfig } from '../../repo/schema.ts';
 import type { NodeOf, Snapshot } from '../../repo/task-store.ts';
 import { inputsOf, redoOf } from './common.ts';
 import type { NodeKindPlugin, Step } from './kind.ts';
-import { variantsConfig, variantsEdit, variantsPlan, withVariants } from './variants.ts';
+import { variantsConfig, variantsPlan } from './variants.ts';
 
 type ToolNode = NodeOf<'tool'>;
 
@@ -40,13 +40,6 @@ export function upstreamFiles(steps: ToolStep[]): { from: string; path: string }
       if (match) found.set(file, { from: match[1]!, path: match[2]! });
     }
   return [...found.values()];
-}
-
-/** 一步的计费单位数：目录说按哪个参数计（视频的秒数、生图的张数）就按它，否则一次一个单位 */
-export function unitsOf(step: ToolStep, per: { arg: string; default: number } | undefined) {
-  if (!per) return 1;
-  const value = Number(step.args[per.arg]);
-  return Number.isFinite(value) && value > 0 ? value : per.default;
 }
 
 const modelOf = (step: ToolStep) =>
@@ -109,18 +102,6 @@ export const tool: NodeKindPlugin<'tool'> = {
     }
     return problems;
   },
-  estimate: (plan, rates) =>
-    withVariants(
-      rates.compute +
-        plan.steps.reduce(
-          (sum, step) =>
-            sum +
-            unitsOf(step, rates.per(step.tool)) * rates.tool(step.tool, modelOf(step), step.args),
-          0,
-        ),
-      plan.variants,
-      rates,
-    ),
   config: (plan): ToolConfig => ({ steps: plan.steps, ...variantsConfig(plan.variants) }),
   plan: (node, common) => ({
     ...common,
@@ -128,27 +109,7 @@ export const tool: NodeKindPlugin<'tool'> = {
     steps: node.config.steps ?? [],
     ...variantsPlan(node),
   }),
-  edit(node, body) {
-    if (body.participants !== undefined || body.rounds !== undefined)
-      throw new HttpError(400, 'invalid_node', '只有讨论节点有参与者和轮数');
-    if (body.tools !== undefined)
-      throw new HttpError(400, 'invalid_node', '工具节点用的工具写在步骤里');
-    if (!body.steps) return variantsEdit(body);
-    const problems = stepProblems(node.key, body.steps);
-    if (problems.length) throw new HttpError(400, 'invalid_node', problems.join('；'));
-    return { steps: body.steps, ...variantsEdit(body) };
-  },
-  body(node) {
-    const steps = node.config.steps ?? [];
-    // 工作流页和修改规划员照常看「用了哪些工具」：按步骤数
-    const uses = new Map<string, number>();
-    for (const step of steps) uses.set(step.tool, (uses.get(step.tool) ?? 0) + 1);
-    return {
-      tools: [...uses].map(([key, count]) => ({ key, uses: count })),
-      discussion: null,
-      steps,
-    };
-  },
+  body: (node) => ({ discussion: null, steps: node.config.steps ?? [] }),
   // 没有会话可以接着改：修改时只能沿用或重新跑
   continuable: false,
   reworkable: false,

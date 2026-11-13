@@ -49,7 +49,6 @@ const SHEET = {
   deliverables: [{ name: '首页文案', form: 'Markdown' }],
   criteria: ['有标题、卖点和预订方式'],
   style: ['温馨'],
-  budgetMicro: null,
   assumptions: ['用 Markdown 写'],
   materials: [],
 };
@@ -90,9 +89,9 @@ function node(id: string, key: string, title: string, status: string) {
     role: '',
     goal: title,
     model: 'deepseek/x',
-    checks: [],
     expects: [],
-    tools: [],
+    line: null,
+    adjust: null,
     discussion: null,
     steps: null,
     status,
@@ -115,9 +114,7 @@ function task(overrides: Partial<TaskBody> = {}): TaskBody {
     brief: '',
     status: 'running',
     attention: null,
-    estimateMicro: 30_000,
     spentMicro: 12_300,
-    budgetLimitMicro: 90_000,
     sheet: SHEET,
     acceptance: null,
     deliverables: [{ name: '首页文案', form: 'Markdown', nodeId: NODE_A }],
@@ -212,7 +209,7 @@ describe('问题卡和任务单', () => {
     });
     const taskCard = message('task', { taskId: TASK });
     const { chat, api } = fakeChat([asked, questions], {
-      task: () => task({ status: 'planning', nodes: [], spentMicro: 0, estimateMicro: null }),
+      task: () => task({ status: 'planning', nodes: [], spentMicro: 0 }),
       extra: (method, path) => {
         if (method === 'POST' && path.endsWith('/intake/answers')) {
           chat.messages = [
@@ -259,6 +256,8 @@ describe('问题卡和任务单', () => {
     fireEvent.click(within(sheetCard).getByRole('button', { name: '确认，开始做' }));
     const taskRegion = await screen.findByRole('region', { name: `任务：${SHEET.title}` });
     expect(await within(taskRegion).findAllByText('正在搭建工作流')).not.toHaveLength(0);
+    // 确认时不选预算：没有预算这回事
+    expect(api.bodies.find((b) => b.path.endsWith('/intake/confirm'))?.body).toEqual({});
     expect(
       within(screen.getByRole('region', { name: '任务单' })).getByText('已交给 AI 团队'),
     ).toBeTruthy();
@@ -289,56 +288,6 @@ describe('问题卡和任务单', () => {
         messageId: questions.id,
         answers: { q1: 'custom:来出差的商务客', q2: 'a' },
         skip: false,
-      }),
-    );
-  });
-
-  it('任务单上选预算：三档带金额和用时，默认标准；自定义低于最低预算不能确认', async () => {
-    const quote = {
-      tiers: [
-        { tier: 'economy', micro: 400_000, minutes: 6 },
-        { tier: 'standard', micro: 1_200_000, minutes: 12 },
-        { tier: 'premium', micro: 3_000_000, minutes: 25 },
-      ],
-      minimumMicro: 400_000,
-      steps: ['写初稿'],
-      rough: false,
-    };
-    const sheet = message('sheet', {
-      intakeId: INTAKE,
-      sheet: SHEET,
-      quote,
-      status: 'open',
-      taskId: null,
-    });
-    const { api } = fakeChat([message('text', {}, 'user', '写首页'), sheet], {
-      extra: (method, path) =>
-        method === 'POST' && path.endsWith('/intake/confirm')
-          ? json(200, { messages: [] })
-          : undefined,
-    });
-    await openChat();
-    const card = await screen.findByRole('region', { name: '任务单' });
-    expect(within(card).getByRole('radio', { name: /标准 · \$1\.20 · 约 12 分钟/ })).toHaveProperty(
-      'checked',
-      true,
-    );
-    expect(within(card).getByText(/预算只是参考/)).toBeTruthy();
-    fireEvent.click(within(card).getByRole('radio', { name: '自定义' }));
-    const confirm = within(card).getByRole('button', { name: '确认，开始做' });
-    fireEvent.change(within(card).getByRole('spinbutton', { name: '自定义预算（美元）' }), {
-      target: { value: '0.2' },
-    });
-    expect(confirm).toHaveProperty('disabled', true);
-    expect(within(card).getByText('最低预算是 $0.40。')).toBeTruthy();
-    fireEvent.change(within(card).getByRole('spinbutton', { name: '自定义预算（美元）' }), {
-      target: { value: '2' },
-    });
-    fireEvent.click(confirm);
-    await waitFor(() =>
-      expect(api.bodies.find((b) => b.path.endsWith('/intake/confirm'))?.body).toEqual({
-        tier: 'custom',
-        customMicro: 2_000_000,
       }),
     );
   });

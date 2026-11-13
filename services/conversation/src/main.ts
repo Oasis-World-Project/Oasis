@@ -83,7 +83,6 @@ await startService({
         fallbackModel: config.INTAKE_FALLBACK_MODEL,
         maxRounds: config.INTAKE_MAX_ROUNDS,
         maxTokens: config.INTAKE_MAX_TOKENS,
-        quoteTimeoutMs: config.MODEL_GATEWAY_TIMEOUT_MS,
       },
       logger,
     });

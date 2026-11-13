@@ -1,7 +1,7 @@
 // 回归场景（docs/engineering/回归测试.md）：网页：浏览器关卡、测试计划、应用清单。
 import { literal, query } from '../db.mjs';
 import { marker, writeFiles } from '../fake-provider.mjs';
-import { DEFAULT_MODEL, done, sha256, work } from './shared.mjs';
+import { DEFAULT_MODEL, done, outcomes, sha256, work } from './shared.mjs';
 
 // ---------- 1. 多文件网页：浏览器关卡发现计数错 → 退回修一次 → 桌面端画布里打得开、点得对 ----------
 // 脚本是 ES 模块、互相 import（11-07「检查通过的网页画布里黑屏」就是多文件模块串联引用）
@@ -37,17 +37,18 @@ export const web = {
   get request() {
     return `做一个计数小网页，HTML、CSS、JS 分开放 ${marker('web')}`;
   },
-  plan: ({ pick }) => ({
-    nodes: [
-      work('web', 'site', '做计数网页', '做一个计数网页，交出 out/site/ 整个目录', {
-        model: pick(DEFAULT_MODEL),
-        expects: ['site/index.html'],
-        deliver: ['site/**'],
-      }),
-    ],
-    edges: [],
-    deliverables: { 计数网页: 'site' },
-  }),
+  plan: ({ pick }) =>
+    outcomes({
+      nodes: [
+        work('web', 'site', '做计数网页', '做一个计数网页，交出 out/site/ 整个目录', {
+          model: pick(DEFAULT_MODEL),
+          expects: ['site/index.html'],
+          deliver: ['site/**'],
+        }),
+      ],
+      edges: [],
+      deliverables: { 计数网页: 'site' },
+    }),
   nodes: {
     site: {
       // 第一版计数每次加 2：浏览器关卡按 oasis-test.json 点一遍会发现
@@ -139,17 +140,18 @@ export const testplan = {
   get request() {
     return `做一个计数小网页，附上浏览器测试计划 ${marker('testplan')}`;
   },
-  plan: ({ pick }) => ({
-    nodes: [
-      work('testplan', 'site', '做计数网页', '做一个计数网页，交出 out/site/ 整个目录', {
-        model: pick(DEFAULT_MODEL),
-        expects: ['site/index.html'],
-        deliver: ['site/**'],
-      }),
-    ],
-    edges: [],
-    deliverables: { 计数网页: 'site' },
-  }),
+  plan: ({ pick }) =>
+    outcomes({
+      nodes: [
+        work('testplan', 'site', '做计数网页', '做一个计数网页，交出 out/site/ 整个目录', {
+          model: pick(DEFAULT_MODEL),
+          expects: ['site/index.html'],
+          deliver: ['site/**'],
+        }),
+      ],
+      edges: [],
+      deliverables: { 计数网页: 'site' },
+    }),
   nodes: {
     site: {
       work: [
@@ -200,17 +202,18 @@ export const manifest = {
   get request() {
     return `做一个计数小网页 ${marker('manifest')}`;
   },
-  plan: ({ pick }) => ({
-    nodes: [
-      work('manifest', 'site', '做计数网页', '做一个计数网页，交出 out/site/ 整个目录', {
-        model: pick(DEFAULT_MODEL),
-        expects: ['site/index.html'],
-        deliver: ['site/**'],
-      }),
-    ],
-    edges: [],
-    deliverables: { 计数网页: 'site' },
-  }),
+  plan: ({ pick }) =>
+    outcomes({
+      nodes: [
+        work('manifest', 'site', '做计数网页', '做一个计数网页，交出 out/site/ 整个目录', {
+          model: pick(DEFAULT_MODEL),
+          expects: ['site/index.html'],
+          deliver: ['site/**'],
+        }),
+      ],
+      edges: [],
+      deliverables: { 计数网页: 'site' },
+    }),
   nodes: {
     site: {
       work: [
@@ -298,31 +301,34 @@ export const solo = {
   title: '带插图的计数网页',
   deliverables: [{ name: '计数网页', form: '静态网页（HTML + CSS + JS）' }],
   criteria: ['点「加一」计数加一', '页面上有一张插图'],
-  quoteTools: [{ key: 'image.generate', uses: { economy: 1, standard: 1, premium: 1 } }],
   get request() {
     return `做一个带插图的计数小网页 ${marker('solo')}`;
   },
-  plan: ({ pick }) => ({
-    nodes: [
-      work(
-        'solo',
-        'site',
-        '做带插图的计数网页',
-        '做一个带插图的计数网页，交出 out/site/ 整个目录',
-        {
-          model: pick(DEFAULT_MODEL),
-          tools: [{ key: 'image.generate', uses: 1 }],
-          expects: ['site/index.html', 'site/cover.png'],
-          deliver: ['site/**'],
-        },
-      ),
-    ],
-    edges: [],
-    deliverables: { 计数网页: 'site' },
-  }),
+  plan: ({ pick }) =>
+    outcomes({
+      nodes: [
+        work(
+          'solo',
+          'site',
+          '做带插图的计数网页',
+          '做一个带插图的计数网页，交出 out/site/ 整个目录',
+          {
+            model: pick(DEFAULT_MODEL),
+            expects: ['site/index.html', 'site/cover.png'],
+            deliver: ['site/**'],
+          },
+        ),
+      ],
+      edges: [],
+      deliverables: { 计数网页: 'site' },
+    }),
   nodes: {
     site: {
       work: [
+        {
+          bash: 'oasis-tool model.ask --question "计数网页最容易漏掉什么？"',
+          description: '问另一个模型',
+        },
         {
           bash: 'mkdir -p out/site && oasis-tool image.generate --prompt "雨夜屋顶上的橘猫，像素风" --out out/site/cover.png && ls out/site',
           description: '生成插图',
@@ -359,7 +365,12 @@ export const solo = {
       '节点没有自己调生图工具',
     );
     const site = t.provider.of('solo', 'site');
-    const played = site.find((c) => c.segment === 'work' && c.action === 'bash:3');
+    const asked = site.find((c) => c.segment === 'work' && c.action === 'bash:1');
+    t.check(
+      asked?.previous?.includes('好的。'),
+      `节点应能问另一个模型并拿到回答：${asked?.previous ?? '没有记录'}`,
+    );
+    const played = site.find((c) => c.segment === 'work' && c.action === 'bash:4');
     t.check(
       played?.previous?.includes('BROWSER {"count":"2","cover":true,"shot":true}'),
       `节点应能用沙箱里的浏览器打开自己做的页面、点两下、看到插图并截图：${played?.previous ?? '没有记录'}`,

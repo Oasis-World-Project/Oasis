@@ -168,6 +168,9 @@ describe('工具目录', () => {
       'audio.music',
       'video.generate',
       'jev.decide',
+      'model.ask',
+      // 提出调整（ADR 0030 §3.7）：平台自己答复，不靠供应商，一直可用
+      'workflow.adjust',
       'text.batch',
       // 沙箱里的本地操作（ADR 0025）：不调供应商，一直可用
       'op.video.concat',
@@ -455,6 +458,37 @@ describe('调用工具', () => {
     expect(
       (await call('jev.decide', { question: '写得怎么样', scale: ['差', '一般', '好'] })).data,
     ).toEqual({ type: 'score', score: '好' });
+  });
+
+  it('问另一个模型：问题和材料交给指定的型号，交回它的回答；目录里附上各型号的实测', async () => {
+    knobs.judgeAnswer = '标题太长，建议压到 12 个字以内。';
+    const result = await call('model.ask', {
+      question: '这个标题有什么问题？',
+      context: '# 山里的小木屋民宿官网首页开头第一版',
+      model: 'openai/ask-2',
+    });
+    expect(result.text).toBe('标题太长，建议压到 12 个字以内。');
+    expect(upstream[0]?.body).toMatchObject({ model: 'openai/ask-2', stream: false });
+    expect((upstream[0]?.body.messages as { content: string }[])[0]!.content).toBe(
+      '材料：\n# 山里的小木屋民宿官网首页开头第一版\n\n这个标题有什么问题？',
+    );
+    // 不指定型号用清单里的第一个；不在清单里的型号不给用
+    await call('model.ask', { question: '再看一遍' });
+    expect(upstream[1]?.body).toMatchObject({ model: 'alibaba/ask-1' });
+    expect(await errorOf(call('model.ask', { question: 'x', model: 'other/m' }))).toMatchObject({
+      code: 'invalid_tool_args',
+    });
+
+    knobs.measured = new Map([
+      [
+        'alibaba/ask-1',
+        { calls: 120, tokensPerSecond: 163, microPerMTok: 232_000, failureRate: 0 },
+      ],
+    ]);
+    const entry = (await tools.list()).find((t) => t.key === 'model.ask');
+    expect(entry?.description).toContain(
+      '最近的实测（含缓存折扣）：alibaba/ask-1 每秒约 163 个 token、每百万 token 约 $0.23。',
+    );
   });
 
   it('没配 Key 的工具：503', async () => {

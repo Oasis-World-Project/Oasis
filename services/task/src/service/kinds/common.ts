@@ -84,7 +84,7 @@ const json = (path: string, value: unknown): RunInputFile => ({
   contentBase64: Buffer.from(JSON.stringify(value, null, 2)).toString('base64'),
 });
 
-/** 节点看得到的上下文：任务、任务单、角色和目标、上游交来的东西、用户追加的要求、预算和进度 */
+/** 节点看得到的上下文：任务、任务单、角色和目标、上游交来的东西、用户追加的要求 */
 export function contextOf(snapshot: Snapshot, node: Node): NodeContext {
   return {
     brief: snapshot.task.brief,
@@ -101,22 +101,7 @@ export function contextOf(snapshot: Snapshot, node: Node): NodeContext {
     userNotes: node.userNotes,
     materials: materialPaths(snapshot.task.materials).map((m) => m.path),
     ...(node.config.deliver === undefined ? {} : { deliver: node.config.deliver }),
-    checks: (node.config.checks ?? []).map((c) => (typeof c === 'string' ? c : c.text)),
     ...(node.config.previousRunId ? { previous: true } : {}),
-    budget: {
-      ...(node.config.budgetMicro ? { nodeMicro: node.config.budgetMicro } : {}),
-      ...(snapshot.task.sheet?.budget
-        ? {
-            taskMicro: snapshot.task.sheet.budget.micro,
-            taskMinutes: snapshot.task.sheet.budget.minutes,
-          }
-        : {}),
-      spentMicro: snapshot.task.spentMicro,
-      elapsedMinutes: Math.max(
-        0,
-        Math.round((Date.now() - snapshot.task.createdAt.getTime()) / 60_000),
-      ),
-    },
   };
 }
 
@@ -144,7 +129,7 @@ export function reworkStep(node: Node, unmet: string[], revision?: string): Step
         purpose: 'rework',
         goal: revision !== undefined,
         model: node.model,
-        prompt: revision !== undefined ? revisionPrompt(revision, node.goal) : reworkPrompt(unmet),
+        prompt: revision !== undefined ? revisionPrompt(revision) : reworkPrompt(unmet),
         inputsFrom: [],
         continueFrom: node.currentRunId ?? undefined,
         meta: {},

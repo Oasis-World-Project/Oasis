@@ -2,7 +2,7 @@
 import type { NodeBody } from '@oasis/contracts/task';
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
-import { workflowOptionsQuery } from '../api/queries.ts';
+import { workflowNamesQuery } from '../api/queries.ts';
 import { useModelMap } from '../api/use-model-map.ts';
 
 export interface Speaker {
@@ -23,10 +23,10 @@ function fallback(providerModel: string): Speaker {
 
 export function useSpeakers() {
   const models = useModelMap();
-  const { data: options } = useQuery(workflowOptionsQuery);
+  const { data: names } = useQuery(workflowNamesQuery);
   const byProvider = useMemo(
-    () => new Map((options?.models ?? []).map((m) => [m.providerModel, m])),
-    [options],
+    () => new Map((names?.models ?? []).map((m) => [m.providerModel, m])),
+    [names],
   );
 
   const speakerOf = useCallback(
@@ -51,9 +51,9 @@ export function useSpeakers() {
   );
 
   const toolName = useCallback(
-    (key: string) => options?.tools.find((t) => t.key === key)?.name ?? key,
-    [options],
+    (key: string) => names?.tools.find((t) => t.key === key)?.name ?? key,
+    [names],
   );
 
-  return { speakerOf, speakersOf, toolName, options };
+  return { speakerOf, speakersOf, toolName };
 }

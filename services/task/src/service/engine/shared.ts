@@ -4,7 +4,7 @@
 import type { RunFinishedData } from '@oasis/contracts/events';
 import type { Logger, ServiceClient } from '@oasis/service-kit';
 import type { Node, NodeRun, Snapshot, TaskStore, Writer } from '../../repo/task-store.ts';
-import type { Effects, Submission } from '../effects.ts';
+import type { Effects, Engine as PlanningEngine, Submission } from '../effects.ts';
 import type { Gate } from '../gate.ts';
 import type { Step } from '../kinds/index.ts';
 import type { createPlanning, PlanningConfig } from '../planning-service.ts';
@@ -81,6 +81,10 @@ export interface Engine {
   // ---- 修改（revisions.ts，ADR 0022）
   applyRevision: Decision;
   cancelRevision: Decision;
+
+  // ---- 中途调整（adjust.ts，ADR 0030 §3.7）
+  /** 把规划员同意的调整落到工作流上：停掉成果、补说明、加成果 */
+  applyAdjust: PlanningEngine['applyAdjust'];
 
   // ---- 子节点（groups.ts、expand.ts，ADR 0026）
   /** 组节点开跑：展开节点去读清单，做几版的节点开出各版；停下、失败过的子节点重新排队 */

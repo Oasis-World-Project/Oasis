@@ -76,6 +76,7 @@ export const repo: CallsRepo = {
   regionBlockedModels: async () => [],
   staleRunning: async () => [],
   typicalUsage: async () => ({ tools: new Map(), nodes: new Map(), nodeTokens: null }),
+  measured: async () => new Map(),
   finish: async (_id, outcome) => void finished.push(outcome),
 };
 export const silent = pino({ level: 'silent' });

@@ -19,7 +19,7 @@ const ids = (rows, key = 'id') => rows.map((r) => literal(r[key])).join(',') || 
 
 const [task] = query(
   'task',
-  `select id, title, status, attention, version, spent_micro, estimate_micro, planner_run_id, plan_attempts, created_at, finished_at, revision from tasks where id = ${literal(taskId)}`,
+  `select id, title, status, attention, version, spent_micro, planner_run_id, plan_attempts, created_at, finished_at, revision from tasks where id = ${literal(taskId)}`,
 );
 if (!task) {
   console.error(`没有这个任务：${taskId}（已删除的任务查不到，删除是真删除）`);
@@ -125,7 +125,7 @@ function runLine(runId, label) {
 }
 
 console.log(
-  `任务 ${task.id}「${task.title}」 ${task.status}  第 ${task.version} 版  花费 ${usd(task.spent_micro)}（预估 ${usd(task.estimate_micro)}）`,
+  `任务 ${task.id}「${task.title}」 ${task.status}  第 ${task.version} 版  花费 ${usd(task.spent_micro)}`,
 );
 console.log(
   `创建 ${new Date(task.created_at).toLocaleString('zh-CN', { hour12: false })}  结束 ${task.finished_at ? new Date(task.finished_at).toLocaleString('zh-CN', { hour12: false }) : '—'}`,

@@ -1,27 +1,22 @@
 // task 的接口。/internal/* 给 5.3 的规划和测试用；/v1/* 经 gateway 给前端，只能看、改自己的任务。
 import {
-  CreateEdgeBody,
   CreateTaskBody,
   DecisionBody,
   NodeMessageBody,
   PickVersionBody,
-  PlanNode,
-  QuoteBody,
   TaskRevisionBody,
-  UpdateEdgeBody,
-  UpdateNodeBody,
 } from '@oasis/contracts/task';
 import { ModelScope } from '@oasis/contracts/model-gateway';
 import { fileResponseHeaders, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { ModelScopes } from '../service/model-scope.ts';
-import type { Quotes } from '../service/quote.ts';
+
 import type { Revisions } from '../service/revision.ts';
 import type { WorkflowService } from '../service/workflow-service.ts';
 
 const TaskParams = z.object({ taskId: z.uuid() });
 const NodeParams = TaskParams.extend({ nodeId: z.uuid() });
-const EdgeParams = TaskParams.extend({ edgeId: z.uuid() });
+
 const FileParams = NodeParams.extend({ '*': z.string().min(1).max(500) });
 const EventsQuery = z.object({
   after: z.coerce.number().int().min(-1).default(-1),
@@ -34,16 +29,9 @@ const MaterialsInUseBody = z.object({ ownerId: z.uuid(), ids: z.array(z.uuid()) 
 export function registerRoutes(
   app: ServiceApp,
   workflows: WorkflowService,
-  quotes: Quotes,
   revisions: Revisions,
   modelScopes: ModelScopes,
 ): void {
-  /** 给任务单报价（ADR 0016 §4）：三档预算和用时；草案用不了时 quote 为 null */
-  app.post('/internal/quotes', async (request) => {
-    const body = parseWith(QuoteBody, request.body);
-    return { quote: await quotes.quote({ ...body, requestId: request.id }) };
-  });
-
   /** 提交任务和工作流方案，校验后立即开跑 */
   app.post('/internal/tasks', async (request, reply) => {
     const body = parseWith(CreateTaskBody, request.body);
@@ -102,7 +90,7 @@ export function registerRoutes(
     return workflows.get(requireUserId(request), taskId);
   });
 
-  // ---- 整个任务：运行（先检查整张图）、停止、取消、「需要处理」时三选一 ----
+  // ---- 整个任务：运行、停止、取消、「需要处理」时三选一 ----
   app.post('/v1/tasks/:taskId/run', async (request) => {
     const { taskId } = parseWith(TaskParams, request.params);
     return workflows.run(requireUserId(request), taskId);
@@ -124,24 +112,7 @@ export function registerRoutes(
     return workflows.decide(requireUserId(request), taskId, body);
   });
 
-  // ---- 节点：新建、改、删（还没开始的），单独运行、停止 ----
-  app.post('/v1/tasks/:taskId/nodes', async (request, reply) => {
-    const { taskId } = parseWith(TaskParams, request.params);
-    const body = parseWith(PlanNode, request.body);
-    return reply.code(201).send(await workflows.createNode(requireUserId(request), taskId, body));
-  });
-
-  app.patch('/v1/tasks/:taskId/nodes/:nodeId', async (request) => {
-    const { taskId, nodeId } = parseWith(NodeParams, request.params);
-    const body = parseWith(UpdateNodeBody, request.body);
-    return workflows.updateNode(requireUserId(request), taskId, nodeId, body);
-  });
-
-  app.delete('/v1/tasks/:taskId/nodes/:nodeId', async (request) => {
-    const { taskId, nodeId } = parseWith(NodeParams, request.params);
-    return workflows.deleteNode(requireUserId(request), taskId, nodeId);
-  });
-
+  // ---- 一样成果（节点）：继续、停止 ----
   app.post('/v1/tasks/:taskId/nodes/:nodeId/run', async (request) => {
     const { taskId, nodeId } = parseWith(NodeParams, request.params);
     return workflows.runNode(requireUserId(request), taskId, nodeId);
@@ -157,26 +128,6 @@ export function registerRoutes(
     const { taskId, nodeId } = parseWith(NodeParams, request.params);
     const { version } = parseWith(PickVersionBody, request.body);
     return workflows.pickVersion(requireUserId(request), taskId, nodeId, version);
-  });
-
-  // ---- 连线：新建、接上线头 / 改一端、删除 ----
-  app.post('/v1/tasks/:taskId/edges', async (request, reply) => {
-    const { taskId } = parseWith(TaskParams, request.params);
-    const { from, to } = parseWith(CreateEdgeBody, request.body);
-    return reply
-      .code(201)
-      .send(await workflows.createEdge(requireUserId(request), taskId, from, to));
-  });
-
-  app.patch('/v1/tasks/:taskId/edges/:edgeId', async (request) => {
-    const { taskId, edgeId } = parseWith(EdgeParams, request.params);
-    const body = parseWith(UpdateEdgeBody, request.body);
-    return workflows.updateEdge(requireUserId(request), taskId, edgeId, body);
-  });
-
-  app.delete('/v1/tasks/:taskId/edges/:edgeId', async (request) => {
-    const { taskId, edgeId } = parseWith(EdgeParams, request.params);
-    return workflows.deleteEdge(requireUserId(request), taskId, edgeId);
   });
 
   /** 下载节点交出的一个文件 */
@@ -218,8 +169,8 @@ export function registerRoutes(
     return workflows.nodeEvents(requireUserId(request), taskId, nodeId, after, runId);
   });
 
-  /** 编辑节点时能选的模型和工具 */
-  app.get('/v1/workflow/options', async (request) => workflows.options(requireUserId(request)));
+  /** 工作流页显示用的名字：型号是哪个 AI、工具叫什么 */
+  app.get('/v1/workflow/names', async (request) => workflows.names(requireUserId(request)));
 
   /** 「只用国内模型」开关（ADR 0027）：这个用户的 AI 团队用哪些模型 */
   app.get('/v1/model-scope', async (request) => modelScopes.get(requireUserId(request)));

@@ -3,7 +3,7 @@
 import { fault, gateway, takeover } from './scenarios/faults.mjs';
 import { groups } from './scenarios/groups.mjs';
 import { media, video } from './scenarios/media.mjs';
-import { revise, stop, workspace } from './scenarios/revise.mjs';
+import { adjust, revise, stop, workspace } from './scenarios/revise.mjs';
 import { toolnode } from './scenarios/tools.mjs';
 import { manifest, solo, testplan, web } from './scenarios/web.mjs';
 
@@ -16,6 +16,7 @@ export const SCENARIOS = {
   solo,
   media,
   revise,
+  adjust,
   stop,
   workspace,
   video,

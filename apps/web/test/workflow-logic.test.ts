@@ -1,13 +1,21 @@
 import type { NodeBody, TaskBody } from '@oasis/contracts/task';
 import { describe, expect, it } from 'vitest';
-import { layout, NODE_W } from '../src/workflow/layout.ts';
-import { keyFor, parseSteps } from '../src/workflow/NodeEditor.tsx';
-import { nodeActions, runLabel, stepArgs, stepsOf } from '../src/workflow/rules.ts';
+import { layout, NODE_H, NODE_W } from '../src/workflow/layout.ts';
+import {
+  frameRows,
+  nodeActions,
+  progressOf,
+  runLabel,
+  stepArgs,
+  stepsOf,
+} from '../src/workflow/rules.ts';
+
+const box = (id: string, w = NODE_W, h = NODE_H) => ({ id, w, h });
 
 describe('工作流自动布局', () => {
   it('按最长上游链分列，同一列里按上游的位置排', () => {
-    const p = layout(
-      ['a', 'b', 'c', 'd', 'x'],
+    const { positions: p } = layout(
+      ['a', 'b', 'c', 'd', 'x'].map((id) => box(id)),
       [
         { from: 'a', to: 'b' },
         { from: 'a', to: 'c' },
@@ -21,23 +29,26 @@ describe('工作流自动布局', () => {
     expect(p.get('b')!.y).toBeLessThan(p.get('c')!.y);
   });
 
+  it('块的大小不一样：列宽取最宽的，同一列按各自的高往下排，整张图多大算得出来', () => {
+    const {
+      positions: p,
+      width,
+      height,
+    } = layout([box('a', 264, 200), box('b'), box('c', 300, 150)], [{ from: 'a', to: 'c' }]);
+    expect(p.get('c')).toEqual({ x: 264 + 72, y: (200 + 36 + NODE_H - 150) / 2 });
+    expect(p.get('b')!.y - p.get('a')!.y).toBe(200 + 36);
+    expect([width, height]).toEqual([264 + 72 + 300, 200 + 36 + NODE_H]);
+  });
+
   it('有环也不会卡住', () => {
-    const p = layout(
-      ['a', 'b'],
+    const { positions } = layout(
+      [box('a'), box('b')],
       [
         { from: 'a', to: 'b' },
         { from: 'b', to: 'a' },
       ],
     );
-    expect(p.size).toBe(2);
-  });
-});
-
-describe('节点名', () => {
-  it('从标题生成，去掉不能用的字符，不重名', () => {
-    expect(keyFor('写 首页：文案', new Set())).toBe('写-首页-文案');
-    expect(keyFor('写首页', new Set(['写首页', '写首页-2']))).toBe('写首页-3');
-    expect(keyFor('!!!', new Set())).toBe('node');
+    expect(positions.size).toBe(2);
   });
 });
 
@@ -48,61 +59,103 @@ const task = (
   status: TaskBody['status'] = 'running',
 ) => ({ status, nodes, edges }) as TaskBody;
 
-describe('节点现在能做什么（和 task 的规则一致）', () => {
-  it('还没开始的能改、能删、能往里接线；跑完的都不行', () => {
+describe('一样成果现在能做什么（和 task 的规则一致）', () => {
+  it('停下的可以继续，失败的等上游做完才能再试；在跑的能停、能追问；做完的都不行', () => {
     const t = task(
-      [node('a', 'succeeded'), node('b', 'waiting')],
-      [{ id: 'e', from: 'a', to: 'b' }],
-    );
-    expect(nodeActions(t, t.nodes[1]!)).toMatchObject({
-      edit: true,
-      remove: true,
-      run: true,
-      acceptsInput: true,
-    });
-    expect(nodeActions(t, t.nodes[0]!)).toMatchObject({
-      edit: false,
-      remove: false,
-      run: false,
-      message: false,
-    });
-  });
-
-  it('上游没完成的不能单独运行；停止的可以继续；任务结束后什么都不能动', () => {
-    const t = task(
-      [node('a', 'running'), node('b', 'waiting'), node('c', 'stopped')],
+      [
+        node('a', 'running'),
+        node('b', 'waiting'),
+        node('c', 'stopped'),
+        node('d', 'failed'),
+        node('e', 'succeeded'),
+      ],
       [
         { id: 'e', from: 'a', to: 'b' },
         { id: 'f', from: 'a', to: 'c' },
+        { id: 'g', from: 'a', to: 'd' },
       ],
     );
-    expect(nodeActions(t, t.nodes[1]!).run).toBe(false);
-    expect(nodeActions(t, t.nodes[2]!).run).toBe(true);
-    expect(nodeActions(t, t.nodes[0]!)).toMatchObject({ stop: true, message: true });
+    const can = (index: number) => nodeActions(t, t.nodes[index]!);
+    expect(can(0)).toEqual({ run: false, stop: true, message: true });
+    expect(can(1)).toEqual({ run: false, stop: false, message: true });
+    expect(can(2)).toEqual({ run: true, stop: false, message: true });
+    expect(can(3)).toEqual({ run: false, stop: false, message: false });
+    expect(can(4)).toEqual({ run: false, stop: false, message: false });
+    // 任务结束后、修改方案等确认时什么都不能动
     const done = task(t.nodes, t.edges, 'succeeded');
-    expect(Object.values(nodeActions(done, t.nodes[1]!)).some(Boolean)).toBe(false);
+    expect(Object.values(nodeActions(done, t.nodes[2]!)).some(Boolean)).toBe(false);
+    const revising = { ...t, revision: { stage: 'confirm' } } as TaskBody;
+    expect(Object.values(nodeActions(revising, t.nodes[2]!)).some(Boolean)).toBe(false);
   });
 
-  it('工具节点没有 AI：能改、能跑、能停，但不能追问', () => {
+  it('工具节点没有 AI：能停，不能追问', () => {
     const tool = { ...node('t', 'running'), kind: 'tool' } as NodeBody;
     expect(nodeActions(task([tool], []), tool)).toMatchObject({ stop: true, message: false });
   });
 });
 
-describe('编辑工具节点的步骤', () => {
-  it('JSON 数组，按契约检查；问题说清楚', () => {
-    expect(
-      parseSteps('[{"tool":"op.video.concat","args":{"in":["a","b"]},"out":"out/c.mp4"}]'),
-    ).toEqual({
-      steps: [{ tool: 'op.video.concat', args: { in: ['a', 'b'] }, out: 'out/c.mp4' }],
-    });
-    expect(parseSteps('不是 JSON')).toEqual({ problem: '步骤要写成 JSON 数组' });
-    expect(parseSteps('[{"tool":"x","out":"c.mp4"}]')).toMatchObject({
-      problem: expect.stringContaining('步骤有问题') as string,
-    });
-    expect(parseSteps('[]')).toMatchObject({
-      problem: expect.stringContaining('步骤有问题') as string,
-    });
+describe('一样成果做到哪了（AI 自己列的任务清单）', () => {
+  const at = '2026-11-13T00:00:00.000Z';
+  const call = (seq: number, name: string, args: object) => ({
+    seq,
+    kind: 'tool_call' as const,
+    data: { callId: `c${seq}`, name, arguments: JSON.stringify(args) },
+    createdAt: at,
+  });
+  const todos = (seq: number, list: [string, string][]) =>
+    call(seq, 'todo_write', { todos: list.map(([content, status]) => ({ content, status })) });
+  const toolName = (key: string) => key;
+
+  it('清单取最后一次列的；后来的运行没再列，就沿用之前那次的', () => {
+    const first = [
+      todos(0, [
+        ['写页面', 'in_progress'],
+        ['自查', 'pending'],
+      ]),
+      call(1, 'write', { path: 'out/index.html' }),
+      todos(2, [
+        ['写页面', 'completed'],
+        ['自查', 'in_progress'],
+      ]),
+    ];
+    const progress = progressOf([first, [call(0, 'write', { path: 'out/style.css' })]]);
+    expect(progress.todos).toEqual([
+      { text: '写页面', state: 'done' },
+      { text: '自查', state: 'doing' },
+    ]);
+    expect(frameRows(progress, toolName)).toEqual([
+      { mark: 'done', text: '写页面' },
+      { mark: 'doing', text: '自查' },
+    ]);
+  });
+
+  it('没列清单时显示最近几步；清单太长只显示正在做的那一段，末行写总数', () => {
+    const none = progressOf([
+      ['a', 'b', 'c', 'd'].map((name, seq) => call(seq, 'write', { path: `out/${name}.md` })),
+    ]);
+    expect(none.todos).toBeNull();
+    expect(frameRows(none, toolName).map((row) => row.text)).toEqual([
+      '写文件 out/b.md',
+      '写文件 out/c.md',
+      '写文件 out/d.md',
+    ]);
+    expect(frameRows(undefined, toolName)).toEqual([]);
+
+    const long = progressOf([
+      [
+        todos(
+          0,
+          Array.from({ length: 14 }, (_, i): [string, string] => [
+            `第 ${i + 1} 步`,
+            i < 8 ? 'completed' : i === 8 ? 'in_progress' : 'pending',
+          ]),
+        ),
+      ],
+    ]);
+    const rows = frameRows(long, toolName);
+    expect(rows).toHaveLength(11);
+    expect(rows[0]).toEqual({ mark: 'done', text: '第 5 步' });
+    expect(rows.at(-1)).toEqual({ mark: 'note', text: '共 14 项，完成了 8 项' });
   });
 });
 

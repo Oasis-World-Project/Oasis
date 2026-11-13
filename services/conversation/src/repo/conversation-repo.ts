@@ -65,7 +65,7 @@ export interface ConversationRepo {
   touchConversation(id: string): Promise<void>;
   /**
    * 已完成的消息（不含 excludeId），按时间正序：seq 不超过 beforeSeq，不限条数
-   * （ADR 0016 §8：上下文默认带整段对话，快到窗口时由摘要代替较早部分）。
+   * （上下文默认带整段对话，快到窗口时由摘要代替较早部分）。
    */
   completeMessages(
     conversationId: string,

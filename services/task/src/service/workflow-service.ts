@@ -1,10 +1,10 @@
 // 工作流控制面（ADR 0004、0005）的对外接口：任务单 → 规划（planning-service）或直接提交方案 → 调度可以跑的节点 →
 // 收到运行结束就推进（讨论的下一轮、汇总、过关卡、原会话修复、最终验收）→ 实际失败或证据不足时明确交给用户处理。
-// 用户可以随时停止 / 继续、运行整个工作流或单个节点、改还没开始的节点和连线（节点和连线的接口在 workflow-nodes.ts）。
+// 用户可以随时停止 / 继续整个任务或一样成果、给它发话（单个节点的接口在 workflow-nodes.ts）；节点和连线不能编辑。
 // 节点真正的执行在 harness；推进的规则在 engine/，各种节点怎么跑在 kinds/。
 import { randomUUID } from 'node:crypto';
 import type { Material } from '@oasis/contracts/canvas';
-import type { CallSettledData } from '@oasis/contracts/events';
+import type { AdjustmentRequestedData, CallSettledData } from '@oasis/contracts/events';
 import type {
   Attention,
   CreateTaskInput,
@@ -24,19 +24,18 @@ import {
   toTaskBody,
   type EngineDeps,
 } from './engine/index.ts';
-import { isRoot } from './groups.ts';
-import { kindOf } from './kinds/index.ts';
+import { isRoot, rootOf } from './groups.ts';
+
 import { planToRows, validatePlan } from './plan.ts';
+import { directRevision } from './revision-planner.ts';
 import { createNodeApi } from './workflow-nodes.ts';
 import { createPickApi } from './workflow-pick.ts';
 
 /** 「需要处理」时某个选择不适用的说明 */
 const UNAVAILABLE: Record<Attention['reason'], string> = {
   node_failed: '节点失败时可以继续、再试或取消',
-  over_budget: '花费超过上限时只能继续或取消',
-  over_estimate: '预估超过你设的上限时只能照做或取消',
   plan_failed: '工作流没排好时只能重新规划或取消',
-  workflow_broken: '工作流的连线断开了：先把线接好再点运行，或者取消任务',
+  workflow_broken: '有成果的上游没做完，工作流走不下去了：只能取消任务',
   revision_plan: '修改方案只能确认，或者不改了',
 };
 
@@ -45,7 +44,7 @@ const revising = () =>
 
 export function createWorkflowService(deps: EngineDeps) {
   const engine = createEngine(deps);
-  const { store, harness, logger } = deps;
+  const { store, logger } = deps;
   const { planning } = engine;
 
   async function owned(ownerId: string, taskId: string): Promise<Snapshot> {
@@ -91,15 +90,17 @@ export function createWorkflowService(deps: EngineDeps) {
     onRunFinished: (result: Parameters<typeof engine.onRunFinished>[0]) =>
       engine.onRunFinished(result),
 
+    /** 做成果的 AI 提出了跨成果的调整（ADR 0030 §3.7）：交给规划员答一次 */
+    onAdjustmentRequested: (data: AdjustmentRequestedData) => planning.adjust(data),
+
     /**
      * 一次属于任务的调用（模型、工具、沙箱和检查浏览器的算力）结算了：累加到任务和节点上，
-     * 同一次调用只算一次。花超也不停（ADR 0016），只提醒节点收尾。
+     * 同一次调用只算一次。只记已经花了多少：没有预算、上限和提醒（ADR 0030 §3.6）。
      */
     async onCallSettled(
       data: Pick<CallSettledData, 'callId' | 'taskId' | 'nodeId' | 'chargedMicro'>,
     ) {
       if (!(await store.get(data.taskId))) return;
-      let nudge: { runId: string; text: string } | undefined;
       await engine.transact(data.taskId, async (snapshot, w) => {
         const node = data.nodeId ? snapshot.nodes.find((n) => n.id === data.nodeId) : undefined;
         const counted = await w.addSpend({
@@ -108,25 +109,9 @@ export function createWorkflowService(deps: EngineDeps) {
           chargedMicro: data.chargedMicro,
         });
         if (!counted) return;
-        const { task } = snapshot;
-        await w.setTask({ spentMicro: task.spentMicro + data.chargedMicro });
-        if (!node) return;
-        const spent = node.spentMicro + data.chargedMicro;
-        await w.setNode(node.id, { spentMicro: spent });
-        // 预算只是参考，花完照样做（ADR 0016 §2）；但节点在运行中看不到花费，超过份额时提醒它收尾
-        const due = kindOf(node).nudge?.(node, spent);
-        if (due) {
-          await w.setNode(node.id, { config: due.config });
-          nudge = { runId: node.currentRunId!, text: due.text };
-        }
+        await w.setTask({ spentMicro: snapshot.task.spentMicro + data.chargedMicro });
+        if (node) await w.setNode(node.id, { spentMicro: node.spentMicro + data.chargedMicro });
       });
-      if (nudge)
-        await harness
-          .json('POST', `/internal/runs/${nudge.runId}/messages`, { body: { text: nudge.text } })
-          .catch((err: unknown) =>
-            // 运行正在启动或收尾：这次提醒就不发了，不影响记账
-            logger.warn({ err, runId: nudge!.runId }, '超预算提醒没发出去'),
-          );
     },
 
     /**
@@ -153,8 +138,6 @@ export function createWorkflowService(deps: EngineDeps) {
             task: {
               ...base,
               status: 'planning',
-              estimateMicro: null,
-              budgetLimitMicro: null,
               sheet: body.sheet,
             },
             nodes: [],
@@ -180,15 +163,8 @@ export function createWorkflowService(deps: EngineDeps) {
       const plan = body.plan as NonNullable<typeof body.plan>;
       validatePlan(plan);
       const rows = planToRows(plan);
-      const estimate = body.estimateMicro ?? null;
       await store.create({
-        task: {
-          ...base,
-          status: 'running',
-          estimateMicro: estimate,
-          budgetLimitMicro: null,
-          sheet: null,
-        },
+        task: { ...base, status: 'running', sheet: null },
         nodes: rows.nodes,
         edges: rows.edges,
       });
@@ -236,8 +212,8 @@ export function createWorkflowService(deps: EngineDeps) {
     },
 
     /**
-     * 修改成果（ADR 0022，取代 0012 的「交付节点接着原会话改」）：在原任务里改，但先交给规划员看上一版
-     * 决定怎么改（沿用 / 接着改 / 重新做 / 加减节点），排好后等用户确认才开跑；附件并进任务素材。
+     * 修改成果（ADR 0022、0030 §3.8）：在原任务里改；附件并进任务素材。意见指得到由 AI 做的成果时，直接交给
+     * 做它的 AI 接着原会话改、马上开跑；跨几样成果或定不下来时交给规划员看上一版决定怎么改，排好后等用户确认。
      * 新版交付后 canvas 原地更新成果，链接不变。
      */
     async revise(
@@ -259,6 +235,27 @@ export function createWorkflowService(deps: EngineDeps) {
         if (!task.sheet || snapshot.nodes.length === 0)
           throw new HttpError(409, 'task_not_revisable', '这个任务没有可以接着改的工作流');
         const known = new Set(task.materials.map((m) => m.uploadId));
+        // 意见针对的成果：批注所在成果的节点；展开出来的条目、做几版里的一版算在它所在的那个节点上
+        const roots = snapshot.nodes.filter(isRoot);
+        const targets = [
+          ...new Set(
+            (body.nodeIds ?? []).flatMap((id) => {
+              const node = snapshot.nodes.find((n) => n.id === id);
+              return node ? [rootOf(snapshot.nodes, node).id] : [];
+            }),
+          ),
+        ];
+        const keyOf = new Map(roots.map((n) => [n.id, n.key]));
+        const direct = directRevision({
+          nodes: roots,
+          edges: snapshot.edges,
+          deliverables: Object.fromEntries(
+            task.deliverables.flatMap((d) =>
+              d.nodeId && keyOf.has(d.nodeId) ? [[d.name, keyOf.get(d.nodeId)!]] : [],
+            ),
+          ),
+          targets,
+        });
         await w.setTask({
           materials: [...task.materials, ...body.materials.filter((m) => !known.has(m.uploadId))],
           revision: {
@@ -266,13 +263,16 @@ export function createWorkflowService(deps: EngineDeps) {
             request: body.request,
             nodeIds: body.nodeIds ?? [],
             previousStatus: task.status,
+            ...direct,
           },
           planAttempts: 0,
         });
-        // 交给规划员看上一版决定怎么改，排好后先给用户确认（ADR 0022）
+        logger.info({ taskId, direct: Boolean(direct) }, '收到修改意见');
+        // 指得到做成果的 AI：直接按意见改
+        if (direct) return engine.applyRevision(snapshot, w, fx);
+        // 否则交给规划员看上一版决定怎么改，排好后先给用户确认（ADR 0022）
         await planning.begin(snapshot, w, fx);
       });
-      logger.info({ taskId }, '修改交给规划员');
       return toTaskBody(await owned(body.ownerId, taskId));
     },
 
@@ -292,12 +292,10 @@ export function createWorkflowService(deps: EngineDeps) {
       };
     },
 
-    /** 编辑节点时能选的模型和工具 */
-    options: (userId: string) => planning.options(userId),
-    /** 报价用的单价：这个用户能用的模型目录和工具目录，带单价（ADR 0016 §4） */
-    pricing: (userId: string) => planning.pricing(userId),
+    /** 工作流页显示用的名字：型号是哪个 AI、工具叫什么 */
+    names: (userId: string) => planning.names(userId),
 
-    /** 运行整个工作流（先检查整张图） */
+    /** 运行整个工作流 */
     run: (ownerId: string, taskId: string) =>
       change(ownerId, taskId, (snapshot, w, fx) => engine.runAll(snapshot, w, fx)),
 
@@ -352,15 +350,6 @@ export function createWorkflowService(deps: EngineDeps) {
             );
           }
           await w.setTask({ status: 'running', attention: null });
-          return engine.schedule(snapshot, w, fx);
-        }
-        if (reason === 'over_budget' && choice === 'continue') {
-          await w.setTask({ budgetLimitMicro: null });
-          return engine.runAll(snapshot, w, fx);
-        }
-        if (reason === 'over_estimate' && choice === 'continue') {
-          // 用户看了预估决定照做：估价不转为预算。
-          await w.setTask({ budgetLimitMicro: null, status: 'running', attention: null });
           return engine.schedule(snapshot, w, fx);
         }
         if (reason === 'plan_failed' && choice === 'retry') return planning.retry(snapshot, w, fx);

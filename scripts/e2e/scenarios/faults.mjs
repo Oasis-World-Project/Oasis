@@ -1,7 +1,7 @@
 // 回归场景（docs/engineering/回归测试.md）：故障：回答截断、harness 接管、model-gateway 重启。
 import { execute, literal, query } from '../db.mjs';
 import { marker, writeFiles } from '../fake-provider.mjs';
-import { DEFAULT_MODEL, done, work } from './shared.mjs';
+import { DEFAULT_MODEL, done, outcomes, work } from './shared.mjs';
 
 // ---------- 6. 回答不完整：流断在半路、输出被截断，都不能当成做完了 ----------
 const BOTH = writeFiles({ 'out/甲.md': '甲\n', 'out/乙.md': '乙\n' });
@@ -12,17 +12,18 @@ export const fault = {
   get request() {
     return `写甲乙两段文字 ${marker('fault')}`;
   },
-  plan: ({ pick }) => ({
-    nodes: [
-      work('fault', 'fragile', '写两段', '写甲乙两段，交出 out/甲.md 和 out/乙.md', {
-        model: pick(DEFAULT_MODEL),
-        expects: ['甲.md', '乙.md'],
-        deliver: ['*.md'],
-      }),
-    ],
-    edges: [],
-    deliverables: { 两段文字: 'fragile' },
-  }),
+  plan: ({ pick }) =>
+    outcomes({
+      nodes: [
+        work('fault', 'fragile', '写两段', '写甲乙两段，交出 out/甲.md 和 out/乙.md', {
+          model: pick(DEFAULT_MODEL),
+          expects: ['甲.md', '乙.md'],
+          deliver: ['*.md'],
+        }),
+      ],
+      edges: [],
+      deliverables: { 两段文字: 'fragile' },
+    }),
   nodes: {
     fragile: {
       work: [
@@ -73,17 +74,18 @@ export const takeover = {
   get request() {
     return `写一份报告（中途服务会重启）${marker('takeover')}`;
   },
-  plan: ({ pick }) => ({
-    nodes: [
-      work('takeover', 'long', '写报告', '写报告，交出 out/报告.md', {
-        model: pick(DEFAULT_MODEL),
-        expects: ['报告.md'],
-        deliver: ['报告.md'],
-      }),
-    ],
-    edges: [],
-    deliverables: { 报告: 'long' },
-  }),
+  plan: ({ pick }) =>
+    outcomes({
+      nodes: [
+        work('takeover', 'long', '写报告', '写报告，交出 out/报告.md', {
+          model: pick(DEFAULT_MODEL),
+          expects: ['报告.md'],
+          deliver: ['报告.md'],
+        }),
+      ],
+      edges: [],
+      deliverables: { 报告: 'long' },
+    }),
   nodes: {
     long: {
       // 第一步跑到一半 harness 重启：持续目标在原会话里续跑，dsh 告诉模型这条命令丢了（unknown job），重做这一步再往下
@@ -139,17 +141,18 @@ export const gateway = {
   get request() {
     return `写两段文字（中途网关会重启）${marker('gateway')}`;
   },
-  plan: ({ pick }) => ({
-    nodes: [
-      work('gateway', 'steady', '写两段', '写两段，交出 out/一.md 和 out/二.md', {
-        model: pick(DEFAULT_MODEL),
-        expects: ['一.md', '二.md'],
-        deliver: ['*.md'],
-      }),
-    ],
-    edges: [],
-    deliverables: { 两段文字: 'steady' },
-  }),
+  plan: ({ pick }) =>
+    outcomes({
+      nodes: [
+        work('gateway', 'steady', '写两段', '写两段，交出 out/一.md 和 out/二.md', {
+          model: pick(DEFAULT_MODEL),
+          expects: ['一.md', '二.md'],
+          deliver: ['*.md'],
+        }),
+      ],
+      edges: [],
+      deliverables: { 两段文字: 'steady' },
+    }),
   nodes: {
     steady: {
       work: [

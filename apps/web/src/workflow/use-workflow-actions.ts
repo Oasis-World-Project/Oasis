@@ -1,4 +1,4 @@
-// 工作流上的操作（运行、停止、改节点、接线……）：同一时间只做一件事；
+// 工作流上的操作（运行、停止、继续、发话、改用另一版）：同一时间只做一件事；
 // 返回任务的操作直接换上最新的任务，再刷新这个任务下的一切（节点运行、运行过程）和额度。
 import type { TaskBody } from '@oasis/contracts/task';
 import { useQueryClient } from '@tanstack/react-query';
@@ -35,7 +35,7 @@ export function useWorkflowActions(taskId: string) {
     [queryClient, taskId],
   );
 
-  return { busy, error, run, clearError: () => setError(null) };
+  return { busy, error, run };
 }
 
 export type WorkflowActions = ReturnType<typeof useWorkflowActions>;

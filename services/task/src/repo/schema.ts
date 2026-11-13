@@ -11,14 +11,13 @@ import type {
   RevisionChange,
   TaskSheet,
   TaskStatus,
-  TaskCheck,
   Variants,
 } from '@oasis/contracts/task';
 import type { ToolStep } from '@oasis/contracts/tool-step';
 import { bigint, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
- * 每种节点都有的配置（引擎、关卡、修改流程用）：自查清单、应有文件、交付文件，以及推进中记下的状态。
+ * 每种节点都有的配置（引擎、关卡、修改流程用）：应有文件、交付文件、属于哪条生产线，以及推进中记下的状态。
  * 各种节点自己的配置在下面，按种类定型（重构阶段 2）：引擎碰不到某种节点特有的字段。
  */
 interface CommonConfig {
@@ -29,11 +28,12 @@ interface CommonConfig {
   revision?: string;
   /** 修改时「重新做」的节点：上一版它交出产出的那次运行，产出放进 in/_previous/（ADR 0022） */
   previousRunId?: string;
-  checks?: TaskCheck[];
   expects?: ExpectedFile[];
   deliver?: string[];
-  /** 按用户预算分给这个节点的份额（微美元，ADR 0016 §5）；只是参考，旧节点没有 */
-  budgetMicro?: number;
+  /** 属于哪条生产线（ADR 0030）；一个 AI 做的成果没有 */
+  line?: { key: string; title: string };
+  /** 中途调整（ADR 0030 §3.7）：提出了调整、规划员还在答复（asking），或被调整过什么（note） */
+  adjust?: { asking: boolean; note: string };
   /** 用户追加要求的前几条已经交给节点了（讨论在下一轮、停止后在继续时带上之后的新要求） */
   notesSeen?: number;
   /** 节点现在的产出是哪次运行交出来的（下游拿这次运行的产出） */
@@ -63,13 +63,8 @@ interface CommonConfig {
   resumeOnStart?: boolean;
 }
 
-/** 干活节点：一个 agent 在持续目标里做完一件事 */
-export interface WorkConfig extends CommonConfig {
-  /** 要用的外部工具（model：规划员按预算选的型号） */
-  tools?: { key: string; uses: number; model?: string }[];
-  /** 运行中已经发过几次超预算提醒（1.5 倍、2 倍各一次，2026-11-07；只报已花多少，ADR 0028） */
-  budgetNudges?: number;
-}
+/** 干活节点：一个 AI 在持续目标里把一样成果做完；没有自己特有的配置 */
+type WorkConfig = CommonConfig;
 
 /** 讨论发言的一条记录：记下是哪次运行说的，下一轮这位参与者接着那次运行的会话 */
 interface TranscriptEntry {
@@ -133,6 +128,8 @@ export interface RunMeta {
   resumable?: boolean;
   round?: number;
   participant?: string;
+  /** 答复调整的运行（ADR 0030 §3.7）：答复写回哪个长任务、提的是什么、答复和有没有送到 */
+  adjust?: { jobId: string; want: string; why: string; reply?: string; answered?: boolean };
 }
 
 /** 规划员排的修改方案里一个节点（ADR 0022）：沿用，或完整节点 + 来自哪个旧节点、怎么做 */
@@ -153,7 +150,6 @@ export interface RevisionState {
     edges: { from: string; to: string }[];
     deliverables: Record<string, string>;
   };
-  estimateMicro?: number;
   changes?: { key: string; title: string; change: RevisionChange }[];
   /** 用户在做几版的节点上「改用这一版」（ADR 0026）：确认后先换成这一版，再重做受影响的下游 */
   pick?: { nodeId: string; version: number };
@@ -179,9 +175,7 @@ export const tasks = pgTable('tasks', {
   brief: text('brief').notNull(),
   status: text('status').$type<TaskStatus>().notNull(),
   attention: jsonb('attention').$type<Attention>(),
-  estimateMicro: micro('estimate_micro'),
   spentMicro: micro('spent_micro').notNull().default(0),
-  budgetLimitMicro: micro('budget_limit_micro'),
   sheet: jsonb('sheet').$type<TaskSheet>(),
   materials: jsonb('materials').$type<Material[]>().notNull().default([]),
   /** 当前是第几版工作流（ADR 0022） */
@@ -246,7 +240,7 @@ export const edges = pgTable('edges', {
 export type NodeRunStatus =
   'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'stopped';
 /** pick：做几版的节点挑一版（ADR 0026） */
-export type NodeRunPurpose = 'work' | 'rework' | 'speech' | 'summary' | 'pick';
+export type NodeRunPurpose = 'work' | 'rework' | 'speech' | 'summary' | 'pick' | 'adjust';
 export const nodeRuns = pgTable('node_runs', {
   id: uuid('id').primaryKey(),
   taskId: uuid('task_id').notNull(),

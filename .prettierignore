@@ -1,3 +1,5 @@
 pnpm-lock.yaml
 *.md
 .tmp/
+# nginx 的配置片段，不是 HTML（prettier 按后缀当成 HTML）
+*.inc

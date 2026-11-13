@@ -17,12 +17,12 @@ import {
 } from '../groups.ts';
 import { kindOf, refsOf, upstreamOf } from '../kinds/index.ts';
 import { nodeRow } from '../plan.ts';
-import { estimatePlan } from '../planner.ts';
+
 import type { Engine } from './shared.ts';
 
 type Foreach = NodeOf<'foreach'>;
 type Prepared = { plan: PlanNode; item: unknown };
-const NOT_STARTED = ['draft', 'waiting', 'blocked'];
+const NOT_STARTED = ['waiting'];
 
 /** 清单在哪：over 写成 in/<上游 key>/<文件> */
 function sourceOf(snapshot: Snapshot, node: Foreach) {
@@ -88,14 +88,14 @@ export function createExpand(engine: Engine): Pick<Engine, 'expand'> {
     return 'problem' in parsed ? { problem: `${node.config.over} ${parsed.problem}` } : parsed;
   }
 
-  /** 读清单、套做法、核对参数；返回要开的每一条和每条的预估，或者问题 */
+  /** 读清单、套做法、核对参数；返回要开的每一条，或者问题 */
   async function prepare(
     snapshot: Snapshot,
     node: Foreach,
-  ): Promise<{ problem: string } | { prepared: Prepared[]; perItem: number }> {
+  ): Promise<{ problem: string } | { prepared: Prepared[] }> {
     const read = await readList(snapshot, node);
     if ('problem' in read) return { problem: read.problem };
-    const { models, tools } = await engine.planning.pricing(snapshot.task.payerId);
+    const tools = await engine.planning.tools(snapshot.task.payerId);
     const byKey = new Map(tools.map((t) => [t.key, t]));
     const problems: string[] = [];
     const prepared: Prepared[] = read.items.map((item, i) => {
@@ -112,23 +112,11 @@ export function createExpand(engine: Engine): Pick<Engine, 'expand'> {
       return { plan, item };
     });
     if (problems.length) return { problem: problems.slice(0, 5).join('；') };
-    const perItem = estimatePlan(
-      { nodes: [prepared[0]!.plan], edges: [] },
-      models,
-      tools,
-      engine.deps.planning.fallback,
-    ).totalMicro;
-    return { prepared, perItem };
+    return { prepared };
   }
 
   /** 开出每一条：指纹相同的旧子节点沿用（换到新位置），其余旧的移出，新的新建 */
-  async function apply(
-    snapshot: Snapshot,
-    w: Writer,
-    node: Foreach,
-    prepared: Prepared[],
-    perItem: number,
-  ) {
+  async function apply(snapshot: Snapshot, w: Writer, node: Foreach, prepared: Prepared[]) {
     const old = childrenOf(snapshot.nodes, node);
     const hashes = prepared.map((p) =>
       itemHash(p.item, node.config.each, usedRuns(snapshot, node, p.plan)),
@@ -145,9 +133,7 @@ export function createExpand(engine: Engine): Pick<Engine, 'expand'> {
     for (const child of keptNodes)
       await w.setNode(child.id, { key: `${child.key}~${child.id.slice(0, 8)}` });
     const taken = new Set(snapshot.nodes.filter((n) => !keptNodes.has(n)).map((n) => n.key));
-    const share = node.config.budgetMicro
-      ? Math.max(1, Math.round(node.config.budgetMicro / prepared.length))
-      : undefined;
+
     for (const [i, { plan, item }] of prepared.entries()) {
       const key = freeKey(plan.key, taken);
       taken.add(key);
@@ -168,7 +154,7 @@ export function createExpand(engine: Engine): Pick<Engine, 'expand'> {
         await w.setNode(child.id, { key, slot: i + 1, title: plan.title, ...again });
         continue;
       }
-      const row = nodeRow({ ...plan, key }, randomUUID(), 'waiting', share);
+      const row = nodeRow({ ...plan, key }, randomUUID());
       await w.addNode({
         ...row,
         config: { ...row.config, item, itemHash: hashes[i] },
@@ -181,15 +167,6 @@ export function createExpand(engine: Engine): Pick<Engine, 'expand'> {
       summary: null,
       config: { ...node.config, items: prepared.length },
     });
-    // 第一次展开：条数和规划时预计的不一样，预估跟着改
-    const count = node.config.count ?? prepared.length;
-    if (!old.length && count !== prepared.length && snapshot.task.estimateMicro !== null)
-      await w.setTask({
-        estimateMicro: Math.max(
-          0,
-          snapshot.task.estimateMicro + (prepared.length - count) * perItem,
-        ),
-      });
     logger.info({ nodeId: node.id, items: prepared.length, kept: kept.size }, '展开了清单');
   }
 
@@ -266,7 +243,7 @@ export function createExpand(engine: Engine): Pick<Engine, 'expand'> {
         )
           return;
         if ('problem' in result) await listProblem(fresh, w, current, result.problem);
-        else await apply(fresh, w, current, result.prepared, result.perItem);
+        else await apply(fresh, w, current, result.prepared);
         await engine.schedule(fresh, w, fx);
       });
     },

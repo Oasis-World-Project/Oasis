@@ -2,7 +2,6 @@ import { OASIS_HEADERS } from '@oasis/contracts/common';
 import {
   CreateDmBody,
   IntakeAnswersBody,
-  IntakeConfirmBody,
   ReplaceReplyBody,
   SendMessageBody,
   StartIntakeBody,
@@ -169,8 +168,8 @@ export function registerRoutes(app: ServiceApp, dms: DmService, intake: IntakeSe
   app.post('/v1/conversations/:id/intake/confirm', async (request) => {
     const ownerId = requireUserId(request);
     const { id } = parseWith(IdParams, request.params);
-    const budget = parseWith(IntakeConfirmBody, request.body ?? {});
+
     const conversation = await dms.assertOwned(id, ownerId);
-    return result(await intake.confirm({ conversation, ownerId, budget, requestId: request.id }));
+    return result(await intake.confirm({ conversation, ownerId, requestId: request.id }));
   });
 }

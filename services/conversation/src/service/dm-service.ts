@@ -92,7 +92,7 @@ export function createDmService(deps: {
   /** 查用户的任务（被问起时回答进度）、删私聊时问哪些文件是任务素材 */
   task: ServiceClient;
   intake: IntakeService;
-  /** 交给模型的历史：整段对话，快到窗口时压缩较早部分（ADR 0016 §8） */
+  /** 交给模型的历史：整段对话，快到窗口时压缩较早部分 */
   context: ContextService;
   replyMaxTokens: number;
   /** 认出任务的决策模型和两个阈值（ADR 0005 §2） */

@@ -69,7 +69,7 @@ export const realShots = ({ waitFiles, logBill, CHEAP_VIDEO, LONG }) => ({
       `方案：${planned.nodes
         .filter((n) => !n.parentId)
         .map((n) => `${n.title}（${n.kind}）`)
-        .join(' → ')}，估价 ${usd(planned.estimateMicro ?? 0)}`,
+        .join(' → ')}`,
     );
     const problems = [
       ...(foreach.length ? [] : ['没有用展开节点']),
@@ -137,7 +137,7 @@ export const realShots = ({ waitFiles, logBill, CHEAP_VIDEO, LONG }) => ({
       writeFileSync(path.join(t.outDir, 'real-shots-成片.mp4'), bytes);
       t.log(`成片 ${film.path}：${(bytes.length / 1024).toFixed(0)} KB，已存到回归目录`);
     }
-    t.log(`任务花费 ${usd(task.spentMicro)}（估价 ${usd(task.estimateMicro ?? 0)}）`);
+    t.log(`任务花费 ${usd(task.spentMicro)}`);
     logBill(t);
   },
 });

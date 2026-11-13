@@ -1,64 +1,40 @@
-// 干活节点：一个 agent 在持续目标里做完一件事（ADR 0004、0015）。
-// - 开跑：持续目标，带上下文、工具和预算；交出产出后过关卡。
+// 干活节点：一个 AI 在一次持续会话里把一样成果从头做到交付（ADR 0004、0015、0030）。
+// - 开跑：持续目标，带上任务、任务单、要交什么、能用的文件和工具；步骤和校验它自己定，交出产出后过关卡。
 // - 停止后继续：接着停下的那次运行的会话；那次运行已经交出产出、又没有新要求时直接重新过关卡。
 // - 失败：原会话的工作目录还在就接着做，不把已付费的工作从头重放；否则从头做。
-// - 运行中花费越过份额的 1.5 倍、2 倍时各告诉它一次花了多少（节点在会话里看不到花费）；接着做还是交付由它判断（ADR 0028）。
-import { HttpError } from '@oasis/service-kit';
-import type { WorkConfig } from '../../repo/schema.ts';
+// - 没有预算、用时上限和提醒：它自己结束、用户停止、模型连不上、余额用完才会停。
 import type { NodeOf, NodeRun, Snapshot } from '../../repo/task-store.ts';
 import { contextParts, NO_QUESTIONS, resumePrompt, type NodeContext } from '../prompt.ts';
 import { contextOf, inputsOf, redoOf } from './common.ts';
 import type { NodeKindPlugin, Step } from './kind.ts';
-import {
-  branchParts,
-  variantsConfig,
-  variantsEdit,
-  variantsPlan,
-  withVariants,
-} from './variants.ts';
+import { branchParts, variantsConfig, variantsPlan } from './variants.ts';
 
 type WorkNode = NodeOf<'work'>;
 
-const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
+/** 沙箱里有什么、外部工具怎么用：都让 AI 自己查 */
+const TOOLS_PART = [
+  '【工具】',
+  '- `oasis-tool list` 列出全部外部工具、用法和单价，以及沙箱里预装的软件和 Python、Node 包；长任务没等到就按提示 `oasis-tool wait <任务号>`。',
+  '- 沙箱里有什么（浏览器、命令行工具）见 in/.oasis-environment.json；交互网页、3D 预览等的文件格式见 in/.oasis-formats.json。',
+  '- `oasis-tool app.check --dir out/<应用目录>` 按画布的方式打开网页跑一遍，交付后的检查用的是同一套。',
+].join('\n');
 
-/** 节点花费到份额的这些倍数时各提醒一次（用户 2026-11-07 同意 1.5 倍、2 倍；2026-11-10 起只报数字，不要求收尾） */
-const NUDGE_AT = [1.5, 2];
+/** 只告诉从头做到交付一样成果的 AI：要动别的成果时怎么向规划员提（ADR 0030 §3.7） */
+const ADJUST_PART =
+  '- 要动别的成果才做得好时（缺一样成果、别的成果的说明要改、有一样成果不用做了），`oasis-tool workflow.adjust --want "要调整什么" --why "为什么"` 向规划员提一次；没等到答复就接着做自己的，过后按提示 `oasis-tool wait <任务号>` 取。自己这样成果里怎么做不用提。';
 
-/** 预算和进度：只给事实，节点自己掂量 */
-function budgetPart(b: NonNullable<NodeContext['budget']>): string {
-  const facts = [
-    ...(b.nodeMicro ? [`这一步分到约 ${usd(b.nodeMicro)}`] : []),
-    ...(b.taskMicro
-      ? [`整个任务预算约 ${usd(b.taskMicro)}，已花 ${usd(b.spentMicro)}`]
-      : [`整个任务已花 ${usd(b.spentMicro)}`]),
-    `已经跑了 ${b.elapsedMinutes} 分钟${b.taskMinutes ? `，预计总用时约 ${b.taskMinutes} 分钟` : ''}`,
-  ];
-  return `【预算和用时】${facts.join('；')}。预算和预计用时都是参考，不是上限。`;
-}
-
-/** 节点能用的外部工具：都通过沙箱里的 oasis-tool 命令调用，用法让 AI 自己查 */
-function toolsPart(tools: string[]): string {
+/** 干活节点的说明（branch：展开出来的一条、做几版里的一版） */
+function workPrompt(c: NodeContext, branch: string[] = []): string {
   return [
-    '【工具】',
-    ...(tools.length ? [`- 规划建议用：${tools.join('、')}（不限于这些）。`] : []),
-    '- `oasis-tool list` 列出全部工具、用法和单价；长任务没等到就按提示 `oasis-tool wait <任务号>`。',
-    '- 交互网页、3D 预览等的文件格式见 in/.oasis-formats.json；沙箱里有什么（浏览器、命令行工具）见 in/.oasis-environment.json，`oasis-tool list` 也列出预装的软件和 Python、Node 包。',
-    '- `oasis-tool app.check --dir out/<应用目录>` 按画布的方式打开网页跑一遍，交付后的检查用的是同一套。',
-  ].join('\n');
-}
-
-/** 干活节点的说明（tools：分给它的外部工具名；branch：展开出来的一条、做几版里的一版） */
-function workPrompt(c: NodeContext, tools: string[], branch: string[] = []): string {
-  return [
-    `你是 Oasis 工作流里的一个节点，负责「${c.title}」。`,
+    `你是 Oasis 里负责「${c.title}」的 AI。`,
     ...contextParts(c, '你要做的事'),
     ...branch,
-    ...(c.budget ? [budgetPart(c.budget)] : []),
-    toolsPart(tools),
+    branch.length ? TOOLS_PART : `${TOOLS_PART}\n${ADJUST_PART}`,
     [
       '【说明】',
       '- 成果写到 out/（可建子目录），下游和用户只看得到 out/。',
-      '- 这是持续目标：要交的文件都做好了就 update_goal complete 结束。',
+      '- 这是持续目标：怎么做、分几步、怎么校验由你定；要交的文件都做好了就 update_goal complete 结束。',
+      '- 你用 todo_write 列的任务清单会显示给用户看进度。',
       NO_QUESTIONS,
       '- 最后用一两句话说明交付了什么。',
     ].join('\n'),
@@ -79,11 +55,7 @@ function start(snapshot: Snapshot, node: WorkNode): Step {
         purpose: 'work',
         goal: true,
         model: node.model,
-        prompt: workPrompt(
-          contextOf(snapshot, node),
-          (node.config.tools ?? []).map((t) => t.key),
-          branchParts(node, itemIndex(snapshot, node)),
-        ),
+        prompt: workPrompt(contextOf(snapshot, node), branchParts(node, itemIndex(snapshot, node))),
         inputsFrom: inputsOf(snapshot, node),
         meta: {},
       },
@@ -116,42 +88,10 @@ export const work: NodeKindPlugin<'work'> = {
   problems: () => [],
   texts: (plan) => [plan.goal, plan.role],
   models: (plan) => [plan.model],
-  toolProblems(plan, tools) {
-    const problems: string[] = [];
-    for (const tool of plan.tools) {
-      const entry = tools.get(tool.key);
-      if (!entry) {
-        problems.push(`节点「${plan.key}」的工具 ${tool.key} 不在可以用的工具里`);
-      } else if (tool.model && entry.models.length && !entry.models.includes(tool.model)) {
-        problems.push(
-          `节点「${plan.key}」的工具 ${tool.key} 不能用型号 ${tool.model}，可选：${entry.models.join('、')}`,
-        );
-      }
-    }
-    return problems;
-  },
-  estimate: (plan, rates) =>
-    withVariants(
-      rates.node(plan.model) +
-        rates.compute +
-        plan.tools.reduce((sum, t) => sum + t.uses * rates.tool(t.key, t.model), 0),
-      plan.variants,
-      rates,
-    ),
-  config: (plan): WorkConfig => ({ tools: plan.tools, ...variantsConfig(plan.variants) }),
-  plan: (node, common) => ({
-    ...common,
-    kind: 'work',
-    tools: node.config.tools ?? [],
-    ...variantsPlan(node),
-  }),
-  edit(_node, body) {
-    if (body.participants !== undefined || body.rounds !== undefined)
-      throw new HttpError(400, 'invalid_node', '只有讨论节点有参与者和轮数');
-    if (body.steps !== undefined) throw new HttpError(400, 'invalid_node', '只有工具节点有步骤');
-    return { ...(body.tools ? { tools: body.tools } : {}), ...variantsEdit(body) };
-  },
-  body: (node) => ({ tools: node.config.tools ?? [], discussion: null, steps: null }),
+  toolProblems: () => [],
+  config: (plan) => variantsConfig(plan.variants),
+  plan: (node, common) => ({ ...common, kind: 'work', ...variantsPlan(node) }),
+  body: () => ({ discussion: null, steps: null }),
   continuable: true,
   reworkable: true,
   switchable: true,
@@ -178,18 +118,4 @@ export const work: NodeKindPlugin<'work'> = {
   succeeded: () => ({ deliver: true }),
   switchModel: (_node, _run, model) => ({ model }),
   live: true,
-  nudge(node, spentMicro, now = new Date()) {
-    const share = node.config.budgetMicro;
-    if (node.status !== 'running' || !node.currentRunId || !share) return;
-    const sent = node.config.budgetNudges ?? 0;
-    const crossed = NUDGE_AT.filter((times) => spentMicro >= share * times).length;
-    if (crossed <= sent) return;
-    const minutes = node.startedAt
-      ? Math.max(0, Math.round((now.getTime() - node.startedAt.getTime()) / 60_000))
-      : undefined;
-    return {
-      config: { ...node.config, budgetNudges: crossed },
-      text: `【系统提醒】这一步已花 ${usd(spentMicro)}（分到约 ${usd(share)}）${minutes === undefined ? '' : `，已经跑了 ${minutes} 分钟`}。预算是参考不是上限，接着做还是现在交付由你判断。`,
-    };
-  },
 };

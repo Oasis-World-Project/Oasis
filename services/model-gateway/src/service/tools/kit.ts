@@ -23,6 +23,8 @@ export interface ToolConfig {
   videoModels: string[];
   speechModels: string[];
   transcribeModels: string[];
+  /** model.ask 能问的聊天型号，按顺序（第一个是默认） */
+  askModels: string[];
   jevModel: string;
   /** jevModel 用不了时（如「只用国内模型」）回答快速判断的聊天模型，按顺序 */
   decideChatModels: string[];
@@ -53,6 +55,9 @@ export interface ToolDeps {
   /** 调用工具的那次节点运行 */
   runId?: string;
   nodeId?: string;
+  /** 长任务提交时的任务号，和发事件的办法：平台自己答复的工具（workflow.adjust）用 */
+  jobId?: string;
+  emit?: (type: string, data: unknown) => Promise<void>;
   logger?: Logger;
   browserstack?: BrowserStackClient;
   payerId?: string;
@@ -91,10 +96,12 @@ interface ToolBase {
   estimateMicro: number;
   /** 调用前冻结多少（微美元），按参数算 */
   holdMicro: (args: Record<string, unknown>) => number;
-  /** 依赖哪个供应商（没配 Key 就不能用） */
-  provider: 'openrouter' | 'tavily' | 'fal' | 'runpod' | 'browserstack' | 'inspector';
+  /** 依赖哪个供应商（没配 Key 就不能用）；task 是平台自己答复的，不靠供应商 */
+  provider: 'openrouter' | 'tavily' | 'fal' | 'runpod' | 'browserstack' | 'inspector' | 'task';
   /** 可以选的模型；不需要模型的工具返回空 */
   models: (config: ToolConfig) => string[];
+  /** 目录里给各型号附上最近实测的每秒输出和实际单价（聊天型号，ADR 0030 §3.5） */
+  speedNote?: boolean;
   /** 型号一次的标价（微美元）：供应商不按调用回报花费的工具（fal）写上，目录按它列各型号的单价 */
   priceMicro?: (model: string) => number | undefined;
   args: z.ZodType<Record<string, unknown>>;
@@ -147,6 +154,8 @@ const usd = (value: number) => Math.round(value * USD_TO_MICRO);
 export const clip = (text: string, max = MAX_TEXT) =>
   text.length > max ? `${text.slice(0, max)}\n……（太长，后面省略了）` : text;
 export const optionalModel = z.string().min(1).max(200).optional();
+/** 要不要有可用的型号才能用：搜索不分型号，平台自己答复的工具不用模型 */
+export const needsModel = (tool: ToolDef) => tool.provider !== 'tavily' && tool.provider !== 'task';
 /** 指定了模型就用指定的，否则用可选模型里的第一个 */
 export const pickModel = (args: Record<string, unknown>, models: string[]) =>
   typeof args.model === 'string' ? args.model : (models[0] ?? '');

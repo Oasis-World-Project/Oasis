@@ -1,4 +1,5 @@
-// 节点的状态怎么显示、现在能做什么（和 task 的规则一致，见 ADR 0004 §3–4），以及运行记录怎么写成普通话。
+// 节点的状态怎么显示、现在能做什么（和 task 的规则一致，见 ADR 0004 §3–4），运行记录怎么写成普通话，
+// 以及一样成果做到哪了（AI 自己列的任务清单，ADR 0030 §3.2）。
 import type { RunEventBody } from '@oasis/contracts/harness';
 import type {
   NodeBody,
@@ -23,14 +24,12 @@ const TASK_STATUS: Record<TaskStatus, { label: string; tone: 'muted' | 'accent' 
 type Tone = 'done' | 'active' | 'trouble' | 'idle';
 
 const NODE_STATUS: Record<NodeStatus, { label: string; tone: Tone }> = {
-  draft: { label: '新建，还没运行', tone: 'idle' },
   waiting: { label: '等上游', tone: 'idle' },
   running: { label: '进行中', tone: 'active' },
   checking: { label: '检查中', tone: 'active' },
   succeeded: { label: '完成', tone: 'done' },
   failed: { label: '失败', tone: 'trouble' },
   stopped: { label: '已停止', tone: 'idle' },
-  blocked: { label: '连线断开', tone: 'trouble' },
   cancelled: { label: '已取消', tone: 'idle' },
 };
 
@@ -49,14 +48,12 @@ export function waitingOn(task: TaskBody, node: NodeBody): { id: string | null; 
     });
 }
 
-/** 还没开始的节点：可以改、删、往里接线 */
-const NOT_STARTED: NodeStatus[] = ['draft', 'waiting', 'blocked'];
 const ACTIVE: NodeStatus[] = ['running', 'checking'];
-/** 任务这几个状态下工作流不能动 */
+/** 任务这几个状态下工作流不能操作 */
 const FROZEN: TaskBody['status'][] = ['planning', 'accepting', 'succeeded', 'failed', 'cancelled'];
 
-/** 修改方案在排、等确认时不能动工作流：方案按现在的节点排（ADR 0022） */
-export const canEditWorkflow = (task: TaskBody) => !FROZEN.includes(task.status) && !task.revision;
+/** 能不能停止、继续、发话；修改方案在排、等确认时也不能（方案按现在的节点排，ADR 0022） */
+export const canOperate = (task: TaskBody) => !FROZEN.includes(task.status) && !task.revision;
 
 /** 任务状态的叫法：修改时规划员在排方案叫「正在规划修改」，等确认叫「修改方案待确认」 */
 export function taskStatusOf(
@@ -78,7 +75,7 @@ export const REVISION_CHANGE: Record<RevisionChange, string> = {
   remove: '删除',
 };
 
-/** 单独运行要求上游都已完成（停止后继续除外），和 task 的 runNode 一致 */
+/** 失败的再试要求上游都已完成（停止后继续不用），和 task 的 runNode 一致 */
 function upstreamReady(task: TaskBody, node: NodeBody): boolean {
   if (node.status === 'stopped') return true;
   return task.edges
@@ -89,36 +86,32 @@ function upstreamReady(task: TaskBody, node: NodeBody): boolean {
 /** 展开节点、做几版的节点（ADR 0026）：自己不跑，开子节点去做 */
 const isGroup = (node: NodeBody) => node.kind === 'foreach' || (node.variants?.n ?? 0) > 1;
 
+/** 一个 AI 从头做到交付的成果（ADR 0030 §3.1）：不在生产线里、自己干活的节点 */
+export const isAgentOutcome = (node: NodeBody) =>
+  node.kind === 'work' && !node.parentId && !node.line && !isGroup(node);
+
 /** 某个节点的子节点（展开出来的条目、各版），按顺序 */
 export const childrenOf = (task: TaskBody, node: NodeBody) =>
   task.nodes.filter((n) => n.parentId === node.id).sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
 
+/** 一样成果现在能做什么（ADR 0030 §3.2）：停止、继续、发话。节点和连线不能改 */
 export function nodeActions(task: TaskBody, node: NodeBody) {
-  const open = canEditWorkflow(task);
-  const notStarted = NOT_STARTED.includes(node.status);
-  // 子节点跟着父节点（ADR 0026）：不能单独改、删、接线；父节点在跑时可以单独再跑它
+  const open = canOperate(task);
+  // 子节点跟着父节点（ADR 0026）：父节点在跑时可以单独再跑它
   const parent = node.parentId ? task.nodes.find((n) => n.id === node.parentId) : undefined;
-  const root = !node.parentId;
   return {
-    // 展开节点的做法写在方案里，编辑窗不管它；要改请提修改意见
-    edit: open && notStarted && root && node.kind !== 'foreach',
-    remove: open && notStarted && root,
+    /** 停下的继续、失败的再试 */
     run:
       open &&
-      ['draft', 'waiting', 'stopped', 'failed'].includes(node.status) &&
-      (root ? upstreamReady(task, node) : parent?.status === 'running'),
+      ['stopped', 'failed'].includes(node.status) &&
+      (node.parentId ? parent?.status === 'running' : upstreamReady(task, node)),
     stop: open && ACTIVE.includes(node.status),
-    /** 能往这个节点里接线 */
-    acceptsInput: open && notStarted && root,
-    /** 能从这个节点往外接线 */
-    givesOutput: open && node.status !== 'cancelled' && root,
     /** 追问（运行中的干活节点直接送达）或补要求（开跑、继续时带上）；工具节点没有 AI，不收 */
     message:
       open &&
       node.kind !== 'tool' &&
       !isGroup(node) &&
-      (['draft', 'waiting', 'blocked', 'stopped'].includes(node.status) ||
-        node.status === 'running'),
+      ['waiting', 'stopped', 'running'].includes(node.status),
   };
 }
 
@@ -136,10 +129,14 @@ export function runLabel(run: NodeRunBody): string {
   if (run.purpose === 'speech') return `第 ${run.round ?? 1} 轮 · ${run.participant ?? '发言'}`;
   if (run.purpose === 'summary') return '汇总结论';
   if (run.purpose === 'pick') return '挑一版';
+  if (run.purpose === 'adjust') return '提出调整，规划员答复';
   if (run.purpose === 'rework') return '关卡没过，接着改';
   if (run.continued) return '停止后继续';
   return run.attempt > 1 ? `第 ${run.attempt} 次（重做）` : '第 1 次';
 }
+
+/** 这次运行还在动 */
+export const isLiveRun = (run: NodeRunBody) => run.status === 'pending' || run.status === 'running';
 
 export const RUN_STATUS: Record<NodeRunBody['status'], string> = {
   pending: '准备中',
@@ -167,6 +164,8 @@ const ACTIONS: Record<string, string> = {
   bash: '运行命令',
   shell: '运行命令',
   exec: '运行命令',
+  todo_write: '更新任务清单',
+  read_image: '看图片',
 };
 
 function parseArgs(raw: unknown): Record<string, unknown> {
@@ -220,4 +219,84 @@ export function stepsOf(events: RunEventBody[]): Step[] {
     }
   }
   return steps;
+}
+
+interface Todo {
+  text: string;
+  state: 'done' | 'doing' | 'todo';
+}
+
+/** 一样成果做到哪了：AI 自己列的任务清单（没列过为 null）和最近几步 */
+export interface Progress {
+  todos: Todo[] | null;
+  recent: Step[];
+}
+
+const TODO_STATE: Record<string, Todo['state']> = { completed: 'done', in_progress: 'doing' };
+
+/** AI 自己列的任务清单（dsh 的 todo_write，每次整份重写）：取这次运行里最后一次列的 */
+function todosOf(events: RunEventBody[]): Todo[] | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const { kind, data } = events[i]!;
+    if (kind !== 'tool_call' || data.name !== 'todo_write') continue;
+    const list = parseArgs(data.arguments).todos;
+    if (!Array.isArray(list)) continue;
+    return list.flatMap((item: unknown) => {
+      const todo = (item ?? {}) as { content?: unknown; status?: unknown };
+      const content = text(todo.content);
+      return content ? [{ text: content, state: TODO_STATE[text(todo.status)] ?? 'todo' }] : [];
+    });
+  }
+  return null;
+}
+
+/** runs：这样成果各次运行的事件，按先后。清单往回找最后一次列的；最近几步只看最后一次运行 */
+export function progressOf(runs: RunEventBody[][]): Progress {
+  let todos: Todo[] | null = null;
+  for (let i = runs.length - 1; i >= 0 && !todos; i -= 1) todos = todosOf(runs[i]!);
+  const recent = stepsOf(runs.at(-1) ?? []).filter((s) => s.kind === 'said' || s.kind === 'did');
+  return { todos, recent: recent.slice(-3) };
+}
+
+export interface FrameRow {
+  mark: Todo['state'] | 'note' | 'adjust';
+  text: string;
+}
+
+/** 中途调整（ADR 0030 §3.7）写成一句：规划员还在答复时是「正在调整」，之后是改了什么 */
+export const adjustText = (node: NodeBody) =>
+  node.adjust ? `${node.adjust.asking ? '正在调整' : '调整'}：${node.adjust.note}` : null;
+
+/** 清单太长时框里只显示这么多项，完整的在详情里 */
+const FRAME_TODOS = 10;
+
+/** 框里显示的几行：有清单显示清单（太长只显示正在做的那一段，末行写总数），没有就显示最近几步 */
+export function frameRows(
+  progress: Progress | undefined,
+  toolName: (key: string) => string,
+): FrameRow[] {
+  const todos = progress?.todos ?? [];
+  if (todos.length > 0) {
+    const rows = todos.map((t): FrameRow => ({ mark: t.state, text: t.text }));
+    if (rows.length <= FRAME_TODOS) return rows;
+    const current = Math.max(
+      0,
+      todos.findIndex((t) => t.state !== 'done'),
+    );
+    const start = Math.min(Math.max(0, current - 2), rows.length - FRAME_TODOS);
+    const done = todos.filter((t) => t.state === 'done').length;
+    return [
+      ...rows.slice(start, start + FRAME_TODOS),
+      { mark: 'note', text: `共 ${rows.length} 项，完成了 ${done} 项` },
+    ];
+  }
+  return (progress?.recent ?? []).map((step) => ({
+    mark: 'note',
+    text:
+      step.kind === 'did'
+        ? step.tool
+          ? `调用工具「${toolName(step.tool)}」`
+          : [step.text, step.detail].filter(Boolean).join(' ')
+        : step.text,
+  }));
 }

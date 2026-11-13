@@ -1,4 +1,4 @@
-// 节点种类登记表：引擎、规划门、编辑和估价都按节点的 kind 从这里取插件，不再自己分种类处理。
+// 节点种类登记表：引擎和规划门都按节点的 kind 从这里取插件，不再自己分种类处理。
 import type { NodeKind } from '../../repo/schema.ts';
 import { discussion } from './discussion.ts';
 import { foreach } from './foreach.ts';
@@ -23,4 +23,4 @@ export {
   upstreamOf,
 } from './common.ts';
 export { listSource } from './foreach.ts';
-export type { Rates, RunRequest, Step } from './kind.ts';
+export type { RunRequest, Step } from './kind.ts';

@@ -98,7 +98,7 @@ describe('实际花费', () => {
   });
 });
 
-describe('估价用的典型单价（ADR 0016 §4）', () => {
+describe('型号的典型单价和用时', () => {
   const capabilities = {
     id: 'v/m',
     name: 'M',

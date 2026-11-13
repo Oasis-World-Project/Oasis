@@ -1,9 +1,9 @@
 // 事务里的推进：开出节点的一步、停下节点、按图调度能跑的节点、运行整个工作流、取消整个任务。
 // 节点这一步具体开哪些运行由它的种类插件决定（kinds/），这里只管状态和次数。
 import { randomUUID } from 'node:crypto';
-import { HttpError } from '@oasis/service-kit';
+
 import type { Node } from '../../repo/task-store.ts';
-import { graphProblems } from '../graph.ts';
+
 import { childrenOf, isGroup } from '../groups.ts';
 import { inlineInputsOf, inputsOf, isOpen, kindOf, openRuns, reworkStep } from '../kinds/index.ts';
 import { decide } from '../schedule.ts';
@@ -162,11 +162,13 @@ export function createAdvance(engine: Engine): Advance {
         maxParallel,
         maxToolChildren: maxToolChildren ?? maxParallel,
       });
-      for (const node of decision.blocked) await w.setNode(node.id, { status: 'blocked' });
-      for (const node of decision.unblocked) await w.setNode(node.id, { status: 'waiting' });
+
       for (const node of decision.start) await engine.startNode(snapshot, w, node, fx);
       // 开了组节点（ADR 0026）：它刚开出的子节点这一轮就能排上
       if (decision.start.some(isGroup)) return engine.schedule(snapshot, w, fx);
+      // 规划员还在答复一条调整（ADR 0030 §3.7）：可能要加成果，先不算做完；答复到了会再排一次
+      const adjusting = snapshot.activeRuns.some((r) => isOpen(r) && r.purpose === 'adjust');
+      if (decision.task?.status === 'succeeded' && adjusting) return;
       if (decision.task?.status === 'succeeded' && snapshot.task.sheet) {
         // 从任务单来的任务：先对照任务单整体验收，再算完成
         await w.setTask({ status: 'accepting', attention: null });
@@ -177,20 +179,13 @@ export function createAdvance(engine: Engine): Advance {
       }
     },
 
-    /**
-     * 运行整个工作流：先检查整张图（断开的线头、环），有问题就列出来、不开跑；
-     * 没问题就把新建的节点加进来、停下的接着做、失败的再试，然后一路往下跑。
-     */
+    /** 运行整个工作流：停下的接着做、失败的再试，然后一路往下跑 */
     async runAll(snapshot, w, fx) {
-      const problems = graphProblems(snapshot);
-      if (problems.length > 0) {
-        throw new HttpError(409, 'workflow_invalid', `工作流有错误：${problems.join('；')}`);
-      }
       await w.setTask({ status: 'running', attention: null, finishedAt: null });
       const byId = new Map(snapshot.nodes.map((n) => [n.id, n]));
       for (const node of [...snapshot.nodes]) {
         const parent = node.parentId ? byId.get(node.parentId) : undefined;
-        if (node.status === 'draft') await w.setNode(node.id, { status: 'waiting' });
+
         // 已经挑好一版的节点下面没做成的那几版不再做（ADR 0026）
         if (node.status === 'failed' && parent?.status !== 'succeeded') {
           await w.setNode(node.id, { status: 'waiting', attempts: 0, reworks: 0, warning: null });

@@ -166,6 +166,15 @@ harness.get('/internal/v1/tools', async () => ({
     ...fake.tools,
   ],
 }));
+/** 假 model-gateway：规划员对「提出调整」的答复写回哪个长任务（ADR 0030 §3.7） */
+export const answers: { jobId: string; text: string }[] = [];
+harness.post('/internal/v1/tools/jobs/:id/answer', async (request) => {
+  answers.push({
+    jobId: (request.params as { id: string }).id,
+    text: (request.body as { text: string }).text,
+  });
+  return { accepted: true };
+});
 /** 假 harness：运行过程（记下问的是哪次运行） */
 export const eventRequests: string[] = [];
 harness.get('/internal/runs/:id/events', async (request) => {
@@ -236,6 +245,7 @@ beforeEach(() => {
   messages.length = 0;
   cancelled.length = 0;
   stopped.length = 0;
+  answers.length = 0;
   harnessKnows = new Set();
   finishedRemote = new Map();
   fake.rejectNext = false;
@@ -260,7 +270,6 @@ beforeEach(() => {
     planning: {
       planner: 'deepseek/planner',
       defaultModel: 'deepseek/x',
-      fallback: { workRun: 3_000, speechRun: 3_000, computeRun: 0, nodeSeconds: 600 },
     },
     logger: pino({ level: 'silent' }),
   });
@@ -273,10 +282,8 @@ export const work = (key: string, title = key) => ({
   role: '',
   goal: `做 ${key}`,
   model: 'deepseek/x',
-  checks: [] as string[],
   expects: [] as string[],
   deliver: ['*.md'],
-  tools: [] as { key: string; uses: number }[],
 });
 export const discussion = (key: string, names: string[], rounds = 2) => ({
   key,
@@ -285,24 +292,18 @@ export const discussion = (key: string, names: string[], rounds = 2) => ({
   role: '',
   goal: '定下小屋介绍的风格',
   model: 'deepseek/summary',
-  checks: ['给出明确建议'],
   expects: [] as string[],
   participants: names.map((name) => ({ name, model: `deepseek/${name}`, stance: `${name}的立场` })),
   rounds,
 });
 export type PlanNode = ReturnType<typeof work> | ReturnType<typeof discussion>;
-export const create = (
-  keys: (string | PlanNode)[],
-  edges: [string, string][],
-  estimateMicro?: number,
-) =>
+export const create = (keys: (string | PlanNode)[], edges: [string, string][]) =>
   service.create({
     ownerId: OWNER,
     materials: [],
     payerId: OWNER,
     title: '测试任务',
     brief: '做一份温馨小屋的介绍',
-    ...(estimateMicro ? { estimateMicro } : {}),
     plan: {
       nodes: keys.map((k) => (typeof k === 'string' ? work(k) : k)),
       edges: edges.map(([from, to]) => ({ from, to })),

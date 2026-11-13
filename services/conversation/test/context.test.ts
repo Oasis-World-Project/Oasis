@@ -65,7 +65,7 @@ function setup(rows: Message[], window: number, summaryReply: string | null) {
   return { conversation, summaries, summaryCalls, history };
 }
 
-describe('私聊的上下文（ADR 0016 §8）', () => {
+describe('私聊的上下文', () => {
   it('按任务给消息贴标签：结束了的任务注明只作背景，没整理完的不注', () => {
     const intakeId = 'i-1';
     const taskId = 't-1';

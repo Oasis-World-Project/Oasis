@@ -1,24 +1,19 @@
-// 工具节点（ADR 0025）：规划门怎么查步骤、上游文件怎么变成上游必须交出的文件、怎么估价、开跑交给 harness 什么。
+// 工具节点（ADR 0025）：规划门怎么查步骤、上游文件怎么变成上游必须交出的文件、开跑交给 harness 什么。
 import type { ToolEntry } from '@oasis/contracts/model-gateway';
 import { TOOL_RUN_MODEL } from '@oasis/contracts/harness';
 import { checkToolArgs } from '@oasis/contracts/tool-args';
 import { describe, expect, it } from 'vitest';
 import { checkRules } from '../src/service/gate.ts';
 import { kindOf } from '../src/service/kinds/index.ts';
-import { unitsOf, upstreamFiles } from '../src/service/kinds/tool.ts';
-import {
-  checkPlan,
-  estimatePlan,
-  plannerPrompt,
-  resourceSections,
-} from '../src/service/planner.ts';
+import { upstreamFiles } from '../src/service/kinds/tool.ts';
+import { checkPlan, plannerPrompt, resourceSections } from '../src/service/planner.ts';
+import { outcomePlan } from './support/outcomes.ts';
 
 const sheet = {
   title: 't',
   deliverables: [{ name: '成片', form: 'MP4' }],
   criteria: [],
   style: [],
-  budgetMicro: null,
   assumptions: [],
   materials: [],
 };
@@ -72,7 +67,6 @@ const tools: ToolEntry[] = [
   }),
   entry('text.batch', { args: [{ name: 'in', kind: 'path', required: true, description: '行' }] }),
 ];
-const fallback = { workRun: 1_000, speechRun: 1_000, computeRun: 10_000, nodeSeconds: 600 };
 
 const shots = {
   key: 'shots',
@@ -100,7 +94,7 @@ const goodSteps = [
   { tool: 'op.video.concat', args: { in: ['out/1.mp4', 'out/2.mp4'] }, out: 'out/成片.mp4' },
 ];
 const planOf = (nodes: unknown[], edges = [{ from: 'shots', to: 'cut' }]) =>
-  JSON.stringify({ nodes, edges, deliverables: { 成片: 'cut' } });
+  JSON.stringify(outcomePlan({ nodes, edges, deliverables: { 成片: 'cut' } }));
 
 describe('工具节点', () => {
   it('规划门：步骤合格就通过；上游文件成为上游必须交出的文件', () => {
@@ -174,16 +168,7 @@ describe('工具节点', () => {
     );
   });
 
-  it('估价：每步按工具单价 × 计费单位数（视频按秒，没写按默认），加一次算力；本地操作不花工具钱', () => {
-    const plan = { nodes: [cut(goodSteps)], edges: [] } as never;
-    const { perNode } = estimatePlan(plan, [], tools, fallback);
-    // 4 秒 × 0.05 + 默认 5 秒 × 0.2 + 拼接 0 + 算力 0.01
-    expect(perNode.get('cut')).toBe(4 * 50_000 + 5 * 200_000 + 10_000);
-    expect(unitsOf({ tool: 'x', args: { n: 3 } }, { arg: 'n', default: 1 })).toBe(3);
-    expect(unitsOf({ tool: 'x', args: {} }, undefined)).toBe(1);
-  });
-
-  it('估价：单价随清晰度变的按步骤写的清晰度取，没写或表里没有用默认（720p）单价', () => {
+  it('单价随清晰度变的工具：规划员看得到各档单价', () => {
     const tiered = tools.map((t) =>
       t.key === 'video.generate'
         ? {
@@ -200,17 +185,6 @@ describe('工具节点', () => {
           }
         : t,
     );
-    const step = (resolution?: string) => ({
-      tool: 'video.generate',
-      args: { prompt: 'p', duration: 4, ...(resolution ? { resolution } : {}) },
-    });
-    const plan = {
-      nodes: [cut([step('480p'), step('1080p'), step(), step('2K')])],
-      edges: [],
-    } as never;
-    const { perNode } = estimatePlan(plan, [], tiered, fallback);
-    expect(perNode.get('cut')).toBe(4 * (50_000 + 200_000 + 100_000 + 100_000) + 10_000);
-    // 规划员看得到各档单价
     const text = resourceSections({
       catalog,
       tools: tiered,
@@ -280,16 +254,10 @@ describe('工具节点', () => {
     ).toBe('gate');
     const carry = plugin.resume(snapshot, { ...node, currentRunId: 'r2' } as never, undefined);
     expect(carry).toMatchObject({ requests: [{ continueFrom: 'r2', steps: goodSteps }] });
-    expect(plugin.body(node as never)).toMatchObject({
-      tools: [
-        { key: 'video.generate', uses: 2 },
-        { key: 'op.video.concat', uses: 1 },
-      ],
-      steps: goodSteps,
-    });
+    expect(plugin.body(node as never)).toEqual({ discussion: null, steps: goodSteps });
   });
 
-  it('规划员看得到每个工具的参数和本地操作，也知道什么时候用工具节点', () => {
+  it('规划员看得到每个工具的参数和本地操作，也知道工具节点是什么', () => {
     const prompt = plannerPrompt({
       brief: 'b',
       sheet,
@@ -303,7 +271,7 @@ describe('工具节点', () => {
     expect(prompt).toContain(
       'op.video.concat（op.video.concat）：d\n  沙箱里的本地操作，不花工具钱',
     );
-    expect(prompt).toContain('kind：tool 不用 AI');
+    expect(prompt).toContain('工具节点（kind：tool）：在容器里按顺序执行 steps');
   });
 
   it('参数检查：多余的参数、文件路径不在沙箱、列表个数不对', () => {
@@ -333,20 +301,22 @@ describe('工具节点', () => {
       deliver: ['site/**'],
     };
     const plan = (dir: string) =>
-      JSON.stringify({
-        nodes: [
-          build,
-          {
-            key: 'check',
-            title: '浏览器自查',
-            kind: 'tool',
-            goal: '检查上游交来的网页',
-            steps: [{ tool: 'app.check', args: { dir }, out: 'out/check-report.json' }],
-          },
-        ],
-        edges: [{ from: 'build', to: 'check' }],
-        deliverables: { 成片: 'build' },
-      });
+      JSON.stringify(
+        outcomePlan({
+          nodes: [
+            build,
+            {
+              key: 'check',
+              title: '浏览器自查',
+              kind: 'tool',
+              goal: '检查上游交来的网页',
+              steps: [{ tool: 'app.check', args: { dir }, out: 'out/check-report.json' }],
+            },
+          ],
+          edges: [{ from: 'build', to: 'check' }],
+          deliverables: { 成片: 'build' },
+        }),
+      );
     // 不在沙箱目录约定里的写法在规划时就退回，不等到节点开跑才失败
     const bad = checkPlan(plan('site'), sheet, catalog, withCheck);
     expect((bad as { problems: string[] }).problems.join('\n')).toContain(

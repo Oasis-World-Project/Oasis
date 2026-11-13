@@ -245,7 +245,10 @@ export function createFakeProvider(options) {
     return answer(res, body, { call: { name: 'get_goal', args: {} } });
   }
 
-  /** 规划员（第一次规划、规划门退回后修改、修改成果时的规划）：写 out/plan.json，再说一句话 */
+  /**
+   * 规划员（第一次规划、规划门退回后修改、修改成果时的规划）：写 out/plan.json，再说一句话；
+   * 答复中途调整（ADR 0030 §3.7）时写 out/adjust.json
+   */
   function plannerTurn(res, body, segments) {
     const first = segments[0];
     const seg = segments.at(-1);
@@ -254,7 +257,8 @@ export function createFakeProvider(options) {
       return stale(res, 'planner');
     const scenario = scenarios[scenarioName];
     const entry = {
-      kind: first.kind === 'replan' ? 'replanner' : 'planner',
+      kind:
+        first.kind === 'replan' ? 'replanner' : first.kind === 'adjust' ? 'adjuster' : 'planner',
       scenario: scenarioName,
       segment: seg.kind,
       model: body.model,
@@ -270,21 +274,23 @@ export function createFakeProvider(options) {
     const ctx = planContext(first.text);
     const pick = (preferred) =>
       ctx.models.includes(preferred) ? preferred : (ctx.models[0] ?? preferred);
-    const plan =
-      first.kind === 'replan'
-        ? scenario.revisionPlan({
-            ...ctx,
-            pick,
-            fix: seg.kind === 'planfix' ? seg.text : undefined,
-          })
-        : scenario.plan({ ...ctx, pick, fix: seg.kind === 'planfix' ? seg.text : undefined });
+    const fix = seg.kind === 'planfix' ? seg.text : undefined;
+    const [file, plan] =
+      first.kind === 'adjust'
+        ? ['out/adjust.json', scenario.adjust({ ...ctx, pick, text: first.text })]
+        : [
+            'out/plan.json',
+            first.kind === 'replan'
+              ? scenario.revisionPlan({ ...ctx, pick, fix })
+              : scenario.plan({ ...ctx, pick, fix }),
+          ];
     record({ ...entry, action: 'write-plan', plan });
     answer(res, body, {
       call: {
         name: 'bash',
         args: {
           description: '写方案',
-          command: writeFiles({ 'out/plan.json': JSON.stringify(plan, null, 2) }),
+          command: writeFiles({ [file]: JSON.stringify(plan, null, 2) }),
         },
       },
     });
@@ -308,7 +314,6 @@ export function createFakeProvider(options) {
       deliverables: scenario?.deliverables ?? [{ name: '成果', form: 'Markdown' }],
       criteria: scenario?.criteria ?? ['按要求交付'],
       style: [],
-      budgetMicro: null,
       assumptions: [],
       requirements: [
         {
@@ -339,15 +344,6 @@ export function createFakeProvider(options) {
     const messages = body.messages ?? [];
     if (body.response_format?.json_schema?.name === 'oasis_intake') return intakeTurn(res, body);
     const firstUser = textOf(messages.find((m) => m.role === 'user')?.content);
-    if (firstUser.startsWith('你在为一项交给 AI 团队的任务估工具用量')) {
-      const [, name, run] = firstUser.match(TASK_MARK) ?? [];
-      if (run && run !== RUN) return stale(res, 'quote');
-      record({ kind: 'quote', scenario: name, model: body.model });
-      return answer(res, body, {
-        text: JSON.stringify({ tools: scenarios[name]?.quoteTools ?? [] }),
-        cost: 0.0001,
-      });
-    }
     if (body.response_format?.json_schema?.name === 'evidence_decisions') {
       const keys = Object.keys(
         body.response_format.json_schema.schema?.properties?.answers?.properties ?? {},
@@ -375,7 +371,8 @@ export function createFakeProvider(options) {
         violations.push(`dsh 请求里认不出平台提示：${firstUser.slice(0, 120)}`);
         return answer(res, body, { text: '看不懂。' });
       }
-      if (['plan', 'replan'].includes(segments[0].kind)) return plannerTurn(res, body, segments);
+      if (['plan', 'replan', 'adjust'].includes(segments[0].kind))
+        return plannerTurn(res, body, segments);
       return nodeTurn(res, body, segments);
     }
     record({ kind: 'chat', model: body.model });

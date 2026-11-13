@@ -9,12 +9,11 @@ import {
   CUSTOM_ANSWER_MAX,
   CUSTOM_ANSWER_PREFIX,
   SheetCard,
-  type IntakeConfirmBody,
   type IntakeQuestion,
   type MessageAttachment,
   type QuestionsCard,
 } from '@oasis/contracts/conversation';
-import { BudgetQuote, type TaskSheet } from '@oasis/contracts/task';
+import type { TaskSheet } from '@oasis/contracts/task';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Conversation, ConversationRepo, Intake, Message } from '../repo/conversation-repo.ts';
@@ -68,8 +67,6 @@ export interface IntakeConfig {
   maxRounds: number;
   /** 接需求一步的输出上限；留足余量，不靠截断后重来 */
   maxTokens: number;
-  /** 报价要等 task 调一次模型列草案，按模型调用的超时等，不按普通服务查询的 10 秒 */
-  quoteTimeoutMs: number;
 }
 
 const IS_TASK = {
@@ -241,31 +238,6 @@ function intakeActions(deps: {
     }
   }
 
-  /**
-   * 任务单的三档预算和用时（ADR 0016）：由 task 列草案、按记账单价定价。报价失败不影响确认，
-   * 卡片上就不显示档位，确认时按标准档的默认方式做。
-   */
-  async function quoteFor(
-    intake: Intake,
-    sheet: TaskSheet,
-    ownerId: string,
-    requestId: string,
-  ): Promise<BudgetQuote | null> {
-    try {
-      const { quote } = await deps.task.json('POST', '/internal/quotes', {
-        body: { ownerId, brief: taskBrief(intake.request, intake.turns, sheet), sheet },
-        requestId,
-        // 2026-11-06：报价用了 10 秒多，按普通查询的 10 秒超时被当成失败，任务单上就没有预算档位
-        timeoutMs: config.quoteTimeoutMs,
-        schema: z.object({ quote: BudgetQuote.nullable() }),
-      });
-      return quote;
-    } catch (err) {
-      logger.warn({ err, requestId, intakeId: intake.id }, '报价失败，任务单先不显示预算');
-      return null;
-    }
-  }
-
   /** 读不到地区限制时按原模型来，不因此中断 */
   async function blockedModels(requestId: string): Promise<string[]> {
     try {
@@ -355,7 +327,7 @@ function intakeActions(deps: {
   }
 
   /**
-   * 会话里发过的文件，注明来自哪里（ADR 0016 §8）：这次的需求和接需求时补发的在前，之前的聊天和
+   * 会话里发过的文件，注明来自哪里：这次的需求和接需求时补发的在前，之前的聊天和
    * 别的任务在后。已经选为素材但消息不在了（如较早部分压进了摘要）的也列上，免得选择被悄悄丢掉。
    */
   function filesOf(
@@ -435,7 +407,7 @@ function intakeActions(deps: {
       resuming,
     );
     if (reply.type !== 'cancel' && reply.materialIds) {
-      // 素材由 AI 从会话里的文件中挑（ADR 0016 §8）；只认列出来的文件
+      // 素材由 AI 从会话里的文件中挑；只认列出来的文件
       const ids = new Set(reply.materialIds);
       const materials = files
         .filter((f) => ids.has(f.uploadId))
@@ -510,7 +482,7 @@ function intakeActions(deps: {
         intakeId: intake.id,
         intro: reply.intro,
         sheet: reply.sheet,
-        quote: await quoteFor(intake, reply.sheet, ownerId, requestId),
+
         status: 'open',
         taskId: null,
       };
@@ -689,7 +661,7 @@ function intakeActions(deps: {
     async confirm(input: {
       conversation: Conversation;
       ownerId: string;
-      budget?: IntakeConfirmBody;
+
       requestId: string;
     }): Promise<Message[]> {
       const intake = await openIntake(input.conversation);
@@ -698,12 +670,11 @@ function intakeActions(deps: {
       }
       const { cardMessageId, materials } = intake;
       const card = await repo.findMessage(input.conversation.id, cardMessageId);
-      const quote = SheetCard.safeParse(card?.data).data?.quote ?? null;
+
       // 任务单上的素材以用户实际发的文件为准（AI 看不到文件，不让它填）
       const sheet: TaskSheet = {
         ...intake.sheet,
         materials: materials.map((m) => m.name),
-        ...(quote ? { budget: chosenBudget(quote, input.budget ?? { tier: 'standard' }) } : {}),
       };
       // 事先定好任务 ID 并记下：确认超时或断网后再点，task 按同一个 ID 返回已经建好的任务，不会建出第二个
       const taskId = intake.taskId ?? randomUUID();
@@ -748,27 +719,6 @@ function intakeActions(deps: {
       return [message];
     },
   };
-}
-
-/** 用户选的预算 → 任务单上的预算；自定义金额不能低于最低预算，用时按金额落在哪两档之间估 */
-function chosenBudget(
-  quote: BudgetQuote,
-  choice: IntakeConfirmBody,
-): NonNullable<TaskSheet['budget']> {
-  const steps = quote.steps;
-  if (choice.tier !== 'custom') {
-    const tier = quote.tiers.find((t) => t.tier === choice.tier)!;
-    return { tier: choice.tier, micro: tier.micro, minutes: tier.minutes, steps };
-  }
-  const micro = choice.customMicro!;
-  if (micro < quote.minimumMicro)
-    throw new HttpError(
-      400,
-      'budget_too_low',
-      `预算不能低于 $${(quote.minimumMicro / 1_000_000).toFixed(2)}（最低预算）`,
-    );
-  const reached = [...quote.tiers].reverse().find((t) => micro >= t.micro) ?? quote.tiers[0]!;
-  return { tier: 'custom', micro, minutes: reached.minutes, steps };
 }
 
 /** 只留题目里有的回答；答案必须是选项之一或「你看着办」 */

@@ -2,7 +2,7 @@
 // 打开后这个账号的 AI 团队不用国外厂商的模型和工具型号；关着时所有模型都能用。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MapPin } from 'lucide-react';
-import { modelScopeQuery, setModelScope, workflowOptionsQuery } from '../api/queries.ts';
+import { modelScopeQuery, setModelScope, workflowNamesQuery } from '../api/queries.ts';
 
 export function ModelScopeToggle({ className }: { className: string }) {
   const queryClient = useQueryClient();
@@ -12,7 +12,7 @@ export function ModelScopeToggle({ className }: { className: string }) {
     onSuccess: (saved) => {
       queryClient.setQueryData(modelScopeQuery.queryKey, saved);
       // 编辑节点时能选的模型和工具跟着变
-      void queryClient.invalidateQueries({ queryKey: workflowOptionsQuery.queryKey });
+      void queryClient.invalidateQueries({ queryKey: workflowNamesQuery.queryKey });
     },
   });
   const on = scope.data?.domesticOnly ?? false;

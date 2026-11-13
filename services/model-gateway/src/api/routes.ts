@@ -9,6 +9,7 @@ import {
   type ModelCapabilities,
   ModelScope,
   ToolCallBody,
+  ToolJobAnswerBody,
 } from '@oasis/contracts/model-gateway';
 import {
   fileResponseHeaders,
@@ -182,6 +183,14 @@ export function registerRoutes(
   );
   app.post('/internal/v1/tools/jobs/:jobId/cancel', async (request) => {
     await tools.cancel(internalCaller(request), parseWith(JobParams, request.params).jobId);
+    return { accepted: true };
+  });
+  /** task 把规划员对「提出调整」的答复写回长任务（ADR 0030 §3.7） */
+  app.post('/internal/v1/tools/jobs/:jobId/answer', async (request) => {
+    await tools.answer(
+      parseWith(JobParams, request.params).jobId,
+      parseWith(ToolJobAnswerBody, request.body).text,
+    );
     return { accepted: true };
   });
   app.post('/internal/v1/tools/runs/:runId/cancel', async (request) => {

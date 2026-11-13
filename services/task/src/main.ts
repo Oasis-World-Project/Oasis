@@ -1,8 +1,9 @@
 // task：工作流控制面（ADR 0004）。管任务的节点图、状态和调度；节点在 harness 里执行，
 // 收到 harness.run.finished 就推进（讨论下一轮、过关卡），收到 model-gateway.call.settled 就累加花费，
-// 并定时和 harness 对账。
+// 收到 model-gateway.adjustment.requested 就让规划员答复一条中途调整，并定时和 harness 对账。
 import { fileURLToPath } from 'node:url';
 import {
+  AdjustmentRequested,
   CallSettled,
   HARNESS_STREAM,
   MODEL_GATEWAY_STREAM,
@@ -19,7 +20,7 @@ import {
   type ServiceResource,
 } from '@oasis/service-kit';
 import { registerRoutes } from './api/routes.ts';
-import { createQuotes, type Quotes } from './service/quote.ts';
+
 import { createRevisions, type Revisions } from './service/revision.ts';
 import { taskEnv } from './config.ts';
 import { createTaskStore } from './repo/task-store.ts';
@@ -30,7 +31,7 @@ import { createWorkflowService, type WorkflowService } from './service/workflow-
 
 let workflows: WorkflowService;
 let modelScopes: ModelScopes;
-let quotes: Quotes;
+
 let revisions: Revisions;
 
 await startService({
@@ -53,12 +54,7 @@ await startService({
     const modelGateway = createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
       timeoutMs: 60_000,
     });
-    const fallback = {
-      workRun: config.ESTIMATE_WORK_RUN_MICRO,
-      speechRun: config.ESTIMATE_SPEECH_RUN_MICRO,
-      computeRun: config.ESTIMATE_COMPUTE_RUN_MICRO,
-      nodeSeconds: config.ESTIMATE_NODE_SECONDS,
-    };
+
     workflows = createWorkflowService({
       store: createTaskStore(postgres.pool),
       harness,
@@ -79,19 +75,10 @@ await startService({
       planning: {
         planner: config.PLANNER_MODEL,
         defaultModel: config.DEFAULT_NODE_MODEL,
-        fallback,
       },
       logger,
     });
     modelScopes = createModelScopes(modelGateway);
-    quotes = createQuotes({
-      modelGateway,
-      pricing: (userId) => workflows.pricing(userId),
-      model: config.QUOTE_MODEL,
-      planner: config.PLANNER_MODEL,
-      fallback,
-      logger,
-    });
     revisions = createRevisions({
       workflows,
       canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 10_000 }),
@@ -107,7 +94,7 @@ await startService({
         if (data.taskId) await workflows.onRunFinished(data);
       },
     });
-    // 属于任务的模型调用结算了：累加花费（预算只是参考，不暂停，ADR 0016 §2）
+    // 属于任务的模型调用结算了：累加已经花了多少
     const callSettled = startEventConsumer({
       connection: eventBus.connection,
       stream: MODEL_GATEWAY_STREAM,
@@ -115,6 +102,16 @@ await startService({
       filterSubject: CallSettled.type,
       logger,
       handle: async (envelope) => workflows.onCallSettled(CallSettled.data.parse(envelope.data)),
+    });
+    // 做成果的 AI 提出了跨成果的调整（ADR 0030 §3.7）：让规划员答一次
+    const adjustmentRequested = startEventConsumer({
+      connection: eventBus.connection,
+      stream: MODEL_GATEWAY_STREAM,
+      durable: 'task-adjustment-requested',
+      filterSubject: AdjustmentRequested.type,
+      logger,
+      handle: async (envelope) =>
+        workflows.onAdjustmentRequested(AdjustmentRequested.data.parse(envelope.data)),
     });
     // 启动时对一次账，之后定时对账
     void workflows.reconcile(0).catch((err: unknown) => logger.warn({ err }, '启动对账失败'));
@@ -126,7 +123,15 @@ await startService({
       ready: async () => {},
       close: async () => clearInterval(timer),
     };
-    return { postgres, eventBus, outbox, runFinished, callSettled, reconciler };
+    return {
+      postgres,
+      eventBus,
+      outbox,
+      runFinished,
+      callSettled,
+      adjustmentRequested,
+      reconciler,
+    };
   },
-  routes: (app) => registerRoutes(app, workflows, quotes, revisions, modelScopes),
+  routes: (app) => registerRoutes(app, workflows, revisions, modelScopes),
 });
