@@ -55,10 +55,21 @@ describe('一次模型调用', () => {
     expect(finished[0]).toMatchObject({ status: 'failed', costSource: 'estimate' });
     expect(billingCalls.map((c) => c.path)).toEqual(['/internal/holds', 'settle']);
   });
-  it('正常 EOF 缺少完成标记或供应商流内报错，都不能记为成功', async () => {
-    for (const content of [
-      'data: {"choices":[{"delta":{"content":"部分"}}]}\n\n',
-      'data: {"error":{"message":"upstream failed"}}\n\ndata: [DONE]\n\n',
+  it('正常 EOF 缺少完成标记或供应商流内报错，都不能记为成功；供应商报的错记进调用记录', async () => {
+    for (const [content, error] of [
+      ['data: {"choices":[{"delta":{"content":"部分"}}]}\n\n', '流式传输未收到完成标记'],
+      [
+        'data: {"error":{"message":"upstream failed"}}\n\ndata: [DONE]\n\n',
+        '供应商在流里报错：upstream failed',
+      ],
+      [
+        'data: {"choices":[{"delta":{"content":"部分"}}]}\n\ndata: {"error":{"code":502,"message":"provider timed out"}}\n\n',
+        '供应商在流里报错：502 provider timed out',
+      ],
+      [
+        'data: {"provider":"Novita","choices":[{"delta":{"content":"部分"}}]}\n\n',
+        '流式传输未收到完成标记（OpenRouter 转给了 Novita）',
+      ],
     ]) {
       const call = await chat.prepare({
         caller: { payerId: PAYER },
@@ -66,7 +77,7 @@ describe('一次模型调用', () => {
         body: request,
       });
       await chat.pump(call, new Response(content), () => undefined);
-      expect(finished.at(-1)?.status).toBe('failed');
+      expect(finished.at(-1)).toMatchObject({ status: 'failed', error });
     }
   });
   it('收到完成标记即完成读取，先结算再转发 DONE，正常关闭不记成中断', async () => {

@@ -30,6 +30,17 @@ function deltaChars(delta: {
   return (delta.content?.length ?? 0) + toolChars;
 }
 
+/** 供应商在流里报的错写成一句话（有 code 带上 code），最多 300 字 */
+function errorText(error: unknown): string {
+  const { code, message } = (typeof error === 'object' && error ? error : {}) as {
+    code?: unknown;
+    message?: unknown;
+  };
+  const text = typeof message === 'string' ? message : JSON.stringify(error);
+  const prefix = typeof code === 'string' || typeof code === 'number' ? `${code} ` : '';
+  return `${prefix}${text}`.slice(0, 300);
+}
+
 export function createChatService(deps: {
   provider: ProviderClient;
   meter: Meter;
@@ -151,7 +162,10 @@ export function createChatService(deps: {
       let usage: Usage | undefined;
       let completionChars = 0;
       let completed = false;
-      let providerFailed = false;
+      /** 供应商在流里报的错（流已经开始后出错只能这样报），记进调用记录，排查时才知道是谁断的 */
+      let providerError: string | undefined;
+      /** OpenRouter 把这次请求转给了哪家（每个片段都带着）；断了记进原因，同一型号各家的限制不一样 */
+      let servedBy: string | undefined;
       /** 供应商给这次生成的 ID（每个片段都带着），中断时凭它查实际花费 */
       let generationId: string | undefined;
       const parser = createSseParser((data) => {
@@ -162,13 +176,16 @@ export function createChatService(deps: {
         try {
           const chunk = JSON.parse(data) as {
             id?: unknown;
+            provider?: unknown;
             usage?: Usage;
             error?: unknown;
             choices?: { delta?: Parameters<typeof deltaChars>[0] }[];
           };
           if (!generationId && typeof chunk.id === 'string' && chunk.id) generationId = chunk.id;
+          if (!servedBy && typeof chunk.provider === 'string' && chunk.provider)
+            servedBy = chunk.provider;
           if (chunk.usage) usage = chunk.usage;
-          if (chunk.error) providerFailed = true;
+          if (chunk.error) providerError = errorText(chunk.error);
           const delta = chunk.choices?.[0]?.delta;
           if (delta) completionChars += deltaChars(delta);
         } catch {
@@ -190,12 +207,12 @@ export function createChatService(deps: {
           write(chunk);
         }
         parser.end();
-        if (!completed) {
-          error = '流式传输未收到完成标记';
-        } else if (providerFailed) error = '供应商返回流式错误';
+        if (providerError) error = `供应商在流里报错：${providerError}`;
+        else if (!completed) error = '流式传输未收到完成标记';
       } catch (err) {
         error = `流式传输中断：${String(err)}`;
       }
+      if (error && servedBy) error += `（OpenRouter 转给了 ${servedBy}）`;
       if (!completed && options.transportErrors !== 'disconnect')
         write(
           `data: ${JSON.stringify({ error: { code: 'stream_interrupted', message: '回复中断了' } })}\n\n`,
