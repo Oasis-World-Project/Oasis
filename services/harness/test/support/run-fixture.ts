@@ -344,7 +344,7 @@ modelGateway.post('/internal/artifacts/lookup', async (request, reply) => {
       category: 'media',
       conversationId: CONVERSATION,
       sessionId: CONVERSATION,
-      topic: '海报',
+      task: '海报',
       runId: CONVERSATION,
       models: [],
       syncPath: '海报/site/poster.png',

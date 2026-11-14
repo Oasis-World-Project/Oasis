@@ -29,6 +29,26 @@ export function targetsFor(files: { name: string }[], out: string | undefined): 
   );
 }
 
+/** 生图、视频、配音、音乐、3D 做出的文件花了用户的钱，都留给用户：只能存进交付目录（做好一个就进画布） */
+export const KEPT_TOOLS = new Set([
+  'image.generate',
+  'video.generate',
+  'audio.speech',
+  'audio.music',
+  '3d.generate',
+  '3d.render',
+]);
+
+/** --out 写在交付目录（沙箱里是 out/，用户电脑上是项目里的 .oasis/out/）里面才行，不然这次不提交 */
+export function requireDelivered(out: string): void {
+  const dir = process.env.OASIS_OUT_DIR ?? 'out';
+  const fold = (path: string) => (sep === '\\' ? path.toLowerCase() : path);
+  if (fold(resolve(out)).startsWith(fold(`${resolve(dir)}${sep}`))) return;
+  throw new Error(
+    `生成的文件要存进 ${dir}/（用户在画布里才看得到）：--out 写成 ${dir}/名字，素材写成 ${dir}/素材/名字。这次没有提交，没有收费`,
+  );
+}
+
 /** 认得文件头的图片、音频格式：后缀 → 格式（.jpg 和 .jpeg 是同一种） */
 const FORMATS: Record<string, string> = {
   '.png': 'png',

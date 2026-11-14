@@ -7,13 +7,20 @@ export const OASIS_TOOL = /(?:^|[\s;&|(])oasis-tool\s+([a-z0-9]+(?:\.[a-z0-9_-]+
 /** 只是查工具怎么用（oasis-tool <工具> --help），不算调用 */
 export const TOOL_HELP = /oasis-tool\s+\S+\s+(?:--help|-h)(?:\s|$)/;
 
-/** 工作目录里的相对路径；工作目录外的、往上跳的不算 */
+/**
+ * 工作目录里的相对路径；工作目录外的、往上跳的不算。在用户电脑上交付目录是项目里的 .oasis/out/
+ * （相对、绝对路径都有，Windows 上是反斜杠）：都换成和沙箱一样的 out/…，进度页和画布才认得
+ */
 function inWorkspace(path: string): string | undefined {
-  const relative = path
-    .trim()
-    .replace(/^\/workspace\//, '')
-    .replace(/^\.\//, '');
-  return relative && !relative.startsWith('/') && !relative.split('/').includes('..')
+  const slashed = path.trim().replaceAll('\\', '/');
+  const delivered = /(?:^|\/)\.oasis\/out\/(.+)$/.exec(slashed)?.[1];
+  const relative = delivered
+    ? `out/${delivered}`
+    : slashed.replace(/^\/workspace\//, '').replace(/^\.\//, '');
+  return relative &&
+    !relative.startsWith('/') &&
+    !/^[a-z]:/i.test(relative) &&
+    !relative.split('/').includes('..')
     ? relative
     : undefined;
 }

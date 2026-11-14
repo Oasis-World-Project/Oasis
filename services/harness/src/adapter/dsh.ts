@@ -153,6 +153,9 @@ export function sandboxEnv(input: {
   const noProxy = [new URL(modelBaseUrl).hostname, 'localhost', '127.0.0.1'].join(',');
   return {
     ...base,
+    // 交付目录写成绝对路径：AI 在别的目录里跑 oasis-tool，生成的文件也只能存进 out/（做好一个就进画布）
+    OASIS_OUT_DIR: SANDBOX_PATHS.outputs,
+    OASIS_TOOL_STATE_DIR: `${SANDBOX_PATHS.outputs}/.oasis-tools`,
     ...(egressProxy
       ? {
           HTTP_PROXY: egressProxy,

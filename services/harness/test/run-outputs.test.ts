@@ -215,6 +215,26 @@ describe('对话里的一轮：输入和产出', () => {
       });
   });
 
+  it('一轮还没收尾时读产出文件（做好一个就登记进画布）：从沙箱的 out/ 里读，没有摘要', async () => {
+    const run = await service.start({ ...base, prompt: '写' });
+    await finished(run.id);
+    rows.get(run.id)!.outputKey = null;
+    executor.readStoredArchive = async (_id, path) =>
+      path === `${SANDBOX_PATHS.workdir}/out/素材/帧.png`
+        ? Readable.from([await packFiles([{ path: '帧.png', content: Buffer.from('png') }])])
+        : undefined;
+    try {
+      const file = await service.fileStream(run.id, '素材/帧.png');
+      expect(file).toMatchObject({ size: 3, contentType: 'image/png', sha256: undefined });
+      expect(Buffer.concat(await file.content.toArray()).toString()).toBe('png');
+      await expect(service.fileStream(run.id, 'missing.png')).rejects.toMatchObject({
+        statusCode: 404,
+      });
+    } finally {
+      delete executor.readStoredArchive;
+    }
+  });
+
   it('读这一轮工作目录里的一个文件：沙箱还在就从沙箱读（只给普通文件），收尾后只剩 out/ 里的', async () => {
     const run = await service.start({ ...base, prompt: '写' });
     await finished(run.id);

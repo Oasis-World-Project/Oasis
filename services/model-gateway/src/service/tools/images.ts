@@ -97,7 +97,7 @@ export const imageGenerate: ToolDef = {
   description:
     '按文字描述生成图片（插画、海报、商品图、网页效果图……）。按供应商实际返回的格式保存（PNG/JPEG/WebP），后缀可能与 --out 不同，以输出里「已保存」的路径为准。要几张图就一次交：几个不同的画面用 --prompts（JSON 数组），同一个画面要几张用 --n，一次最多 4 张、同时生成，比一张张调快得多。',
   usage:
-    'oasis-tool image.generate --prompt "描述" [--ref materials/主图.png,materials/风格.jpg] [--aspect_ratio 16:9] [--resolution 2K] [--n 1] --out out/图片.png；几个画面一起：oasis-tool image.generate --prompts \'["第一个画面","第二个画面"]\' --out out/关键帧/帧.png（存成 帧-1.png、帧-2.png，和描述顺序一致）',
+    'oasis-tool image.generate --prompt "描述" [--ref materials/主图.png,materials/风格.jpg] [--aspect_ratio 16:9] [--resolution 2K] [--n 1] --out out/图片.png；几个画面一起：oasis-tool image.generate --prompts \'["第一个画面","第二个画面"]\' --out out/素材/关键帧/帧.png（存成 帧-1.png、帧-2.png，和描述顺序一致；中间素材放 out/素材/）',
   unit: '张',
   estimateMicro: 150_000,
   holdMicro: (args) => 500_000 * imageCount(args),

@@ -18,10 +18,12 @@ import { runBatch } from './batch.ts';
 import { confirmed, openRequest, request, say, waitSeconds } from './tool-api.ts';
 import {
   appFiles,
+  KEPT_TOOLS,
   localImages,
   localMedia,
   matchExt,
   renderScene,
+  requireDelivered,
   saveFetched,
   startOf,
   targetsFor,
@@ -266,6 +268,7 @@ async function wait(ids: string[], out?: string): Promise<void> {
 
 async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
+  if (out && KEPT_TOOLS.has(key)) requireDelivered(out);
   // --wait false：长任务只提交、马上给任务号，几个交完再用 wait 一起等
   const noWait = args.wait === 'false';
   delete args.wait;
@@ -451,6 +454,7 @@ export async function main(argv: string[]): Promise<void> {
     if (!ids.length) throw new Error('wait 后面要写任务号（几个一起等就都写上）');
     if (ids.length > 1 && out)
       throw new Error('几个任务一起等时不写 --out：各存到交的时候写的 --out');
+    if (out) requireDelivered(out);
     // 一起等：有一个没做出来，其余的照样等完
     return wait(ids, out);
   }

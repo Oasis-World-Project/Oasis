@@ -173,6 +173,12 @@ describe('dsh 事件翻译', () => {
       ),
     ).toEqual(['out/帧-1.png', 'out/帧-2.png', 'out/尾.png']);
     expect(saved('已保存：/tmp/x.png\n已保存：../x.png')).toBeUndefined();
+    // 在用户电脑上：项目里的 .oasis/out/（相对、绝对、反斜杠）都换成 out/；别的绝对路径不给
+    expect(
+      saved(
+        '已保存：.oasis/out/素材/帧.png\n已保存：C:\\proj\\.oasis\\out\\片.mp4\n已保存：D:\\x.png',
+      ),
+    ).toEqual(['out/素材/帧.png', 'out/片.mp4']);
 
     // 长任务的进展按任务号：交了没等的、做好了的（连同它的文件）、还在做的、没做出来的
     const [a, b, c, d] = ['a', 'b', 'c', 'd'].map(
@@ -318,6 +324,11 @@ describe('dsh 事件翻译', () => {
     expect(env.npm_config_registry).toBeUndefined();
     // 云端沙箱不设权限档：组合默认就是完全访问
     expect(env.OASIS_PERMISSION).toBeUndefined();
+    // 交付目录是绝对路径：在别的目录里跑 oasis-tool，生成的文件也存进 /workspace/out/
+    expect(env).toMatchObject({
+      OASIS_OUT_DIR: '/workspace/out',
+      OASIS_TOOL_STATE_DIR: '/workspace/out/.oasis-tools',
+    });
   });
 
   it('用户电脑上：经网页地址上的 gateway 调模型，平台的文件在项目的 .oasis/ 下，权限档按设置', () => {

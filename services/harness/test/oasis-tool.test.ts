@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { main, parseArgs } from '../sandbox/oasis-tool.ts';
-import { matchExt, startOf, targetsFor } from '../sandbox/tool-files.ts';
+import { matchExt, requireDelivered, startOf, targetsFor } from '../sandbox/tool-files.ts';
 
 describe('oasis-tool', () => {
   it('解析 --名字 值；列表参数按逗号拆或读 JSON；--out、--file 单独拿出来', () => {
@@ -70,6 +70,14 @@ describe('oasis-tool', () => {
       join('out', 'image-1.png'),
       join('out', 'image-2.png'),
     ]);
+  });
+
+  it('生图、视频这类做出的文件只能存进 out/：写到别处这次不提交、不收费', async () => {
+    expect(() => requireDelivered('out/素材/帧.png')).not.toThrow();
+    expect(() => requireDelivered('work/帧.png')).toThrow('存进 out/');
+    await expect(
+      main(['image.generate', '--prompt', '猫', '--out', 'work/猫.png']),
+    ).rejects.toThrow('没有收费');
   });
 
   it('要存成图片但内容是另一种图片格式时按实际格式改后缀；同类或认不出的不动', () => {
@@ -264,6 +272,8 @@ describe('oasis-tool 长任务', () => {
     vi.stubEnv('OASIS_TOOL_AUTH', 'k');
     vi.stubEnv('OASIS_TOOL_STATE_DIR', join(dir, '.oasis-tools'));
     vi.stubEnv('OASIS_TOOL_WAIT_SECONDS', '1');
+    // 临时目录当交付目录：生成的文件只能存在这里面
+    vi.stubEnv('OASIS_OUT_DIR', dir);
     vi.spyOn(process.stdout, 'write').mockImplementation((text) => {
       printed.push(String(text));
       return true;
@@ -351,8 +361,9 @@ describe('oasis-tool 长任务', () => {
 
   it('等到上限还没好：告诉 AI 用 wait 接着等', async () => {
     printed.length = 0;
-    await main(['wait', 'job-slow', '--out', 'out/v.mp4']);
-    expect(printed.join('')).toContain('oasis-tool wait job-slow --out "out/v.mp4"');
+    const out = join(dir, 'v.mp4');
+    await main(['wait', 'job-slow', '--out', out]);
+    expect(printed.join('')).toContain(`oasis-tool wait job-slow --out ${JSON.stringify(out)}`);
   });
   it('--wait false 只提交、马上给任务号；几个一起等，各存到交的时候写的 --out', async () => {
     const one = join(dir, '镜头一.mp4'),
