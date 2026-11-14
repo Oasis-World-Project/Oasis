@@ -10,6 +10,7 @@ import type { ToolJob, ToolJobsRepo } from '../repo/tool-jobs-repo.ts';
 import type { AvatarCatalog } from './avatar-catalog.ts';
 import type { Caller, Meter } from './metering.ts';
 import type { ModelScope } from './model-scope.ts';
+import type { RunKeyService } from './run-key-service.ts';
 import type { BrowserChecks } from './tools/kit.ts';
 import type { ToolConfig, ToolDef } from './tools.ts';
 
@@ -39,6 +40,8 @@ export interface ToolServiceDeps {
   logger: Logger;
   /** 数字人形象和声音目录；只读、不花钱，不走计量 */
   avatarCatalog?: AvatarCatalog;
+  /** 花钱的工具先问用户（这一轮设了「问我」时）：确认卡在临时 Key 服务里 */
+  confirmations?: Pick<RunKeyService, 'paidTool'>;
 }
 
 /** 长任务的冻结比等待上限多留这么久，免得结算前就被自动退回 */

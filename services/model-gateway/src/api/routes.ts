@@ -1,13 +1,15 @@
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import { AvatarSessionStartBody, AvatarStopBody } from '@oasis/contracts/avatar';
 import {
+  AskConfirmationBody,
   ChatCompletionRequest,
   ComputeHoldBody,
   ComputeSettleBody,
   CreateRunKeyBody,
+  DecideConfirmationBody,
   DecisionRequest,
   type ModelCapabilities,
-  type RunSpend,
+  type RunActivity,
   ToolCallBody,
 } from '@oasis/contracts/model-gateway';
 import {
@@ -36,6 +38,9 @@ const AvatarSessionParams = z.object({ sessionId: z.uuid() });
 const TOOL_BODY = { bodyLimit: 40 * 1024 * 1024 };
 const RunIdParams = z.object({ runId: z.uuid() });
 const ConversationParams = z.object({ conversationId: z.uuid() });
+const ConfirmationParams = z.object({ confirmationId: z.uuid() });
+/** 等确认结果最多等几秒（长轮询；入口代理和 gateway 的读超时都比这长） */
+const WaitQuery = z.object({ wait: z.coerce.number().int().min(0).max(30).default(0) });
 
 /** 内部调用方：付费人在 x-oasis-payer-id 头里 */
 const internalCaller = (request: FastifyRequest): Caller => ({ payerId: requirePayerId(request) });
@@ -122,7 +127,7 @@ export function registerRoutes(
     avatars: AvatarService;
     scope: ModelScope;
     /** 对话里一轮已经结算的花费和用过的工具 */
-    runSpend: (runId: string, payerId: string) => Promise<RunSpend>;
+    runSpend: (runId: string, payerId: string) => Promise<Omit<RunActivity, 'confirmations'>>;
     executionModels: () => Promise<ModelCapabilities[]>;
   },
 ): void {
@@ -132,7 +137,10 @@ export function registerRoutes(
 
   async function useTool(caller: Caller, request: FastifyRequest, reply: FastifyReply) {
     const { key } = parseWith(ToolParams, request.params);
-    const { args, max_cost_micro, idempotency_key } = parseWith(ToolCallBody, request.body);
+    const { args, max_cost_micro, idempotency_key, confirmation_id } = parseWith(
+      ToolCallBody,
+      request.body,
+    );
     return tools.call({
       idempotencyKey: idempotency_key,
       caller,
@@ -141,6 +149,7 @@ export function registerRoutes(
       requestId: request.id,
       signal: abortOnClose(reply),
       ...(max_cost_micro === undefined ? {} : { maxCostMicro: max_cost_micro }),
+      ...(confirmation_id ? { confirmationId: confirmation_id } : {}),
     });
   }
 
@@ -172,14 +181,26 @@ export function registerRoutes(
     const models = await services.executionModels();
     return { models: models.filter((model) => allowed(model.id)) };
   });
-  /** 对话里一轮的花费和用过的工具：conversation 在一轮进行中和结束后读 */
-  app.get('/internal/v1/runs/:runId/spend', async (request): Promise<RunSpend> => {
+  /** 对话里一轮的花费、用过的工具和在等用户点的确认卡：conversation 在一轮进行中和结束后读 */
+  app.get('/internal/v1/runs/:runId', async (request): Promise<RunActivity> => {
     const { runId } = parseWith(RunIdParams, request.params);
-    return services.runSpend(runId, requirePayerId(request));
+    const [spend, confirmations] = await Promise.all([
+      services.runSpend(runId, requirePayerId(request)),
+      runKeys.pending(runId),
+    ]);
+    return { ...spend, confirmations };
   });
-  /** 删对话（真删除）：拦住迟到的工具提交，取消在途的长任务，清掉工具的结果文件；可以重复调用 */
+  /** 用户点确认卡（conversation 核对过是这个私聊正在进行的这一轮） */
+  app.post('/internal/v1/confirmations/:confirmationId/decide', async (request) => {
+    const { confirmationId } = parseWith(ConfirmationParams, request.params);
+    const { runId, decision } = parseWith(DecideConfirmationBody, request.body);
+    return runKeys.decide(confirmationId, runId, decision);
+  });
+  /** 删对话（真删除）：拦住迟到的工具提交，取消在途的长任务，清掉工具的结果文件和确认卡；可以重复调用 */
   app.post('/internal/conversations/:conversationId/purge', async (request, reply) => {
-    await tools.purgeConversation(parseWith(ConversationParams, request.params).conversationId);
+    const { conversationId } = parseWith(ConversationParams, request.params);
+    await tools.purgeConversation(conversationId);
+    await runKeys.purgeConversation(conversationId);
     return reply.code(204).send();
   });
   app.post('/internal/v1/tools/:key', TOOL_BODY, (request, reply) =>
@@ -284,6 +305,24 @@ export function registerRoutes(
   );
   app.post('/run/v1/decisions', modelBody, async (request, reply) =>
     decide(await runKeys.authenticate(request.headers.authorization), request, reply),
+  );
+  // 确认卡：dsh 插件登记（AI 要做超出权限的事）、等结果、不等了收回；oasis-tool 等花钱工具的确认
+  app.post('/run/v1/confirmations', async (request, reply) => {
+    const caller = await runKeys.authenticate(request.headers.authorization);
+    const { text, callId } = parseWith(AskConfirmationBody, request.body);
+    return reply.code(201).send(await runKeys.ask(caller, text, callId));
+  });
+  app.get('/run/v1/confirmations/:confirmationId', async (request) => {
+    const caller = await runKeys.authenticate(request.headers.authorization);
+    const { confirmationId } = parseWith(ConfirmationParams, request.params);
+    const { wait } = parseWith(WaitQuery, request.query);
+    return runKeys.wait(caller, confirmationId, wait * 1000);
+  });
+  app.post('/run/v1/confirmations/:confirmationId/cancel', async (request) =>
+    runKeys.withdraw(
+      await runKeys.authenticate(request.headers.authorization),
+      parseWith(ConfirmationParams, request.params).confirmationId,
+    ),
   );
   // 沙箱里的 oasis-tool：看有哪些工具、调用工具
   app.get('/run/v1/tools', async (request) => {

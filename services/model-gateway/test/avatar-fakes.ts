@@ -1,4 +1,4 @@
-// 数字人测试共用的假依赖：内存会话表、内存调用记录、假计量、假 LiveAvatar。
+// 数字人和临时 Key 测试共用的假依赖：内存临时 Key 和确认卡、内存会话表、内存调用记录、假计量、假 LiveAvatar。
 import type { AvatarTurn } from '@oasis/contracts/avatar';
 import {
   LiveAvatarError,
@@ -7,18 +7,30 @@ import {
 } from '../src/adapters/liveavatar.ts';
 import type { AvatarSession, AvatarSessionsRepo } from '../src/repo/avatar-sessions-repo.ts';
 import type { Call, CallsRepo } from '../src/repo/calls-repo.ts';
-import type { NewRunKey, RunKey, RunKeysRepo } from '../src/repo/run-keys-repo.ts';
+import type { ConfirmationRow, NewRunKey, RunKey, RunKeysRepo } from '../src/repo/run-keys-repo.ts';
 import type { Meter } from '../src/service/metering.ts';
 
-export function memoryRunKeys(): RunKeysRepo & { rows: RunKey[] } {
+/** 内存里的临时 Key 和确认卡，行为与 SQL 版一致（Key 只按未作废、未过期查） */
+export function memoryRunKeys(): RunKeysRepo & {
+  rows: RunKey[];
+  confirmations: ConfirmationRow[];
+} {
   const rows: RunKey[] = [];
+  const confirmations: ConfirmationRow[] = [];
+  const pending = (runId: string, kind?: string) =>
+    confirmations.filter(
+      (c) => c.runId === runId && c.status === 'pending' && (!kind || c.kind === kind),
+    );
   return {
     rows,
+    confirmations,
     async insert(key: NewRunKey) {
       rows.push({
         ...key,
         conversationId: key.conversationId ?? null,
         domesticOnly: key.domesticOnly ?? false,
+        askPaid: key.askPaid ?? false,
+        autoAllow: [],
         revokedAt: null,
         createdAt: new Date(),
       });
@@ -34,7 +46,49 @@ export function memoryRunKeys(): RunKeysRepo & { rows: RunKey[] } {
     async revoke(id, now) {
       const row = rows.find((r) => r.id === id && !r.revokedAt);
       if (row) row.revokedAt = now;
+      for (const c of row ? pending(row.runId) : []) Object.assign(c, { status: 'cancelled' });
       return Boolean(row);
+    },
+    async allowAlways(runId, kind) {
+      for (const r of rows)
+        if (r.runId === runId && !r.autoAllow.includes(kind)) r.autoAllow = [...r.autoAllow, kind];
+    },
+    async addConfirmation(row) {
+      const full = { ...row, createdAt: new Date(), decidedAt: null };
+      confirmations.push(full);
+      return { ...full };
+    },
+    async confirmation(id) {
+      const row = confirmations.find((c) => c.id === id);
+      return row && { ...row };
+    },
+    async openToolConfirmation(runId, text) {
+      return confirmations.findLast(
+        (c) =>
+          c.runId === runId &&
+          c.kind === 'tool' &&
+          c.text === text &&
+          ['pending', 'allowed'].includes(c.status),
+      );
+    },
+    pendingConfirmations: async (runId) => pending(runId).map((c) => ({ ...c })),
+    async settle(id, from, to, now) {
+      const row = confirmations.find((c) => c.id === id && from.includes(c.status));
+      if (row) Object.assign(row, { status: to, decidedAt: now });
+      return row && { ...row };
+    },
+    async settleKind(runId, kind, to, now) {
+      for (const c of pending(runId, kind)) Object.assign(c, { status: to, decidedAt: now });
+    },
+    async deleteConfirmations(conversationId) {
+      const runs = new Set(
+        rows.filter((r) => r.conversationId === conversationId).map((r) => r.runId),
+      );
+      confirmations.splice(
+        0,
+        confirmations.length,
+        ...confirmations.filter((c) => !runs.has(c.runId)),
+      );
     },
   };
 }

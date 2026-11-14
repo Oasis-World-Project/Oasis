@@ -58,6 +58,10 @@ export const knobs = {
   renderBusy: false,
   renderStatusGone: false,
   renderExposure: undefined as number | undefined,
+  /** 花钱的工具先问用户（确认卡）；不设就是不用问 */
+  paidTool: undefined as
+    | ((caller: unknown, text: string, id?: string) => Promise<{ id: string } | undefined>)
+    | undefined,
 };
 
 export const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';

@@ -8,13 +8,16 @@ import type { CostSource, Usage } from './pricing.ts';
 
 /**
  * 谁在调用、钱算在哪：付费人，以及（沙箱里的 agent 调用时）所属的对话和这一轮；
- * domesticOnly：这一轮开始时用户打开了「只用国内模型」。
+ * domesticOnly：这一轮开始时用户打开了「只用国内模型」；askPaid：花钱的工具要先问用户；
+ * autoAllow：用户这一轮点过「以后都允许」的确认种类。
  */
 export interface Caller {
   payerId: string;
   runId?: string;
   conversationId?: string;
   domesticOnly?: boolean;
+  askPaid?: boolean;
+  autoAllow?: ('command' | 'tool')[];
 }
 
 export interface MeteredCall {

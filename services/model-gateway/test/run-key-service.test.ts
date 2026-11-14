@@ -1,49 +1,20 @@
 import { HttpError } from '@oasis/service-kit';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { NewRunKey, RunKey, RunKeysRepo } from '../src/repo/run-keys-repo.ts';
 import { createRunKeyService } from '../src/service/run-key-service.ts';
+import { memoryRunKeys } from './avatar-fakes.ts';
 
 const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 const RUN = '3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b9a';
+const OTHER_RUN = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const CONVERSATION = '1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b';
 
-/** 内存里的 Key 表，行为与 SQL 版一致（只按未作废、未过期查）。 */
-function memoryRepo(): RunKeysRepo & { rows: RunKey[] } {
-  const rows: RunKey[] = [];
-  return {
-    rows,
-    async insert(key: NewRunKey) {
-      rows.push({
-        ...key,
-        conversationId: key.conversationId ?? null,
-        domesticOnly: key.domesticOnly ?? false,
-        revokedAt: null,
-        createdAt: new Date(),
-      });
-    },
-    async findActive(keyHash, now) {
-      return rows.find((r) => r.keyHash === keyHash && !r.revokedAt && r.expiresAt > now);
-    },
-    async renew(id, now, expiresAt) {
-      const row = rows.find((r) => r.id === id && !r.revokedAt && r.expiresAt > now);
-      if (row) row.expiresAt = expiresAt;
-      return Boolean(row);
-    },
-    async revoke(id, now) {
-      const row = rows.find((r) => r.id === id && !r.revokedAt);
-      if (row) row.revokedAt = now;
-      return Boolean(row);
-    },
-  };
-}
-
 let clock = new Date('2026-10-22T10:00:00Z');
-let repo: ReturnType<typeof memoryRepo>;
+let repo: ReturnType<typeof memoryRunKeys>;
 let service: ReturnType<typeof createRunKeyService>;
 beforeEach(() => {
   clock = new Date('2026-10-22T10:00:00Z');
-  repo = memoryRepo();
-  service = createRunKeyService({ repo, now: () => clock });
+  repo = memoryRunKeys();
+  service = createRunKeyService({ repo, now: () => clock, pollMs: 5 });
 });
 
 describe('运行临时 Key', () => {
@@ -61,17 +32,19 @@ describe('运行临时 Key', () => {
       runId: RUN,
       conversationId: CONVERSATION,
     });
-    // 打开了「只用国内模型」的一轮：凭证带着这个设置，这一轮的工具按它过滤
-    const domestic = await service.issue({
+    // 打开了「只用国内模型」、花钱的工具要先问的一轮：凭证带着这些设置
+    const scoped = await service.issue({
       payerId: PAYER,
       runId: RUN,
       domesticOnly: true,
+      askPaid: true,
       ttlSeconds: 60,
     });
-    await expect(service.authenticate(`Bearer ${domestic.key}`)).resolves.toEqual({
+    await expect(service.authenticate(`Bearer ${scoped.key}`)).resolves.toEqual({
       payerId: PAYER,
       runId: RUN,
       domesticOnly: true,
+      askPaid: true,
     });
   });
 
@@ -103,5 +76,108 @@ it('运行可跨凭证租约续期；已撤销或已过期的凭证不能复活'
   clock = new Date(clock.getTime() + 2000);
   await expect(service.renew(expired.keyId, 60)).rejects.toMatchObject({
     code: 'run_key_not_active',
+  });
+});
+
+describe('确认卡', () => {
+  const caller = async (askPaid = false) => {
+    const { key } = await service.issue({
+      payerId: PAYER,
+      runId: RUN,
+      conversationId: CONVERSATION,
+      askPaid,
+      ttlSeconds: 60,
+    });
+    return () => service.authenticate(`Bearer ${key}`);
+  };
+
+  it('AI 要做超出权限的事：登记、等结果、用户允许一次；别的轮看不到这张卡', async () => {
+    const me = await caller();
+    const card = await service.ask(await me(), '需要「完全访问」：写项目外的文件', 'call-3');
+    expect(card).toMatchObject({ kind: 'command', status: 'pending', callId: 'call-3' });
+    expect(await service.pending(RUN)).toHaveLength(1);
+    // 用户还没点：等到时候照实回「待定」
+    await expect(service.wait(await me(), card.id, 20)).resolves.toMatchObject({
+      status: 'pending',
+    });
+    const waiting = service.wait(await me(), card.id, 5_000);
+    await service.decide(card.id, RUN, 'once');
+    await expect(waiting).resolves.toMatchObject({ status: 'allowed' });
+    expect(await service.pending(RUN)).toEqual([]);
+    await expect(service.decide(card.id, OTHER_RUN, 'deny')).rejects.toMatchObject({
+      code: 'confirmation_not_found',
+    });
+  });
+
+  it('以后都允许：这一轮还在等的同类卡一起允许，之后同类的不再问；拒绝、收回、作废照实记', async () => {
+    const me = await caller();
+    const first = await service.ask(await me(), '写项目外的文件 A');
+    const second = await service.ask(await me(), '写项目外的文件 B');
+    await service.decide(first.id, RUN, 'always');
+    expect((await me()).autoAllow).toEqual(['command']);
+    await expect(service.wait(await me(), second.id, 0)).resolves.toMatchObject({
+      status: 'allowed',
+    });
+    await expect(service.ask(await me(), '写项目外的文件 C')).resolves.toMatchObject({
+      status: 'allowed',
+    });
+
+    const other = await caller();
+    repo.rows.forEach((row) => (row.autoAllow = []));
+    const denied = await service.ask(await other(), '删掉系统文件夹');
+    await expect(service.decide(denied.id, RUN, 'deny')).resolves.toMatchObject({
+      status: 'denied',
+    });
+    // 已经有结果的卡再点不改
+    await expect(service.decide(denied.id, RUN, 'once')).resolves.toMatchObject({
+      status: 'denied',
+    });
+    const withdrawn = await service.ask(await other(), '装全局软件');
+    await expect(service.withdraw(await other(), withdrawn.id)).resolves.toMatchObject({
+      status: 'cancelled',
+    });
+    const open = await service.ask(await other(), '改注册表');
+    await service.revoke(repo.rows.at(-1)!.id);
+    expect(repo.confirmations.find((c) => c.id === open.id)?.status).toBe('cancelled');
+  });
+
+  it('花钱的工具设了「问我」：同样内容只登记一张；允许后用掉，一张只能用一次；拒绝的不能调', async () => {
+    expect(
+      await service.paidTool(await (await caller())(), '生成图片，最多 $0.20'),
+    ).toBeUndefined();
+    const me = await caller(true);
+    const card = await service.paidTool(await me(), '生成图片（m），最多 $0.20');
+    expect(card).toBeDefined();
+    // AI 等不及、回头重跑同一条命令：还是这一张
+    await expect(service.paidTool(await me(), '生成图片（m），最多 $0.20')).resolves.toEqual(card);
+    await service.decide(card!.id, RUN, 'once');
+    await expect(service.paidTool(await me(), 'x', card!.id)).resolves.toBeUndefined();
+    await expect(service.paidTool(await me(), 'x', card!.id)).rejects.toMatchObject({
+      code: 'confirmation_not_allowed',
+    });
+    // 同样内容的旧卡已经用掉：再要就是新的一张
+    const again = await service.paidTool(await me(), '生成图片（m），最多 $0.20');
+    expect(again?.id).not.toBe(card!.id);
+    await service.decide(again!.id, RUN, 'deny');
+    await expect(service.paidTool(await me(), 'x', again!.id)).rejects.toMatchObject({
+      code: 'confirmation_not_allowed',
+    });
+    // 命令的确认卡不能拿来调工具
+    const command = await service.ask(await me(), '写项目外的文件');
+    await service.decide(command.id, RUN, 'once');
+    await expect(service.paidTool(await me(), 'x', command.id)).rejects.toMatchObject({
+      code: 'confirmation_not_allowed',
+    });
+    // 以后都允许：这一轮里不再问
+    const third = await service.paidTool(await me(), '生成视频（v），最多 $0.80');
+    await service.decide(third!.id, RUN, 'always');
+    await expect(service.paidTool(await me(), '生成音乐，最多 $0.10')).resolves.toBeUndefined();
+  });
+
+  it('删对话：这个对话各轮的确认卡都删掉', async () => {
+    const me = await caller();
+    await service.ask(await me(), '写项目外的文件');
+    await service.purgeConversation(CONVERSATION);
+    expect(repo.confirmations).toEqual([]);
   });
 });

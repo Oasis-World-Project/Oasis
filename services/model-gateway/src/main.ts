@@ -139,8 +139,10 @@ await startService({
       pricePerCoreHourMicro: config.COMPUTE_PRICE_MICRO_PER_CORE_HOUR,
     });
     const scope = createModelScope({ domesticVendors: config.DOMESTIC_MODEL_VENDORS });
+    const runKeys = createRunKeyService({ repo: createRunKeysRepo(resources.postgres.pool) });
     const tools = createToolService({
       estimateFromHistory: config.ESTIMATE_FROM_HISTORY,
+      confirmations: runKeys,
       // 浏览器检查在 inspector；检查浏览器的算力在这里冻结、结算
       checks: {
         inspector: createServiceClient('inspector', config.INSPECTOR_URL, { timeoutMs: 65_000 }),
@@ -214,7 +216,6 @@ await startService({
       defaultMaxTokens: config.DEFAULT_MAX_TOKENS,
       maxOutputTokens: config.MAX_OUTPUT_TOKENS,
     });
-    const runKeys = createRunKeyService({ repo: createRunKeysRepo(resources.postgres.pool) });
     const avatars = createAvatarService({
       client: liveAvatar,
       runKeys,

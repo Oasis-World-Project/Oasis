@@ -10,7 +10,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import type { AvatarSpec, AvatarTurn } from '@oasis/contracts/avatar';
-import type { ToolResult } from '@oasis/contracts/model-gateway';
+import type { Confirmation, ToolResult } from '@oasis/contracts/model-gateway';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
@@ -47,9 +47,27 @@ export const runKeys = pgTable('run_keys', {
   conversationId: uuid('conversation_id'),
   /** 用户打开了「只用国内模型」：这一轮的工具只给国内厂商的型号 */
   domesticOnly: boolean('domestic_only').notNull().default(false),
+  /** 花钱的工具要先问（用户设了「问我」） */
+  askPaid: boolean('ask_paid').notNull().default(false),
+  /** 用户点过「以后都允许」的确认种类（command、tool）：这一轮里不再问 */
+  autoAllow: text('auto_allow').array().$type<ConfirmationKind[]>().notNull().default([]),
   expiresAt: at('expires_at').notNull(),
   revokedAt: at('revoked_at'),
   createdAt: at('created_at').notNull().defaultNow(),
+});
+
+type ConfirmationKind = Confirmation['kind'];
+
+/** 一轮里要用户点的确认卡 */
+export const confirmations = pgTable('confirmations', {
+  id: uuid('id').primaryKey(),
+  runId: uuid('run_id').notNull(),
+  kind: text('kind').$type<ConfirmationKind>().notNull(),
+  text: text('text').notNull(),
+  callId: text('call_id'),
+  status: text('status').$type<Confirmation['status']>().notNull().default('pending'),
+  createdAt: at('created_at').notNull().defaultNow(),
+  decidedAt: at('decided_at'),
 });
 
 /** 长任务（视频）：供应商的任务号、进度，以及结算时要用的调用信息 */

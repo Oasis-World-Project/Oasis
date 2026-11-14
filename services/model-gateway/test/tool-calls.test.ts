@@ -38,6 +38,35 @@ describe('文件场景工具', () => {
     expect(billingCalls).toEqual([]);
     expect(upstream).toEqual([]);
   });
+  it('花钱的工具设了「问我」：先给确认卡，不冻结、不调供应商；允许后带确认号才调；不花钱的不问', async () => {
+    const card = '5c5c5c5c-5c5c-4c5c-8c5c-5c5c5c5c5c5c';
+    const asked: { text: string; id?: string }[] = [];
+    knobs.paidTool = async (_caller, text, id) => {
+      asked.push({ text, ...(id ? { id } : {}) });
+      return id ? undefined : { id: card };
+    };
+    await expect(call('image.generate', { prompt: '猫' }, CONVERSATION)).resolves.toMatchObject({
+      costMicro: 0,
+      files: [],
+      confirmation: { id: card },
+    });
+    expect(upstream).toEqual([]);
+    expect(billingCalls).toEqual([]);
+    expect(asked[0]?.text).toMatch(/（bytedance-seed\/seedream-4\.5），最多 \$\d+\.\d\d$/);
+    const done = await tools.call({
+      caller: { payerId: PAYER, conversationId: CONVERSATION, runId: RUN, askPaid: true },
+      key: 'image.generate',
+      args: { prompt: '猫' },
+      requestId: 'r',
+      signal: new AbortController().signal,
+      confirmationId: card,
+    });
+    expect(done.files).toHaveLength(1);
+    expect(asked.at(-1)).toMatchObject({ id: card });
+    asked.length = 0;
+    await call('web.search', { query: '天气' }, CONVERSATION);
+    expect(asked).toEqual([]);
+  });
   it('大图片校验不递归溢出，总字节数超限在冻结前拒绝', async () => {
     const bytes = Buffer.alloc(6 * 1024 * 1024);
     Buffer.from(reference.base64, 'base64').copy(bytes);

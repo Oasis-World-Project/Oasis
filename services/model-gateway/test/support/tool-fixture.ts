@@ -51,6 +51,10 @@ export const build = (
   const logger = pino({ level: 'silent' });
   return createToolService({
     estimateFromHistory: fromHistory,
+    confirmations: {
+      paidTool: (caller, text, id) =>
+        knobs.paidTool?.(caller, text, id) ?? Promise.resolve(undefined),
+    },
     render: withRender
       ? createRenderClient({
           baseUrl: 'https://api.runpod.ai/v2',
@@ -282,6 +286,7 @@ beforeEach(() => {
   jobRows.clear();
   deletedConversations.clear();
   knobs.resultDeleteFails = false;
+  knobs.paidTool = undefined;
   tools = build('tvly-k');
 });
 

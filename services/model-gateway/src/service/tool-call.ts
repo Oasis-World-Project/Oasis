@@ -1,7 +1,7 @@
 // 一次工具调用的计量：校验参数 → 冻结额度 → 调供应商 → 按实际花费（或估算）结算。
 // 长任务提交时冻结并持久化意图，之后由 tool-jobs 推进；生图、看图在供应商限流或地区不可用时换下一个模型。
 import { createHash, randomUUID } from 'node:crypto';
-import type { ToolResult } from '@oasis/contracts/model-gateway';
+import { GENERATION_TOOLS, type ToolResult } from '@oasis/contracts/model-gateway';
 import { HttpError } from '@oasis/service-kit';
 import { ToolAdmissionError } from '../repo/tool-jobs-repo.ts';
 import { AVATAR_CATALOG_TOOL } from './avatar-catalog.ts';
@@ -45,6 +45,8 @@ export function createToolCall(ctx: ToolContext) {
       signal: AbortSignal;
       maxCostMicro?: number;
       idempotencyKey?: string;
+      /** 用户允许过的花钱工具确认卡 */
+      confirmationId?: string;
     }): Promise<ToolResult> {
       const { conversationId } = input.caller;
       if (conversationId && (await jobs.conversationDeleted(conversationId)))
@@ -184,6 +186,27 @@ export function createToolCall(ctx: ToolContext) {
         );
       }
 
+      const holdMicro =
+        tool.provider === 'runpod'
+          ? deps.render!.holdMicro
+          : (videoHoldMicro ?? tool.holdMicro(args));
+      // 用户设了花钱的工具「问我」：先登记确认卡、不调，等用户允许后 oasis-tool 带确认号重交
+      if (GENERATION_TOOLS.includes(tool.key) && deps.confirmations) {
+        const waiting = await deps.confirmations.paidTool(
+          input.caller,
+          `${tool.name}（${model}），最多 $${(holdMicro / 1_000_000).toFixed(2)}`,
+          input.confirmationId,
+        );
+        if (waiting)
+          return {
+            tool: tool.key,
+            text: '要先等用户在聊天里确认；还没调用、没花钱',
+            files: [],
+            costMicro: 0,
+            confirmation: waiting,
+          };
+      }
+
       const canFallback = tool.key === 'image.generate' || tool.key === 'media.inspect';
       const candidates =
         !canFallback || typeof args.model === 'string' || !models.length ? [model] : models;
@@ -194,10 +217,7 @@ export function createToolCall(ctx: ToolContext) {
           kind: tool.provider === 'runpod' ? 'compute' : 'tool',
           model,
           tool: tool.key,
-          amountMicro:
-            tool.provider === 'runpod'
-              ? deps.render!.holdMicro
-              : (videoHoldMicro ?? tool.holdMicro(args)),
+          amountMicro: holdMicro,
           ...(input.maxCostMicro === undefined ? {} : { maxCostMicro: input.maxCostMicro }),
           requestId: input.requestId,
           ...(tool.long ? { ttlMs: deps.jobTimeoutMs + HOLD_MARGIN_MS } : {}),

@@ -2,12 +2,13 @@ import { readFile, readdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
+import { createRunKeysRepo } from '../src/repo/run-keys-repo.ts';
 import { createToolJobsRepo } from '../src/repo/tool-jobs-repo.ts';
 import { createObjectStore } from '@oasis/service-kit';
 import { createToolService } from '../src/service/tool-service.ts';
 import { pino } from 'pino';
 
-describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 取消准入事务', () => {
+describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL：工具取消准入、确认卡', () => {
   const schema = 'render_test_' + randomUUID().replaceAll('-', '');
   const pool = new pg.Pool({
     connectionString: process.env.TEST_DATABASE_URL,
@@ -162,6 +163,50 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 取消准入�
     ).rejects.toThrow('fences');
     await rollBackAndReapply('20261114110000_conversation_attribution.sql');
     expect(await repo.conversationDeleted(conversationId)).toBe(false);
+  });
+  it('确认卡：以后都允许记在这一轮的 Key 上、作废时收回、删对话时删掉；迁移可回滚重建', async () => {
+    const keys = createRunKeysRepo(pool);
+    const run = randomUUID(),
+      conversationId = randomUUID(),
+      keyId = randomUUID(),
+      now = new Date();
+    await keys.insert({
+      id: keyId,
+      keyHash: randomUUID(),
+      payerId,
+      runId: run,
+      conversationId,
+      domesticOnly: false,
+      askPaid: true,
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    const card = (text: string, kind: 'command' | 'tool' = 'command') =>
+      keys.addConfirmation({
+        id: randomUUID(),
+        runId: run,
+        kind,
+        text,
+        callId: null,
+        status: 'pending',
+      });
+    const a = await card('A'),
+      b = await card('B');
+    const tool = await card('生成图片', 'tool');
+    await keys.allowAlways(run, 'command');
+    await keys.allowAlways(run, 'command');
+    await keys.settleKind(run, 'command', 'allowed', now);
+    const [row] = (await pool.query('select auto_allow from run_keys where id = $1', [keyId])).rows;
+    expect(row.auto_allow).toEqual(['command']);
+    expect((await keys.confirmation(a.id))?.status).toBe('allowed');
+    expect((await keys.pendingConfirmations(run)).map((c) => c.id)).toEqual([tool.id]);
+    expect((await keys.openToolConfirmation(run, '生成图片'))?.id).toBe(tool.id);
+    expect(await keys.settle(b.id, ['pending'], 'denied', now)).toBeUndefined();
+    await keys.revoke(keyId, now);
+    expect((await keys.confirmation(tool.id))?.status).toBe('cancelled');
+    await keys.deleteConfirmations(conversationId);
+    expect(await keys.confirmation(a.id)).toBeUndefined();
+    await rollBackAndReapply('20261114230000_confirmations.sql');
+    expect(await keys.pendingConfirmations(run)).toEqual([]);
   });
   it.skipIf(!process.env.TEST_S3_ENDPOINT)(
     '真实对象存储随对话清除结果，重复清理不会重建对象',
