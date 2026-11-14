@@ -9,7 +9,12 @@ import { ArtifactBody, ArtifactLookupResult } from '@oasis/contracts/canvas';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import type { TaskCard, TaskFile } from '@oasis/contracts/conversation';
 import { RunBody, RunEventList, type StartRunBody } from '@oasis/contracts/harness';
-import { GENERATION_TOOLS, RunSpend } from '@oasis/contracts/model-gateway';
+import {
+  GENERATION_TOOLS,
+  RunSpend,
+  ToolList,
+  type ToolEntry,
+} from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { Conversation, ConversationRepo, Message } from '../repo/conversation-repo.ts';
@@ -24,6 +29,7 @@ import {
   settleSteps,
   terminal,
   writeEvents,
+  type Durations,
 } from './turn-parts.ts';
 
 export interface TurnDeps {
@@ -41,6 +47,8 @@ export interface TurnDeps {
 
 /** 一次拉多少条运行事件 */
 const EVENT_PAGE = 500;
+/** 工具目录（各型号通常要多久）多久重新拉一次 */
+const CATALOG_MS = 5 * 60_000;
 /** 接不上原会话（工作目录不在了、会话已有更新的一轮）：这一轮开新会话 */
 const SESSION_GONE = new Set(['continue_unavailable', 'session_advanced', 'workspace_unavailable']);
 const RegisteredArtifacts = z.object({ artifacts: z.array(ArtifactBody) });
@@ -66,6 +74,26 @@ export function createTurns(deps: TurnDeps) {
       headers: { [OASIS_HEADERS.payerId]: ownerId },
       schema: RunSpend,
     });
+
+  /** 工具目录：几分钟拉一次；拉不到就用上次的（第一次拉不到就不写预计用时） */
+  let catalog: { at: number; tools: ToolEntry[] } = { at: 0, tools: [] };
+  async function durations(): Promise<Durations> {
+    if (Date.now() - catalog.at > CATALOG_MS) {
+      const tools = await deps.modelGateway
+        .json('GET', '/internal/v1/tools', { schema: ToolList })
+        .then((list) => list.tools)
+        .catch((err: unknown) => {
+          logger.warn({ err }, '读不到工具目录，这次不写预计用时');
+          return catalog.tools;
+        });
+      catalog = { at: Date.now(), tools };
+    }
+    const { tools } = catalog;
+    return (key, model) => {
+      const rates = tools.find((tool) => tool.key === key)?.rates ?? [];
+      return (rates.find((rate) => rate.model === model) ?? rates[0])?.seconds ?? undefined;
+    };
+  }
 
   /** 任务卡：这一轮用了生图、视频这类工具或交了文件；有就更新，没有就建 */
   async function saveTaskCard(
@@ -155,7 +183,11 @@ export function createTurns(deps: TurnDeps) {
       : { spentMicro: 0, tools: [] };
     const message = await store.findMessage(conversation.id, turn.segmentId);
     if (message) {
-      const settled = settleSteps(segmentOf(message), status === 'succeeded');
+      const settled = settleSteps(
+        segmentOf(message),
+        status === 'succeeded',
+        run?.finishedAt ?? new Date().toISOString(),
+      );
       for (const text of notices) settled.parts.push({ type: 'notice', text });
       await store.updateMessage(message.id, {
         content: contentOf(settled),
@@ -222,7 +254,8 @@ export function createTurns(deps: TurnDeps) {
         );
         // 用户正在发话、这批没写进去：等一会儿再拉，写完才算跟到了这里
         const written =
-          !events.length || (await writeEvents(store, conversationId, turn.runId, events));
+          !events.length ||
+          (await writeEvents(store, conversationId, turn.runId, events, await durations()));
         if (written && terminal(run.status) && events.length < EVENT_PAGE) {
           const latest = (await store.find(conversationId))?.turn;
           if (latest?.runId === turn.runId)

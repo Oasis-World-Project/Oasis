@@ -237,6 +237,32 @@ export function createDmService(deps: {
       });
     },
 
+    /**
+     * 这个私聊某一轮工作目录里的一个文件（进度页预览中间产物和成品）：一轮还在做时从沙箱读，
+     * 结束后只剩 out/ 里的。
+     */
+    async runFile(ownerId: string, conversationId: string, runId: string, path: string) {
+      const conversation = await owned(conversationId, ownerId);
+      const run = await deps.harness
+        .json('GET', `/internal/runs/${runId}`, { schema: RunBody })
+        .catch((err: unknown) => {
+          if (err instanceof HttpError && err.statusCode === 404) return undefined;
+          throw err;
+        });
+      if (run?.conversationId !== conversation.id)
+        throw new HttpError(404, 'run_not_found', '这个私聊里没有这一轮');
+      const encoded = path.split('/').map(encodeURIComponent).join('/');
+      const response = await deps.harness.stream(
+        'GET',
+        `/internal/runs/${runId}/workspace/${encoded}`,
+      );
+      return {
+        contentType: response.headers.get('content-type') ?? 'application/octet-stream',
+        size: response.headers.get('content-length'),
+        body: response.body,
+      };
+    },
+
     /** 停下正在进行的一轮：已经做出来的存下，下一轮接着做 */
     async stop(ownerId: string, conversationId: string) {
       const conversation = await owned(conversationId, ownerId);

@@ -35,36 +35,61 @@ const NOTICES: Record<string, string> = {
   recovering: '服务恢复了，接着做',
 };
 
+/** 生图、视频这类工具通常要多久（秒，按调用记录）：工具名和点名的型号（没点名用默认的）；不知道为 undefined */
+export type Durations = (tool: string, model: string | undefined) => number | undefined;
+
+const asText = (value: unknown) => (typeof value === 'string' ? value : undefined);
+const asTexts = (value: unknown) =>
+  Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+
 /**
- * 按顺序把一批事件写进这一段，返回写好的新一段（不改原来的）。
+ * 按顺序把一批事件写进这一段，返回写好的新一段（不改原来的）。步骤记下开始、结束的时间，跑的
+ * oasis-tool 工具和它通常要多久，存下的文件（写、改的文件做成了才算；oasis-tool 输出里说已保存的都算）。
  * AI 派出去的子任务（带 parentSessionId 的事件）不写：子任务本身是主 AI 的一步。
  */
-export function applyEvents(current: Segment, events: RunEventBody[]): Segment {
+export function applyEvents(
+  current: Segment,
+  events: RunEventBody[],
+  durations?: Durations,
+): Segment {
   const segment: Segment = {
     parts: current.parts.map((part) => ({ ...part })),
     ...(current.todos ? { todos: current.todos } : {}),
   };
-  for (const { kind, data } of events) {
+  for (const { kind, data, createdAt } of events) {
     if (typeof data.parentSessionId === 'string') continue;
     if (kind === 'assistant_text') {
-      const text = String(data.text ?? '');
-      if (text.trim()) segment.parts.push({ type: 'text', text });
+      const said = String(data.text ?? '');
+      if (said.trim()) segment.parts.push({ type: 'text', text: said });
     } else if (kind === 'tool_call') {
       const tool = String(data.name ?? '');
+      const oasisTool = asText(data.oasisTool);
+      const expectSeconds = oasisTool ? durations?.(oasisTool, asText(data.oasisModel)) : undefined;
+      const path = asText(data.path);
       segment.parts.push({
         type: 'step',
         id: String(data.callId ?? ''),
         tool,
         label: String(data.label ?? tool),
         status: 'running',
+        startedAt: createdAt,
+        ...(oasisTool ? { oasisTool } : {}),
+        ...(expectSeconds ? { expectSeconds } : {}),
+        ...(path ? { files: [path] } : {}),
       });
     } else if (kind === 'tool_result') {
       const step = segment.parts.find(
         (part): part is StepPart => part.type === 'step' && part.id === String(data.callId ?? ''),
       );
       if (!step) continue;
-      step.status = data.ok === false ? 'failed' : 'done';
-      if (data.ok === false) step.detail = brief(String(data.error ?? data.text ?? ''), 300);
+      const ok = data.ok !== false;
+      step.status = ok ? 'done' : 'failed';
+      step.finishedAt = createdAt;
+      if (!ok) step.detail = brief(String(data.error ?? data.text ?? ''), 300);
+      // 几个一起等时有一个没做出来也算失败，说已保存的那些还是存下了
+      const files = [...new Set([...(ok ? (step.files ?? []) : []), ...asTexts(data.files)])];
+      if (files.length) step.files = files;
+      else delete step.files;
     } else if (kind === 'todos') {
       const items = z.array(TodoItem).safeParse(data.items);
       if (items.success) segment.todos = items.data;
@@ -76,15 +101,15 @@ export function applyEvents(current: Segment, events: RunEventBody[]): Segment {
   return segment;
 }
 
-/** 一轮结束时还没做完的步骤：正常做完的算完成，停下、出错的算没做完 */
-export function settleSteps(segment: Segment, succeeded: boolean): Segment {
+/** 一轮结束（at）时还没做完的步骤：正常做完的算完成，停下、出错的算没做完；都在那时结束 */
+export function settleSteps(segment: Segment, succeeded: boolean, at: string): Segment {
   return {
     ...segment,
     parts: segment.parts.map((part) =>
       part.type === 'step' && part.status === 'running'
         ? succeeded
-          ? { ...part, status: 'done' }
-          : { ...part, status: 'failed', detail: '没做完' }
+          ? { ...part, status: 'done', finishedAt: at }
+          : { ...part, status: 'failed', detail: '没做完', finishedAt: at }
         : part,
     ),
   };
@@ -120,10 +145,11 @@ async function append(
   conversationId: string,
   segmentId: string,
   events: RunEventBody[],
+  durations: Durations | undefined,
 ) {
   const message = events.length ? await store.findMessage(conversationId, segmentId) : undefined;
   if (!message) return;
-  const next = applyEvents(segmentOf(message), events);
+  const next = applyEvents(segmentOf(message), events, durations);
   await store.updateMessage(message.id, {
     content: contentOf(next),
     data: { ...message.data, parts: next.parts, ...(next.todos ? { todos: next.todos } : {}) },
@@ -166,13 +192,14 @@ async function afterInterjection(
 /**
  * 把这一批事件写进正在写的那条 AI 消息。插话在 AI 看到时（这一轮里又来一条用户的话）分段：
  * AI 在那之前说的、做的留在插话前面。拿着 message 锁写，和用户发话错开；锁被占着（用户正在发话）
- * 就这次不写、返回 false，下次再拉这批事件。
+ * 就这次不写、返回 false，下次再拉这批事件。durations：生图、视频这类工具通常要多久。
  */
 export async function writeEvents(
   store: ConversationRepo,
   conversationId: string,
   runId: string,
   events: RunEventBody[],
+  durations?: Durations,
 ): Promise<boolean> {
   try {
     return await store.withLock('message', conversationId, async (locked) => {
@@ -191,12 +218,12 @@ export async function writeEvents(
           pending.push(event);
           continue;
         }
-        await append(locked, conversationId, segmentId, pending);
+        await append(locked, conversationId, segmentId, pending, durations);
         pending = [];
         segmentId = await afterInterjection(locked, conversation, runId, segmentId);
         unheard -= 1;
       }
-      await append(locked, conversationId, segmentId, pending);
+      await append(locked, conversationId, segmentId, pending, durations);
       await locked.updateTurn(conversationId, runId, {
         cursor: events.at(-1)!.seq,
         segmentId,

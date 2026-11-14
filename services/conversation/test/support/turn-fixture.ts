@@ -68,12 +68,19 @@ harness.post('/internal/runs', async (request, reply) => {
       .code(fake.startError.status)
       .send(fail(fake.startError.status, fake.startError.code, fake.startError.message));
   const id = String(body.runId);
-  fake.runs.set(id, run(id));
+  fake.runs.set(id, run(id, { conversationId: String(body.conversationId) }));
   return reply.code(202).send(fake.runs.get(id));
 });
 harness.get('/internal/runs/:id', async (request, reply) => {
   const found = fake.runs.get((request.params as { id: string }).id);
   return found ?? reply.code(404).send(fail(404, 'run_not_found', '没有这次运行'));
+});
+/** 这一轮工作目录里的文件：out/ 下的有，别的没有 */
+harness.get('/internal/runs/:id/workspace/*', async (request, reply) => {
+  const path = (request.params as { '*': string })['*'];
+  if (!path.startsWith('out/'))
+    return reply.code(404).send(fail(404, 'file_not_found', '没有这个文件'));
+  return reply.type('image/png').send(Buffer.from(`png:${path}`));
 });
 harness.get('/internal/runs/:id/events', async (request) => {
   const { after } = request.query as { after: string };
@@ -118,6 +125,27 @@ others.get('/internal/models/:key/route', async (request) => ({
   domesticOnly: scope.domesticOnly,
 }));
 others.get('/internal/v1/runs/:id/spend', async () => spend);
+/** 工具目录：生图通常 30 秒（点名 x/slow 的 90 秒） */
+others.get('/internal/v1/tools', async () => ({
+  tools: [
+    {
+      key: 'image.generate',
+      name: '生成图片',
+      description: '',
+      usage: '',
+      unit: '张',
+      estimateMicro: 1,
+      long: false,
+      available: true,
+      models: ['x/fast', 'x/slow'],
+      defaultModel: 'x/fast',
+      rates: [
+        { model: 'x/fast', costMicro: 1, seconds: 30, basis: 'history' },
+        { model: 'x/slow', costMicro: 1, seconds: 90, basis: 'history' },
+      ],
+    },
+  ],
+}));
 others.post('/internal/conversations/:id/purge', async (request, reply) => {
   const body = request.body as { ownerId?: string };
   fake.purged.push(

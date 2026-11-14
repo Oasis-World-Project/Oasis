@@ -1,10 +1,16 @@
 // 私聊的接口（群聊见 group-routes.ts）。发消息立即返回：AI 这一轮在后台做，前端刷新消息看进度。
+import { Readable } from 'node:stream';
 import { CreateDmBody, SendMessageBody } from '@oasis/contracts/conversation';
 import { parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { DmService } from '../service/dm-service.ts';
 
 const IdParams = z.object({ id: z.uuid() });
+const RunFileParams = z.object({
+  id: z.uuid(),
+  runId: z.uuid(),
+  '*': z.string().min(1).max(1000),
+});
 
 export function registerRoutes(app: ServiceApp, dms: DmService): void {
   app.get('/v1/dms', async (request) => ({
@@ -41,6 +47,15 @@ export function registerRoutes(app: ServiceApp, dms: DmService): void {
         requestId: request.id,
       }),
     );
+  });
+
+  /** 某一轮工作目录里的一个文件：进度页预览这一轮做出的中间产物和成品 */
+  app.get('/v1/conversations/:id/runs/:runId/files/*', async (request, reply) => {
+    const { id, runId, '*': path } = parseWith(RunFileParams, request.params);
+    const file = await dms.runFile(requireUserId(request), id, runId, path);
+    reply.header('content-type', file.contentType).header('cache-control', 'no-store');
+    if (file.size) reply.header('content-length', file.size);
+    return reply.send(file.body ? Readable.fromWeb(file.body) : '');
   });
 
   /** 停下正在进行的一轮 */

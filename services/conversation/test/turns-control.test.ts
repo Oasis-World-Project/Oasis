@@ -98,7 +98,15 @@ describe('插话、停止、出错', () => {
     });
     expect(before?.data.parts).toEqual([{ type: 'text', text: '先写分镜' }]);
     expect(after?.data.parts).toEqual([
-      { type: 'step', id: 'c1', tool: 'bash', label: '生成分镜', status: 'done' },
+      {
+        type: 'step',
+        id: 'c1',
+        tool: 'bash',
+        label: '生成分镜',
+        status: 'done',
+        startedAt: expect.any(String),
+        finishedAt: expect.any(String),
+      },
     ]);
   });
 
