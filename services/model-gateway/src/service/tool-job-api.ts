@@ -1,11 +1,22 @@
-// 长任务的对外接口：查进度、取结果文件、取消、云渲染的上传与提交、费用回执对账、任务删除时清理。
+// 长任务的对外接口：查进度、取结果文件、取消、云渲染的上传与提交、费用回执对账、删对话时清理。
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
-import { ADJUST_TOOL, type ToolJobBody } from '@oasis/contracts/model-gateway';
+import type { ToolJobBody } from '@oasis/contracts/model-gateway';
 import { HttpError } from '@oasis/service-kit';
 import { RenderArgs } from '../adapters/runpod.ts';
 import type { Caller, MeteredCall } from './metering.ts';
 import type { ToolContext } from './tool-context.ts';
+
+/**
+ * 长任务归谁：沙箱里的调用（带运行）要在同一个对话里——这一轮提交的视频，下一轮还能接着等；
+ * 不属于对话的按运行。内部服务的调用（不带运行）只核对付费人。
+ */
+const owns = (caller: Caller, owner: Caller) =>
+  owner.payerId === caller.payerId &&
+  (!caller.runId ||
+    (owner.conversationId
+      ? owner.conversationId === caller.conversationId
+      : !owner.runId || owner.runId === caller.runId));
 
 export function createToolJobApi(ctx: ToolContext) {
   const { deps, resultKey } = ctx;
@@ -17,16 +28,11 @@ export function createToolJobApi(ctx: ToolContext) {
   async function ownedJob(caller: Caller, id: string) {
     const job = await jobs.get(id);
     const call = job?.call as unknown as MeteredCall | undefined;
-    if (
-      !job ||
-      !call ||
-      call.caller.payerId !== caller.payerId ||
-      (call.caller.taskId && call.caller.taskId !== caller.taskId) ||
-      (!call.caller.taskId && call.caller.runId && call.caller.runId !== caller.runId)
-    )
+    if (!job || !call || !owns(caller, call.caller))
       throw new HttpError(404, 'tool_job_not_found', '没有这个任务号');
-    if (call.caller.taskId && (await jobs.taskDeleted(call.caller.taskId)))
-      throw new HttpError(410, 'tool_result_deleted', '所属任务已删除');
+    const { conversationId } = call.caller;
+    if (conversationId && (await jobs.conversationDeleted(conversationId)))
+      throw new HttpError(410, 'tool_result_deleted', '所属对话已删除');
     return job;
   }
   async function cancelJob(caller: Caller, id: string) {
@@ -40,24 +46,14 @@ export function createToolJobApi(ctx: ToolContext) {
   return {
     ownedJob,
     api: {
-      async purgeTask(taskId: string) {
-        await jobs.markTaskDeleted(taskId);
+      /** 删对话（真删除）：拦住迟到的提交，取消在途的长任务，清掉存着的结果文件；可以重复调用 */
+      async purgeConversation(conversationId: string) {
+        await jobs.markConversationDeleted(conversationId);
         await tick();
       },
       cancel: cancelJob,
-      /** task 把规划员对「提出调整」的答复写回来：沙箱里等着的 AI 下次查就拿到 */
-      async answer(jobId: string, text: string) {
-        const job = await jobs.get(jobId);
-        if (job?.tool !== ADJUST_TOOL)
-          throw new HttpError(404, 'tool_job_not_found', '没有这个任务号');
-        if (job.status !== 'pending') return;
-        await jobs.mergeCall(jobId, { providerReceipt: { answer: text } });
-        await processOne(jobId).catch((err: unknown) =>
-          deps.logger.warn({ err, jobId }, '答复已记下，结算等巡检重试'),
-        );
-      },
       async cancelRun(caller: Caller, runId: string) {
-        await jobs.cancelRun(runId, caller.payerId, caller.taskId);
+        await jobs.cancelRun(runId, caller.payerId, caller.conversationId);
         for (const job of await jobs.forRun(runId)) await cancelJob(caller, job.id);
       },
       async upload(caller: Caller, id: string, fileId: string, body: Readable) {

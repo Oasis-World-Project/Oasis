@@ -1,6 +1,5 @@
 // 工具目录：每个工具 = 参数校验 + 目录信息 + 怎么调供应商、怎么算钱，按家族放在 tools/ 下。
 // 目录放在 model-gateway（和供应商适配在一起）；以后接新供应商（如 fal.ai）只在 tools/ 里加。
-import { adjust } from './tools/adjust.ts';
 import { ask } from './tools/ask.ts';
 import { music, speech, transcribe } from './tools/audio.ts';
 import { androidTest, appCheck, websiteTest } from './tools/checks.ts';
@@ -28,7 +27,6 @@ export const TOOLS: ToolDef[] = [
   videoGenerate,
   decide,
   ask,
-  adjust,
 ];
 
 export type { ToolConfig, ToolDef } from './tools/kit.ts';

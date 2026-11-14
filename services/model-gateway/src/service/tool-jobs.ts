@@ -247,8 +247,8 @@ export function createToolJobs(ctx: ToolContext) {
           if (state.outcome.files.length > maxResultFiles) throw new Error('工具结果文件过多');
           for (const [index, file] of state.outcome.files.entries()) {
             const fileId = String(index);
-            const taskId = call.caller.taskId;
-            if (taskId && (await jobs.taskDeleted(taskId))) {
+            const conversationId = call.caller.conversationId;
+            if (conversationId && (await jobs.conversationDeleted(conversationId))) {
               file.body?.destroy();
               continue;
             }
@@ -259,7 +259,7 @@ export function createToolJobs(ctx: ToolContext) {
                   ...state.outcome.files.slice(0, index + 1).map((_, n) => String(n)),
                 ]),
               ],
-              taskFilesCleaned: false,
+              filesCleaned: false,
             });
             const source = file.body ?? Readable.from([Buffer.from(file.base64 ?? '', 'base64')]);
             const saved = await deps.store.putStream(
@@ -355,14 +355,14 @@ export function createToolJobs(ctx: ToolContext) {
       if (deleted && job.status === 'pending') {
         if (job.result)
           await jobs.update(id, {
-            result: { ...job.result, text: '所属任务已删除', data: undefined, files: [] },
+            result: { ...job.result, text: '所属对话已删除', data: undefined, files: [] },
           });
-        await jobs.mergeCall(id, { resultFileIds: [], taskFilesCleaned: true });
+        await jobs.mergeCall(id, { resultFileIds: [], filesCleaned: true });
       } else {
         // 终态后才删除可能含原始资产/截图的回执；计费和供应商句柄继续保留用于审计。
         await jobs.mergeCall(id, {
           resultFileIds: [],
-          taskFilesCleaned: true,
+          filesCleaned: true,
           providerReceipt: null,
           inputArgs: null,
           uploads: null,
@@ -385,7 +385,7 @@ export function createToolJobs(ctx: ToolContext) {
         ...(await jobs.deletedResults(10)),
         ...(await jobs.expired(new Date(), 10)),
       ])
-        await cleanResult(job.id, job.call.taskDeleted === true).catch((err: unknown) =>
+        await cleanResult(job.id, job.call.deleted === true).catch((err: unknown) =>
           deps.logger.warn({ err, jobId: job.id }, '工具结果清理失败，将重试'),
         );
     } finally {

@@ -1,16 +1,16 @@
-// 按清单把节点交出的网页组装成检查用的运行包：静态网页按画布的方式打开（同一份 live-page 规则），
-// 画布里加载不了的文件、清单和测试计划的问题在启动浏览器前就说清楚，交给节点修复。
+// 按清单把 AI 交出的网页组装成检查用的运行包：静态网页按画布的方式打开（同一份 live-page 规则），
+// 画布里加载不了的文件、清单和测试计划的问题在启动浏览器前就说清楚，交给 AI 修复。
 import { createHash } from 'node:crypto';
 import { LIVE_SANDBOX, livePage } from '@oasis/live-page';
 import { ApplicationBundle, ApplicationSpec } from '@oasis/contracts/canvas';
 import { BrowserTestPlan, type BrowserTestResult } from '@oasis/contracts/ui-test';
 
-/** 画布运行网页的规则，交给节点看（没过时写进原因） */
+/** 画布运行网页的规则，交给 AI 看（没过时写进原因） */
 const CANVAS_RULE =
   '画布把网页放进不联网的隔离框运行：<script>/<link>/<img> 和 ES 模块 import（含 importmap）引用同目录文件可以；' +
   'fetch/XHR 读本地文件、CDN、localStorage 不行，模型等数据请内嵌成 data: 地址或 JS 里的常量。';
 
-/** 浏览器检查没过时说清楚哪一步、为什么，以及页面自己报的错（交给节点修复，也给用户看） */
+/** 浏览器检查没过时说清楚哪一步、为什么，以及页面自己报的错（交给 AI 修复，也给用户看） */
 export function failureReason(report: BrowserTestResult['report']): string {
   const failed = report.steps.filter((step) => step.status === 'failed');
   const parts = [
@@ -46,7 +46,7 @@ async function asCanvasPage(
     },
   );
   if (page.missing.length) {
-    // 运行包里的路径相对应用目录；说给节点听时换回 out/ 下的路径
+    // 运行包里的路径相对应用目录；说给 AI 听时换回 out/ 下的路径
     const missing = page.missing.map((item) => `${bundle.spec.root}/${item}`);
     return fail(
       `这些文件在画布里加载不了：${missing.slice(0, 8).join('、')}${missing.length > 8 ? ' 等' : ''}。${CANVAS_RULE}`,
@@ -66,7 +66,7 @@ async function asCanvasPage(
 }
 
 /**
- * 按清单把 out/ 里的网页成果组装成运行包（关卡和节点自查共用）：清单、入口、大小、测试计划不合格时
+ * 按清单把 out/ 里的网页成果组装成运行包（检查一轮的产出和 AI 自查共用）：清单、入口、大小、测试计划不合格时
  * 直接返回没通过的原因，不启动浏览器。
  */
 export async function assemble(

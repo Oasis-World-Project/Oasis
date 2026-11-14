@@ -169,7 +169,7 @@ export async function runMediaCheck(
   }
 }
 
-/** 关卡的解码检查：读运行产出包里请求的这些文件（加上工程引用的素材），报回结果和实际算力 */
+/** 一轮产出的解码检查：读运行产出包里请求的这些文件（加上工程引用的素材），报回结果和实际算力 */
 export function createMediaCheck(deps: {
   sources: Sources;
   docker: DockerApi;

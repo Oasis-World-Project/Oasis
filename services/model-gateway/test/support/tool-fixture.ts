@@ -8,22 +8,23 @@ import { createRenderClient } from '../../src/adapters/runpod.ts';
 import { createHash } from 'node:crypto';
 import { createTavilyClient } from '../../src/adapters/tavily.ts';
 import { createMeter } from '../../src/service/metering.ts';
-import { createModelScopeService } from '../../src/service/model-scope.ts';
+import { createModelScope } from '../../src/service/model-scope.ts';
 import { createToolService } from '../../src/service/tool-service.ts';
 import {
   knobs,
   PAYER,
+  RUN,
   billingCalls,
   billing,
   upstream,
   fake,
   finished,
   recordedCalls,
-  settled,
+  startedCalls,
   noHistory,
   repo,
   jobRows,
-  deletedTasks,
+  deletedConversations,
   jobs,
   mediaFiles,
   mediaStore,
@@ -182,15 +183,7 @@ export const build = (
           }[model],
     tavily: createTavilyClient({ baseUrl: `${urls.fake}/tavily`, apiKey: tavilyKey }),
     meter: createMeter({ billing: createServiceClient('billing', urls.billing), repo, logger }),
-    scope: createModelScopeService({
-      repo: {
-        domesticOnly: async () => knobs.domesticOnly,
-        setDomesticOnly: async (_userId, domesticOnly) => {
-          knobs.domesticOnly = domesticOnly;
-        },
-      },
-      domesticVendors: ['bytedance-seed', 'alibaba'],
-    }),
+    scope: createModelScope({ domesticVendors: ['bytedance-seed', 'alibaba'] }),
     jobs,
     store: mediaStore,
     jobTimeoutMs: 30 * 60_000,
@@ -271,7 +264,7 @@ beforeEach(() => {
   mediaFiles.clear();
   upstream.length = 0;
   finished.length = 0;
-  settled.length = 0;
+  startedCalls.length = 0;
   knobs.domesticOnly = false;
   knobs.imageStatus = 200;
   knobs.imageRejections = 0;
@@ -287,14 +280,19 @@ beforeEach(() => {
   knobs.videoCentsPerSecond = '5';
   knobs.videoUsdTariff = true;
   jobRows.clear();
-  deletedTasks.clear();
+  deletedConversations.clear();
   knobs.resultDeleteFails = false;
   tools = build('tvly-k');
 });
 
-export const call = (key: string, args: Record<string, unknown>, taskId?: string) =>
+/** 调一个工具；给了对话就当作沙箱里那一轮调的（带上这一轮）；knobs.domesticOnly：这一轮只用国内模型 */
+export const call = (key: string, args: Record<string, unknown>, conversationId?: string) =>
   tools.call({
-    caller: { payerId: PAYER, ...(taskId ? { taskId } : {}) },
+    caller: {
+      payerId: PAYER,
+      ...(conversationId ? { conversationId, runId: RUN } : {}),
+      ...(knobs.domesticOnly ? { domesticOnly: true } : {}),
+    },
     key,
     args,
     requestId: 'r',

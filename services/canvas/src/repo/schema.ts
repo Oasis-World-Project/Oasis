@@ -20,13 +20,16 @@ export const uploads = pgTable('uploads', {
 export const artifacts = pgTable('artifacts', {
   id: uuid('id').primaryKey(),
   ownerId: uuid('owner_id').notNull(),
-  taskId: uuid('task_id').notNull(),
-  taskTitle: text('task_title').notNull(),
-  conversationId: uuid('conversation_id'),
-  nodeId: uuid('node_id').notNull(),
+  conversationId: uuid('conversation_id').notNull(),
+  /** 话题（同一个会话）；同一话题里同一路径只有一份 */
+  sessionId: uuid('session_id').notNull(),
+  /** 最近一次做出或改了它的那一轮 */
+  runId: uuid('run_id').notNull(),
+  /** 话题名（电脑上的文件夹按它起名） */
+  topic: text('topic').notNull(),
+  /** out/ 里的相对路径 */
   path: text('path').notNull(),
   name: text('name').notNull(),
-  deliverable: text('deliverable').notNull(),
   sha256: text('sha256'),
   size: bigint('size', { mode: 'number' }).notNull(),
   contentType: text('content_type').notNull(),

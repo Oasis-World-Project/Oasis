@@ -1,11 +1,9 @@
-// canvas：画布。存用户上传的素材；任务完成时把成果登记进画布，给前端列出、预览、下载。
+// canvas：画布。存用户上传的素材；对话里一轮结束时把 AI 做出的文件登记成成果，给前端列出、预览、下载。
 import { fileURLToPath } from 'node:url';
-import { TASK_STREAM, TaskDeleted, TaskStatusChanged } from '@oasis/contracts/events';
 import {
-  connectPostgresAndEventBus,
   createObjectStore,
+  createPostgres,
   createServiceClient,
-  startEventConsumer,
   startService,
   type ObjectStore,
 } from '@oasis/service-kit';
@@ -25,7 +23,7 @@ await startService({
   migrationsDir: fileURLToPath(new URL('../migrations', import.meta.url)),
   resources: async (ctx) => {
     const { config } = ctx;
-    const { postgres, eventBus } = await connectPostgresAndEventBus(ctx);
+    const postgres = createPostgres(config.DATABASE_URL, ctx.logger);
     const objects = createObjectStore({
       endpoint: config.S3_ENDPOINT,
       region: config.S3_REGION,
@@ -42,30 +40,12 @@ await startService({
       uploads: createUploadsRepo(postgres.pool),
       store,
       // 复制成果文件可能要一会儿
-      task: createServiceClient('task', config.TASK_URL, { timeoutMs: 60_000 }),
+      harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 60_000 }),
       logger: ctx.logger,
       maxFileBytes: config.UPLOAD_MAX_BYTES,
       transferTimeoutMs: config.FILE_TRANSFER_TIMEOUT_MS,
     });
-    // 任务完成 → 把成果登记进画布
-    const taskStatus = startEventConsumer({
-      connection: eventBus.connection,
-      stream: TASK_STREAM,
-      durable: 'canvas-task-succeeded',
-      filterSubject: TaskStatusChanged.type,
-      logger: ctx.logger,
-      handle: (envelope) => artifacts.onTaskStatus(TaskStatusChanged.data.parse(envelope.data)),
-    });
-    // 任务被删除（用户删除或被新版替换）→ 删掉它的成果和修订素材
-    const taskDeleted = startEventConsumer({
-      connection: eventBus.connection,
-      stream: TASK_STREAM,
-      durable: 'canvas-task-deleted',
-      filterSubject: TaskDeleted.type,
-      logger: ctx.logger,
-      handle: (envelope) => artifacts.onTaskDeleted(TaskDeleted.data.parse(envelope.data)),
-    });
-    return { postgres, eventBus, objectStore: objects.resource, taskStatus, taskDeleted };
+    return { postgres, objectStore: objects.resource };
   },
   routes: (app, { config, resources, logger }) => {
     const uploads = createUploadService({
@@ -84,7 +64,6 @@ await startService({
         artifacts,
         store,
         inspector: createServiceClient('inspector', config.INSPECTOR_URL, { timeoutMs: 60_000 }),
-        task: createServiceClient('task', config.TASK_URL, { timeoutMs: 20000 }),
         ...(config.MODEL_GATEWAY_URL
           ? {
               // 开数字人会话要在 LiveAvatar 上建好几样东西，从国内网络发出去会慢

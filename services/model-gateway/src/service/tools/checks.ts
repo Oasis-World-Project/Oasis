@@ -1,6 +1,6 @@
-// 检查类工具：外站浏览器测试、网页应用自查（和交付关卡同一套浏览器检查）、Android 原生应用测试。
+// 检查类工具：外站浏览器测试、网页应用自查、Android 原生应用测试。
 // 浏览器检查都在 inspector：网关转交参数，检查浏览器的算力由网关冻结、按 inspector 报回的
-// 实际用时结算，记在调用的任务和节点上。
+// 实际用时结算，记在调用它的那一轮上。
 import { randomUUID } from 'node:crypto';
 import {
   ApplicationCheckReply,
@@ -18,9 +18,9 @@ const AppCheckArgs = z.object({
   dir: z.string().min(1).max(220),
   /** 沙箱里的 oasis-tool 读好应用目录的文件一起带来（相对 dir 的路径） */
   files: z.array(z.object({ path: z.string(), contentBase64: z.string() })).optional(),
-  /** 实际检查的目录在沙箱里的路径（out/site、in/<上游 key>/site），结果里照这个说；旧版沙箱不带 */
+  /** 实际检查的目录在沙箱里的路径（如 out/site），结果里照这个说；旧版沙箱不带 */
   shown: z.string().min(1).max(260).optional(),
-  /** 调用时给了 --out：把完整报告作为文件交回，存进去给下游用 */
+  /** 调用时给了 --out：把完整报告作为文件交回，存进去 */
   report: z.boolean().optional(),
 });
 
@@ -32,10 +32,9 @@ async function metered<T extends { usage: ComputeUsage }>(
   const { compute, cores, maxMs } = deps.checks!;
   const id = randomUUID();
   const hold = await compute.hold({
-    runId: id,
+    // 记在调用它的那一轮上，这一轮的花费里就有它
+    runId: deps.runId ?? id,
     payerId: deps.payerId!,
-    taskId: deps.taskId ?? null,
-    nodeId: deps.nodeId ?? null,
     cores,
     maxMs,
     purpose: 'application-check',
@@ -56,12 +55,12 @@ async function metered<T extends { usage: ComputeUsage }>(
   }
 }
 
-/** app.check 的结果说成节点能直接照着改的话：原因、页面报错、没覆盖到的地方 */
+/** app.check 的结果说成 AI 能直接照着改的话：原因、页面报错、没覆盖到的地方 */
 function appCheckText(shown: string, result: ApplicationCheckResult): string {
   const report = result.report;
   const lines = [
     result.passed
-      ? `${shown}：浏览器检查通过（交付后关卡复跑的是同一套检查）。`
+      ? `${shown}：浏览器检查通过。`
       : `${shown}：浏览器检查没通过：${result.reason ?? '原因未返回'}`,
     ...(report?.steps ?? [])
       .filter((step) => step.status === 'failed')
@@ -90,7 +89,7 @@ export const websiteTest: ToolDef = {
   ],
   long: false,
   run: async (deps, args) => {
-    if (!deps.taskId) throw new HttpError(400, 'task_required', '网站测试需要所属任务');
+    if (!deps.runId) throw new HttpError(400, 'run_required', '网站测试只能在对话里 AI 干活时用');
     const result = await metered(deps, async (cores) => {
       const response = await deps.upstream(() =>
         deps.checks!.inspector.stream('POST', '/internal/websites/check', {
@@ -122,9 +121,9 @@ export const appCheck: ToolDef = {
   key: 'app.check',
   name: '网页应用自查',
   description:
-    '把网页应用（带 oasis-app.json；自己 out/ 里的，或上游交来的 in/<上游 key>/ 里的）放进和交付检查同一个隔离浏览器里打开，按 oasis-test.json 操作，当场返回页面报错和没通过的步骤；给了 --out 就把完整报告（JSON）存进去，平台截的画面（打开后的首屏 opening.jpg、测试里 screenshot 步骤和没通过那一步的截图）存在报告旁边，名字是「报告名-截图名」。',
+    '把 out/ 里的网页应用（带 oasis-app.json）放进隔离浏览器里打开，按 oasis-test.json 操作，当场返回页面报错和没通过的步骤；给了 --out 就把完整报告（JSON）存进去，平台截的画面（打开后的首屏 opening.jpg、测试里 screenshot 步骤和没通过那一步的截图）存在报告旁边，名字是「报告名-截图名」。',
   usage:
-    'oasis-tool app.check --dir out/site [--out out/检查报告.json]（--dir 是 oasis-app.json 所在目录；上游交来的写 in/<上游 key>/site）',
+    'oasis-tool app.check --dir out/site [--out out/检查报告.json]（--dir 是 oasis-app.json 所在目录）',
   unit: '次（算力单独结算）',
   estimateMicro: 0,
   holdMicro: () => 1,
@@ -137,12 +136,13 @@ export const appCheck: ToolDef = {
       name: 'dir',
       kind: 'dir',
       required: true,
-      description: 'oasis-app.json 所在目录：自己做的如 out/site，上游交来的如 in/<上游 key>/site',
+      description: 'oasis-app.json 所在目录，如 out/site',
     },
   ],
   long: false,
   run: async (deps, args) => {
-    if (!deps.taskId) throw new HttpError(400, 'task_required', '网页应用自查只能在任务节点里用');
+    if (!deps.runId)
+      throw new HttpError(400, 'run_required', '网页应用自查只能在对话里 AI 干活时用');
     const parsed = AppCheckArgs.parse(args);
     const dir = parsed.dir.replace(/^(\.\/)?(\/workspace\/)?(out\/)?/, '').replace(/\/+$/, '');
     if (!dir)
@@ -152,21 +152,21 @@ export const appCheck: ToolDef = {
       throw new HttpError(
         400,
         'sandbox_outdated',
-        'oasis-tool 版本过旧，没有带上 out/ 里的文件，app.check 用不了（沙箱镜像需要重建：pnpm sandbox:build）。这次先跳过自查，交付后关卡照常检查。',
+        'oasis-tool 版本过旧，没有带上 out/ 里的文件，app.check 用不了（沙箱镜像需要重建：pnpm sandbox:build）。',
       );
     const shown = parsed.shown ?? `out/${dir}`;
     if (!parsed.files.length) throw new HttpError(400, 'invalid_args', `${shown} 里没有文件`);
     const result = await metered(deps, async (cores) => {
       const response = await deps.upstream(() =>
         deps.checks!.inspector.stream('POST', '/internal/applications/check-files', {
-          // 给了 --out：除了报告，平台截的画面也要回来，存在报告旁边给节点看
+          // 给了 --out：除了报告，平台截的画面也要回来，存在报告旁边给 AI 看
           body: {
             dir,
             files: parsed.files,
             cores,
             ...(parsed.report ? { screenshots: true } : {}),
           },
-          // 页面多慢都等（与关卡一致），调用方中断时随之回收浏览器
+          // 页面多慢都等，调用方中断时随之回收浏览器
           signal: deps.signal,
         }),
       );
@@ -175,7 +175,7 @@ export const appCheck: ToolDef = {
     return {
       text: appCheckText(shown, result),
       data: result.report ?? null,
-      // 调用时给了 --out（工具节点把检查结果交给下游）：完整报告作为文件交回，沙箱存到 --out
+      // 调用时给了 --out：完整报告作为文件交回，沙箱存到 --out
       files: parsed.report
         ? [
             {

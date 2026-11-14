@@ -13,20 +13,14 @@ function setup() {
   const repo = memoryArtifacts(),
     store = memoryStore(),
     owner = randomUUID(),
-    taskId = randomUUID(),
-    nodeId = randomUUID();
+    conversationId = randomUUID(),
+    sessionId = randomUUID(),
+    runId = randomUUID();
   const calls: unknown[] = [];
   const logger = pino({ level: 'silent' });
-  let inspectedSha: string | undefined, taskHeaders: unknown;
-  const task = {
-    json: async () => {
-      throw new Error('not used');
-    },
-    stream: async (_method: string, _path: string, options: { headers: unknown }) => {
-      taskHeaders = options.headers;
-      throw new Error('upstream owner check denied');
-    },
-  } as unknown as ServiceClient;
+  let inspectedSha: string | undefined;
+  /** 这里的成果都直接写进仓库，不从 harness 取 */
+  const harness = {} as ServiceClient;
   const inspector = {
     json: async (_method: string, path: string, input: { body: { sha256: string } }) => {
       calls.push(input.body);
@@ -48,9 +42,15 @@ function setup() {
           };
     },
   } as unknown as ServiceClient;
-  const artifacts = createArtifactService({ repo, uploads: memoryUploads(), store, task, logger });
+  const artifacts = createArtifactService({
+    repo,
+    uploads: memoryUploads(),
+    store,
+    harness,
+    logger,
+  });
   const uploads = createUploadService({ repo: memoryUploads(), store, logger });
-  const models = createModelPreviewService({ artifacts, uploads, store, task, inspector });
+  const models = createModelPreviewService({ artifacts, uploads, store, inspector });
   async function add(path: string, content: Buffer | string, extra: object = {}) {
     const id = randomUUID(),
       body = Buffer.from(content),
@@ -60,8 +60,10 @@ function setup() {
     await repo.insert({
       id,
       ownerId: owner,
-      taskId,
-      nodeId,
+      conversationId,
+      sessionId,
+      runId,
+      topic: '模型',
       path,
       name: path.split('/').at(-1)!,
       size: body.length,
@@ -69,9 +71,6 @@ function setup() {
       objectKey,
       contentType: 'application/octet-stream',
       category: 'threed',
-      deliverable: '模型',
-      taskTitle: '模型',
-      conversationId: null,
       appSpec: null,
       avatarSpec: null,
       models: [],
@@ -90,9 +89,7 @@ function setup() {
     store,
     repo,
     add,
-    task,
     inspector,
-    taskHeaders: () => taskHeaders,
     badInspection: () => {
       inspectedSha = '0'.repeat(64);
     },
@@ -150,6 +147,8 @@ describe('受信模型预览描述', () => {
         (await request({ kind: 'artifact', id: source.id, url: 'https://evil.test/model.glb' }))
           .statusCode,
       ).toBe(400);
+      // 只认登记过的成果和上传的文件
+      expect((await request({ kind: 'file', path: 'out/model.glb' })).statusCode).toBe(400);
       expect((await request({ kind: 'artifact', id: source.id }, '')).statusCode).toBe(401);
       expect((await request({ kind: 'artifact', id: source.id }, randomUUID())).statusCode).toBe(
         404,
@@ -187,7 +186,7 @@ describe('受信模型预览描述', () => {
       f.models.describe(randomUUID(), { kind: 'artifact', id: row.id }),
     ).rejects.toMatchObject({ statusCode: 404 });
   });
-  it('配套轻量 GLB、封面和视频只能来自同节点正式清单，保持原件身份', async () => {
+  it('配套轻量 GLB、封面和视频只能来自同一话题的清单，保持原件身份', async () => {
     const f = setup(),
       source = await f.add('out/scene.blend', 'native'),
       glb = await f.add('out/light.glb', 'mesh'),
@@ -212,7 +211,7 @@ describe('受信模型预览描述', () => {
     expect(descriptor.turntable?.sha256).toBe(video.sha256);
     expect(descriptor.simplified).toBe(true);
   });
-  it.each(['foreign-node', 'wrong-hash', 'external-url', 'traversal', 'missing-final'])(
+  it.each(['foreign-topic', 'wrong-hash', 'external-url', 'traversal', 'missing-final'])(
     '关联 %s 不能成为预览来源',
     async (mode) => {
       const f = setup(),
@@ -220,7 +219,7 @@ describe('受信模型预览描述', () => {
         glb = await f.add(
           'out/preview.glb',
           'preview',
-          mode === 'foreign-node' ? { nodeId: randomUUID() } : {},
+          mode === 'foreign-topic' ? { sessionId: randomUUID() } : {},
         );
       const path =
         mode === 'external-url'
@@ -259,7 +258,7 @@ describe('受信模型预览描述', () => {
       (await f.models.describe(f.owner, { kind: 'artifact', id: row.id })).glb,
     ).toBeUndefined();
   });
-  it('上传与未登记的节点文件沿用原所有权检查，不接受调用方给 URL', async () => {
+  it('上传的文件沿用原所有权检查', async () => {
     const f = setup();
     const upload = await f.uploads.upload(
       f.owner,
@@ -271,14 +270,5 @@ describe('受信模型预览描述', () => {
     await expect(
       f.models.describe(randomUUID(), { kind: 'upload', id: upload.id }),
     ).rejects.toMatchObject({ statusCode: 404 });
-    await expect(
-      f.models.describe(f.owner, {
-        kind: 'task',
-        taskId: randomUUID(),
-        nodeId: randomUUID(),
-        path: 'out/model.glb',
-      }),
-    ).rejects.toThrow('owner');
-    expect(f.taskHeaders()).toEqual({ 'x-oasis-user-id': f.owner });
   });
 });

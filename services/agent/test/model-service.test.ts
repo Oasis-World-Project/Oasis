@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { AiSettings } from '@oasis/contracts/agent';
 import type { ModelRepo, ModelRow } from '../src/repo/model-repo.ts';
 import { createModelService, defaultSystemPrompt } from '../src/service/model-service.ts';
-import { TEAM_MODELS } from '../src/service/team-models.ts';
 
+const USER = '11111111-1111-4111-8111-111111111111';
+const OTHER = '22222222-2222-4222-8222-222222222222';
 const base = {
   vendor: 'X',
   category: 'llm' as const,
@@ -16,9 +18,14 @@ const rows: ModelRow[] = [
   { ...base, key: 'ok', name: 'Ok', providerModel: 'vendor/ok-1', versionLabel: 'Ok 1' },
   { ...base, key: 'later', name: '以后', providerModel: null, versionLabel: null },
 ];
+const saved = new Map<string, AiSettings>();
 const repo: ModelRepo = {
   list: async () => rows,
   find: async (key) => rows.find((r) => r.key === key),
+  settings: async (userId) => saved.get(userId) ?? { domesticOnly: false },
+  saveSettings: async (userId, settings) => {
+    saved.set(userId, settings);
+  },
 };
 
 async function errorCode(promise: Promise<unknown>) {
@@ -31,26 +38,6 @@ async function errorCode(promise: Promise<unknown>) {
 }
 
 describe('模型目录', () => {
-  it('规划员的目录：AI 团队的旗舰和强力型号在前，私聊的省钱型号作为快速档，没接入的不列', async () => {
-    const catalog = await createModelService(repo).catalog();
-    expect(catalog.slice(0, TEAM_MODELS.length).map((m) => m.providerModel)).toEqual(
-      TEAM_MODELS.map((m) => m.providerModel),
-    );
-    expect(catalog[0]).toMatchObject({
-      providerModel: 'deepseek/deepseek-v4-pro-0813',
-      tier: 'flagship',
-    });
-    expect(catalog.slice(TEAM_MODELS.length)).toEqual([
-      expect.objectContaining({
-        key: 'ok',
-        name: 'Ok 1',
-        providerModel: 'vendor/ok-1',
-        tier: 'fast',
-      }),
-    ]);
-    expect(new Set(catalog.map((m) => m.providerModel)).size).toBe(catalog.length);
-  });
-
   it('没有上游模型的标记为不可用，对外不暴露上游模型 ID', async () => {
     const list = await createModelService(repo).list();
     expect(list.map((m) => [m.key, m.available])).toEqual([
@@ -60,18 +47,27 @@ describe('模型目录', () => {
     expect(JSON.stringify(list)).not.toContain('vendor/ok-1');
   });
 
-  it('调用路由带上游模型 ID 和默认人设', async () => {
-    expect(await createModelService(repo).route('ok')).toEqual({
+  it('开一轮的路由带上游模型 ID、默认人设和这个用户的「只用国内模型」', async () => {
+    const service = createModelService(repo);
+    expect(await service.route('ok', USER)).toEqual({
       key: 'ok',
       name: 'Ok',
       providerModel: 'vendor/ok-1',
       systemPrompt: defaultSystemPrompt('Ok'),
+      domesticOnly: false,
     });
+    expect(await service.saveSettings(USER, { domesticOnly: true })).toEqual({
+      domesticOnly: true,
+    });
+    expect(await service.settings(USER)).toEqual({ domesticOnly: true });
+    expect((await service.route('ok', USER)).domesticOnly).toBe(true);
+    // 别的用户不受影响
+    expect((await service.route('ok', OTHER)).domesticOnly).toBe(false);
   });
 
   it('不存在或未接入的模型给出明确错误', async () => {
     const service = createModelService(repo);
-    expect(await errorCode(service.route('nope'))).toBe('model_not_found');
-    expect(await errorCode(service.route('later'))).toBe('model_unavailable');
+    expect(await errorCode(service.route('nope', USER))).toBe('model_not_found');
+    expect(await errorCode(service.route('later', USER))).toBe('model_unavailable');
   });
 });

@@ -1,87 +1,50 @@
-// 工具服务：长任务（视频、音乐），以及任务删除时回收工具结果。
+// 工具服务：长任务（视频、音乐），以及删对话时回收工具结果。
 import { describe, expect, it } from 'vitest';
 import {
   knobs,
   PAYER,
-  TASK,
+  CONVERSATION,
+  RUN,
   billingCalls,
   upstream,
-  settled,
+  finished,
+  startedCalls,
   jobRows,
   jobs,
   mediaFiles,
-  emitted,
 } from './support/tool-fakes.ts';
 import { tools, falCalls, geometryImage, useTools, call, errorOf } from './support/tool-fixture.ts';
 
-describe('提出调整', () => {
-  const caller = {
-    payerId: PAYER,
-    taskId: TASK,
-    nodeId: '00000000-0000-4000-8000-0000000000a1',
-    runId: '00000000-0000-4000-8000-0000000000b1',
-  };
-  const submit = () =>
-    tools.call({
-      caller,
-      key: 'workflow.adjust',
-      args: { want: '加一样成果：宣传海报', why: '任务单里要海报，没有人做' },
-      requestId: 'r',
-      signal: new AbortController().signal,
-    });
-
-  it('提交时发事件给 task；task 写回规划员的答复后才算完成，不花钱', async () => {
-    useTools('key', true);
-    const id = (await submit()).job!.id;
-    expect(emitted.at(-1)).toMatchObject({
-      type: 'model-gateway.adjustment.requested',
-      data: {
-        jobId: id,
-        taskId: TASK,
-        nodeId: caller.nodeId,
-        runId: caller.runId,
-        want: '加一样成果：宣传海报',
-        why: '任务单里要海报，没有人做',
-      },
-    });
-    expect(await tools.job(caller, id, AbortSignal.timeout(3000))).toEqual({ status: 'pending' });
-    await tools.answer(id, '同意：加了「宣传海报」。');
-    expect(await tools.job(caller, id, AbortSignal.timeout(3000))).toMatchObject({
-      status: 'completed',
-      result: { text: '同意：加了「宣传海报」。', costMicro: 0 },
-    });
-    expect(jobRows.get(id)).toMatchObject({ status: 'completed', cost: { costMicro: 0 } });
-  });
-
-  it('不在工作流里的调用（私聊）不能提，也不冻结', async () => {
-    useTools('key', true);
-    const holds = billingCalls.length;
-    expect(await errorOf(call('workflow.adjust', { want: 'x', why: 'y' }))).toMatchObject({
-      statusCode: 409,
-      code: 'not_in_workflow',
-    });
-    expect(billingCalls).toHaveLength(holds);
-  });
+/** 沙箱里那一轮的调用方：同一个对话的下一轮（换了运行）也能接着等长任务 */
+const inRun = (conversationId = CONVERSATION, runId = RUN) => ({
+  payerId: PAYER,
+  runId,
+  conversationId,
 });
+const NEXT_RUN = '00000000-0000-4000-8000-0000000000b2';
 
-describe('任务删除回收工具结果', () => {
-  async function completed(taskId = TASK) {
+describe('删对话回收工具结果', () => {
+  async function completed(conversationId = CONVERSATION) {
     useTools('key', true);
     const id = (
-      await call('audio.music', { prompt: 'A warm instrumental track', instrumental: true }, taskId)
+      await call(
+        'audio.music',
+        { prompt: 'A warm instrumental track', instrumental: true },
+        conversationId,
+      )
     ).job!.id;
-    await tools.job({ payerId: PAYER, taskId }, id, AbortSignal.timeout(3000));
+    await tools.job(inRun(conversationId), id, AbortSignal.timeout(3000));
     return id;
   }
-  it('只删除目标任务的对象，保留账单，重复事件幂等，拒绝读取和迟到提交', async () => {
+  it('只删除这个对话的对象，保留账单，重复删除幂等，拒绝读取和迟到提交', async () => {
     const id = await completed();
     const other = await completed('00000000-0000-4000-8000-000000000008');
     const cost = jobRows.get(id)!.cost;
     // 旧版在第二个文件写入后未保存清单便中断，也必须回收。
     delete jobRows.get(id)!.call.resultFileIds;
     mediaFiles.set(`tool-results/${id}/1`, Buffer.from('legacy partial'));
-    await tools.purgeTask(TASK);
-    await tools.purgeTask(TASK);
+    await tools.purgeConversation(CONVERSATION);
+    await tools.purgeConversation(CONVERSATION);
     expect([...mediaFiles.keys()].filter((key) => key.startsWith(`tool-results/${id}/`))).toEqual(
       [],
     );
@@ -92,12 +55,12 @@ describe('任务删除回收工具结果', () => {
       result: null,
       cost,
     });
-    await expect(
-      tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000)),
-    ).rejects.toMatchObject({ statusCode: 410 });
+    await expect(tools.job(inRun(), id, AbortSignal.timeout(1000))).rejects.toMatchObject({
+      statusCode: 410,
+    });
     const holds = billingCalls.length;
     await expect(
-      call('audio.music', { prompt: 'another track', instrumental: true }, TASK),
+      call('audio.music', { prompt: 'another track', instrumental: true }, CONVERSATION),
     ).rejects.toMatchObject({ statusCode: 410 });
     expect(billingCalls).toHaveLength(holds);
   });
@@ -105,24 +68,24 @@ describe('任务删除回收工具结果', () => {
     const id = await completed();
     jobRows.get(id)!.leaseToken = 'other';
     jobRows.get(id)!.leaseUntil = new Date(Date.now() + 60000);
-    await tools.purgeTask(TASK);
+    await tools.purgeConversation(CONVERSATION);
     expect(mediaFiles.has(`tool-results/${id}/0`)).toBe(true);
     jobRows.get(id)!.leaseUntil = null;
     knobs.resultDeleteFails = true;
-    await tools.purgeTask(TASK);
+    await tools.purgeConversation(CONVERSATION);
     expect(jobRows.get(id)!.result).not.toBeNull();
     expect(jobRows.get(id)!.call.resultFileIds).toEqual(['0']);
     knobs.resultDeleteFails = false;
     useTools('key', true);
-    await tools.purgeTask(TASK);
+    await tools.purgeConversation(CONVERSATION);
     expect(mediaFiles.has(`tool-results/${id}/0`)).toBe(false);
   });
   it('删除与供应商完成竞争时照常结算，停止归档结果', async () => {
     knobs.geometryMode = true;
     knobs.geometryCancelCompleted = true;
     useTools('key', true);
-    const id = (await call('3d.generate', { image: geometryImage }, TASK)).job!.id;
-    await tools.purgeTask(TASK);
+    const id = (await call('3d.generate', { image: geometryImage }, CONVERSATION)).job!.id;
+    await tools.purgeConversation(CONVERSATION);
     expect(jobRows.get(id)).toMatchObject({ status: 'completed', phase: 'expired', result: null });
     expect([...mediaFiles.keys()].some((key) => key.startsWith(`tool-results/${id}/`))).toBe(false);
     expect(billingCalls.filter((call) => call.path === 'settle')).toHaveLength(1);
@@ -134,7 +97,7 @@ describe('任务删除回收工具结果', () => {
     row.phase = 'uncertain';
     row.result = null;
     row.cost = null;
-    await tools.purgeTask(TASK);
+    await tools.purgeConversation(CONVERSATION);
     expect(mediaFiles.has(`tool-results/${id}/0`)).toBe(false);
     expect(jobRows.get(id)!.status).toBe('pending');
     expect(jobRows.get(id)!.cost).toBeNull();
@@ -143,11 +106,11 @@ describe('任务删除回收工具结果', () => {
 
 describe('长任务（视频）', () => {
   const job = (id: string, payerId = PAYER) =>
-    tools.job({ payerId, taskId: TASK }, id, new AbortController().signal);
+    tools.job({ ...inRun(), payerId }, id, new AbortController().signal);
 
   it('供应商不回费用时使用持久化的时长/模型报价，重建服务不会变成固定短镜头价格', async () => {
     knobs.videoUsageCost = undefined;
-    const submitted = await call('video.generate', { prompt: 'x', duration: 20 }, TASK);
+    const submitted = await call('video.generate', { prompt: 'x', duration: 20 }, CONVERSATION);
     const id = submitted.job!.id;
     expect(jobRows.get(id)?.call.videoEstimateMicro).toBe(1_000_000);
     // 之后目录变价也不改变原报价；新的工具服务只从同一持久作业取回结果。
@@ -175,7 +138,7 @@ describe('长任务（视频）', () => {
     expect(billingCalls).toHaveLength(0);
     expect(upstream).toHaveLength(0);
     knobs.videoFramesSupported = true;
-    const result = await call('video.generate', args, TASK);
+    const result = await call('video.generate', args, CONVERSATION);
     expect(result.job).toBeDefined();
     expect(upstream[0]?.body.frame_images).toEqual([
       {
@@ -215,9 +178,13 @@ describe('长任务（视频）', () => {
     expect(billingCalls[0]?.body.amountMicro).toBe(6_000_000);
   });
 
-  it('提交时冻结（留够时间）并交回任务号；做好前是 pending；做好后按实际花费结算一次', async () => {
+  it('提交时冻结（留够时间）并交回任务号；做好前是 pending；下一轮接着等，做好后按实际花费结算一次', async () => {
     knobs.videoPolls = 1;
-    const submitted = await call('video.generate', { prompt: '木屋的清晨', duration: '6' }, TASK);
+    const submitted = await call(
+      'video.generate',
+      { prompt: '木屋的清晨', duration: '6' },
+      CONVERSATION,
+    );
     const id = submitted.job?.id ?? '';
     expect(submitted).toMatchObject({ tool: 'video.generate', costMicro: 0, files: [] });
     expect(upstream[0]).toEqual({
@@ -227,20 +194,24 @@ describe('长任务（视频）', () => {
     expect(billingCalls[0]?.body).toMatchObject({ amountMicro: 4_200_000, ttlMs: 40 * 60_000 });
 
     expect(await job(id)).toEqual({ status: 'pending' });
-    const done = await job(id);
+    // 这一轮结束了，同一个对话的下一轮（新的运行）接着等
+    const done = await tools.job(inRun(CONVERSATION, NEXT_RUN), id, AbortSignal.timeout(3000));
     expect(done).toMatchObject({
       status: 'completed',
       result: { costMicro: 500_000, files: [{ name: 'video.mp4', mediaType: 'video/mp4' }] },
     });
-    const file = await tools.file({ payerId: PAYER, taskId: TASK }, id, done.result!.files[0]!.id!);
+    const file = await tools.file(inRun(), id, done.result!.files[0]!.id!);
     const chunks: Buffer[] = [];
     for await (const chunk of file.content) chunks.push(Buffer.from(chunk as Uint8Array));
     expect(Buffer.concat(chunks).toString()).toBe('mp4');
     knobs.videoPolls = 99;
     knobs.videoEnd = 'failed';
-    expect(settled[0]).toMatchObject({
-      data: { kind: 'tool', taskId: TASK, chargedMicro: 500_000 },
+    expect(startedCalls[0]).toMatchObject({
+      kind: 'tool',
+      conversationId: CONVERSATION,
+      runId: RUN,
     });
+    expect(finished[0]).toMatchObject({ status: 'succeeded', chargedMicro: 500_000 });
 
     // 再取一次：照样交回结果，但不再结算
     expect((await job(id)).status).toBe('completed');
@@ -269,9 +240,12 @@ describe('长任务（视频）', () => {
     expect(billingCalls.map((c) => c.path)).toEqual(['hold']);
   });
 
-  it('别人的任务号：查不到', async () => {
+  it('别人的任务号、别的对话交的任务号：查不到', async () => {
     const id = (await call('video.generate', { prompt: 'x' })).job?.id ?? '';
-    expect((await errorOf(job(id, TASK)))?.statusCode).toBe(404);
+    expect((await errorOf(job(id, CONVERSATION)))?.statusCode).toBe(404);
+    const mine = (await call('video.generate', { prompt: 'x' }, CONVERSATION)).job?.id ?? '';
+    const elsewhere = tools.job(inRun(PAYER), mine, AbortSignal.timeout(1000));
+    expect((await errorOf(elsewhere))?.statusCode).toBe(404);
   });
 });
 
@@ -285,22 +259,20 @@ describe('音乐长任务', () => {
       providerJobId: '',
       requestKey: null,
       requestHash: 'test',
-      call: { caller: { payerId: PAYER, taskId: TASK } },
+      call: { caller: inRun() },
     });
-    expect(
-      await tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000)),
-    ).toEqual({ status: 'pending' });
+    expect(await tools.job(inRun(), id, AbortSignal.timeout(1000))).toEqual({ status: 'pending' });
     jobRows.get(id)!.createdAt = new Date(Date.now() - 121_000);
-    expect(
-      await tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000)),
-    ).toMatchObject({ status: 'uncertain' });
+    expect(await tools.job(inRun(), id, AbortSignal.timeout(1000))).toMatchObject({
+      status: 'uncertain',
+    });
     expect(falCalls).toEqual([]);
     expect(billingCalls).toEqual([]);
   });
   it('相同幂等键的并发提交只生成一次，重复冻结退回，改参数不能复用键', async () => {
     useTools('key', true);
     const input = {
-      caller: { payerId: PAYER, taskId: TASK },
+      caller: inRun(),
       key: 'audio.music',
       args: { prompt: 'A complete instrumental with a warm ending', instrumental: true },
       requestId: 'test',
@@ -319,33 +291,29 @@ describe('音乐长任务', () => {
       }),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
-  it('器乐与歌词参数明确；结果保存后进程重建不再调供应商，其他任务不能访问', async () => {
+  it('器乐与歌词参数明确；结果保存后进程重建不再调供应商，别的对话不能访问', async () => {
     useTools('key', true);
     const id = (
       await call(
         'audio.music',
         { prompt: 'Warm piano and strings with a complete ending', instrumental: 'true' },
-        TASK,
+        CONVERSATION,
       )
     ).job!.id;
     expect(falCalls[0]?.input).toMatchObject({ is_instrumental: true, lyrics: '' });
     expect(falCalls[0]?.input).toMatchObject({
       audio_setting: { sample_rate: 44100, bitrate: 256000, format: 'mp3' },
     });
-    const done = await tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000));
+    const done = await tools.job(inRun(), id, AbortSignal.timeout(1000));
     expect(done.status).toBe('completed');
     expect(done.result?.files[0]).toMatchObject({ id: '0', size: 8 });
     const count = falCalls.length;
     await tools.close();
     useTools('key', true);
-    expect(
-      (await tools.job({ payerId: PAYER, taskId: TASK }, id, AbortSignal.timeout(1000))).status,
-    ).toBe('completed');
+    expect((await tools.job(inRun(), id, AbortSignal.timeout(1000))).status).toBe('completed');
     expect(falCalls).toHaveLength(count);
     expect(billingCalls.map((call) => call.path)).toEqual(['hold', 'settle']);
-    await expect(tools.file({ payerId: PAYER, taskId: PAYER }, id, '0')).rejects.toMatchObject({
-      statusCode: 404,
-    });
+    await expect(tools.file(inRun(PAYER), id, '0')).rejects.toMatchObject({ statusCode: 404 });
     const missing = await errorOf(
       call('audio.music', {
         prompt: 'A complete vocal song with accompaniment',

@@ -1,18 +1,20 @@
-// 每一次上游调用（聊天、决策）共用的计量步骤：冻结额度并登记 → 按实际花费结算，或失败退回。
-// 属于某个任务的调用结算后，经发件箱发出 model-gateway.call.settled，task 据此累加花费。
+// 每一次上游调用（聊天、决策、工具、算力）共用的计量步骤：冻结额度并登记 → 按实际花费结算，或失败退回。
+// 对话里一轮的花费按调用记录里的 run_id 汇总（runSpend）。
 import { randomUUID } from 'node:crypto';
 import { HoldResult, SettleResult } from '@oasis/contracts/billing';
-import { CallSettled } from '@oasis/contracts/events';
-import { createEnvelope, HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
+import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { REGION_ERROR, type CallKind, type CallsRepo } from '../repo/calls-repo.ts';
 import type { CostSource, Usage } from './pricing.ts';
 
-/** 谁在调用、钱算在哪：付费人，以及（agent 运行时）所属的任务、节点和运行。 */
+/**
+ * 谁在调用、钱算在哪：付费人，以及（沙箱里的 agent 调用时）所属的对话和这一轮；
+ * domesticOnly：这一轮开始时用户打开了「只用国内模型」。
+ */
 export interface Caller {
   payerId: string;
   runId?: string;
-  taskId?: string;
-  nodeId?: string;
+  conversationId?: string;
+  domesticOnly?: boolean;
 }
 
 export interface MeteredCall {
@@ -87,8 +89,8 @@ export function createMeter(deps: {
   repo: CallsRepo;
   logger: Logger;
   /**
-   * 网络短暂断开时最多等多久（2026-11-05 用户决定：任务只因用户停止或网络长时间连不上而停）。
-   * 只对请求没发出去的「连不上」生效；超过这么久仍连不上才报错，节点停下等用户点继续。
+   * 网络短暂断开时最多等多久（2026-11-05 用户决定：活只因用户停止或网络长时间连不上而停）。
+   * 只对请求没发出去的「连不上」生效；超过这么久仍连不上才报错，这一轮停下，用户再说一句接着做。
    */
   reconnectMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -118,8 +120,10 @@ export function createMeter(deps: {
     },
     /** 在当前网络用不了的模型：最近一次聊天调用因为地区限制被上游拒绝、之后没再成功过 */
     regionBlockedModels: () => repo.regionBlockedModels(),
-    /** 从调用记录算出的典型用量，估价用 */
+    /** 从调用记录算出的工具典型用量，工具目录估价用 */
     typicalUsage: () => repo.typicalUsage(),
+    /** 对话里一轮已经结算的花费和用过的工具 */
+    runSpend: (runId: string, payerId: string) => repo.runSpend(runId, payerId),
     /** 各型号最近 30 天的实测（每秒输出、含缓存的实际单价、上游出错的比例） */
     measured: () => repo.measured(new Date(Date.now() - 30 * 24 * 3600_000)),
 
@@ -160,6 +164,8 @@ export function createMeter(deps: {
       caller: Caller;
       kind: CallKind;
       model: string;
+      /** 工具调用：哪个工具 */
+      tool?: string;
       amountMicro: number;
       maxCostMicro?: number;
       requestId: string;
@@ -190,9 +196,9 @@ export function createMeter(deps: {
         kind: input.kind,
         payerId: input.caller.payerId,
         runId: input.caller.runId ?? null,
-        taskId: input.caller.taskId ?? null,
-        nodeId: input.caller.nodeId ?? null,
+        conversationId: input.caller.conversationId ?? null,
         model: input.model,
+        tool: input.tool ?? null,
         requestId: input.requestId,
         holdId,
       });
@@ -267,36 +273,17 @@ export function createMeter(deps: {
           '结算失败，冻结将过期退回',
         );
       }
-      const { caller } = call;
-      const settled =
-        caller.taskId && chargedMicro !== null
-          ? createEnvelope('model-gateway', CallSettled.type, {
-              callId: call.id,
-              payerId: caller.payerId,
-              taskId: caller.taskId,
-              nodeId: caller.nodeId ?? null,
-              runId: caller.runId ?? null,
-              kind: call.kind,
-              model: call.model,
-              chargedMicro,
-              settledAt: new Date().toISOString(),
-            })
-          : undefined;
-      await repo.finish(
-        call.id,
-        {
-          status: error ? 'failed' : 'succeeded',
-          error: error ?? null,
-          promptTokens: usage?.prompt_tokens ?? null,
-          completionTokens: usage?.completion_tokens ?? null,
-          cachedTokens: usage?.prompt_tokens_details?.cached_tokens ?? null,
-          cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens ?? null,
-          upstreamCostMicro: cost.costMicro,
-          chargedMicro,
-          costSource: cost.source,
-        },
-        settled,
-      );
+      await repo.finish(call.id, {
+        status: error ? 'failed' : 'succeeded',
+        error: error ?? null,
+        promptTokens: usage?.prompt_tokens ?? null,
+        completionTokens: usage?.completion_tokens ?? null,
+        cachedTokens: usage?.prompt_tokens_details?.cached_tokens ?? null,
+        cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens ?? null,
+        upstreamCostMicro: cost.costMicro,
+        chargedMicro,
+        costSource: cost.source,
+      });
       return chargedMicro !== null;
     },
   };

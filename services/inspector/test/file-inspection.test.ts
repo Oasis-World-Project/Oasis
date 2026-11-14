@@ -1,19 +1,8 @@
 import { zipSync } from 'fflate';
 import { createHash } from 'node:crypto';
-import { Readable } from 'node:stream';
-import { createMaterialInspector } from '../src/service/material-inspection.ts';
-import type { Sources } from '../src/service/sources.ts';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { defaultInspectionLimits, inspectFiles } from '../src/service/file-inspection.ts';
-
-/** 假的下载：按链接给出内容，记下打开过哪些链接 */
-const sourcesOf = (content: () => Buffer, opened: string[] = []): Sources => ({
-  open: async (url) => {
-    opened.push(url);
-    return Readable.from([content()]);
-  },
-});
 
 const file = (path: string, content: string | Uint8Array) => ({
   path,
@@ -79,70 +68,6 @@ describe('隔离文件解析', () => {
     expect(index).toBeGreaterThan(0);
     corrupt[index] = 120;
     expect((await inspect([file('broken.zip', corrupt)])).files[0]?.error).toContain('CRC');
-  });
-  it('素材按 canvas 签发的链接有界读取并核对摘要；截断、超大和摘要不符都不冒充完整正文', async () => {
-    const id = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
-    const bytes = Buffer.from('预算按报价计算，另加10%');
-    const opened: string[] = [];
-    const inspector = createMaterialInspector(
-      sourcesOf(() => bytes, opened),
-      defaultInspectionLimits,
-    );
-    const upload = (sha256: string, size = bytes.length) => ({
-      uploadId: id,
-      name: '事实.txt',
-      size,
-      sha256,
-      url: 'http://s3.test/canvas/uploads/1?sig',
-    });
-    const good = createHash('sha256').update(bytes).digest('hex');
-    const complete = await inspector({ files: [upload(good)], maxChars: 300 });
-    expect(complete.files[0]).toMatchObject({ status: 'complete', text: bytes.toString('utf8') });
-    expect(opened).toEqual(['http://s3.test/canvas/uploads/1?sig']);
-    expect((await inspector({ files: [upload(good)], maxChars: 3 })).files[0]?.status).toBe(
-      'partial',
-    );
-    expect(
-      (await inspector({ files: [upload('0'.repeat(64))], maxChars: 300 })).files[0],
-    ).toMatchObject({ status: 'failed', text: '' });
-    // 超过解析上限的不下载
-    const before = opened.length;
-    expect(
-      (await inspector({ files: [upload(good, 100 * 1024 * 1024)], maxChars: 300 })).files[0]
-        ?.status,
-    ).toBe('partial');
-    expect(opened).toHaveLength(before);
-  });
-  it('图片素材（如批注截图）原图交给看图检查，不记成没读完', async () => {
-    const id = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
-    const png = await sharp({
-      create: { width: 4, height: 4, channels: 3, background: '#000' },
-    })
-      .png()
-      .toBuffer();
-    const inspector = createMaterialInspector(
-      sourcesOf(() => png),
-      defaultInspectionLimits,
-    );
-    const [image] = (
-      await inspector({
-        files: [
-          {
-            uploadId: id,
-            name: '批注-site-截图1.png',
-            size: png.length,
-            sha256: createHash('sha256').update(png).digest('hex'),
-            url: 'http://s3.test/canvas/uploads/2?sig',
-          },
-        ],
-        maxChars: 300,
-      })
-    ).files;
-    expect(image).toMatchObject({
-      status: 'complete',
-      text: '',
-      image: { mediaType: 'image/png', base64: png.toString('base64') },
-    });
   });
   it('HTML 内嵌库不耗正文额度，保留可见文字、来源和受校验看板数据', async () => {
     const chart = {

@@ -1,4 +1,3 @@
-import type { EventEnvelope } from '@oasis/contracts/events';
 import { readFile, readdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
@@ -11,7 +10,6 @@ import { createComputeService } from '../src/service/compute-service.ts';
 import { createMeter } from '../src/service/metering.ts';
 
 const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
-const TASK = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
 const RUN = '3c3c3c3c-3c3c-4c3c-8c3c-3c3c3c3c3c3c';
 const HOLD = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 
@@ -40,7 +38,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 算力接管'
     await pool.query(`drop schema if exists ${schema} cascade`);
     await pool.end();
   });
-  it('只结算同一付费人的原运行沙箱窗口，保留浏览器检查与其他付费人，重复接管不重复发计费事件', async () => {
+  it('只结算同一付费人的原运行沙箱窗口，保留浏览器检查与其他付费人，重复接管不重复结算；这一轮的花费按运行汇总', async () => {
     const actual = createCallsRepo(pool);
     const ids = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
     for (const [index, id] of ids.entries()) {
@@ -50,7 +48,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 算力接管'
         model: index === 2 ? 'application-check' : 'sandbox',
         payerId: index === 3 ? randomUUID() : PAYER,
         runId: RUN,
-        taskId: TASK,
         holdId: randomUUID(),
       });
       await pool.query('update calls set created_at=$2 where id=$1', [
@@ -75,7 +72,23 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 算力接管'
     expect((await actual.get(ids[3]!))?.status).toBe('running');
     await compute.recover(RUN, cutoff);
     expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(2);
-    expect((await pool.query('select count(*)::int as n from outbox')).rows[0].n).toBe(2);
+    expect(await actual.runSpend(RUN, PAYER)).toEqual({ spentMicro: 90000, tools: [] });
+    expect(await actual.runSpend(randomUUID(), PAYER)).toEqual({ spentMicro: 0, tools: [] });
+    // 这一轮用过的工具（同一个工具多次只列一次）
+    for (const tool of ['image.generate', 'image.generate', 'web.search'])
+      await actual.start({
+        id: randomUUID(),
+        kind: 'tool',
+        model: 'm',
+        tool,
+        payerId: PAYER,
+        runId: RUN,
+        holdId: randomUUID(),
+      });
+    expect((await actual.runSpend(RUN, PAYER)).tools.sort()).toEqual([
+      'image.generate',
+      'web.search',
+    ]);
   });
 });
 billing.post('/internal/holds/:id/settle', async (request) => {
@@ -85,14 +98,14 @@ billing.post('/internal/holds/:id/settle', async (request) => {
 
 /** 内存里的调用记录 */
 const rows = new Map<string, Call>();
-const settled: EventEnvelope[] = [];
+const charged = () => [...rows.values()].filter((row) => row.chargedMicro !== null);
 const repo: CallsRepo = {
   async start(call) {
     rows.set(call.id, {
       ...call,
       runId: call.runId ?? null,
-      taskId: call.taskId ?? null,
-      nodeId: call.nodeId ?? null,
+      conversationId: call.conversationId ?? null,
+      tool: call.tool ?? null,
       requestId: call.requestId ?? null,
       holdId: call.holdId ?? null,
       status: 'running',
@@ -109,10 +122,16 @@ const repo: CallsRepo = {
     });
   },
   get: async (id) => rows.get(id),
-  async finish(id, outcome, event) {
+  async finish(id, outcome) {
     const row = rows.get(id)!;
     rows.set(id, { ...row, ...outcome, status: outcome.status ?? row.status } as Call);
-    if (event) settled.push(event);
+  },
+  runSpend: async (runId) => {
+    const mine = charged().filter((row) => row.runId === runId);
+    return {
+      spentMicro: mine.reduce((sum, row) => sum + (row.chargedMicro ?? 0), 0),
+      tools: [...new Set(mine.flatMap((row) => (row.tool ? [row.tool] : [])))],
+    };
   },
   computeForRun: async (runId, payerId) =>
     [...rows.values()].filter(
@@ -121,7 +140,7 @@ const repo: CallsRepo = {
     ),
   regionBlockedModels: async () => [],
   staleRunning: async () => [],
-  typicalUsage: async () => ({ tools: new Map(), nodes: new Map(), nodeTokens: null }),
+  typicalUsage: async () => ({ tools: new Map() }),
   measured: async () => new Map(),
 };
 
@@ -136,7 +155,7 @@ const build = (pricePerCoreHourMicro: number) =>
     repo,
     pricePerCoreHourMicro,
   });
-const run = { runId: RUN, payerId: PAYER, taskId: TASK, nodeId: null, requestId: 'r' };
+const run = { runId: RUN, payerId: PAYER, requestId: 'r' };
 
 beforeAll(async () => {
   billingUrl = await billing.listen({ port: 0, host: '127.0.0.1' });
@@ -144,12 +163,11 @@ beforeAll(async () => {
 afterAll(() => billing.close());
 beforeEach(() => {
   billingCalls.length = 0;
-  settled.length = 0;
   rows.clear();
 });
 
 describe('算力计费', () => {
-  it('按最长运行时间冻结（留够时间），按实际时长 × 核数 × 单价结算，计入任务；只结算一次', async () => {
+  it('按最长运行时间冻结（留够时间），按实际时长 × 核数 × 单价结算，记在这一轮上；只结算一次', async () => {
     const compute = build(15_000);
     const { callId } = await compute.hold({ ...run, cores: 2, maxMs: 30 * 60_000 });
     // 2 核 × 0.5 小时 × $0.015
@@ -157,9 +175,8 @@ describe('算力计费', () => {
 
     await compute.settle(callId!, { cores: 2, elapsedMs: 6 * 60_000 });
     expect(billingCalls[1]).toMatchObject({ path: 'settle', body: { costMicro: 3_000 } });
-    expect(settled[0]).toMatchObject({
-      data: { kind: 'compute', taskId: TASK, runId: RUN, chargedMicro: 3_000 },
-    });
+    expect(rows.get(callId!)).toMatchObject({ kind: 'compute', runId: RUN, chargedMicro: 3_000 });
+    expect((await repo.runSpend(RUN, PAYER)).spentMicro).toBe(3_000);
 
     await compute.settle(callId!, { cores: 2, elapsedMs: 6 * 60_000 });
     expect(billingCalls).toHaveLength(2);
@@ -186,7 +203,7 @@ describe('算力计费', () => {
       endedAt: new Date(start.getTime() + 45000).toISOString(),
     });
     expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(2);
-    expect(settled).toHaveLength(2);
+    expect(charged()).toHaveLength(2);
   });
 
   it('单价为 0：不冻结，也不用结算', async () => {
@@ -196,7 +213,7 @@ describe('算力计费', () => {
     });
     expect(billingCalls).toHaveLength(0);
   });
-  it('节点沙箱与检查用浏览器的调用类型分开标识', async () => {
+  it('一轮的沙箱与检查用浏览器的调用类型分开标识', async () => {
     const compute = build(15_000);
     const sandbox = await compute.hold({ ...run, requestId: 'run', cores: 2, maxMs: 60_000 });
     expect(rows.get(sandbox.callId!)?.model).toBe('sandbox');

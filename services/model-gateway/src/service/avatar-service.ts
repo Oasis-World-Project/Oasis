@@ -108,11 +108,7 @@ export function createAvatarService(deps: {
         requestId: row.requestId ?? callId,
         model: row.model,
         kind: 'avatar',
-        caller: {
-          payerId: row.payerId,
-          ...(row.runId ? { runId: row.runId } : {}),
-          ...(row.taskId ? { taskId: row.taskId } : {}),
-        },
+        caller: { payerId: row.payerId, ...(row.runId ? { runId: row.runId } : {}) },
       },
       { costMicro, source },
       undefined,
@@ -259,7 +255,6 @@ export function createAvatarService(deps: {
         id,
         payerId,
         artifactId: input.artifactId ?? null,
-        taskId: input.taskId ?? null,
         sandbox,
         maxSeconds,
         pricePerMinuteMicro,
@@ -269,7 +264,7 @@ export function createAvatarService(deps: {
         if (pricePerMinuteMicro > 0) {
           // 额度不够时 billing 返回 402，原样交给调用方
           const call = await deps.meter.hold({
-            caller: { payerId, runId: id, ...(input.taskId ? { taskId: input.taskId } : {}) },
+            caller: { payerId, runId: id },
             kind: 'avatar',
             model: 'liveavatar-full',
             amountMicro: spec.maxMinutes * pricePerMinuteMicro,
@@ -281,7 +276,6 @@ export function createAvatarService(deps: {
         const key = await runKeys.issue({
           payerId,
           runId: id,
-          ...(input.taskId ? { taskId: input.taskId } : {}),
           ttlSeconds: maxSeconds + KEY_GRACE_SECONDS,
         });
         await repo.addResources(id, { runKeyId: key.keyId });

@@ -1,16 +1,22 @@
 // 长任务的提交、文件持久化、结算与清理共用同一行；租约防止多个进程重复处理。
-import type { EventEnvelope } from '@oasis/contracts/events';
 import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { outbox, toolJobs, toolRunControls, toolTaskDeletions } from './schema.ts';
+import { toolConversationDeletions, toolJobs, toolRunControls } from './schema.ts';
 export type ToolJob = typeof toolJobs.$inferSelect;
 export class ToolAdmissionError extends Error {}
+/** 调用方里和长任务有关的部分（存在 tool_jobs.call.caller 里） */
+interface JobCaller {
+  runId?: string;
+  payerId: string;
+  conversationId?: string;
+}
 export interface ToolJobsRepo {
-  markTaskDeleted(taskId: string): Promise<void>;
-  taskDeleted(taskId: string): Promise<boolean>;
+  /** 删对话：拦住之后才到的提交，在途的请求取消，已有结果标记待清理 */
+  markConversationDeleted(conversationId: string): Promise<void>;
+  conversationDeleted(conversationId: string): Promise<boolean>;
   deletedResults(limit: number): Promise<ToolJob[]>;
-  cancelRun(runId: string, payerId: string, taskId?: string): Promise<void>;
+  cancelRun(runId: string, payerId: string, conversationId?: string): Promise<void>;
   mergeCall(id: string, patch: Record<string, unknown>): Promise<void>;
   insert(
     job: Pick<ToolJob, 'id' | 'tool' | 'providerJobId' | 'call' | 'requestKey' | 'requestHash'>,
@@ -30,34 +36,29 @@ export interface ToolJobsRepo {
   pending(limit: number): Promise<ToolJob[]>;
   expired(now: Date, limit: number): Promise<ToolJob[]>;
   finish(id: string, status: 'completed' | 'failed', error?: string): Promise<boolean>;
-  /** 写一条事件进发件箱（平台自己答复的工具提交时用） */
-  emit(event: EventEnvelope): Promise<void>;
 }
+const conversationLock = (conversationId: string) =>
+  sql`select pg_advisory_xact_lock(hashtextextended(${`conversation:${conversationId}`},0))`;
 export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
   const db = drizzle(pool);
   return {
-    async emit(event) {
-      await db.insert(outbox).values({ id: event.id, subject: event.type, payload: event });
-    },
-    async taskDeleted(taskId) {
+    async conversationDeleted(conversationId) {
       const rows = await db
         .select()
-        .from(toolTaskDeletions)
-        .where(eq(toolTaskDeletions.taskId, taskId));
+        .from(toolConversationDeletions)
+        .where(eq(toolConversationDeletions.conversationId, conversationId));
       return rows.length > 0;
     },
-    async markTaskDeleted(taskId) {
+    async markConversationDeleted(conversationId) {
       await db.transaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended(${`task:${taskId}`},0))`,
-        );
-        await tx.insert(toolTaskDeletions).values({ taskId }).onConflictDoNothing();
+        await tx.execute(conversationLock(conversationId));
+        await tx.insert(toolConversationDeletions).values({ conversationId }).onConflictDoNothing();
         await tx
           .update(toolJobs)
           .set({
-            call: sql`${toolJobs.call} || '{"taskDeleted":true,"taskFilesCleaned":false}'::jsonb || case when ${toolJobs.status} = 'pending' then '{"cancelRequested":true}'::jsonb else '{}'::jsonb end`,
+            call: sql`${toolJobs.call} || '{"deleted":true,"filesCleaned":false}'::jsonb || case when ${toolJobs.status} = 'pending' then '{"cancelRequested":true}'::jsonb else '{}'::jsonb end`,
           })
-          .where(sql`${toolJobs.call}->'caller'->>'taskId' = ${taskId}`);
+          .where(sql`${toolJobs.call}->'caller'->>'conversationId' = ${conversationId}`);
       });
     },
     deletedResults: (limit) =>
@@ -66,9 +67,9 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
         .from(toolJobs)
         .where(
           and(
-            sql`${toolJobs.call}->>'taskDeleted' = 'true'`,
+            sql`${toolJobs.call}->>'deleted' = 'true'`,
             or(
-              sql`coalesce(${toolJobs.call}->>'taskFilesCleaned','false') <> 'true'`,
+              sql`coalesce(${toolJobs.call}->>'filesCleaned','false') <> 'true'`,
               and(sql`${toolJobs.status} <> 'pending'`, sql`${toolJobs.phase} <> 'expired'`),
             ),
           ),
@@ -76,16 +77,14 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
         .limit(limit),
     async insert(job) {
       return db.transaction(async (tx) => {
-        const caller = job.call.caller as { runId?: string; payerId: string; taskId?: string };
-        if (caller.taskId) {
-          await tx.execute(
-            sql`select pg_advisory_xact_lock(hashtextextended(${`task:${caller.taskId}`},0))`,
-          );
+        const caller = job.call.caller as JobCaller;
+        if (caller.conversationId) {
+          await tx.execute(conversationLock(caller.conversationId));
           const deleted = await tx
             .select()
-            .from(toolTaskDeletions)
-            .where(eq(toolTaskDeletions.taskId, caller.taskId));
-          if (deleted.length) throw new Error('Task deletion fences new tool admission');
+            .from(toolConversationDeletions)
+            .where(eq(toolConversationDeletions.conversationId, caller.conversationId));
+          if (deleted.length) throw new Error('Conversation deletion fences new tool admission');
         }
         if (job.tool === '3d.render') {
           await tx.execute(
@@ -105,7 +104,11 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
           await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${caller.runId},0))`);
           await tx
             .insert(toolRunControls)
-            .values({ runId: caller.runId, payerId: caller.payerId, taskId: caller.taskId ?? null })
+            .values({
+              runId: caller.runId,
+              payerId: caller.payerId,
+              conversationId: caller.conversationId ?? null,
+            })
             .onConflictDoNothing();
           const [control] = await tx
             .select()
@@ -114,7 +117,7 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
           if (control?.cancelledAt) throw new Error('Run cancellation fences new tool admission');
           if (
             control?.payerId !== caller.payerId ||
-            (control.taskId && control.taskId !== caller.taskId)
+            (control.conversationId && control.conversationId !== caller.conversationId)
           )
             throw new Error('Run owner mismatch');
         }
@@ -138,18 +141,26 @@ export function createToolJobsRepo(pool: pg.Pool): ToolJobsRepo {
         );
       });
     },
-    async cancelRun(runId, payerId, taskId) {
+    async cancelRun(runId, payerId, conversationId) {
       await db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${runId},0))`);
         await tx
           .insert(toolRunControls)
-          .values({ runId, payerId, taskId: taskId ?? null, cancelledAt: new Date() })
+          .values({
+            runId,
+            payerId,
+            conversationId: conversationId ?? null,
+            cancelledAt: new Date(),
+          })
           .onConflictDoNothing();
         const [control] = await tx
           .select()
           .from(toolRunControls)
           .where(eq(toolRunControls.runId, runId));
-        if (control?.payerId !== payerId || (control.taskId && control.taskId !== taskId))
+        if (
+          control?.payerId !== payerId ||
+          (control.conversationId && conversationId && control.conversationId !== conversationId)
+        )
           throw new Error('Run owner mismatch');
         await tx
           .update(toolRunControls)

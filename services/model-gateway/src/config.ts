@@ -1,4 +1,4 @@
-import { objectStoreEnv, postgresAndEventBus } from '@oasis/service-kit';
+import { databaseEnv, objectStoreEnv } from '@oasis/service-kit';
 import { z } from 'zod';
 
 /** 逗号分隔的列表 */
@@ -26,7 +26,7 @@ export const modelGatewayEnv = {
     .string()
     .default('deepseek/deepseek-v4.1-flash')
     .transform((value) => value || undefined),
-  /** 网络短暂断开（请求没发出去）时等多久再报错；超过才让节点停下等用户点继续（2026-11-05） */
+  /** 网络短暂断开（请求没发出去）时等多久再报错；超过才让这一轮停下（2026-11-05） */
   UPSTREAM_RECONNECT_MS: z.coerce
     .number()
     .int()
@@ -35,7 +35,7 @@ export const modelGatewayEnv = {
   /** 浏览器检查（website.test、app.check）在 inspector 里做 */
   INSPECTOR_URL: z.url().default('http://127.0.0.1:4109'),
   /**
-   * 检查浏览器用几核、一次冻结多久的算力（按调用的任务和节点计费）。检查本身不设时限
+   * 检查浏览器用几核、一次冻结多久的算力（记在调用它的那一轮上）。检查本身不设时限
    * （2026-11-04 用户决定），超过冻结时长的部分不再计费。
    */
   BROWSER_CHECK_CPUS: z.coerce.number().positive().max(8).default(2),
@@ -67,7 +67,7 @@ export const modelGatewayEnv = {
   RENDER_STAGING_S3_BUCKET: z.string().default(''),
   RENDER_STAGING_S3_ACCESS_KEY: z.string().default(''),
   RENDER_STAGING_S3_SECRET_KEY: z.string().default(''),
-  ...postgresAndEventBus.env,
+  ...databaseEnv,
   ...objectStoreEnv,
   S3_BUCKET: z.string().default('oasis-model-gateway'),
   FAL_API_KEY: z
@@ -177,7 +177,7 @@ export const modelGatewayEnv = {
     'deepseek/deepseek-v4.1-flash,qwen/qwen3.8-flash,z-ai/glm-5.3-flash',
   ),
   /**
-   * 国内厂商（模型 ID 里「/」前面的部分）。用户打开「只用国内模型」后，只给他的 AI 团队列这些厂商的
+   * 国内厂商（模型 ID 里「/」前面的部分）。用户打开「只用国内模型」后，只给他的 AI 们列这些厂商的
    * 模型和工具型号；不在名单里的都算国外。
    */
   DOMESTIC_MODEL_VENDORS: list(
@@ -185,7 +185,6 @@ export const modelGatewayEnv = {
   ),
   /** 配音拿不到实际花费时每个字估多少（微美元） */
   TOOL_SPEECH_MICRO_PER_CHAR: z.coerce.number().int().nonnegative().default(20),
-  /** 沙箱算力每核每小时多少钱（微美元；按云服务器成本价约 $0.015）。为 0 时不计费 */
   /**
    * 估价要不要参考调用记录。开发阶段的记录多半来自失控的运行，样本再多也不可信，先关掉，
    * 只按价格表估（2026-11-07 用户决定；稳定后再打开）。
@@ -194,9 +193,7 @@ export const modelGatewayEnv = {
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
-  /** 不看记录时，一个干活节点按这么多 token 乘型号单价估 */
-  ESTIMATE_NODE_PROMPT_TOKENS: z.coerce.number().int().positive().default(600_000),
-  ESTIMATE_NODE_COMPLETION_TOKENS: z.coerce.number().int().positive().default(40_000),
+  /** 沙箱算力每核每小时多少钱（微美元；按云服务器成本价约 $0.015）。为 0 时不计费 */
   COMPUTE_PRICE_MICRO_PER_CORE_HOUR: z.coerce.number().int().nonnegative().default(15_000),
   /** 实时数字人（LiveAvatar）；没配置时开数字人会话返回 503 */
   LIVEAVATAR_API_KEY: z

@@ -8,14 +8,7 @@ import { avatarSessions, type AvatarResources } from './schema.ts';
 export type AvatarSession = typeof avatarSessions.$inferSelect;
 type NewAvatarSession = Pick<
   typeof avatarSessions.$inferInsert,
-  | 'id'
-  | 'payerId'
-  | 'artifactId'
-  | 'taskId'
-  | 'sandbox'
-  | 'maxSeconds'
-  | 'pricePerMinuteMicro'
-  | 'spec'
+  'id' | 'payerId' | 'artifactId' | 'sandbox' | 'maxSeconds' | 'pricePerMinuteMicro' | 'spec'
 >;
 
 /** 一个会话最多记这么多轮（再多页面也看不过来） */

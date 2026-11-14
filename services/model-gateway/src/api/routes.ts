@@ -7,9 +7,8 @@ import {
   CreateRunKeyBody,
   DecisionRequest,
   type ModelCapabilities,
-  ModelScope,
+  type RunSpend,
   ToolCallBody,
-  ToolJobAnswerBody,
 } from '@oasis/contracts/model-gateway';
 import {
   fileResponseHeaders,
@@ -24,7 +23,7 @@ import type { ChatService } from '../service/chat-service.ts';
 import type { ComputeService } from '../service/compute-service.ts';
 import type { DecisionService } from '../service/decision-service.ts';
 import type { Caller } from '../service/metering.ts';
-import type { ModelScopeService } from '../service/model-scope.ts';
+import type { ModelScope } from '../service/model-scope.ts';
 import type { RunKeyService } from '../service/run-key-service.ts';
 import type { ToolService } from '../service/tool-service.ts';
 
@@ -35,28 +34,21 @@ const CallIdParams = z.object({ callId: z.uuid() });
 const AvatarSessionParams = z.object({ sessionId: z.uuid() });
 /** 工具的参数里可能带着要转写的录音（base64），放宽请求体上限（入口代理是 50MB） */
 const TOOL_BODY = { bodyLimit: 40 * 1024 * 1024 };
-const Attribution = z.object({
-  [OASIS_HEADERS.taskId]: z.uuid().optional(),
-  [OASIS_HEADERS.nodeId]: z.uuid().optional(),
+const RunIdParams = z.object({ runId: z.uuid() });
+const ConversationParams = z.object({ conversationId: z.uuid() });
+
+/** 内部调用方：付费人在 x-oasis-payer-id 头里 */
+const internalCaller = (request: FastifyRequest): Caller => ({ payerId: requirePayerId(request) });
+
+/** 目录按「只用国内模型」过滤（?domesticOnly=true）；没带就列全部 */
+const ScopeQuery = z.object({
+  domesticOnly: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
 });
-
-/** 内部调用方：付费人必填，任务和节点可选 */
-function internalCaller(request: FastifyRequest): Caller {
-  const headers = parseWith(Attribution, request.headers);
-  const taskId = headers[OASIS_HEADERS.taskId];
-  const nodeId = headers[OASIS_HEADERS.nodeId];
-  return {
-    payerId: requirePayerId(request),
-    ...(taskId ? { taskId } : {}),
-    ...(taskId && nodeId ? { nodeId } : {}),
-  };
-}
-
-const ForUser = z.object({ [OASIS_HEADERS.payerId]: z.uuid().optional() });
-/** 目录是替哪个用户列的（按他的模型范围过滤）；没带就是平台自己看，列全部 */
-const listedFor = (request: FastifyRequest) =>
-  parseWith(ForUser, request.headers)[OASIS_HEADERS.payerId];
-const UserIdParams = z.object({ userId: z.uuid() });
+const domesticOnlyOf = (request: FastifyRequest) =>
+  parseWith(ScopeQuery, request.query).domesticOnly;
 
 /** 客户端断开时取消上游请求（已产生的部分照样按实际花费结算）。 */
 function abortOnClose(reply: FastifyReply): AbortSignal {
@@ -128,9 +120,9 @@ export function registerRoutes(
     tools: ToolService;
     compute: ComputeService;
     avatars: AvatarService;
-    scope: ModelScopeService;
-    /** 在当前网络用不了的模型 */
-    unavailableModels: () => Promise<string[]>;
+    scope: ModelScope;
+    /** 对话里一轮已经结算的花费和用过的工具 */
+    runSpend: (runId: string, payerId: string) => Promise<RunSpend>;
     executionModels: () => Promise<ModelCapabilities[]>;
   },
 ): void {
@@ -162,8 +154,7 @@ export function registerRoutes(
     return decisions.decide({ caller, requestId: request.id, body, signal: abortOnClose(reply) });
   }
 
-  // ---- 内部服务用（gateway 不转发 /internal）：付费人放在 x-oasis-payer-id 头里；
-  // 替任务调用时（如 task 的关卡）再带上 x-oasis-task-id / x-oasis-node-id，花费计入任务 ----
+  // ---- 内部服务用（gateway 不转发 /internal）：付费人放在 x-oasis-payer-id 头里 ----
   app.post('/internal/v1/chat/completions', modelBody, (request, reply) =>
     completions(internalCaller(request), request, reply),
   );
@@ -171,25 +162,26 @@ export function registerRoutes(
     decide(internalCaller(request), request, reply),
   );
 
-  /** 工具目录（规划员、节点说明用）；调用工具 */
+  /** 工具目录；调用工具 */
   app.get('/internal/v1/tools', async (request) => ({
-    tools: await tools.list(listedFor(request)),
+    tools: await tools.list(domesticOnlyOf(request)),
   }));
+  /** 能开一轮的执行模型（harness 开一轮前核对）；打开了「只用国内模型」的只列国内厂商的 */
   app.get('/internal/v1/models/execution', async (request) => {
-    const allowed = await services.scope.filterFor(listedFor(request));
+    const allowed = services.scope.filterFor(domesticOnlyOf(request));
     const models = await services.executionModels();
     return { models: models.filter((model) => allowed(model.id)) };
   });
-  /** 一个用户的模型范围：task 替网页读写「只用国内模型」开关 */
-  app.get('/internal/v1/model-scopes/:userId', async (request) =>
-    services.scope.get(parseWith(UserIdParams, request.params).userId),
-  );
-  app.put('/internal/v1/model-scopes/:userId', async (request) =>
-    services.scope.set(
-      parseWith(UserIdParams, request.params).userId,
-      parseWith(ModelScope, request.body),
-    ),
-  );
+  /** 对话里一轮的花费和用过的工具：conversation 在一轮进行中和结束后读 */
+  app.get('/internal/v1/runs/:runId/spend', async (request): Promise<RunSpend> => {
+    const { runId } = parseWith(RunIdParams, request.params);
+    return services.runSpend(runId, requirePayerId(request));
+  });
+  /** 删对话（真删除）：拦住迟到的工具提交，取消在途的长任务，清掉工具的结果文件；可以重复调用 */
+  app.post('/internal/conversations/:conversationId/purge', async (request, reply) => {
+    await tools.purgeConversation(parseWith(ConversationParams, request.params).conversationId);
+    return reply.code(204).send();
+  });
   app.post('/internal/v1/tools/:key', TOOL_BODY, (request, reply) =>
     useTool(internalCaller(request), request, reply),
   );
@@ -201,16 +193,8 @@ export function registerRoutes(
     await tools.cancel(internalCaller(request), parseWith(JobParams, request.params).jobId);
     return { accepted: true };
   });
-  /** task 把规划员对「提出调整」的答复写回长任务 */
-  app.post('/internal/v1/tools/jobs/:jobId/answer', async (request) => {
-    await tools.answer(
-      parseWith(JobParams, request.params).jobId,
-      parseWith(ToolJobAnswerBody, request.body).text,
-    );
-    return { accepted: true };
-  });
   app.post('/internal/v1/tools/runs/:runId/cancel', async (request) => {
-    const { runId } = parseWith(z.object({ runId: z.uuid() }), request.params);
+    const { runId } = parseWith(RunIdParams, request.params);
     await tools.cancelRun(internalCaller(request), runId);
     return { accepted: true };
   });
@@ -240,7 +224,7 @@ export function registerRoutes(
     return reply.code(204).send();
   });
   app.post('/internal/v1/compute/runs/:runId/recover', async (request, reply) => {
-    const { runId } = parseWith(z.object({ runId: z.uuid() }), request.params);
+    const { runId } = parseWith(RunIdParams, request.params);
     await services.compute.recover(
       runId,
       parseWith(
@@ -259,11 +243,6 @@ export function registerRoutes(
     return services.compute.outcome(callId);
   });
 
-  /** 在当前网络用不了的模型（conversation 接需求时，私聊的 AI 用不了就事先换一个） */
-  app.get('/internal/v1/models/unavailable', async () => ({
-    models: await services.unavailableModels(),
-  }));
-
   // ---- 实时数字人：canvas 替用户开、结束会话 ----
   app.post('/internal/avatar/sessions', async (request, reply) => {
     const body = parseWith(AvatarSessionStartBody, request.body);
@@ -280,7 +259,7 @@ export function registerRoutes(
     return avatars.view(requirePayerId(request), sessionId);
   });
 
-  /** harness 为一次 agent 运行签发临时 Key；明文只在这里返回一次。 */
+  /** harness 为对话里的一轮签发临时 Key；明文只在这里返回一次。 */
   app.post('/internal/run-keys', async (request, reply) => {
     const body = parseWith(CreateRunKeyBody, request.body);
     return reply.code(201).send(await runKeys.issue(body));
@@ -309,7 +288,7 @@ export function registerRoutes(
   // 沙箱里的 oasis-tool：看有哪些工具、调用工具
   app.get('/run/v1/tools', async (request) => {
     const caller = await runKeys.authenticate(request.headers.authorization);
-    return { tools: await tools.list(caller.payerId) };
+    return { tools: await tools.list(caller.domesticOnly) };
   });
   app.post('/run/v1/tools/:key', TOOL_BODY, async (request, reply) =>
     useTool(await runKeys.authenticate(request.headers.authorization), request, reply),

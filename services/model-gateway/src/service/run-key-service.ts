@@ -1,4 +1,5 @@
-// 每次 agent 运行专用的临时 Key：签发（明文只返回一次）、校验（换出付费人和归属）、作废。
+// 对话里每一轮（一次 agent 运行）专用的临时 Key：签发（明文只返回一次）、校验（换出付费人、归属和
+// 「只用国内模型」）、作废。
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { RunKeyCreated } from '@oasis/contracts/model-gateway';
 import { HttpError } from '@oasis/service-kit';
@@ -22,8 +23,8 @@ export function createRunKeyService(deps: { repo: RunKeysRepo; now?: () => Date 
         keyHash: hashKey(key),
         payerId: input.payerId,
         runId: input.runId,
-        taskId: input.taskId ?? null,
-        nodeId: input.nodeId ?? null,
+        conversationId: input.conversationId ?? null,
+        domesticOnly: input.domesticOnly ?? false,
         expiresAt,
       });
       return { keyId, key, expiresAt: expiresAt.toISOString() } satisfies RunKeyCreated;
@@ -39,8 +40,8 @@ export function createRunKeyService(deps: { repo: RunKeysRepo; now?: () => Date 
       return {
         payerId: row.payerId,
         runId: row.runId,
-        ...(row.taskId ? { taskId: row.taskId } : {}),
-        ...(row.nodeId ? { nodeId: row.nodeId } : {}),
+        ...(row.conversationId ? { conversationId: row.conversationId } : {}),
+        ...(row.domesticOnly ? { domesticOnly: true } : {}),
       };
     },
 

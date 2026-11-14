@@ -8,7 +8,8 @@ import { registerRoutes } from '../src/api/routes.ts';
 import {
   knobs,
   PAYER,
-  TASK,
+  CONVERSATION,
+  RUN,
   billingCalls,
   jobRows,
   jobs,
@@ -60,7 +61,7 @@ describe('3D 生成复用长任务', () => {
     knobs.geometryMode = true;
     useTools('key', true);
     const input = {
-      caller: { payerId: PAYER, taskId: TASK },
+      caller: { payerId: PAYER, conversationId: CONVERSATION, runId: RUN },
       key: '3d.generate',
       args: { image: geometryImage },
       requestId: 'geometry',
@@ -150,11 +151,12 @@ describe('3D 生成复用长任务', () => {
   it('取消意图持久化且检查归属；接受取消不等于费用可退回', async () => {
     knobs.geometryMode = true;
     useTools('key', true);
-    const id = (await call('3d.generate', { image: geometryImage }, TASK)).job!.id;
-    await expect(tools.cancel({ payerId: PAYER, taskId: PAYER }, id)).rejects.toMatchObject({
-      statusCode: 404,
-    });
-    await tools.cancel({ payerId: PAYER, taskId: TASK }, id);
+    const id = (await call('3d.generate', { image: geometryImage }, CONVERSATION)).job!.id;
+    // 别的对话里那一轮取消不了
+    await expect(
+      tools.cancel({ payerId: PAYER, runId: RUN, conversationId: PAYER }, id),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    await tools.cancel({ payerId: PAYER, runId: RUN, conversationId: CONVERSATION }, id);
     await tools.close();
     expect(jobRows.get(id)?.call.cancelRequested).toBe(true);
     expect(jobRows.get(id)?.phase).toBe('uncertain');
@@ -292,7 +294,9 @@ describe('云渲染的准备、恢复、归档和对账', () => {
     expect(knobs.renderSubmits).toBe(1);
     expect([...mediaFiles.keys()].some((k) => k.startsWith('jobs/'))).toBe(false);
     expect(billingCalls.filter((c) => c.path === 'settle')).toHaveLength(1);
-    await expect(tools.file({ payerId: TASK }, id, '0')).rejects.toMatchObject({ statusCode: 404 });
+    await expect(tools.file({ payerId: CONVERSATION }, id, '0')).rejects.toMatchObject({
+      statusCode: 404,
+    });
   });
   it('输入不齐不提交、坏摘要不保存；取消上传不调用 GPU', async () => {
     useTools('key', false, true);

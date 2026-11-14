@@ -1,6 +1,5 @@
 // 工具服务测试用的假依赖：billing、OpenRouter/Tavily/视频接口、调用记录、作业表和对象存储。
 import { Readable } from 'node:stream';
-import type { EventEnvelope } from '@oasis/contracts/events';
 import { checkedParts, type ObjectStore } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import type {
@@ -62,7 +61,9 @@ export const knobs = {
 };
 
 export const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
-export const TASK = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
+/** 沙箱里调用工具的那一轮和它所属的对话 */
+export const CONVERSATION = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
+export const RUN = '1e1e1e1e-1e1e-4e1e-8e1e-1e1e1e1e1e1e';
 const HOLD = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 export const PNG = Buffer.from('fake-png').toString('base64');
 /** 文件头是 JPEG 的假图片 */
@@ -220,40 +221,40 @@ fake.post('/tavily/extract', async (request) => {
 
 export const finished: CallOutcome[] = [];
 export const recordedCalls = new Map<string, CallOutcome>();
-export const settled: EventEnvelope[] = [];
+/** 登记过的调用（谁付钱、记在哪个对话和哪一轮） */
+export const startedCalls: Parameters<CallsRepo['start']>[0][] = [];
 export function noHistory(): TypicalUsage {
-  return { tools: new Map(), nodes: new Map(), nodeTokens: null };
+  return { tools: new Map() };
 }
 export const repo: CallsRepo = {
-  start: async () => {},
+  start: async (call) => void startedCalls.push(call),
   get: async (id) => recordedCalls.get(id) as Call | undefined,
   computeForRun: async () => [],
   regionBlockedModels: async () => [],
   staleRunning: async () => [],
   typicalUsage: async () => knobs.typical,
   measured: async () => knobs.measured,
-  async finish(id, outcome, event) {
+  runSpend: async () => ({ spentMicro: 0, tools: [] }),
+  async finish(id, outcome) {
     recordedCalls.set(id, outcome);
     finished.push(outcome);
-    if (event) settled.push(event);
   },
 };
 
 export const jobRows = new Map<string, ToolJob>();
-export const deletedTasks = new Set<string>();
-/** 长任务提交时发出的事件（提出调整） */
-export const emitted: { type: string; data: unknown }[] = [];
+export const deletedConversations = new Set<string>();
+const conversationOf = (row: Pick<ToolJob, 'call'>) =>
+  (row.call.caller as { conversationId?: string }).conversationId;
 export const jobs: ToolJobsRepo = {
-  emit: async (event) => void emitted.push(event),
-  taskDeleted: async (taskId) => deletedTasks.has(taskId),
-  async markTaskDeleted(taskId) {
-    deletedTasks.add(taskId);
+  conversationDeleted: async (conversationId) => deletedConversations.has(conversationId),
+  async markConversationDeleted(conversationId) {
+    deletedConversations.add(conversationId);
     for (const row of jobRows.values())
-      if ((row.call.caller as { taskId?: string }).taskId === taskId) {
+      if (conversationOf(row) === conversationId) {
         row.call = {
           ...row.call,
-          taskDeleted: true,
-          taskFilesCleaned: false,
+          deleted: true,
+          filesCleaned: false,
           ...(row.status === 'pending' ? { cancelRequested: true } : {}),
         };
       }
@@ -262,14 +263,17 @@ export const jobs: ToolJobsRepo = {
     [...jobRows.values()]
       .filter(
         (row) =>
-          row.call.taskDeleted &&
-          (!row.call.taskFilesCleaned || (row.status !== 'pending' && row.phase !== 'expired')),
+          row.call.deleted &&
+          (!row.call.filesCleaned || (row.status !== 'pending' && row.phase !== 'expired')),
       )
       .slice(0, limit),
-  async cancelRun(runId, payerId, taskId) {
+  async cancelRun(runId, payerId, conversationId) {
     for (const row of await this.forRun(runId)) {
-      const caller = row.call.caller as { payerId: string; taskId?: string };
-      if (caller.payerId !== payerId || (caller.taskId && caller.taskId !== taskId))
+      const caller = row.call.caller as { payerId: string; conversationId?: string };
+      if (
+        caller.payerId !== payerId ||
+        (caller.conversationId && conversationId && caller.conversationId !== conversationId)
+      )
         throw new Error('Owner mismatch');
       await this.requestCancel(row.id);
     }
@@ -290,8 +294,8 @@ export const jobs: ToolJobsRepo = {
       (row) => row.status === 'pending' && (row.call.caller as { runId?: string })?.runId === runId,
     ),
   async insert(job) {
-    if (deletedTasks.has((job.call.caller as { taskId?: string }).taskId ?? ''))
-      throw new Error('Task deleted');
+    if (deletedConversations.has(conversationOf(job) ?? ''))
+      throw new Error('Conversation deleted');
     if (job.requestKey && [...jobRows.values()].some((row) => row.requestKey === job.requestKey))
       return false;
     jobRows.set(job.id, {

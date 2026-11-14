@@ -1,7 +1,7 @@
-// 网页的浏览器检查：交付关卡、节点自查（app.check）、外站测试共用。
+// 网页的浏览器检查：AI 自查（app.check）、检查一轮的产出、外站测试共用。
 // 每次检查开一个检查浏览器容器，用完即删；不设时限（2026-11-04 用户决定）：页面多慢都等，由控制端按页面
-// 是否安定下结论，只有得出结果、浏览器进程退出或调用方断开（用户停止、取消节点）时才结束。
-// inspector 不存东西：交付关卡的报告由 task 存回 harness；核数由付费的调用方定，实际用时报回去由它结算。
+// 是否安定下结论，只有得出结果、浏览器进程退出或调用方断开（用户停下这一轮、删了私聊）时才结束。
+// inspector 不存东西：报告交回调用方；核数由付费的调用方定，实际用时报回去由它结算。
 import { randomUUID } from 'node:crypto';
 import type {
   ApplicationCheckBody,
@@ -170,7 +170,7 @@ export function createBrowserChecks(deps: {
     };
   }
 
-  /** 组装好的运行包跑一遍，说成关卡和节点看得懂的结论 */
+  /** 组装好的运行包跑一遍，说成 AI 看得懂的结论 */
   async function conclude(
     prepared: Exclude<Awaited<ReturnType<typeof assemble>>, Failure>,
     cores: number,
@@ -185,9 +185,9 @@ export function createBrowserChecks(deps: {
       reason: outcome.report.passed ? null : failureReason(outcome.report),
       frameCaptured: true,
       report: outcome.report,
-      // 交付关卡留档：绑定实际检查的运行包
+      // 检查一轮的产出时留档：绑定实际检查的运行包
       ...(keep ? { application: prepared.application, inputSha256: prepared.inputSha256 } : {}),
-      // 平台截的画面：关卡留档时带上；节点自查要看画面时（shots）也带上，不要就只给结论
+      // 平台截的画面：留档时带上；AI 自查要看画面时（shots）也带上，不要就只给结论
       ...(shots
         ? {
             screenshots: [
@@ -207,7 +207,7 @@ export function createBrowserChecks(deps: {
   });
 
   return {
-    /** 交付关卡：检查运行产出包里这份清单所在的应用；结论交回 task 留档 */
+    /** 检查一轮的产出：运行产出包里这份清单所在的应用；结论交回调用方 */
     checkOutputs: (body: ApplicationCheckBody, signal?: AbortSignal) =>
       queue(async () => {
         const outputs = await readOutputs(body.source.url, body.manifest, signal);
@@ -218,7 +218,7 @@ export function createBrowserChecks(deps: {
         return conclude(prepared, body.cores, signal, true);
       }, signal),
 
-    /** 节点自查（app.check）：out/<dir> 的当前文件随调用带来，不留档，结论当场交回节点 */
+    /** AI 自查（app.check）：out/<dir> 的当前文件随调用带来，不留档，结论当场交回 */
     checkFiles: (body: ApplicationFilesCheckBody, signal?: AbortSignal) =>
       queue(async () => {
         const files = new Map(

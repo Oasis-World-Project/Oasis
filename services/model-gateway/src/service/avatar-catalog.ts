@@ -1,4 +1,4 @@
-// 工具 avatar.catalog：给做数字人的节点查能用的形象和声音。只读、不花钱，不走计量。
+// 工具 avatar.catalog：给做数字人的 AI 查能用的形象和声音。只读、不花钱，不走计量。
 // 公共形象有好几百个，按关键词和横竖屏筛，每次最多返回 60 个；列表缓存 10 分钟。
 import type { ToolEntry, ToolResult } from '@oasis/contracts/model-gateway';
 import { HttpError } from '@oasis/service-kit';

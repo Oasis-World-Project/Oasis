@@ -1,14 +1,10 @@
 // model-gateway：所有模型调用（聊天、Jev 决策、沙箱里的 agent）的唯一出口，调用前冻结额度、调用后按实际花费结算。
 import { fileURLToPath } from 'node:url';
-import { MODEL_GATEWAY_STREAM, TASK_STREAM, TaskDeleted } from '@oasis/contracts/events';
 import {
-  connectPostgresAndEventBus,
+  createPostgres,
   createServiceClient,
   createObjectStore,
   type ObjectStore,
-  ensureStream,
-  startOutboxRelay,
-  startEventConsumer,
   startService,
   type Logger,
   type ServiceResource,
@@ -23,15 +19,13 @@ import { registerRoutes } from './api/routes.ts';
 import { modelGatewayEnv } from './config.ts';
 import { createCallsRepo } from './repo/calls-repo.ts';
 import { createAvatarSessionsRepo } from './repo/avatar-sessions-repo.ts';
-import { createModelScopesRepo } from './repo/model-scopes-repo.ts';
 import { createRunKeysRepo } from './repo/run-keys-repo.ts';
 import { createToolJobsRepo } from './repo/tool-jobs-repo.ts';
 import { createChatService } from './service/chat-service.ts';
 import { createComputeService } from './service/compute-service.ts';
 import { createDecisionService } from './service/decision-service.ts';
 import { createMeter } from './service/metering.ts';
-import { createModelScopeService } from './service/model-scope.ts';
-import { withNodeRate } from './service/pricing.ts';
+import { createModelScope } from './service/model-scope.ts';
 import { createRunKeyService } from './service/run-key-service.ts';
 import { createToolService } from './service/tool-service.ts';
 import { createTavilyClient } from './adapters/tavily.ts';
@@ -69,7 +63,6 @@ let priceBook: ReturnType<typeof startPriceBook>;
 let provider: ProviderClient;
 let toolStore: ObjectStore;
 let renderStaging: ObjectStore | undefined;
-let toolService: ReturnType<typeof createToolService> | undefined;
 
 await startService({
   name: 'model-gateway',
@@ -83,7 +76,7 @@ await startService({
     });
     if (!provider.configured) ctx.logger.warn('没有配置 OPENROUTER_API_KEY：模型调用会返回 503');
     priceBook = startPriceBook(provider, ctx.config.PRICING_REFRESH_MS, ctx.logger);
-    const { postgres, eventBus } = await connectPostgresAndEventBus(ctx);
+    const postgres = createPostgres(ctx.config.DATABASE_URL, ctx.logger);
     const objects = createObjectStore({
       endpoint: ctx.config.S3_ENDPOINT,
       region: ctx.config.S3_REGION,
@@ -106,29 +99,8 @@ await startService({
           })
         : undefined;
     renderStaging = staging?.store;
-    await ensureStream(eventBus.connection, MODEL_GATEWAY_STREAM);
-    // 属于任务的调用结算后发 model-gateway.call.settled（task 累加花费）
-    const outbox = startOutboxRelay({
-      pool: postgres.pool,
-      connection: eventBus.connection,
-      logger: ctx.logger,
-    });
-    const taskDeleted = startEventConsumer({
-      connection: eventBus.connection,
-      stream: TASK_STREAM,
-      durable: 'model-gateway-task-deleted',
-      filterSubject: TaskDeleted.type,
-      logger: ctx.logger,
-      handle: async (envelope) => {
-        if (!toolService) throw new Error('model-gateway 还没就绪');
-        await toolService.purgeTask(TaskDeleted.data.parse(envelope.data).taskId);
-      },
-    });
     return {
       postgres,
-      eventBus,
-      outbox,
-      taskDeleted,
       objects: objects.resource,
       priceBook: priceBook.resource,
       ...(staging ? { renderStaging: staging.resource } : {}),
@@ -166,10 +138,7 @@ await startService({
       repo: callsRepo,
       pricePerCoreHourMicro: config.COMPUTE_PRICE_MICRO_PER_CORE_HOUR,
     });
-    const scope = createModelScopeService({
-      repo: createModelScopesRepo(resources.postgres.pool),
-      domesticVendors: config.DOMESTIC_MODEL_VENDORS,
-    });
+    const scope = createModelScope({ domesticVendors: config.DOMESTIC_MODEL_VENDORS });
     const tools = createToolService({
       estimateFromHistory: config.ESTIMATE_FROM_HISTORY,
       // 浏览器检查在 inspector；检查浏览器的算力在这里冻结、结算
@@ -238,7 +207,6 @@ await startService({
       },
       logger,
     });
-    toolService = tools;
     tools.start();
     app.addHook('onClose', () => tools.close());
     const chat = createChatService({
@@ -290,19 +258,9 @@ await startService({
       tools,
       compute,
       scope,
-      unavailableModels: meter.regionBlockedModels,
+      runSpend: meter.runSpend,
       executionModels: async () => {
-        // 开发阶段不参考调用记录（ESTIMATE_FROM_HISTORY）：只按价格表 × 假设的用量估
-        const usage = config.ESTIMATE_FROM_HISTORY
-          ? await meter.typicalUsage().catch((err: unknown) => {
-              logger.warn({ err }, '读不到调用记录，节点估价只按价格表');
-              return undefined;
-            })
-          : undefined;
-        const assumed = {
-          prompt: config.ESTIMATE_NODE_PROMPT_TOKENS,
-          completion: config.ESTIMATE_NODE_COMPLETION_TOKENS,
-        };
+        // 开发阶段不参考调用记录（ESTIMATE_FROM_HISTORY）：型号不带实测
         const measured = config.ESTIMATE_FROM_HISTORY
           ? await meter.measured().catch((err: unknown) => {
               logger.warn({ err }, '读不到调用记录，型号不带实测');
@@ -312,7 +270,7 @@ await startService({
         return [...priceBook.current().values()].flatMap((price) => {
           if (!price.capabilities) return [];
           const seen = measured?.get(price.capabilities.id);
-          return [{ ...withNodeRate(price, usage, assumed), ...(seen ? { measured: seen } : {}) }];
+          return [{ ...price.capabilities, ...(seen ? { measured: seen } : {}) }];
         });
       },
     });

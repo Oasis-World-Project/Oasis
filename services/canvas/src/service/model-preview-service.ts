@@ -19,7 +19,6 @@ export function createModelPreviewService(deps: {
   artifacts: ArtifactService;
   uploads: UploadService;
   store: ObjectStore;
-  task: ServiceClient;
   inspector?: ServiceClient;
 }) {
   const cache = new Map<string, Promise<ReturnType<typeof ModelInspectionResult.parse>>>();
@@ -186,7 +185,7 @@ export function createModelPreviewService(deps: {
       if (linked.turntable && linked.turntable.size <= 128 * 1024 ** 2)
         turntable = ref(linked.turntable);
       simplified = linked.simplified ?? false;
-    } else if (source.kind === 'upload') {
+    } else {
       const row = await deps.uploads.owned(user, source.id);
       if (!row.sha256) throw new HttpError(422, 'model_preview_hash', '素材缺少摘要');
       original = {
@@ -197,41 +196,6 @@ export function createModelPreviewService(deps: {
       };
       if (/\.glb$/i.test(row.name))
         model = { ...row, url: original.url, read: () => deps.store.read(row.objectKey) };
-    } else {
-      const registered = (await deps.artifacts.list(user, { taskId: source.taskId })).filter(
-        (row) => row.nodeId === source.nodeId && row.path === source.path,
-      );
-      if (registered.length === 1)
-        return describe(user, { kind: 'artifact', id: registered[0]!.id });
-      const encoded = source.path.split('/').map(encodeURIComponent).join('/');
-      const response = await deps.task.stream(
-        'GET',
-        `/v1/tasks/${source.taskId}/files/${source.nodeId}/${encoded}`,
-        { headers: { 'x-oasis-user-id': user }, signal: AbortSignal.timeout(15000) },
-      );
-      if (!response.body) throw new HttpError(422, 'model_preview_empty', '模型内容为空');
-      const row = {
-        size: Number(response.headers.get('content-length')),
-        sha256: response.headers.get('x-oasis-file-sha256'),
-      };
-      if (
-        !Number.isSafeInteger(row.size) ||
-        row.size <= 0 ||
-        !/^[a-f0-9]{64}$/.test(row.sha256 ?? '')
-      ) {
-        await response.body.cancel();
-        throw new HttpError(422, 'model_preview_hash', '模型内容缺少可信大小或摘要');
-      }
-      const read = async () => Readable.fromWeb(response.body!);
-      original = {
-        name: posix.basename(source.path),
-        size: row.size,
-        sha256: row.sha256!,
-        url: `/api/task/v1/tasks/${source.taskId}/files/${source.nodeId}/${encoded}`,
-      };
-      if (/\.glb$/i.test(source.path) && row.size <= L.bytes)
-        model = { ...row, name: original.name, url: original.url, read };
-      else await response.body.cancel();
     }
     const result: ModelPreviewBody = {
       source: original,

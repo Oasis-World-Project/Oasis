@@ -6,7 +6,6 @@ import {
   MEDIA_TOKENS,
   videoCatalogRate,
   videoSecondRate,
-  withNodeRate,
 } from '../src/service/pricing.ts';
 
 // $0.10 / 百万输入 token，$0.50 / 百万输出 token
@@ -98,42 +97,7 @@ describe('实际花费', () => {
   });
 });
 
-describe('型号的典型单价和用时', () => {
-  const capabilities = {
-    id: 'v/m',
-    name: 'M',
-    contextWindow: 100_000,
-    maxTokens: 8_000,
-    input: ['text' as const],
-    reasoning: false,
-  };
-  const price = { capabilities, prompt: 1e-6, completion: 4e-6 };
-
-  it('节点：有这个型号的记录用记录，没有按价格表乘典型用量；不给记录时按假设用量', () => {
-    const usage = {
-      tools: new Map(),
-      nodes: new Map([['v/m', { costMicro: 30_000, seconds: 240, samples: 5 }]]),
-      nodeTokens: { prompt: 200_000, completion: 10_000 },
-    };
-    const assumed = { prompt: 300_000, completion: 20_000 };
-    expect(withNodeRate(price, usage, assumed).node).toEqual({
-      costMicro: 30_000,
-      seconds: 240,
-      basis: 'history',
-    });
-    expect(withNodeRate(price, { ...usage, nodes: new Map() }, assumed).node).toEqual({
-      costMicro: 240_000,
-      seconds: null,
-      basis: 'catalog',
-    });
-    // 开发阶段不看记录：300k × $1/M + 20k × $4/M = $0.38
-    expect(withNodeRate(price, undefined, assumed).node).toEqual({
-      costMicro: 380_000,
-      seconds: null,
-      basis: 'catalog',
-    });
-  });
-
+describe('视频的单价', () => {
   it('视频每秒：美元和美分 SKU 都认，取较高档；没有 SKU 是 NaN', () => {
     expect(videoSecondRate({ duration_seconds_720p: '0.1' }, '720p', false)).toBe(0.1);
     expect(

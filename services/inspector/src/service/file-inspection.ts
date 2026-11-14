@@ -85,7 +85,7 @@ export async function inspectFiles(
     const remaining = limits.totalMs - (Date.now() - start);
     if (index >= limits.files || remaining <= 0) {
       result.truncated = true;
-      // 不给遗漏文件制造“有效”结论；关卡可由缺失报告识别未检查。
+      // 不给遗漏文件制造“有效”结论；调用方可由缺失报告识别未检查。
       break;
     }
     const { truncated, ...checked } = await inspect(

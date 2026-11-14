@@ -1,5 +1,5 @@
 import type { ArtifactCategory } from '@oasis/contracts/canvas';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { artifacts } from './schema.ts';
@@ -9,20 +9,23 @@ export type Artifact = typeof artifacts.$inferSelect;
 export type NewArtifact = Omit<Artifact, 'createdAt' | 'annotations' | 'approvedAt'>;
 
 export interface ArtifactsRepo {
-  /** 已经登记过（同一个任务、节点、路径）就什么也不做，返回 false */
+  /** 已经登记过（同一个话题、同一路径）就什么也不做，返回 false */
   insert(artifact: NewArtifact): Promise<boolean>;
   find(id: string): Promise<Artifact | undefined>;
+  /** 按 id 查一批；查不到的不返回 */
+  findMany(ids: string[]): Promise<Artifact[]>;
   setApplication(id: string, spec: Artifact['appSpec']): Promise<void>;
   /** 数字人配置；归到「网页和应用」 */
   setAvatar(id: string, spec: Artifact['avatarSpec']): Promise<void>;
   list(
     ownerId: string,
-    filter: { category?: ArtifactCategory; taskId?: string },
+    filter: { category?: ArtifactCategory; conversationId?: string; sessionId?: string },
     limit: number,
   ): Promise<Artifact[]>;
-  listByTask(taskId: string): Promise<Artifact[]>;
-  /** 这个用户在电脑上已经用掉的任务文件夹名（sync_path 的第一段），不含这个任务的 */
-  syncDirs(ownerId: string, exceptTaskId: string): Promise<string[]>;
+  listBySession(sessionId: string): Promise<Artifact[]>;
+  listByConversation(conversationId: string): Promise<Artifact[]>;
+  /** 这个用户在电脑上已经用掉的话题文件夹名（sync_path 的第一段），不含这个话题的 */
+  syncDirs(ownerId: string, exceptSessionId: string): Promise<string[]>;
   /** 删掉这些成果行（对象已经删掉） */
   removeRows(artifactIds: string[]): Promise<void>;
   /** 批注整份替换、批准记号 */
@@ -30,10 +33,13 @@ export interface ArtifactsRepo {
     id: string,
     patch: Partial<Pick<Artifact, 'annotations' | 'approvedAt'>>,
   ): Promise<Artifact | undefined>;
-  /** 同一任务修改后再次交付：内容换成新版，批注和批准清掉，登记时间更新；id、同步路径不变 */
+  /** 后来的一轮改了它：内容换成新版，批注和批准清掉，登记时间更新；id、同步路径不变 */
   replaceContent(
     id: string,
-    patch: Pick<Artifact, 'size' | 'sha256' | 'contentType' | 'models' | 'replacesSha256'>,
+    patch: Pick<
+      Artifact,
+      'size' | 'sha256' | 'contentType' | 'models' | 'replacesSha256' | 'runId'
+    >,
   ): Promise<void>;
 }
 
@@ -44,9 +50,7 @@ export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
       const rows = await db
         .insert(artifacts)
         .values(artifact)
-        .onConflictDoNothing({
-          target: [artifacts.taskId, artifacts.nodeId, artifacts.path],
-        })
+        .onConflictDoNothing({ target: [artifacts.sessionId, artifacts.path] })
         .returning({ id: artifacts.id });
       return rows.length > 0;
     },
@@ -54,6 +58,8 @@ export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
       const [row] = await db.select().from(artifacts).where(eq(artifacts.id, id));
       return row;
     },
+    findMany: async (ids) =>
+      ids.length ? db.select().from(artifacts).where(inArray(artifacts.id, ids)) : [],
     async setApplication(id, spec) {
       await db
         .update(artifacts)
@@ -74,17 +80,21 @@ export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
           and(
             eq(artifacts.ownerId, ownerId),
             filter.category ? eq(artifacts.category, filter.category) : undefined,
-            filter.taskId ? eq(artifacts.taskId, filter.taskId) : undefined,
+            filter.conversationId ? eq(artifacts.conversationId, filter.conversationId) : undefined,
+            filter.sessionId ? eq(artifacts.sessionId, filter.sessionId) : undefined,
           ),
         )
         .orderBy(desc(artifacts.createdAt), artifacts.path)
         .limit(limit),
-    listByTask: (taskId) => db.select().from(artifacts).where(eq(artifacts.taskId, taskId)),
-    async syncDirs(ownerId, exceptTaskId) {
+    listBySession: (sessionId) =>
+      db.select().from(artifacts).where(eq(artifacts.sessionId, sessionId)),
+    listByConversation: (conversationId) =>
+      db.select().from(artifacts).where(eq(artifacts.conversationId, conversationId)),
+    async syncDirs(ownerId, exceptSessionId) {
       const rows = await db
         .selectDistinct({ dir: sql<string>`split_part(${artifacts.syncPath}, '/', 1)` })
         .from(artifacts)
-        .where(and(eq(artifacts.ownerId, ownerId), sql`${artifacts.taskId} <> ${exceptTaskId}`));
+        .where(and(eq(artifacts.ownerId, ownerId), ne(artifacts.sessionId, exceptSessionId)));
       return rows.map((r) => r.dir);
     },
     async removeRows(artifactIds) {

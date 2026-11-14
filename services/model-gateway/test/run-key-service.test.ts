@@ -5,7 +5,7 @@ import { createRunKeyService } from '../src/service/run-key-service.ts';
 
 const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 const RUN = '3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b9a';
-const TASK = '1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b';
+const CONVERSATION = '1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b';
 
 /** 内存里的 Key 表，行为与 SQL 版一致（只按未作废、未过期查）。 */
 function memoryRepo(): RunKeysRepo & { rows: RunKey[] } {
@@ -15,8 +15,8 @@ function memoryRepo(): RunKeysRepo & { rows: RunKey[] } {
     async insert(key: NewRunKey) {
       rows.push({
         ...key,
-        taskId: key.taskId ?? null,
-        nodeId: key.nodeId ?? null,
+        conversationId: key.conversationId ?? null,
+        domesticOnly: key.domesticOnly ?? false,
         revokedAt: null,
         createdAt: new Date(),
       });
@@ -51,7 +51,7 @@ describe('运行临时 Key', () => {
     const issued = await service.issue({
       payerId: PAYER,
       runId: RUN,
-      taskId: TASK,
+      conversationId: CONVERSATION,
       ttlSeconds: 60,
     });
     expect(issued.key).toMatch(/^oasis_run_[\w-]{40,}$/);
@@ -59,7 +59,19 @@ describe('运行临时 Key', () => {
     await expect(service.authenticate(`Bearer ${issued.key}`)).resolves.toEqual({
       payerId: PAYER,
       runId: RUN,
-      taskId: TASK,
+      conversationId: CONVERSATION,
+    });
+    // 打开了「只用国内模型」的一轮：凭证带着这个设置，这一轮的工具按它过滤
+    const domestic = await service.issue({
+      payerId: PAYER,
+      runId: RUN,
+      domesticOnly: true,
+      ttlSeconds: 60,
+    });
+    await expect(service.authenticate(`Bearer ${domestic.key}`)).resolves.toEqual({
+      payerId: PAYER,
+      runId: RUN,
+      domesticOnly: true,
     });
   });
 

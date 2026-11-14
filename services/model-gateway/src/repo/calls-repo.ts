@@ -1,8 +1,7 @@
-import type { EventEnvelope } from '@oasis/contracts/events';
 import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { calls, outbox } from './schema.ts';
+import { calls } from './schema.ts';
 
 /** 上游拒绝「地区不可用」时返回的原文（记在调用记录的 error 里） */
 export const REGION_ERROR = 'not available in your region';
@@ -10,7 +9,7 @@ export const REGION_ERROR = 'not available in your region';
 export type CallKind = (typeof calls.$inferInsert)['kind'];
 type NewCall = Pick<
   typeof calls.$inferInsert,
-  'id' | 'kind' | 'payerId' | 'runId' | 'taskId' | 'nodeId' | 'model' | 'requestId' | 'holdId'
+  'id' | 'kind' | 'payerId' | 'runId' | 'conversationId' | 'model' | 'tool' | 'requestId' | 'holdId'
 >;
 export type CallOutcome = Pick<
   typeof calls.$inferInsert,
@@ -50,17 +49,15 @@ const MIN_MEASURED_CALLS = 30;
 export interface TypicalUsage {
   /** 工具：每个型号一次调用 */
   tools: Map<string, Typical>;
-  /** 干活节点：每个型号一个节点（这个节点里该型号的所有聊天调用合计） */
-  nodes: Map<string, Typical>;
-  /** 所有节点的典型 token 用量，给没有记录的型号按价格表估；一条记录都没有时为 null */
-  nodeTokens: { prompt: number; completion: number } | null;
 }
 
 export interface CallsRepo {
   start(call: NewCall): Promise<void>;
   get(id: string): Promise<Call | undefined>;
-  /** 写结局；有事件时在同一个事务里写进发件箱 */
-  finish(id: string, outcome: CallOutcome, event?: EventEnvelope): Promise<void>;
+  /** 写结局（已经结算过的不再改） */
+  finish(id: string, outcome: CallOutcome): Promise<void>;
+  /** 对话里一轮已经结算的花费（模型、工具、沙箱算力合计，微美元）和用过的工具 */
+  runSpend(runId: string, payerId: string): Promise<{ spentMicro: number; tools: string[] }>;
   /** 最近一次聊天、工具或决策调用因「地区不可用」失败的模型（之后没再成功过） */
   regionBlockedModels(): Promise<string[]>;
   typicalUsage(): Promise<TypicalUsage>;
@@ -139,35 +136,20 @@ export function createCallsRepo(pool: pg.Pool): CallsRepo {
         where kind = 'tool' and status = 'succeeded' and charged_micro is not null and finished_at is not null
         group by model
       `);
-      const perNode = sql`
-        select node_id, model, sum(coalesce(charged_micro, 0)) as cost,
-          sum(coalesce(prompt_tokens, 0)) as prompt, sum(coalesce(completion_tokens, 0)) as completion,
-          extract(epoch from max(finished_at) - min(created_at)) as seconds
-        from calls
-        where kind = 'chat' and node_id is not null and status = 'succeeded' and finished_at is not null
-        group by node_id, model
-      `;
-      const nodes = await db.execute<Row>(sql`
-        select model, ${median(sql`cost`)} as cost, ${median(sql`seconds`)} as seconds, count(*) as samples
-        from (${perNode}) per_node group by model
-      `);
-      const [tokens] = (
-        await db.execute<{ prompt: number | null; completion: number | null }>(sql`
-          select ${median(sql`prompt`)} as prompt, ${median(sql`completion`)} as completion
-          from (${perNode}) per_node
-        `)
-      ).rows;
-      return {
-        tools: toMap(tools.rows),
-        nodes: toMap(nodes.rows),
-        nodeTokens:
-          tokens?.prompt == null || tokens.completion == null
-            ? null
-            : {
-                prompt: Math.round(Number(tokens.prompt)),
-                completion: Math.round(Number(tokens.completion)),
-              },
-      };
+      return { tools: toMap(tools.rows) };
+    },
+
+    async runSpend(runId, payerId) {
+      const [row] = await db
+        .select({
+          spent: sql<string | null>`sum(${calls.chargedMicro})`,
+          tools: sql<
+            string[] | null
+          >`array_agg(distinct ${calls.tool}) filter (where ${calls.tool} is not null)`,
+        })
+        .from(calls)
+        .where(and(eq(calls.runId, runId), eq(calls.payerId, payerId)));
+      return { spentMicro: Number(row?.spent ?? 0), tools: row?.tools ?? [] };
     },
 
     async measured(since) {
@@ -204,17 +186,11 @@ export function createCallsRepo(pool: pg.Pool): CallsRepo {
       );
     },
 
-    async finish(id, outcome, event) {
-      await db.transaction(async (tx) => {
-        const changed = await tx
-          .update(calls)
-          .set({ ...outcome, finishedAt: new Date() })
-          .where(and(eq(calls.id, id), isNull(calls.chargedMicro)))
-          .returning({ id: calls.id });
-        if (event && changed.length > 0) {
-          await tx.insert(outbox).values({ id: event.id, subject: event.type, payload: event });
-        }
-      });
+    async finish(id, outcome) {
+      await db
+        .update(calls)
+        .set({ ...outcome, finishedAt: new Date() })
+        .where(and(eq(calls.id, id), isNull(calls.chargedMicro)));
     },
   };
 }

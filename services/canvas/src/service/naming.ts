@@ -49,6 +49,6 @@ export function uniqueName(name: string, taken: Set<string>, isFile: boolean): s
   return candidate;
 }
 
-/** 节点产出里的路径 → 同步文件夹里任务目录下的相对路径（每一段都清理过） */
+/** 一轮产出里的路径 → 同步文件夹里话题目录下的相对路径（每一段都清理过） */
 export const safePath = (path: string) =>
   path.split('/').filter(Boolean).map(safeSegment).join('/');

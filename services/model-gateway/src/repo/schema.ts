@@ -18,10 +18,12 @@ export const calls = pgTable('calls', {
   id: uuid('id').primaryKey(),
   kind: text('kind', { enum: ['chat', 'decision', 'tool', 'compute', 'avatar'] }).notNull(),
   payerId: uuid('payer_id').notNull(),
+  /** 对话里的一轮（沙箱里的 agent 运行）；这一轮的花费按它汇总 */
   runId: uuid('run_id'),
-  taskId: uuid('task_id'),
-  nodeId: uuid('node_id'),
+  conversationId: uuid('conversation_id'),
   model: text('model').notNull(),
+  /** 工具调用：哪个工具（如 image.generate） */
+  tool: text('tool'),
   requestId: text('request_id'),
   status: text('status', { enum: ['running', 'succeeded', 'failed'] }).notNull(),
   holdId: uuid('hold_id'),
@@ -42,20 +44,12 @@ export const runKeys = pgTable('run_keys', {
   keyHash: text('key_hash').notNull().unique(),
   payerId: uuid('payer_id').notNull(),
   runId: uuid('run_id').notNull(),
-  taskId: uuid('task_id'),
-  nodeId: uuid('node_id'),
+  conversationId: uuid('conversation_id'),
+  /** 用户打开了「只用国内模型」：这一轮的工具只给国内厂商的型号 */
+  domesticOnly: boolean('domestic_only').notNull().default(false),
   expiresAt: at('expires_at').notNull(),
   revokedAt: at('revoked_at'),
   createdAt: at('created_at').notNull().defaultNow(),
-});
-
-/** 事务发件箱（列名由 service-kit 的 startOutboxRelay 约定） */
-export const outbox = pgTable('outbox', {
-  id: uuid('id').primaryKey(),
-  subject: text('subject').notNull(),
-  payload: jsonb('payload').notNull(),
-  createdAt: at('created_at').notNull().defaultNow(),
-  publishedAt: at('published_at'),
 });
 
 /** 长任务（视频）：供应商的任务号、进度，以及结算时要用的调用信息 */
@@ -78,22 +72,15 @@ export const toolJobs = pgTable('tool_jobs', {
   finishedAt: at('finished_at'),
 });
 
-/** 一个用户让 AI 团队用哪些模型；没有行就是不限制 */
-export const modelScopes = pgTable('model_scopes', {
-  userId: uuid('user_id').primaryKey(),
-  domesticOnly: boolean('domestic_only').notNull(),
-  updatedAt: at('updated_at').notNull().defaultNow(),
-});
-
 export const toolRunControls = pgTable('tool_run_controls', {
   runId: uuid('run_id').primaryKey(),
   payerId: uuid('payer_id').notNull(),
-  taskId: uuid('task_id'),
+  conversationId: uuid('conversation_id'),
   cancelledAt: at('cancelled_at'),
 });
-/** 任务级删除围栏，与按 run 的取消不同；阻止删除事件之后的迟到提交。 */
-export const toolTaskDeletions = pgTable('tool_task_deletions', {
-  taskId: uuid('task_id').primaryKey(),
+/** 对话级删除围栏，与按运行的取消不同：拦住删对话之后才到的工具提交。 */
+export const toolConversationDeletions = pgTable('tool_conversation_deletions', {
+  conversationId: uuid('conversation_id').primaryKey(),
   deletedAt: at('deleted_at').notNull().defaultNow(),
 });
 
@@ -110,7 +97,6 @@ export const avatarSessions = pgTable('avatar_sessions', {
   id: uuid('id').primaryKey(),
   payerId: uuid('payer_id').notNull(),
   artifactId: uuid('artifact_id'),
-  taskId: uuid('task_id'),
   status: text('status', { enum: ['starting', 'live', 'ended'] }).notNull(),
   sandbox: boolean('sandbox').notNull(),
   maxSeconds: integer('max_seconds').notNull(),

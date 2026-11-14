@@ -1,4 +1,4 @@
-// 成果：任务完成时把负责交付物的节点交出的文件复制进画布；给前端列出、读取。
+// 成果：对话里一轮结束时，把 out/ 里新增和改过的文件从 harness 复制进画布；给前端列出、读取。
 import { randomUUID } from 'node:crypto';
 import { PassThrough, Readable } from 'node:stream';
 import { once } from 'node:events';
@@ -8,9 +8,8 @@ import {
   type Annotation,
   type ArtifactBody,
   type ArtifactCategory,
+  type RegisterRunArtifactsBody,
 } from '@oasis/contracts/canvas';
-import type { TaskDeletedData, TaskStatusChangedData } from '@oasis/contracts/events';
-import { TaskBody } from '@oasis/contracts/task';
 import {
   contentTypeOf,
   HttpError,
@@ -36,11 +35,10 @@ const toBody = (row: Artifact): ArtifactBody => ({
   category: row.category,
   application: row.appSpec,
   avatar: row.avatarSpec,
-  deliverable: row.deliverable,
-  taskId: row.taskId,
-  nodeId: row.nodeId,
-  taskTitle: row.taskTitle,
   conversationId: row.conversationId,
+  sessionId: row.sessionId,
+  topic: row.topic,
+  runId: row.runId,
   models: row.models,
   syncPath: row.syncPath,
   replacesSha256: row.replacesSha256,
@@ -49,48 +47,7 @@ const toBody = (row: Artifact): ArtifactBody => ({
   createdAt: row.createdAt.toISOString(),
 });
 
-interface DeliveredFile {
-  deliverable: string;
-  nodeId: string;
-  path: string;
-  models: string[];
-  /** task 清单里记的内容摘要（旧任务没有） */
-  sha256?: string;
-}
-
-/** 负责交付物的节点交出的文件，和交付消息列的是同一批；同一个文件只算一次（记在第一样交付物下） */
-function deliveredFiles(task: TaskBody): DeliveredFile[] {
-  const byId = new Map(task.nodes.map((n) => [n.id, n]));
-  if (task.deliveryFiles !== undefined)
-    return task.deliveryFiles.map((file) => {
-      const node = byId.get(file.nodeId);
-      return {
-        ...file,
-        models: [
-          ...new Set([
-            ...(node?.discussion?.participants.map((p) => p.model) ?? []),
-            ...(node ? [node.model] : []),
-          ]),
-        ],
-      };
-    });
-  const seen = new Set<string>();
-  const files: DeliveredFile[] = [];
-  for (const d of task.deliverables) {
-    const node = d.nodeId ? byId.get(d.nodeId) : undefined;
-    if (!node) continue;
-    const models = [
-      ...new Set([...(node.discussion?.participants.map((p) => p.model) ?? []), node.model]),
-    ];
-    for (const output of node.outputs) {
-      const key = `${node.id}/${output.path}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      files.push({ deliverable: d.name, nodeId: node.id, path: output.path, models });
-    }
-  }
-  return files;
-}
+type RunOutput = RegisterRunArtifactsBody['outputs'][number];
 
 const LIST_LIMIT = 1000;
 const APP_MAX_FILES = 1000;
@@ -108,12 +65,13 @@ export function createArtifactService(deps: {
   /** 批注截图存成上传记录，成果换新版或删除时一起删 */
   uploads: UploadsRepo;
   store: ObjectStore;
-  task: ServiceClient;
+  /** 一轮的产出文件在 harness */
+  harness: ServiceClient;
   logger: Logger;
   maxFileBytes?: number;
   transferTimeoutMs?: number;
 }) {
-  const { repo, uploads, store, task, logger } = deps;
+  const { repo, uploads, store, harness, logger } = deps;
 
   /** 运行中应用的批注截图：只被批注引用 */
   const framesOf = (rows: { annotations: { frame?: string | null }[] }[]) => [
@@ -128,30 +86,30 @@ export function createArtifactService(deps: {
     }
   }
 
-  /** 这个任务在同步文件夹里用哪个目录：已经登记过的沿用，没有就用任务名，和别的任务重名就加序号 */
-  async function taskDir(event: TaskStatusChangedData, existing: Artifact[]): Promise<string> {
+  /** 这个话题在同步文件夹里用哪个目录：已经登记过的沿用，没有就用话题名，和别的话题重名就加序号 */
+  async function topicDir(run: RegisterRunArtifactsBody, existing: Artifact[]): Promise<string> {
     const used = existing[0]?.syncPath.split('/')[0];
     if (used) return used;
     const taken = new Set(
-      (await repo.syncDirs(event.ownerId, event.taskId)).map((d) => d.toLowerCase()),
+      (await repo.syncDirs(run.ownerId, run.sessionId)).map((d) => d.toLowerCase()),
     );
-    return uniqueName(safeSegment(event.title), taken, false);
+    return uniqueName(safeSegment(run.topic), taken, false);
   }
 
-  /** 从 task 复制一个交付文件进画布，返回要登记的行（同步路径另定） */
+  /** 从 harness 复制这一轮的一个产出文件进画布，返回要登记的行（同步路径另定） */
   async function copyFile(
-    event: TaskStatusChangedData,
-    file: DeliveredFile,
+    run: RegisterRunArtifactsBody,
+    file: RunOutput,
   ): Promise<Omit<NewArtifact, 'syncPath' | 'replacesSha256'>> {
-    const response = await task.stream(
+    const response = await harness.stream(
       'GET',
-      `/internal/tasks/${event.taskId}/files/${file.nodeId}/${file.path.split('/').map(encodeURIComponent).join('/')}`,
+      `/internal/runs/${run.runId}/files/${file.path.split('/').map(encodeURIComponent).join('/')}`,
       { signal: AbortSignal.timeout(deps.transferTimeoutMs ?? 600_000) },
     );
     if (!response.body) throw new Error('成果文件没有内容流');
     const contentType = contentTypeOf(file.path);
-    // 键由任务、节点、路径决定：事件重投时覆盖同一个对象，不会留下孤儿
-    const objectKey = `artifacts/${event.taskId}/${file.nodeId}/${file.path}`;
+    // 键由话题和路径决定：后来的一轮改了它、重复登记时都覆盖同一个对象，不会留下孤儿
+    const objectKey = `artifacts/${run.sessionId}/${file.path}`;
     const saved = await store.putStream(objectKey, Readable.fromWeb(response.body), contentType, {
       maxBytes: deps.maxFileBytes ?? 512 * 1024 * 1024,
       ...(response.headers.get('content-length')
@@ -163,27 +121,26 @@ export function createArtifactService(deps: {
     });
     return {
       id: randomUUID(),
-      ownerId: event.ownerId,
-      taskId: event.taskId,
-      taskTitle: event.title,
-      conversationId: event.conversationId,
-      nodeId: file.nodeId,
+      ownerId: run.ownerId,
+      conversationId: run.conversationId,
+      sessionId: run.sessionId,
+      runId: run.runId,
+      topic: run.topic,
       path: file.path,
       name: file.path.split('/').at(-1) ?? file.path,
-      deliverable: file.deliverable,
       ...saved,
       contentType,
       category: categoryOf(file.path),
       appSpec: null,
       avatarSpec: null,
-      models: file.models,
+      models: run.models,
       objectKey,
     };
   }
 
-  /** 应用描述：文件已经登记、描述还没写入的补齐（事件重投时也会执行） */
-  async function registerApplications(taskId: string) {
-    const all = await repo.listByTask(taskId);
+  /** 应用描述：文件已经登记、描述还没写入的补齐（重复登记时也会执行） */
+  async function registerApplications(sessionId: string) {
+    const all = await repo.listBySession(sessionId);
     for (const manifest of all.filter((row) => row.name === 'oasis-app.json' && !row.appSpec)) {
       if (manifest.size > 16_384) continue;
       const raw = await store.get(manifest.objectKey);
@@ -200,10 +157,7 @@ export function createArtifactService(deps: {
       if (manifest.path !== `${spec.root}/oasis-app.json`) continue;
       const members = all.filter(
         (row) =>
-          row.ownerId === manifest.ownerId &&
-          row.nodeId === manifest.nodeId &&
-          row.path.startsWith(`${spec.root}/`) &&
-          row.size > 0,
+          row.ownerId === manifest.ownerId && row.path.startsWith(`${spec.root}/`) && row.size > 0,
       );
       if (
         members.length > APP_MAX_FILES ||
@@ -245,28 +199,27 @@ export function createArtifactService(deps: {
   }
 
   const service = {
-    /** 任务状态变了：完成的就登记成果（幂等：已经登记过的跳过；出错抛出，事件会重投） */
-    async onTaskStatus(event: TaskStatusChangedData): Promise<void> {
-      if (event.status !== 'succeeded') return;
-      let detail: TaskBody;
-      try {
-        detail = await task.json('GET', `/internal/tasks/${event.taskId}`, { schema: TaskBody });
-      } catch (err) {
-        if (err instanceof HttpError && err.statusCode === 404) return; // 已经被删除了
-        throw err;
-      }
-      const existing = await repo.listByTask(event.taskId);
-      const byKey = new Map(existing.map((a) => [`${a.nodeId}/${a.path}`, a]));
-      const delivered = deliveredFiles(detail);
-      // 同一任务修改后再次交付（2026-11-05）：内容变了的原地换成新版，链接和同步路径不变；
-      // 批注已经交给 AI 处理过，连同截图一起清掉。摘要相同的不再复制（事件重投时什么也不做）。
-      // 只看在这一版登记之后才又交付的任务（修改过）；同一次交付的事件重投不再复制
-      const finished = detail.finishedAt ? new Date(detail.finishedAt) : null;
-      for (const file of delivered) {
-        const old = byKey.get(`${file.nodeId}/${file.path}`);
-        if (!old || !finished || finished <= old.createdAt) continue;
+    /**
+     * 对话里一轮结束了：out/ 里新增的文件登记进画布，改过的原地换成新版（链接和同步路径不变；
+     * 批注针对的是旧内容，连同截图一起清掉）；内容没变的不动。重复调用不会重复登记。
+     * 返回这一轮做出或改了的成果。
+     */
+    async registerRun(run: RegisterRunArtifactsBody): Promise<ArtifactBody[]> {
+      const existing = await repo.listBySession(run.sessionId);
+      if (existing.some((row) => row.ownerId !== run.ownerId))
+        throw new HttpError(409, 'session_owner', '这个话题不属于这个用户');
+      const byPath = new Map(existing.map((row) => [row.path, row]));
+      const changed = new Set<string>();
+      for (const file of run.outputs) {
+        const old = byPath.get(file.path);
+        if (!old) continue;
+        // 这一轮已经登记过（重复调用）
+        if (old.runId === run.runId) {
+          changed.add(old.id);
+          continue;
+        }
         if (file.sha256 && file.sha256 === old.sha256) continue;
-        const row = await copyFile(event, file);
+        const row = await copyFile(run, file);
         if (row.sha256 && row.sha256 === old.sha256) continue;
         const frames = framesOf([old]);
         await repo.replaceContent(old.id, {
@@ -275,68 +228,101 @@ export function createArtifactService(deps: {
           contentType: row.contentType,
           models: row.models,
           replacesSha256: old.sha256,
+          runId: run.runId,
         });
-        await dropFrames(event.ownerId, frames);
-        logger.info({ taskId: event.taskId, path: file.path }, '成果已换成修改后的新版');
+        await dropFrames(run.ownerId, frames);
+        changed.add(old.id);
+        logger.info({ runId: run.runId, path: file.path }, '成果已换成新版');
       }
-      const done = new Set(byKey.keys());
-      const files = delivered.filter((f) => !done.has(`${f.nodeId}/${f.path}`));
-      const dir = files.length ? await taskDir(event, existing) : '';
+      const added = run.outputs.filter((file) => !byPath.has(file.path));
+      const dir = added.length ? await topicDir(run, existing) : '';
       const takenInDir = new Set(
-        existing.map((a) => a.syncPath.slice(dir.length + 1).toLowerCase()),
+        existing.map((row) => row.syncPath.slice(dir.length + 1).toLowerCase()),
       );
-      for (const file of files) {
-        const row = await copyFile(event, file);
+      for (const file of added) {
+        const row = await copyFile(run, file);
         const relative = uniqueName(safePath(file.path), takenInDir, true);
         takenInDir.add(relative.toLowerCase());
-        const inserted = await repo.insert({
-          ...row,
-          syncPath: `${dir}/${relative}`,
-          replacesSha256: null,
-        });
-        if (inserted) logger.info({ taskId: event.taskId, path: file.path }, '成果已登记进画布');
-      }
-      // 修改后的新版不再交付的旧成果（节点删了、文件改名了）从画布删掉；
-      // 新版什么也没交出时保留上一版
-      if (detail.version > 1 && delivered.length) {
-        const keep = new Set(delivered.map((f) => `${f.nodeId}/${f.path}`));
-        const stale = existing.filter(
-          (a) => a.ownerId === event.ownerId && !keep.has(`${a.nodeId}/${a.path}`),
-        );
-        for (const row of stale) await store.delete(row.objectKey);
-        if (stale.length) {
-          await repo.removeRows(stale.map((a) => a.id));
-          await dropFrames(event.ownerId, framesOf(stale));
-          logger.info({ taskId: event.taskId, files: stale.length }, '新版不再交付的旧成果已删除');
+        if (await repo.insert({ ...row, syncPath: `${dir}/${relative}`, replacesSha256: null })) {
+          changed.add(row.id);
+          logger.info({ runId: run.runId, path: file.path }, '成果已登记进画布');
         }
       }
-      await registerApplications(event.taskId);
+      await registerApplications(run.sessionId);
+      // 按这一轮交出文件的顺序返回
+      const order = new Map(run.outputs.map((file, index) => [file.path, index]));
+      return (await repo.listBySession(run.sessionId))
+        .filter((row) => changed.has(row.id))
+        .sort((a, b) => order.get(a.path)! - order.get(b.path)!)
+        .map(toBody);
     },
 
-    /**
-     * 任务被用户删除：删掉它的成果和批注截图（真删除）。
-     * 先删对象再删行；重投时找不到的就没有可删的。
-     */
-    async onTaskDeleted(event: TaskDeletedData): Promise<void> {
-      const rows = (await repo.listByTask(event.taskId)).filter((r) => r.ownerId === event.ownerId);
+    /** 删对话（真删除）：删掉它的成果和批注截图。先删对象再删行；重复调用时没有可删的。 */
+    async purgeConversation(ownerId: string, conversationId: string): Promise<void> {
+      const rows = (await repo.listByConversation(conversationId)).filter(
+        (row) => row.ownerId === ownerId,
+      );
       for (const row of rows) await store.delete(row.objectKey);
-      await repo.removeRows(rows.map((r) => r.id));
-      await dropFrames(event.ownerId, framesOf(rows));
+      await repo.removeRows(rows.map((row) => row.id));
+      await dropFrames(ownerId, framesOf(rows));
       if (rows.length)
-        logger.info({ taskId: event.taskId, files: rows.length }, '任务已删除，成果一并清理');
+        logger.info({ conversationId, files: rows.length }, '对话已删除，成果一并清理');
     },
 
     async list(
       ownerId: string,
-      filter: { category?: ArtifactCategory; taskId?: string },
+      filter: { category?: ArtifactCategory; conversationId?: string; sessionId?: string },
     ): Promise<ArtifactBody[]> {
       return (await repo.list(ownerId, filter, LIST_LIMIT)).map(toBody);
     },
-
     async get(ownerId: string, id: string): Promise<Artifact> {
       const row = await repo.find(id);
       if (row?.ownerId !== ownerId) throw new HttpError(404, 'artifact_not_found', '没有这个成果');
       return row;
+    },
+
+    /**
+     * 内部：「让 AI 改」时查这些成果，必须都在且都是这个人的。
+     * withFiles 时再列出改它们要用到的全部文件：应用是整个应用目录，网页是它所在目录里的文件
+     * （页面按相对地址引用它们），其他成果就是它自己。
+     */
+    async lookup(ownerId: string, ids: string[], withFiles: boolean) {
+      const unique = [...new Set(ids)];
+      const rows = await repo.findMany(unique);
+      if (rows.length !== unique.length || rows.some((row) => row.ownerId !== ownerId))
+        throw new HttpError(404, 'artifact_not_found', '有成果找不到了');
+      const files = new Map<string, Artifact>();
+      if (withFiles) {
+        const sessions = new Map<string, Artifact[]>();
+        for (const row of rows) {
+          let all = sessions.get(row.sessionId);
+          if (!all) sessions.set(row.sessionId, (all = await repo.listBySession(row.sessionId)));
+          const dir = row.appSpec
+            ? `${row.appSpec.root}/`
+            : /\.html?$/i.test(row.path)
+              ? row.path.slice(0, row.path.lastIndexOf('/') + 1)
+              : undefined;
+          const needed =
+            dir === undefined
+              ? [row]
+              : all.filter((file) => file.ownerId === ownerId && file.path.startsWith(dir));
+          for (const file of needed) files.set(file.id, file);
+        }
+      }
+      const order = new Map(unique.map((id, index) => [id, index]));
+      return {
+        artifacts: rows.sort((a, b) => order.get(a.id)! - order.get(b.id)!).map(toBody),
+        files: [...files.values()]
+          .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+          .map(toBody),
+      };
+    },
+
+    /** 内部：成果文件的内容（harness 拷进工作目录；是不是这个人的，lookup 时已经核对过） */
+    async internalContent(id: string) {
+      const row = await repo.find(id);
+      if (!row) throw new HttpError(404, 'artifact_not_found', '没有这个成果');
+      return { row, content: await store.read(row.objectKey) };
     },
 
     /**
@@ -367,17 +353,16 @@ export function createArtifactService(deps: {
       return toBody((await repo.setReview(id, { approvedAt: approved ? new Date() : null }))!);
     },
 
+    /** 同一个话题的成果（应用的文件、模型配套的图和视频都在里面） */
     async family(ownerId: string, id: string): Promise<Artifact[]> {
       const source = await this.get(ownerId, id);
-      return (await repo.listByTask(source.taskId)).filter(
-        (row) => row.ownerId === ownerId && row.nodeId === source.nodeId,
-      );
+      return (await repo.listBySession(source.sessionId)).filter((row) => row.ownerId === ownerId);
     },
 
-    /** 和桌面同步使用完全相同的最终文件集合与 syncPath。 */
-    async archive(ownerId: string, taskId: string, limits: { bytes: number; files: number }) {
-      const rows = (await repo.listByTask(taskId)).filter((row) => row.ownerId === ownerId);
-      if (!rows.length) throw new HttpError(404, 'artifact_not_found', '没有这个任务的成果');
+    /** 一个话题的成果打包下载：和桌面同步使用完全相同的文件集合与 syncPath。 */
+    async archive(ownerId: string, sessionId: string, limits: { bytes: number; files: number }) {
+      const rows = (await repo.listBySession(sessionId)).filter((row) => row.ownerId === ownerId);
+      if (!rows.length) throw new HttpError(404, 'artifact_not_found', '这个话题还没有成果');
       if (rows.length > limits.files || rows.reduce((n, row) => n + row.size, 0) > limits.bytes)
         throw new HttpError(413, 'archive_size', '成果超过打包上限，请分别下载');
       const seen = new Set<string>();
@@ -439,7 +424,7 @@ export function createArtifactService(deps: {
         content.destroy(error instanceof Error ? error : new Error(String(error))),
       );
       return {
-        name: `${safeSegment(rows[0]!.taskTitle)}.zip`,
+        name: `${safeSegment(rows[0]!.topic)}.zip`,
         content,
       };
     },

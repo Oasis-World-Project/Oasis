@@ -2,7 +2,7 @@
 // 长任务提交时冻结并持久化意图，之后由 tool-jobs 推进；生图、看图在供应商限流或地区不可用时换下一个模型。
 import { createHash, randomUUID } from 'node:crypto';
 import type { ToolResult } from '@oasis/contracts/model-gateway';
-import { createEnvelope, HttpError } from '@oasis/service-kit';
+import { HttpError } from '@oasis/service-kit';
 import { ToolAdmissionError } from '../repo/tool-jobs-repo.ts';
 import { AVATAR_CATALOG_TOOL } from './avatar-catalog.ts';
 import { upstreamError, type Caller } from './metering.ts';
@@ -28,8 +28,9 @@ export function createToolCall(ctx: ToolContext) {
       maxCostMicro?: number;
       idempotencyKey?: string;
     }): Promise<ToolResult> {
-      if (input.caller.taskId && (await jobs.taskDeleted(input.caller.taskId)))
-        throw new HttpError(410, 'tool_result_deleted', '所属任务已删除');
+      const { conversationId } = input.caller;
+      if (conversationId && (await jobs.conversationDeleted(conversationId)))
+        throw new HttpError(410, 'tool_result_deleted', '所属对话已删除');
       if (input.key === AVATAR_CATALOG_TOOL && deps.avatarCatalog) {
         return deps.avatarCatalog.run(input.args);
       }
@@ -62,9 +63,6 @@ export function createToolCall(ctx: ToolContext) {
         const prior = await jobs.byRequest(input.idempotencyKey);
         if (prior) return resume(prior.id);
       }
-      const { taskId, nodeId, runId } = input.caller;
-      if (tool.provider === 'task' && !(taskId && nodeId && runId))
-        throw new HttpError(409, 'not_in_workflow', `${tool.name}只有工作流里做成果的 AI 能用`);
       if (!configured(tool) || (needsModel(tool) && !tool.models(config).length)) {
         throw new HttpError(503, 'tool_unavailable', `${tool.name}还没有配置好，现在用不了`);
       }
@@ -72,7 +70,7 @@ export function createToolCall(ctx: ToolContext) {
       if (typeof args.model === 'string' && !tool.models(config).includes(args.model)) {
         throw new HttpError(400, 'invalid_tool_args', `${tool.name}不能用模型 ${args.model}`);
       }
-      let models = await ctx.usableModels(tool, input.caller.payerId);
+      let models = ctx.usableModels(tool, input.caller.domesticOnly);
       let videoHoldMicro: number | undefined;
       let videoEstimateMicro: number | undefined;
       if (tool.key === 'video.generate') {
@@ -176,6 +174,7 @@ export function createToolCall(ctx: ToolContext) {
           caller: input.caller,
           kind: tool.provider === 'runpod' ? 'compute' : 'tool',
           model,
+          tool: tool.key,
           amountMicro:
             tool.provider === 'runpod'
               ? deps.render!.holdMicro
@@ -188,9 +187,8 @@ export function createToolCall(ctx: ToolContext) {
         let accepted = false;
         const toolDeps = {
           checks: deps.checks,
-          taskId: input.caller.taskId,
           runId: input.caller.runId,
-          nodeId: input.caller.nodeId,
+          conversationId,
           logger: deps.logger,
           browserstack: deps.browserstack,
           payerId: input.caller.payerId,
@@ -256,8 +254,6 @@ export function createToolCall(ctx: ToolContext) {
               const providerJobId = await tool.start(
                 {
                   ...toolDeps,
-                  jobId: id,
-                  emit: (type, data) => jobs.emit(createEnvelope('model-gateway', type, data)),
                   signal: AbortSignal.any([
                     input.signal,
                     AbortSignal.timeout(deps.submitTimeoutMs ?? 60_000),

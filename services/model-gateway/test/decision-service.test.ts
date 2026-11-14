@@ -1,4 +1,3 @@
-import type { EventEnvelope } from '@oasis/contracts/events';
 import { createServiceClient } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
@@ -68,18 +67,17 @@ openrouter.post('/api/v1/chat/completions', async (request, reply) => {
 
 const started: Parameters<CallsRepo['start']>[0][] = [];
 const finished: CallOutcome[] = [];
-const settledEvents: EventEnvelope[] = [];
 const repo: CallsRepo = {
   start: async (call) => void started.push(call),
+  runSpend: async () => ({ spentMicro: 0, tools: [] }),
   get: async () => undefined,
   computeForRun: async () => [],
   regionBlockedModels: async () => blockedModels,
   staleRunning: async () => [],
-  typicalUsage: async () => ({ tools: new Map(), nodes: new Map(), nodeTokens: null }),
+  typicalUsage: async () => ({ tools: new Map() }),
   measured: async () => new Map(),
-  async finish(_id, outcome, event) {
+  async finish(_id, outcome) {
     finished.push(outcome);
-    if (event) settledEvents.push(event);
   },
 };
 
@@ -135,7 +133,6 @@ beforeEach(() => {
   upstreamBodies.length = 0;
   started.length = 0;
   finished.length = 0;
-  settledEvents.length = 0;
   upstreamStatus = 200;
   upstreamMessage = 'bad';
   blockedModels = [];
@@ -157,11 +154,11 @@ const body = {
 };
 
 describe('Jev 决策', () => {
-  it('专用模型地区不可用时通过同一计费链路回退，保留实际型号和任务归属', async () => {
+  it('专用模型地区不可用时通过同一计费链路回退，保留实际型号和归属（对话、这一轮）', async () => {
     upstreamStatus = 403;
     upstreamMessage = 'This model is not available in your region.';
     const result = await routed.decide({
-      caller: { payerId: PAYER, taskId: PAYER, nodeId: PAYER },
+      caller: { payerId: PAYER, runId: HOLD, conversationId: PAYER },
       requestId: 'fallback',
       body,
       signal: new AbortController().signal,
@@ -172,11 +169,13 @@ describe('Jev 决策', () => {
       answers: { is_task: { noul: 0.93 } },
     });
     expect(billingCalls.map((c) => c.path)).toEqual(['hold', 'release', 'hold', 'settle']);
-    expect(started[1]).toMatchObject({ model: 'test/fallback', taskId: PAYER, nodeId: PAYER });
-    expect(chatBodies[0]).toMatchObject({ response_format: { type: 'json_schema' } });
-    expect(settledEvents.at(-1)).toMatchObject({
-      data: { model: 'test/fallback', chargedMicro: 5 },
+    expect(started[1]).toMatchObject({
+      model: 'test/fallback',
+      runId: HOLD,
+      conversationId: PAYER,
     });
+    expect(chatBodies[0]).toMatchObject({ response_format: { type: 'json_schema' } });
+    expect(finished.at(-1)).toMatchObject({ status: 'succeeded', chargedMicro: 5 });
   });
   it.each(['length', 'invalid', 'broken-body'])(
     '已知不可用不反复调用专用模型，%s 的回退结果不能当成功',
@@ -216,22 +215,7 @@ describe('Jev 决策', () => {
       status: 'succeeded',
       costSource: 'provider',
       promptTokens: 120,
-    });
-    expect(settledEvents).toEqual([]); // 不属于任务的调用不发结算事件
-  });
-
-  it('替任务调用（如关卡）：结算后发出 call.settled，带上任务、节点和实际扣费', async () => {
-    const TASK = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
-    await service.decide({
-      caller: { payerId: PAYER, taskId: TASK, nodeId: TASK },
-      requestId: 'r3',
-      body,
-      signal: new AbortController().signal,
-    });
-    expect(started[0]).toMatchObject({ taskId: TASK, nodeId: TASK });
-    expect(settledEvents[0]).toMatchObject({
-      type: 'model-gateway.call.settled',
-      data: { taskId: TASK, nodeId: TASK, runId: null, kind: 'decision', chargedMicro: 5 },
+      chargedMicro: 5,
     });
   });
 

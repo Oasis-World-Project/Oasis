@@ -17,8 +17,8 @@ export function memoryRunKeys(): RunKeysRepo & { rows: RunKey[] } {
     async insert(key: NewRunKey) {
       rows.push({
         ...key,
-        taskId: key.taskId ?? null,
-        nodeId: key.nodeId ?? null,
+        conversationId: key.conversationId ?? null,
+        domesticOnly: key.domesticOnly ?? false,
         revokedAt: null,
         createdAt: new Date(),
       });
@@ -53,7 +53,6 @@ export function memorySessions(
       rows.set(s.id, {
         ...s,
         artifactId: s.artifactId ?? null,
-        taskId: s.taskId ?? null,
         status: 'starting',
         resources: {},
         callId: null,
@@ -133,8 +132,7 @@ export function fakeMeter() {
         kind: input.kind,
         payerId: input.caller.payerId,
         runId: input.caller.runId ?? null,
-        taskId: null,
-        nodeId: null,
+        conversationId: null,
         model: input.model,
         requestId: input.requestId,
         status: 'running',

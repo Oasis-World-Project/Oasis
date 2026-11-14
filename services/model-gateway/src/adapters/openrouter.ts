@@ -27,7 +27,7 @@ const ModelsResponse = z.object({
 
 export interface ModelPrice {
   capabilities?: ModelCapabilities;
-  /** 目录里写的全部输入种类（text、image、video、audio、file）：挑看图听音的型号、给规划员列能力都用它 */
+  /** 目录里写的全部输入种类（text、image、video、audio、file）：挑看图听音的型号用它 */
   inputs?: string[];
   /** 每个输入 token 的美元价格 */
   prompt: number;

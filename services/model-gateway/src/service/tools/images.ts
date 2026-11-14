@@ -13,7 +13,7 @@ import {
 
 /**
  * 按文件头认出图片的真实格式；认不出返回 undefined。供应商声明的格式不可靠（2026-11-05：
- * 要 PNG 却回 JPEG，存成 .png 后看图工具报签名无效、节点因此返工）。
+ * 要 PNG 却回 JPEG，存成 .png 后看图工具报签名无效）。
  */
 function sniffImageType(base64: string): string | undefined {
   const head = Buffer.from(base64.slice(0, 24), 'base64');

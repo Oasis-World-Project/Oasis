@@ -1,14 +1,13 @@
 // 浏览器检查工具：app.check 把沙箱带来的文件交给 inspector，website.test 交网址和计划；
-// 检查浏览器的算力由网关冻结、按 inspector 报回的实际用时结算，记在调用的任务和节点上。
+// 检查浏览器的算力由网关冻结、按 inspector 报回的实际用时结算，记在调用它的那一轮上。
 import { HttpError, type ServiceClient } from '@oasis/service-kit';
 import { describe, expect, it, vi } from 'vitest';
 import { TOOLS } from '../src/service/tools.ts';
 
 const IDS = {
   payerId: '00000000-0000-4000-8000-000000000001',
-  taskId: '00000000-0000-4000-8000-000000000002',
+  conversationId: '00000000-0000-4000-8000-000000000002',
   runId: '00000000-0000-4000-8000-000000000003',
-  nodeId: '00000000-0000-4000-8000-000000000004',
 };
 const FILES = [
   { path: 'oasis-app.json', contentBase64: 'e30=' },
@@ -54,7 +53,7 @@ const call = (
   );
 
 describe('网页应用自查 app.check', () => {
-  it('沙箱带来的文件交给 inspector 检查，--dir 可以带 out/ 前缀；算力按实际用时记在任务和节点上', async () => {
+  it('沙箱带来的文件交给 inspector 检查，--dir 可以带 out/ 前缀；算力按实际用时记在这一轮上', async () => {
     const { checks, calls, compute } = fakeChecks({
       passed: true,
       reason: null,
@@ -72,8 +71,7 @@ describe('网页应用自查 app.check', () => {
     expect(compute.hold).toHaveBeenCalledWith(
       expect.objectContaining({
         payerId: IDS.payerId,
-        taskId: IDS.taskId,
-        nodeId: IDS.nodeId,
+        runId: IDS.runId,
         cores: 2,
         maxMs: 3_600_000,
         purpose: 'application-check',
@@ -81,7 +79,7 @@ describe('网页应用自查 app.check', () => {
     );
     expect(compute.settle).toHaveBeenCalledWith('call-1', { cores: 2, elapsedMs: 5000 });
   });
-  it('没通过时把原因、失败步骤和没检查到的地方原样交回节点', async () => {
+  it('没通过时把原因、失败步骤和没检查到的地方原样交回给 AI', async () => {
     const { checks } = fakeChecks({
       passed: false,
       reason: '页面诊断：页面错误：THREE is not defined',
@@ -101,7 +99,7 @@ describe('网页应用自查 app.check', () => {
     expect(text).toContain('第 2 步 click：找不到 #start');
     expect(text).toContain('没检查到：音频未检查');
   });
-  it('检查上游交来的网页：结论里说的是实际检查的目录；给了 --out 才把完整报告作为文件交回', async () => {
+  it('结论里说的是实际检查的目录；给了 --out 才把完整报告作为文件交回', async () => {
     const { checks, calls } = fakeChecks({
       passed: false,
       reason: '页面诊断：页面错误：x is not defined',
@@ -113,14 +111,14 @@ describe('网页应用自查 app.check', () => {
       usage: { cores: 2, elapsedMs: 100 },
     });
     const result = await call('app.check', checks, {
-      dir: 'site',
-      shown: 'in/build/site',
+      dir: 'build/site',
+      shown: 'out/build/site',
       report: true,
       files: FILES,
     });
-    // inspector 按应用在产出里的位置（清单的 root）认，和检查自己 out/ 里的一样；给了 --out 就连截图一起要
-    expect(calls[0]?.body).toMatchObject({ dir: 'site', screenshots: true });
-    expect(result.text).toContain('in/build/site：浏览器检查没通过');
+    // inspector 按应用在产出里的位置（清单的 root）认；给了 --out 就连截图一起要
+    expect(calls[0]?.body).toMatchObject({ dir: 'build/site', screenshots: true });
+    expect(result.text).toContain('out/build/site：浏览器检查没通过');
     // 报告在前（沙箱把它原样存到 --out），平台截的画面跟在后面（存在报告旁边）
     expect(result.files).toMatchObject([
       { name: 'app-check.json', mediaType: 'application/json' },
@@ -130,21 +128,21 @@ describe('网页应用自查 app.check', () => {
     expect(
       JSON.parse(Buffer.from(result.files[0]!.base64, 'base64').toString('utf8')),
     ).toMatchObject({
-      dir: 'in/build/site',
+      dir: 'out/build/site',
       passed: false,
       reason: '页面诊断：页面错误：x is not defined',
     });
-    // 没给 --out（AI 节点自查）：不交文件，out/ 里不会多出一份报告
+    // 没给 --out（AI 自查）：不交文件，out/ 里不会多出一份报告
     const plain = await call('app.check', checks, { dir: 'site', files: FILES });
     expect(plain.files).toEqual([]);
     expect(calls[1]?.body).not.toHaveProperty('screenshots');
     expect(plain.text).toContain('out/site：浏览器检查没通过');
   });
-  it('不在任务节点里调用、旧版沙箱没带文件时拒绝，不开浏览器、不冻结算力', async () => {
+  it('不在对话的一轮里调用、旧版沙箱没带文件时拒绝，不开浏览器、不冻结算力', async () => {
     const { checks, calls, compute } = fakeChecks({});
     await expect(
       call('app.check', checks, { dir: 'site', files: FILES }, { payerId: IDS.payerId }),
-    ).rejects.toMatchObject({ code: 'task_required' });
+    ).rejects.toMatchObject({ code: 'run_required' });
     await expect(call('app.check', checks, { dir: 'site' })).rejects.toMatchObject({
       code: 'sandbox_outdated',
       message: expect.stringContaining('pnpm sandbox:build'),
@@ -164,7 +162,7 @@ describe('网页应用自查 app.check', () => {
 });
 
 describe('外站浏览器测试 website.test', () => {
-  it('网址和计划交给 inspector，带上核数；报告和截图交回节点，算力照样结算', async () => {
+  it('网址和计划交给 inspector，带上核数；报告和截图交回给 AI，算力照样结算', async () => {
     const report = {
       version: 1,
       target: 'website',

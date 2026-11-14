@@ -49,14 +49,7 @@ export function memoryArtifacts(): ArtifactsRepo & { rows: Artifact[] } {
   return {
     rows,
     async insert(artifact) {
-      if (
-        rows.some(
-          (r) =>
-            r.taskId === artifact.taskId &&
-            r.nodeId === artifact.nodeId &&
-            r.path === artifact.path,
-        )
-      )
+      if (rows.some((r) => r.sessionId === artifact.sessionId && r.path === artifact.path))
         return false;
       if (rows.some((r) => r.ownerId === artifact.ownerId && r.syncPath === artifact.syncPath))
         throw new Error('sync_path 重复');
@@ -79,6 +72,7 @@ export function memoryArtifacts(): ArtifactsRepo & { rows: Artifact[] } {
         Object.assign(row, patch, { annotations: [], approvedAt: null, createdAt: new Date() });
     },
     find: async (id) => rows.find((r) => r.id === id),
+    findMany: async (ids) => rows.filter((r) => ids.includes(r.id)),
     async setAvatar(id, spec) {
       const row = rows.find((r) => r.id === id);
       if (row) {
@@ -99,15 +93,18 @@ export function memoryArtifacts(): ArtifactsRepo & { rows: Artifact[] } {
           (r) =>
             r.ownerId === ownerId &&
             (!filter.category || r.category === filter.category) &&
-            (!filter.taskId || r.taskId === filter.taskId),
+            (!filter.conversationId || r.conversationId === filter.conversationId) &&
+            (!filter.sessionId || r.sessionId === filter.sessionId),
         )
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
         .slice(0, limit),
-    listByTask: async (taskId) => rows.filter((r) => r.taskId === taskId),
-    syncDirs: async (ownerId, exceptTaskId) => [
+    listBySession: async (sessionId) => rows.filter((r) => r.sessionId === sessionId),
+    listByConversation: async (conversationId) =>
+      rows.filter((r) => r.conversationId === conversationId),
+    syncDirs: async (ownerId, exceptSessionId) => [
       ...new Set(
         rows
-          .filter((r) => r.ownerId === ownerId && r.taskId !== exceptTaskId)
+          .filter((r) => r.ownerId === ownerId && r.sessionId !== exceptSessionId)
           .map((r) => r.syncPath.split('/')[0] ?? ''),
       ),
     ],

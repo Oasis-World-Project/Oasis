@@ -385,7 +385,7 @@ describe('一次模型调用', () => {
         { role: 'tool' as const, content: 'Created file', tool_call_id: 'call_1' },
       ],
     };
-    const caller = { payerId: PAYER, runId: RUN, taskId: RUN, nodeId: RUN };
+    const caller = { payerId: PAYER, runId: RUN, conversationId: PAYER };
     const call = await chat.prepare({ caller, requestId: 'req-6', body: agentRequest });
     const response = await chat.open(call, new AbortController().signal);
     await chat.pump(call, response, () => {});
@@ -400,6 +400,6 @@ describe('一次模型调用', () => {
     });
     // 冻结按 4000 个输出 token 估算（4000 × 0.5 = 2000 微美元，再加输入）
     expect(billingCalls[0]?.body.amountMicro).toBeGreaterThan(2000);
-    expect(started[0]).toMatchObject({ kind: 'chat', runId: RUN, taskId: RUN, nodeId: RUN });
+    expect(started[0]).toMatchObject({ kind: 'chat', runId: RUN, conversationId: PAYER });
   });
 });

@@ -26,7 +26,7 @@ export function textBatchEntry(available: boolean): ToolEntry {
         required: true,
         description: '每行 {"id":"1","prompt":"要求"} 的 JSONL',
       },
-      { ...MODEL_ARG, description: '用哪个模型（工具节点里必须写）' },
+      { ...MODEL_ARG, description: '用哪个模型（不写就用你自己的型号）' },
       { name: 'budget_micro', kind: 'number', min: 1, description: '整批的花费上限（微美元）' },
       { name: 'row_budget_micro', kind: 'number', min: 1, description: '每行的花费上限（微美元）' },
       { name: 'max_tokens', kind: 'number', min: 1, description: '每行最多生成多少 token' },

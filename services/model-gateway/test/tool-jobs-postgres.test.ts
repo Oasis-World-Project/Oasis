@@ -16,12 +16,21 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 取消准入�
   const repo = createToolJobsRepo(pool),
     runId = randomUUID(),
     payerId = randomUUID();
+  const migrations: { file: string; up: string; down: string }[] = [];
+  /** 这个迁移和它之后的迁移倒着回滚、再按顺序重新执行：验证能回滚，又不丢后来的迁移加的东西 */
+  async function rollBackAndReapply(file: string) {
+    const later = migrations.filter((m) => m.file >= file);
+    for (const m of [...later].reverse()) await pool.query(m.down);
+    for (const m of later) await pool.query(m.up);
+  }
   beforeAll(async () => {
     await pool.query(`create schema ${schema}`);
     const root = new URL('../migrations/', import.meta.url);
     for (const file of (await readdir(root)).filter((f) => f.endsWith('.sql')).sort()) {
       const sql = await readFile(new URL(file, root), 'utf8');
-      await pool.query(sql.split('-- migrate:up')[1]!.split('-- migrate:down')[0]!);
+      const up = sql.split('-- migrate:up')[1]!.split('-- migrate:down')[0]!;
+      migrations.push({ file, up, down: sql.split('-- migrate:down')[1]! });
+      await pool.query(up);
     }
   });
   afterAll(async () => {
@@ -105,70 +114,60 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 取消准入�
     await expect(
       repo.mergeCall(b, { billingEvidence: { billId: 'unique-bill-line' } }),
     ).rejects.toMatchObject({ cause: { code: '23505' } });
-    const migration = await readFile(
-      new URL('../migrations/20261028100000_create_tool_run_controls.sql', import.meta.url),
-      'utf8',
-    );
     await pool.query('delete from tool_jobs');
-    await pool.query(migration.split('-- migrate:down')[1]!);
-    await pool.query(migration.split('-- migrate:up')[1]!.split('-- migrate:down')[0]!);
+    await rollBackAndReapply('20261028100000_create_tool_run_controls.sql');
   });
-  it('任务删除与迟到插入并发时，要么拒绝准入，要么持久标记清理与取消', async () => {
-    const taskId = randomUUID(),
+  it('删对话与迟到插入并发时，要么拒绝准入，要么持久标记清理与取消', async () => {
+    const conversationId = randomUUID(),
       id = randomUUID();
     const make = (jobId: string) => ({
       id: jobId,
       tool: 'audio.music',
       providerJobId: 'fixture',
-      call: { caller: { payerId, taskId, runId: randomUUID() } },
+      call: { caller: { payerId, conversationId, runId: randomUUID() } },
       requestKey: null,
       requestHash: null,
     });
     const outcomes = await Promise.allSettled([
       repo.insert(make(id)),
-      repo.markTaskDeleted(taskId),
+      repo.markConversationDeleted(conversationId),
     ]);
     expect(outcomes[1]!.status).toBe('fulfilled');
     const row = await repo.get(id);
     if (row)
       expect(row.call).toMatchObject({
-        taskDeleted: true,
+        deleted: true,
         cancelRequested: true,
-        taskFilesCleaned: false,
+        filesCleaned: false,
       });
     else expect(outcomes[0]!.status).toBe('rejected');
-    expect(await repo.taskDeleted(taskId)).toBe(true);
+    expect(await repo.conversationDeleted(conversationId)).toBe(true);
     await expect(repo.insert(make(randomUUID()))).rejects.toThrow('fences');
     if (row) expect((await repo.deletedResults(100)).map((job) => job.id)).toContain(id);
   });
   it('删除先于首个工具调用也会被记住；删除迁移可回滚重建', async () => {
-    const taskId = randomUUID();
-    await repo.markTaskDeleted(taskId);
-    await repo.markTaskDeleted(taskId);
-    expect(await repo.taskDeleted(taskId)).toBe(true);
+    const conversationId = randomUUID();
+    await repo.markConversationDeleted(conversationId);
+    await repo.markConversationDeleted(conversationId);
+    expect(await repo.conversationDeleted(conversationId)).toBe(true);
     await expect(
       repo.insert({
         id: randomUUID(),
         tool: 'audio.music',
         providerJobId: '',
-        call: { caller: { payerId, taskId } },
+        call: { caller: { payerId, conversationId } },
         requestKey: null,
         requestHash: null,
       }),
     ).rejects.toThrow('fences');
-    const migration = await readFile(
-      new URL('../migrations/20261102130000_tool_task_deletions.sql', import.meta.url),
-      'utf8',
-    );
-    await pool.query(migration.split('-- migrate:down')[1]!);
-    await pool.query(migration.split('-- migrate:up')[1]!.split('-- migrate:down')[0]!);
-    expect(await repo.taskDeleted(taskId)).toBe(false);
+    await rollBackAndReapply('20261114110000_conversation_attribution.sql');
+    expect(await repo.conversationDeleted(conversationId)).toBe(false);
   });
   it.skipIf(!process.env.TEST_S3_ENDPOINT)(
-    '真实对象存储随任务清除结果，重复清理不会重建对象',
+    '真实对象存储随对话清除结果，重复清理不会重建对象',
     async () => {
       await pool.query("update tool_jobs set status='failed',phase='failed'");
-      const taskId = randomUUID(),
+      const conversationId = randomUUID(),
         id = randomUUID(),
         key = `tool-results/${id}/0`;
       const objects = createObjectStore({
@@ -192,7 +191,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 取消准入�
           id,
           tool: 'fixture.media',
           providerJobId: 'fixture',
-          call: { caller: { payerId, taskId }, resultFileIds: ['0'] },
+          call: { caller: { payerId, conversationId }, resultFileIds: ['0'] },
           requestKey: null,
           requestHash: null,
         });
@@ -215,8 +214,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 取消准入�
         });
         await repo.finish(id, 'completed');
         expect((await store.get(key)).length).toBe(128 * 1024);
-        await tools.purgeTask(taskId);
-        await tools.purgeTask(taskId);
+        await tools.purgeConversation(conversationId);
+        await tools.purgeConversation(conversationId);
         await expect(store.get(key)).rejects.toThrow();
         expect(await repo.get(id)).toMatchObject({
           status: 'completed',

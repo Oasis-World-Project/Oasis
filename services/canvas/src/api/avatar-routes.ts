@@ -30,11 +30,7 @@ export function registerAvatarRoutes(
     const started = await modelGateway.json('POST', '/internal/avatar/sessions', {
       requestId: request.id,
       headers: payer(userId),
-      body: {
-        spec: row.avatarSpec,
-        artifactId: row.id,
-        ...(row.taskId ? { taskId: row.taskId } : {}),
-      },
+      body: { spec: row.avatarSpec, artifactId: row.id },
       schema: AvatarSessionStarted,
     });
     return reply.code(201).send(started);

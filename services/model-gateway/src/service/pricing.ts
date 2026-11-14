@@ -1,8 +1,6 @@
 // 估算冻结金额、按用量计算实际花费（纯函数，便于单测）。金额单位：微美元。
 import type { ChatMessage } from '@oasis/contracts/model-gateway';
-import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
 import type { ModelPrice } from '../adapters/openrouter.ts';
-import type { TypicalUsage } from '../repo/calls-repo.ts';
 
 export const USD_TO_MICRO = 1_000_000;
 
@@ -172,27 +170,4 @@ export function videoCatalogRate(
   return Object.values(tiers).some((price) => price !== costMicro)
     ? { costMicro, by: { arg: 'resolution', costMicro: tiers } }
     : { costMicro };
-}
-
-/**
- * 型号能力 + 它负责一个干活节点的典型花费和用时：给了调用记录且有这个型号的记录就用记录；
- * 否则按价格表 × 典型 token 用量估（记录里的典型用量，没有就用配置的假设值；用时未知）。
- */
-export function withNodeRate(
-  price: ModelPrice,
-  usage: TypicalUsage | undefined,
-  assumed: { prompt: number; completion: number },
-): ModelCapabilities {
-  const capabilities = price.capabilities!;
-  const seen = usage?.nodes.get(capabilities.id);
-  if (seen)
-    return {
-      ...capabilities,
-      node: { costMicro: seen.costMicro, seconds: seen.seconds, basis: 'history' },
-    };
-  const tokens = usage?.nodeTokens ?? assumed;
-  const costMicro = Math.ceil(
-    (tokens.prompt * price.prompt + tokens.completion * price.completion) * USD_TO_MICRO,
-  );
-  return { ...capabilities, node: { costMicro, seconds: null, basis: 'catalog' } };
 }
