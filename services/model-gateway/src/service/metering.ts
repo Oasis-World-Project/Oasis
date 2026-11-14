@@ -120,8 +120,11 @@ export function createMeter(deps: {
     },
     /** 在当前网络用不了的模型：最近一次聊天调用因为地区限制被上游拒绝、之后没再成功过 */
     regionBlockedModels: () => repo.regionBlockedModels(),
-    /** 从调用记录算出的工具典型用量，工具目录估价用 */
+    /** 从调用记录算出的工具典型用量，工具目录估价和预计用时用 */
     typicalUsage: () => repo.typicalUsage(),
+    /** 这个人现在同时在做的这些工具（从 since 起开始、还没做完的），按工具数 */
+    runningTools: (payerId: string, tools: string[], since: Date) =>
+      repo.runningTools(payerId, tools, since),
     /** 对话里一轮已经结算的花费和用过的工具 */
     runSpend: (runId: string, payerId: string) => repo.runSpend(runId, payerId),
     /** 各型号最近 30 天的实测（每秒输出、含缓存的实际单价、上游出错的比例） */

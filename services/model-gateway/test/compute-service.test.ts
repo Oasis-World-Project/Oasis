@@ -89,6 +89,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('真实 PostgreSQL 算力接管'
       'image.generate',
       'web.search',
     ]);
+    // 同时在做的生成：还没做完的按工具数；别的付费人、开始得早于 since 的不算
+    const generations = ['image.generate', 'video.generate'];
+    const minuteAgo = new Date(Date.now() - 60_000);
+    expect(await actual.runningTools(PAYER, generations, minuteAgo)).toEqual(
+      new Map([['image.generate', 2]]),
+    );
+    expect((await actual.runningTools(randomUUID(), generations, minuteAgo)).size).toBe(0);
+    expect(
+      (await actual.runningTools(PAYER, generations, new Date(Date.now() + 60_000))).size,
+    ).toBe(0);
   });
 });
 billing.post('/internal/holds/:id/settle', async (request) => {
@@ -142,6 +152,7 @@ const repo: CallsRepo = {
   staleRunning: async () => [],
   typicalUsage: async () => ({ tools: new Map() }),
   measured: async () => new Map(),
+  runningTools: async () => new Map(),
 };
 
 let billingUrl = '';

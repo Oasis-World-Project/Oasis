@@ -35,14 +35,28 @@ const extOf = (mediaType: string) =>
     mediaType
   ] ?? 'png';
 
-const ImageArgs = z.object({
-  prompt: z.string().trim().min(1).max(4000),
-  aspect_ratio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9']).optional(),
-  resolution: z.enum(['1K', '2K', '4K']).optional(),
-  n: z.coerce.number().int().min(1).max(4).default(1),
-  model: optionalModel,
-  references: z.lazy(() => InputImages).optional(),
-});
+/** 一次最多出几张（描述数 × 每个描述几张）：几张同时生成 */
+const MAX_IMAGES = 4;
+const Prompt = z.string().trim().min(1).max(4000);
+const ImageArgs = z
+  .object({
+    prompt: Prompt.optional(),
+    /** 几个不同的描述一次交：同时生成，按顺序存 */
+    prompts: z.array(Prompt).min(1).max(MAX_IMAGES).optional(),
+    aspect_ratio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9']).optional(),
+    resolution: z.enum(['1K', '2K', '4K']).optional(),
+    n: z.coerce.number().int().min(1).max(MAX_IMAGES).default(1),
+    model: optionalModel,
+    references: z.lazy(() => InputImages).optional(),
+  })
+  .refine((a) => !a.prompt !== !a.prompts, '--prompt 和 --prompts 写一个')
+  .refine(
+    (a) => (a.prompts?.length ?? 1) * a.n <= MAX_IMAGES,
+    `一次最多 ${MAX_IMAGES} 张（描述数 × 张数）`,
+  );
+/** 这次一共几张 */
+const imageCount = (args: Record<string, unknown>) =>
+  (Array.isArray(args.prompts) ? args.prompts.length : 1) * (Number(args.n) || 1);
 
 const InspectArgs = z.object({
   files: InputMedia,
@@ -81,18 +95,25 @@ export const imageGenerate: ToolDef = {
   key: 'image.generate',
   name: '生成图片',
   description:
-    '按文字描述生成图片（插画、海报、商品图、网页效果图……）。按供应商实际返回的格式保存（PNG/JPEG/WebP），后缀可能与 --out 不同，以输出里「已保存」的路径为准；--n 大于 1 时并行生成。',
+    '按文字描述生成图片（插画、海报、商品图、网页效果图……）。按供应商实际返回的格式保存（PNG/JPEG/WebP），后缀可能与 --out 不同，以输出里「已保存」的路径为准。要几张图就一次交：几个不同的画面用 --prompts（JSON 数组），同一个画面要几张用 --n，一次最多 4 张、同时生成，比一张张调快得多。',
   usage:
-    'oasis-tool image.generate --prompt "描述" [--ref materials/主图.png,materials/风格.jpg] [--aspect_ratio 16:9] [--resolution 2K] [--n 1] --out out/图片.png',
+    'oasis-tool image.generate --prompt "描述" [--ref materials/主图.png,materials/风格.jpg] [--aspect_ratio 16:9] [--resolution 2K] [--n 1] --out out/图片.png；几个画面一起：oasis-tool image.generate --prompts \'["第一个画面","第二个画面"]\' --out out/关键帧/帧.png（存成 帧-1.png、帧-2.png，和描述顺序一致）',
   unit: '张',
   estimateMicro: 150_000,
-  holdMicro: (args) => 500_000 * (Number(args.n) || 1),
+  holdMicro: (args) => 500_000 * imageCount(args),
   long: false,
   provider: 'openrouter',
   models: (config) => config.imageModels,
   args: ImageArgs,
   cli: [
-    { name: 'prompt', kind: 'text', required: true, description: '画面描述' },
+    { name: 'prompt', kind: 'text', description: '画面描述（和 --prompts 写一个）' },
+    {
+      name: 'prompts',
+      kind: 'list',
+      min: 1,
+      max: MAX_IMAGES,
+      description: '几个不同的画面一次交，写成 JSON 数组；同时生成，按顺序存',
+    },
     { name: 'ref', kind: 'paths', min: 1, max: 4, description: '参考图（1–4 张 PNG/JPEG/WebP）' },
     {
       name: 'aspect_ratio',
@@ -109,17 +130,19 @@ export const imageGenerate: ToolDef = {
   async run(deps, args, model) {
     const a = ImageArgs.parse(args);
     // 不少供应商不接受一次多张（2026-11-05 Seedream 连拒 --n 4）：每张单独请求、同时发出，不排队
-    const request = {
-      model,
-      prompt: a.prompt,
-      n: 1,
-      output_format: 'png',
-      ...(a.references
-        ? { input_references: imageParts(a.references), provider: { require_parameters: true } }
-        : {}),
-      ...(a.aspect_ratio ? { aspect_ratio: a.aspect_ratio } : {}),
-    };
-    const one = async () => {
+    const prompts = a.prompts ?? [a.prompt!];
+    const shots = prompts.flatMap((prompt) => Array.from({ length: a.n }, () => prompt));
+    const one = async (prompt: string) => {
+      const request = {
+        model,
+        prompt,
+        n: 1,
+        output_format: 'png',
+        ...(a.references
+          ? { input_references: imageParts(a.references), provider: { require_parameters: true } }
+          : {}),
+        ...(a.aspect_ratio ? { aspect_ratio: a.aspect_ratio } : {}),
+      };
       const response = await deps.upstream(async () => {
         if (!a.resolution) return deps.openrouter.images(request, deps.signal);
         const first = await deps.openrouter.images(
@@ -135,19 +158,31 @@ export const imageGenerate: ToolDef = {
       });
       return ImagesResponse.parse(await response.json());
     };
-    const settled = await Promise.allSettled(Array.from({ length: a.n }, one));
+    const settled = await Promise.allSettled(shots.map(one));
     const done = settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
     if (!done.length) throw (settled[0] as PromiseRejectedResult).reason;
-    const files = done
-      .flatMap((body) => body.data)
-      .map((d, i) => {
-        const mediaType = sniffImageType(d.b64_json) ?? d.media_type ?? 'image/png';
-        return { name: `image-${i + 1}.${extOf(mediaType)}`, mediaType, base64: d.b64_json };
-      });
+    // 文件名带第几张（没生成出来的空着号），oasis-tool 存的时候用同一个号，和描述的顺序对得上
+    const files = settled.flatMap((r, i) =>
+      r.status === 'fulfilled'
+        ? r.value.data.slice(0, 1).map((d) => {
+            const mediaType = sniffImageType(d.b64_json) ?? d.media_type ?? 'image/png';
+            return { name: `image-${i + 1}.${extOf(mediaType)}`, mediaType, base64: d.b64_json };
+          })
+        : [],
+    );
     const failed = settled.length - done.length;
     const costs = done.map((body) => body.usage?.cost);
+    const order =
+      prompts.length > 1
+        ? `按顺序：${settled
+            .map(
+              (r, i) =>
+                `第 ${i + 1} 张是第 ${Math.floor(i / a.n) + 1} 个描述${r.status === 'fulfilled' ? '' : '（没生成出来）'}`,
+            )
+            .join('；')}。`
+        : '';
     return {
-      text: `生成了 ${files.length} 张图片（${model}）${failed ? `；另有 ${failed} 张没生成出来，没收费` : ''}。`,
+      text: `生成了 ${files.length} 张图片（${model}）${failed ? `；另有 ${failed} 张没生成出来，没收费` : ''}。${order}`,
       files,
       cost: costs.every((c) => typeof c === 'number')
         ? provider(costs.reduce<number>((sum, c) => sum + (c ?? 0), 0))

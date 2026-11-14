@@ -76,6 +76,7 @@ const repo: CallsRepo = {
   staleRunning: async () => [],
   typicalUsage: async () => ({ tools: new Map() }),
   measured: async () => new Map(),
+  runningTools: async () => new Map(),
   async finish(_id, outcome) {
     finished.push(outcome);
   },

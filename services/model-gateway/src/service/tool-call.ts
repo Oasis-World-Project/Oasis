@@ -13,10 +13,28 @@ import { mediaKinds } from './tools/images.ts';
 import { needsModel } from './tools/kit.ts';
 import { videoProblems, videoRejection } from './tools/video.ts';
 
+/** 要做一阵子的生成：每个人同时最多做几个（一次 image.generate 算一个；2026-11-14 第 3 阶段） */
+const GENERATIONS = ['image.generate', 'video.generate', 'audio.music', '3d.generate'];
+const MAX_RUNNING_GENERATIONS = 4;
+
 export function createToolCall(ctx: ToolContext) {
   const { deps, byKey, configured } = ctx;
   const { meter, config, jobs } = deps;
   const ownedJob = (caller: Caller, id: string) => ctx.ownedJob(caller, id);
+
+  /** 同时在做的生成到了上限就不接，说清楚在做的是哪些；没做完的长任务冻结着，最久算到它的冻结期 */
+  async function admitGeneration(payerId: string): Promise<void> {
+    const since = new Date(Date.now() - deps.jobTimeoutMs - HOLD_MARGIN_MS);
+    const running = await meter.runningTools(payerId, GENERATIONS, since);
+    const total = [...running.values()].reduce((sum, n) => sum + n, 0);
+    if (total < MAX_RUNNING_GENERATIONS) return;
+    const doing = [...running].map(([key, n]) => `${byKey.get(key)?.name ?? key} ${n} 个`);
+    throw new HttpError(
+      429,
+      'too_many_running',
+      `同时在做的生成已经有 ${total} 个（${doing.join('、')}），最多 ${MAX_RUNNING_GENERATIONS} 个；等前面的做完（oasis-tool wait 它们的任务号）再交这个，这次没有提交、没有收费`,
+    );
+  }
 
   return {
     async call(input: {
@@ -66,6 +84,7 @@ export function createToolCall(ctx: ToolContext) {
       if (!configured(tool) || (needsModel(tool) && !tool.models(config).length)) {
         throw new HttpError(503, 'tool_unavailable', `${tool.name}还没有配置好，现在用不了`);
       }
+      if (GENERATIONS.includes(tool.key)) await admitGeneration(input.caller.payerId);
 
       if (typeof args.model === 'string' && !tool.models(config).includes(args.model)) {
         throw new HttpError(400, 'invalid_tool_args', `${tool.name}不能用模型 ${args.model}`);

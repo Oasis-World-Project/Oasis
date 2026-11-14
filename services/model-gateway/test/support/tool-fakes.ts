@@ -235,6 +235,18 @@ export const repo: CallsRepo = {
   typicalUsage: async () => knobs.typical,
   measured: async () => knobs.measured,
   runSpend: async () => ({ spentMicro: 0, tools: [] }),
+  // 登记了、还没写结局的就是还在做
+  async runningTools(payerId, tools) {
+    const running = new Map<string, number>();
+    for (const call of startedCalls)
+      if (
+        call.payerId === payerId &&
+        tools.includes(call.tool ?? '') &&
+        !recordedCalls.has(call.id)
+      )
+        running.set(call.tool!, (running.get(call.tool!) ?? 0) + 1);
+    return running;
+  },
   async finish(id, outcome) {
     recordedCalls.set(id, outcome);
     finished.push(outcome);

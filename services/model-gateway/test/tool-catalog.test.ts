@@ -131,7 +131,7 @@ describe('工具目录里的单价', () => {
       ],
     });
   });
-  it('开发阶段不看调用记录：有记录也只用供应商价格和目录兜底值', async () => {
+  it('开发阶段单价不看调用记录，只用供应商价格和目录兜底值；用时照样按记录', async () => {
     knobs.typical = {
       ...noHistory(),
       tools: new Map([
@@ -141,5 +141,6 @@ describe('工具目录里的单价', () => {
     const list = await build('k', false, false, false).list();
     const rates = list.find((t) => t.key === 'image.generate')?.rates ?? [];
     expect(rates.every((r) => r.basis !== 'history')).toBe(true);
+    expect(rates[0]).toMatchObject({ costMicro: 150_000, seconds: 110 });
   });
 });

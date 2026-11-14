@@ -78,6 +78,7 @@ export const repo: CallsRepo = {
   typicalUsage: async () => ({ tools: new Map() }),
   measured: async () => new Map(),
   runSpend: async () => ({ spentMicro: 0, tools: [] }),
+  runningTools: async () => new Map(),
   finish: async (_id, outcome) => void finished.push(outcome),
 };
 export const silent = pino({ level: 'silent' });

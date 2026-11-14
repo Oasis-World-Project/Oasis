@@ -10,6 +10,7 @@ import {
   upstream,
   finished,
   startedCalls,
+  recordedCalls,
 } from './support/tool-fakes.ts';
 import { tools, useTools, call, errorOf, reference, seen } from './support/tool-fixture.ts';
 
@@ -183,6 +184,58 @@ describe('调用工具', () => {
     expect(partial.files).toHaveLength(2);
     expect(partial.costMicro).toBe(80_000);
     expect(partial.text).toContain('另有 1 张没生成出来');
+  });
+  it('几个不同的画面一次交：同时生成，按描述的顺序编号；没生成出来的空着号', async () => {
+    const result = await call(
+      'image.generate',
+      { prompts: ['开业海报', '门店外景'] },
+      CONVERSATION,
+    );
+    expect(upstream.map((u) => u.body.prompt).sort()).toEqual(['开业海报', '门店外景'].sort());
+    expect(result.files.map((f) => f.name)).toEqual(['image-1.png', 'image-2.png']);
+    expect(result.text).toContain('第 2 张是第 2 个描述');
+    expect(billingCalls[0]?.body).toMatchObject({ amountMicro: 1_000_000 });
+
+    knobs.imageRejections = 1;
+    const partial = await call(
+      'image.generate',
+      { prompts: ['开业海报', '门店外景'] },
+      CONVERSATION,
+    );
+    expect(partial.files).toHaveLength(1);
+    expect(partial.text).toMatch(/第 \d 张是第 \d 个描述（没生成出来）/);
+
+    expect(
+      (await errorOf(call('image.generate', { prompt: 'a', prompts: ['b'] })))?.message,
+    ).toContain('写一个');
+    expect(
+      (await errorOf(call('image.generate', { prompts: ['a', 'b', 'c'], n: '2' })))?.message,
+    ).toContain('一次最多 4 张');
+  });
+  it('同时在做的生成到了 4 个就不接新的：说清楚在做什么，不冻结、不调供应商；做完一个就又能交', async () => {
+    for (const id of ['v1', 'v2', 'v3', 'm1'])
+      startedCalls.push({
+        id,
+        kind: 'tool',
+        payerId: PAYER,
+        model: 'm',
+        tool: id.startsWith('v') ? 'video.generate' : 'audio.music',
+        requestId: 'r',
+        holdId: 'h',
+      });
+    const err = await errorOf(call('image.generate', { prompt: 'x' }));
+    expect(err).toMatchObject({ statusCode: 429, code: 'too_many_running' });
+    expect(err?.message).toContain('同时在做的生成已经有 4 个（生成视频 3 个、生成音乐 1 个）');
+    expect(billingCalls).toHaveLength(0);
+    expect(upstream).toHaveLength(0);
+    await expect(call('web.search', { query: '开业' })).resolves.toMatchObject({
+      tool: 'web.search',
+    });
+
+    recordedCalls.set('m1', { status: 'succeeded' });
+    await expect(call('image.generate', { prompt: 'x' })).resolves.toMatchObject({
+      tool: 'image.generate',
+    });
   });
 
   it('供应商说是 PNG、实际是 JPEG：按文件头认成 JPEG', async () => {

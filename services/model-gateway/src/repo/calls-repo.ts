@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { calls } from './schema.ts';
@@ -66,6 +66,8 @@ export interface CallsRepo {
   /** 很久以前开始、一直没收尾的聊天和决策调用（网关中途重启时在途的请求） */
   staleRunning(before: Date, limit?: number): Promise<Call[]>;
   computeForRun(runId: string, payerId: string): Promise<Call[]>;
+  /** 这个人从 since 起开始、还没做完的这些工具的调用，按工具数（同时在做几个） */
+  runningTools(payerId: string, tools: string[], since: Date): Promise<Map<string, number>>;
 }
 
 export function createCallsRepo(pool: pg.Pool): CallsRepo {
@@ -102,6 +104,21 @@ export function createCallsRepo(pool: pg.Pool): CallsRepo {
             eq(calls.model, 'sandbox'),
           ),
         ),
+    async runningTools(payerId, tools, since) {
+      const rows = await db
+        .select({ tool: calls.tool, count: sql<string>`count(*)` })
+        .from(calls)
+        .where(
+          and(
+            eq(calls.payerId, payerId),
+            eq(calls.status, 'running'),
+            inArray(calls.tool, tools),
+            gte(calls.createdAt, since),
+          ),
+        )
+        .groupBy(calls.tool);
+      return new Map(rows.map((row) => [row.tool ?? '', Number(row.count)]));
+    },
     async regionBlockedModels() {
       const result = await db.execute<{ model: string }>(sql`
         select model from (

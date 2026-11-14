@@ -45,19 +45,14 @@ export function createToolService(deps: ToolServiceDeps) {
 
   /**
    * 每个可用型号的典型单价和用时：视频按供应商每秒单价，工具自己有标价的型号
-   * （fal 的音乐、3D）用标价；其余优先用调用记录的中位数；都没有才用工具目录的兜底值。
-   * 读不到记录或目录时照样给兜底，不让目录因此不可用。
+   * （fal 的音乐、3D）用标价；其余（开着按记录估价时）用调用记录的中位数；都没有才用工具目录的兜底值。
+   * 用时总按调用记录（不是定价，只是大概要等多久）；没有记录的型号没有用时。
    */
-  async function ratesOf(tool: ToolDef, models: string[]): Promise<ToolRate[]> {
-    const typical = deps.estimateFromHistory
-      ? await meter
-          .typicalUsage()
-          .then((u) => u.tools)
-          .catch((err: unknown) => {
-            deps.logger.warn({ err }, '读不到调用记录，工具估价用兜底值');
-            return new Map<string, Typical>();
-          })
-      : new Map<string, Typical>();
+  async function ratesOf(
+    tool: ToolDef,
+    models: string[],
+    typical: Map<string, Typical>,
+  ): Promise<ToolRate[]> {
     const videos =
       tool.key === 'video.generate' ? await deps.openrouter.listVideoModels().catch(() => []) : [];
     return models.map((model) => {
@@ -72,7 +67,8 @@ export function createToolService(deps: ToolServiceDeps) {
       } else {
         const listed = tool.priceMicro?.(model);
         if (listed !== undefined) return { model, costMicro: listed, seconds, basis: 'catalog' };
-        if (seen) return { model, costMicro: seen.costMicro, seconds, basis: 'history' };
+        if (seen && deps.estimateFromHistory)
+          return { model, costMicro: seen.costMicro, seconds, basis: 'history' };
       }
       return { model, costMicro: tool.estimateMicro, seconds, basis: 'fallback' };
     });
@@ -111,6 +107,14 @@ export function createToolService(deps: ToolServiceDeps) {
       const measured = deps.estimateFromHistory
         ? await meter.measured().catch(() => new Map<string, Measured>())
         : new Map<string, Measured>();
+      // 读不到调用记录时照样给目录，只是没有用时、估价用兜底值
+      const typical = await meter
+        .typicalUsage()
+        .then((u) => u.tools)
+        .catch((err: unknown) => {
+          deps.logger.warn({ err }, '读不到调用记录，工具目录不写用时');
+          return new Map<string, Typical>();
+        });
       const entries = await Promise.all(
         TOOLS.map(async (tool) => {
           const models = modelsOf(tool, allowed);
@@ -127,7 +131,7 @@ export function createToolService(deps: ToolServiceDeps) {
             available: configured(tool) && (!needsModel(tool) || models.length > 0),
             models,
             defaultModel: models[0] ?? null,
-            rates: await ratesOf(tool, models),
+            rates: await ratesOf(tool, models, typical),
             args: tool.cli,
             ...(tool.per ? { per: tool.per } : {}),
             local: false,

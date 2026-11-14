@@ -90,9 +90,9 @@ export const videoGenerate: ToolDef = {
   key: 'video.generate',
   name: '生成视频',
   description:
-    '按文字或一张本地首帧生成短视频素材，存成 MP4；按实时目录确认参数，不支持参考图时明确拒绝。',
+    '按文字或一张本地首帧生成短视频素材，存成 MP4；按实时目录确认参数，不支持参考图时明确拒绝。几段一起做：每段加 --wait false 先都交上，再 oasis-tool wait 任务号1 任务号2 … 一起等，供应商那边同时做。',
   usage:
-    'oasis-tool video.generate --prompt "画面描述" [--first_frame materials/首帧.png] [--duration 5] [--resolution 720p] [--aspect_ratio 16:9] --out out/视频.mp4（没等到就按提示运行 oasis-tool wait <任务号>；首帧内联输入仍需当前供应商实际验证）',
+    'oasis-tool video.generate --prompt "画面描述" [--first_frame materials/首帧.png] [--duration 5] [--resolution 720p] [--aspect_ratio 16:9] --out out/视频.mp4 [--wait false]（没等到就按提示运行 oasis-tool wait <任务号>；首帧内联输入仍需当前供应商实际验证）',
   unit: '秒',
   estimateMicro: 400_000,
   holdMicro: (args) => (Number(args.duration) || 5) * 700_000,
