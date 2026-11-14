@@ -1,5 +1,6 @@
-// 给沙箱里主 AI 的说明：guide/AGENTS.md 是平台规则（在 Oasis 里怎么干活），guide/playbooks/ 下
-// 每个 .md 是一份场景经验，作为技能交给 AI，需要时它自己读。每轮开沙箱时现读，改了不用重启 harness。
+// 给沙箱里主 AI 的说明和命令：guide/AGENTS.md 是平台规则（在 Oasis 里怎么干活），guide/playbooks/ 下
+// 每个 .md 是一份场景经验，作为技能交给 AI，需要时它自己读；oasis-tool 这些命令也从仓库里拿。
+// 每轮开沙箱时现读，改了不用重启 harness。
 // 经验格式：第一行「# 名称」，接着一行「> 适用：……」，其余是正文。
 import { readdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -35,6 +36,28 @@ async function loadPlaybooks(dir: string): Promise<Playbook[]> {
   const files = (await readdir(dir)).filter((f) => f.endsWith('.md')).sort();
   return Promise.all(
     files.map(async (f) => parsePlaybook(basename(f, '.md'), await readFile(join(dir, f), 'utf8'))),
+  );
+}
+
+/**
+ * 沙箱里 Oasis 自己的命令：oasis-tool、oasis-op 和它们用到的两个契约文件，按镜像里的位置
+ * （相对 /opt/oasis，见 infra/images/harness-sandbox-base/Dockerfile）每轮现放进沙箱，
+ * 改了工具不用重建镜像（3D 镜像重建要重下 Blender）。root 是仓库根目录。
+ */
+export async function loadToolScripts(root: string): Promise<{ path: string; content: Buffer }[]> {
+  const files = [
+    ['services/harness/sandbox/oasis-tool.ts', 'oasis-tool.ts'],
+    ['services/harness/sandbox/batch.ts', 'batch.ts'],
+    ['services/harness/sandbox/tool-files.ts', 'tool-files.ts'],
+    ['services/harness/sandbox/oasis-op.ts', 'services/harness/sandbox/oasis-op.ts'],
+    ['packages/contracts/src/ops.ts', 'packages/contracts/src/ops.ts'],
+    ['packages/contracts/src/tool-args.ts', 'packages/contracts/src/tool-args.ts'],
+  ];
+  return Promise.all(
+    files.map(async ([from, path]) => ({
+      path: path!,
+      content: await readFile(join(root, from!)),
+    })),
   );
 }
 

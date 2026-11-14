@@ -1,4 +1,5 @@
-// oasis-tool：沙箱里的 AI 调用 Oasis 工具的命令。装在沙箱镜像里，只依赖 Node 自带的能力。
+// oasis-tool：沙箱里的 AI 调用 Oasis 工具的命令，只依赖 Node 自带的能力。harness 每轮把当前版本放进
+// 沙箱的 /opt/oasis（镜像里那份给离线验收用），改了不用重建镜像。
 // 经入口代理连 model-gateway，带本次运行的临时 Key；生成的文件（图片、音频……）写到指定位置。
 //
 //   oasis-tool list                                   看有哪些工具、怎么用
@@ -6,16 +7,25 @@
 //   oasis-tool web.search --query "…"
 //   oasis-tool audio.transcribe --file in/录音.mp3
 //   oasis-tool video.generate --prompt "…" --out out/视频.mp4   长任务：提交后自己等，等不到就给任务号
-//   oasis-tool wait <任务号> --out out/视频.mp4                   接着等长任务
-import { mkdir, readFile, stat, writeFile, rename, rm, realpath, lstat } from 'node:fs/promises';
+//   oasis-tool video.generate … --wait false                    只提交、马上给任务号（几段一起交）
+//   oasis-tool wait <任务号> [<任务号> …]                        一起等，各存到交的时候写的 --out
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createWriteStream, createReadStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { basename, dirname, extname, join, resolve, relative, isAbsolute } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import { runBatch } from './batch.ts';
-import { appFiles, localImages, localMedia, matchExt, startOf, targetsFor } from './tool-files.ts';
+import {
+  appFiles,
+  localImages,
+  localMedia,
+  matchExt,
+  renderScene,
+  startOf,
+  targetsFor,
+} from './tool-files.ts';
 
 /** 这些参数是列表：逗号分隔，或者直接写 JSON 数组 */
 const LIST_ARGS = new Set(['urls', 'options', 'scale', 'ref', 'files', 'steps']);
@@ -74,7 +84,13 @@ export function parseArgs(argv: string[]): {
     if (name === 'out') out = value;
     else if (name === 'file') file = value;
     else if (name === 'plan') args[name] = JSON.parse(value) as unknown;
-    else if (LIST_ARGS.has(name)) {
+    // 描述里常有逗号，只认 JSON 数组
+    else if (name === 'prompts') {
+      const list: unknown = value.trim().startsWith('[') ? JSON.parse(value) : undefined;
+      if (!Array.isArray(list))
+        throw new Error('--prompts 要写成 JSON 数组，如 \'["画面一","画面二"]\'');
+      args[name] = list;
+    } else if (LIST_ARGS.has(name)) {
       args[name] = value.trim().startsWith('[')
         ? (JSON.parse(value) as unknown)
         : value
@@ -194,12 +210,43 @@ async function save(result: ToolResult, out: string | undefined): Promise<void> 
   say(`花费：$${(result.costMicro / 1_000_000).toFixed(4)}`);
 }
 
-/** 等长任务做完：做好了就保存；等到上限还没好，告诉 AI 怎么接着等 */
-async function wait(id: string, out: string | undefined): Promise<void> {
-  const deadline = Date.now() + waitSeconds() * 1000;
+/** 长任务的恢复记录放在哪（交的时候记下任务号和 --out，重跑同一条命令不会重复提交） */
+const stateDir = () => process.env.OASIS_TOOL_STATE_DIR ?? join('out', '.oasis-tools');
+
+/** 交这个长任务时写的 --out；没记下就是 undefined（存进 out/，用工具给的名字） */
+async function savedOut(id: string): Promise<string | undefined> {
+  const names = await readdir(stateDir()).catch(() => [] as string[]);
+  for (const name of names.filter((n) => n.endsWith('.json'))) {
+    try {
+      const state = JSON.parse(await readFile(join(stateDir(), name), 'utf8')) as {
+        jobId?: string;
+        out?: string;
+      };
+      if (state.jobId === id) return state.out;
+    } catch {
+      // 写到一半的记录不算
+    }
+  }
+  return undefined;
+}
+
+/** 几个一起等时一个一个地存，各自的输出不交错 */
+let saving: Promise<unknown> = Promise.resolve();
+function inTurn(task: () => Promise<void>): Promise<void> {
+  const next = saving.then(task, task);
+  saving = next.catch(() => undefined);
+  return next;
+}
+
+/** 等一个长任务做完并保存；等到上限还没好返回 false */
+async function waitOne(id: string, out: string | undefined, deadline: number): Promise<boolean> {
   for (;;) {
     const job = (await request(`/tools/jobs/${encodeURIComponent(id)}`)) as ToolJob;
-    if (job.status === 'completed' && job.result) return save(job.result, out);
+    if (job.status === 'completed' && job.result) {
+      const result = job.result;
+      await inTurn(() => save(result, out));
+      return true;
+    }
     // 供应商明确没做出来的不收费，可以重新提交；结果没确认的可能已经收费，不能重新提交
     if (job.status === 'failed')
       throw new Error(
@@ -207,58 +254,44 @@ async function wait(id: string, out: string | undefined): Promise<void> {
       );
     if (job.status === 'uncertain')
       throw new Error(`${job.error ?? '结果没确认'}；任务号 ${id}，不要重新提交以免重复收费`);
-    if (Date.now() + POLL_MS > deadline) {
-      const again = `oasis-tool wait ${id}${out ? ` --out ${JSON.stringify(out)}` : ''}`;
-      say(`还没做好（任务号 ${id}）。先做别的，过一会儿运行：${again}`);
-      return;
-    }
+    if (Date.now() + POLL_MS > deadline) return false;
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
   }
 }
 
+/** 等长任务做完：一起等、各存各的（out 只在等一个时给）；等到上限还没好的，告诉 AI 怎么接着等 */
+async function wait(ids: string[], out?: string): Promise<void> {
+  const deadline = Date.now() + waitSeconds() * 1000;
+  const results = await Promise.allSettled(
+    ids.map(async (id) => waitOne(id, out ?? (await savedOut(id)), deadline)),
+  );
+  const pending = ids.filter((_, i) => {
+    const r = results[i];
+    return r?.status === 'fulfilled' && !r.value;
+  });
+  if (pending.length) {
+    const again = `oasis-tool wait ${pending.join(' ')}${out ? ` --out ${JSON.stringify(out)}` : ''}`;
+    say(`还没做好（任务号 ${pending.join('、')}）。先做别的，过一会儿运行：${again}`);
+  }
+  const failed = results.flatMap((r) =>
+    r.status === 'rejected'
+      ? [r.reason instanceof Error ? r.reason.message : String(r.reason)]
+      : [],
+  );
+  if (failed.length) throw new Error(failed.join('\n'));
+}
+
 async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
+  // --wait false：长任务只提交、马上给任务号，几个交完再用 wait 一起等
+  const noWait = args.wait === 'false';
+  delete args.wait;
   if (key === 'app.check') {
     args.files = await appFiles(args);
     // 给了 --out 就要一份完整报告存进去；没给只看终端里的结论
     if (out) args.report = true;
   }
-  const renderInputs: string[] = [];
-  if (key === '3d.render') {
-    if (typeof args.scene !== 'string') throw new Error('--scene 需要本地 scene.json');
-    const source = resolve(args.scene),
-      directory = dirname(source);
-    if ((await stat(source)).size > 1024 ** 2) throw new Error('Scene exceeds limit');
-    const scene = JSON.parse(await readFile(source, 'utf8')) as {
-      assets?: { id: string; path: string; sha256: string }[];
-    };
-    const assets = [];
-    for (const asset of scene.assets ?? []) {
-      const target = resolve(directory, asset.path),
-        rel = relative(directory, target);
-      if (rel.startsWith('..') || isAbsolute(rel)) throw new Error('Asset path escapes scene');
-      const actual = relative(await realpath(directory), await realpath(target));
-      if (actual.startsWith('..') || isAbsolute(actual) || (await lstat(target)).isSymbolicLink())
-        throw new Error('Asset symlink escapes scene');
-      const size = (await stat(target)).size;
-      if (size <= 0 || size > 100 * 1024 ** 2 || assets.length >= 20)
-        throw new Error('Asset exceeds limits');
-      const hash = createHash('sha256');
-      for await (const chunk of createReadStream(target)) hash.update(chunk);
-      if (hash.digest('hex') !== asset.sha256) throw new Error('Asset hash mismatch');
-      renderInputs.push(target);
-      assets.push({ id: asset.id, size, sha256: asset.sha256 });
-    }
-    args.scene = scene;
-    args.assets = assets;
-    args.render = {
-      width: Number(args.width ?? 512),
-      height: Number(args.height ?? 512),
-      samples: Number(args.samples ?? 32),
-      backend: args.backend ?? 'CUDA',
-    };
-    for (const key of ['width', 'height', 'samples', 'backend']) delete args[key];
-  }
+  const renderInputs = key === '3d.render' ? await renderScene(args) : [];
   const finishJob = async (id: string) => {
     if (key === '3d.render') {
       const state = (await request(`/tools/jobs/${id}`)) as { phase?: string };
@@ -273,7 +306,13 @@ async function run(key: string, argv: string[]): Promise<void> {
         await request(`/tools/jobs/${id}/submit`, { method: 'POST', body: '{}' });
       }
     }
-    return wait(id, out);
+    if (noWait) {
+      say(
+        `已提交，没等结果（任务号 ${id}）。几个都交完后一起等：oasis-tool wait ${id} <别的任务号…>`,
+      );
+      return;
+    }
+    return wait([id], out);
   };
   if (key === '3d.generate' && args.image !== undefined) {
     if (typeof args.image !== 'string') throw new Error('--image 需要本地图片路径');
@@ -311,7 +350,7 @@ async function run(key: string, argv: string[]): Promise<void> {
         }),
       )
       .digest('hex');
-    const folder = process.env.OASIS_TOOL_STATE_DIR ?? join('out', '.oasis-tools');
+    const folder = stateDir();
     await mkdir(folder, { recursive: true });
     statePath = join(folder, `${fingerprint}.json`);
     const scope = process.env.OASIS_TOOL_SCOPE;
@@ -374,7 +413,11 @@ async function run(key: string, argv: string[]): Promise<void> {
   if (result.job && statePath && requestState) {
     const partial = `${statePath}.${randomUUID()}.partial`;
     try {
-      await writeFile(partial, JSON.stringify({ ...requestState, jobId: result.job.id }));
+      // 记下存到哪：之后 wait 几个任务号一起等时，各存各的
+      await writeFile(
+        partial,
+        JSON.stringify({ ...requestState, jobId: result.job.id, ...(out ? { out } : {}) }),
+      );
       await rename(partial, statePath);
     } finally {
       await rm(partial, { force: true });
@@ -406,7 +449,7 @@ export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
   if (!command || command === 'help' || command === '--help') {
     say(
-      '用法：oasis-tool list | oasis-tool <工具名> --参数 值 … [--out 路径] | oasis-tool wait <任务号>',
+      '用法：oasis-tool list | oasis-tool <工具名> --参数 值 … [--out 路径] [--wait false] | oasis-tool wait <任务号> [<任务号> …]',
     );
     return;
   }
@@ -419,9 +462,14 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   if (command === 'wait') {
-    const [id, ...more] = rest;
-    if (!id) throw new Error('wait 后面要写任务号');
-    return wait(id, parseArgs(more).out);
+    const at = rest.findIndex((token) => token.startsWith('--'));
+    const ids = at < 0 ? rest : rest.slice(0, at);
+    const { out } = parseArgs(at < 0 ? [] : rest.slice(at));
+    if (!ids.length) throw new Error('wait 后面要写任务号（几个一起等就都写上）');
+    if (ids.length > 1 && out)
+      throw new Error('几个任务一起等时不写 --out：各存到交的时候写的 --out');
+    // 一起等：有一个没做出来，其余的照样等完
+    return wait(ids, out);
   }
   // 沙箱里的本地操作：工具目录里叫 op.*，由 oasis-op 做
   if (command.startsWith('op.')) {

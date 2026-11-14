@@ -228,6 +228,10 @@ export function createExecution(
               dir: SANDBOX_PATHS.dshHome,
               tar: await packFiles(guideFiles(await deps.guide(), request.persona)),
             },
+            // oasis-tool 这些命令也每轮现放：改了工具，下一轮就用上，不用重建镜像
+            ...(deps.toolScripts
+              ? [{ dir: SANDBOX_PATHS.tools, tar: await packFiles(await deps.toolScripts()) }]
+              : []),
             ...(recovering
               ? []
               : [

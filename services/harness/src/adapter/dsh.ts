@@ -9,6 +9,7 @@ import { ApplicationSpec } from '@oasis/contracts/canvas';
 import { BrowserTestPlan } from '@oasis/contracts/ui-test';
 import { MODEL_PREVIEW_LIMITS, ModelPreviewSpec } from '@oasis/contracts/model-preview';
 import { createJsonRpcClient } from './jsonrpc.ts';
+import { OASIS_TOOL, savedFiles, stepFacts } from './step-facts.ts';
 
 /** 沙箱镜像里的目录约定（与 infra/images/harness-sandbox-base/Dockerfile 一致） */
 export const SANDBOX_PATHS = {
@@ -19,6 +20,8 @@ export const SANDBOX_PATHS = {
   dshHome: '/home/node/.dsh',
   /** dsh 的会话存储（含附件），和 /workspace 一起挂在这个会话的持久卷上：下一轮接着原会话 */
   sessions: '/home/node/.dsh/sessions',
+  /** Oasis 自己的命令（oasis-tool、oasis-op）：每轮开沙箱时放进当前版本，改了不用重建镜像 */
+  tools: '/opt/oasis',
 } as const;
 
 /** 给沙箱里 AI 的平台说明和技能（技能是各类活的经验，AI 需要时自己读） */
@@ -205,7 +208,7 @@ const brief = (text: string, max: number) => {
 
 /** oasis-tool 命令里的工具和要做的内容（提示词、搜索词……） */
 function oasisTool(command: string): string | undefined {
-  const tool = /(?:^|[\s;&|(])oasis-tool\s+([a-z0-9]+(?:\.[a-z0-9_-]+)*)/.exec(command)?.[1];
+  const tool = OASIS_TOOL.exec(command)?.[1];
   if (!tool) return undefined;
   const what = /--(?:prompt|query|question|text|url|dir)\s+(?:"([^"]*)|'([^']*)|(\S+))/.exec(
     command,
@@ -226,6 +229,8 @@ function toolLabel(name: string, args: string): string {
     }
     case 'write':
       return `写文件 ${path}`;
+    case 'edit':
+      return `改文件 ${path}`;
     case 'str_replace_editor':
       return `${argOf(args, 'command') === 'view' ? '读' : '改'}文件 ${path}`;
     case 'read':
@@ -313,20 +318,29 @@ export function translateNotification(method: string, params: unknown): AgentEve
       if (items) return { kind: 'todos', data: { items } };
       return {
         kind: 'tool_call',
-        data: { callId: data.callId, name, arguments: clip(args), label: toolLabel(name, args) },
+        data: {
+          callId: data.callId,
+          name,
+          arguments: clip(args),
+          label: toolLabel(name, args),
+          ...stepFacts(name, (key) => argOf(args, key)),
+        },
       };
     }
     case 'tool/result': {
       const message = data.message as
         { toolCallId?: string; content?: unknown; isError?: boolean } | undefined;
       const error = data.error as { reason?: string } | undefined;
+      const output = textOf(message?.content);
+      const files = savedFiles(output);
       return {
         kind: 'tool_result',
         data: {
           callId: message?.toolCallId,
           ok: !message?.isError,
-          text: clip(textOf(message?.content)),
+          text: clip(output),
           ...(error?.reason ? { error: clip(error.reason) } : {}),
+          ...(files.length ? { files } : {}),
         },
       };
     }

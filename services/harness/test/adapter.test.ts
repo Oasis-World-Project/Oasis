@@ -38,6 +38,7 @@ describe('dsh 事件翻译', () => {
         name: 'write',
         arguments: '{"path":"out/a.md"}',
         label: '写文件 out/a.md',
+        path: 'out/a.md',
       },
     });
     expect(
@@ -110,11 +111,54 @@ describe('dsh 事件翻译', () => {
     expect(label('str_replace_editor', { command: 'str_replace', path: 'a.md' })).toBe(
       '改文件 a.md',
     );
+    expect(label('edit', { file_path: '/workspace/out/a.css' })).toBe(
+      '改文件 /workspace/out/a.css',
+    );
     // 参数太长被截断、JSON 不完整
     expect(label('write', `{"path":"out/site/index.html","content":"${'x'.repeat(5000)}`)).toBe(
       '写文件 out/site/index.html',
     );
     expect(label('ask_user_question', {})).toBe('ask_user_question');
+  });
+
+  it('进度页要用的：oasis-tool 的工具名和点名的型号，写、改的文件（相对工作目录）', () => {
+    const facts = (name: string, args: unknown) => {
+      const data = translateNotification(
+        ...event('tool/call', { callId: 'c', name, arguments: JSON.stringify(args) }),
+      )?.data;
+      return { oasisTool: data?.oasisTool, oasisModel: data?.oasisModel, path: data?.path };
+    };
+    expect(
+      facts('bash', {
+        command: `oasis-tool image.generate --prompts '["a","b"]' --model x/seedream --out out/a.png`,
+      }),
+    ).toEqual({ oasisTool: 'image.generate', oasisModel: 'x/seedream', path: undefined });
+    expect(facts('bash', { command: 'oasis-tool wait 1 2' })).toMatchObject({ oasisTool: 'wait' });
+    expect(facts('bash', { command: 'ls out' })).toMatchObject({ oasisTool: undefined });
+    expect(facts('write', { file_path: '/workspace/out/分镜.md', content: 'x' })).toMatchObject({
+      path: 'out/分镜.md',
+    });
+    expect(facts('edit', { file_path: 'out/a.css' })).toMatchObject({ path: 'out/a.css' });
+    expect(facts('str_replace_editor', { command: 'view', path: 'out/a.css' })).toMatchObject({
+      path: undefined,
+    });
+    // 工作目录外、往上跳的不给
+    expect(facts('write', { file_path: '/tmp/x' })).toMatchObject({ path: undefined });
+    expect(facts('write', { file_path: 'out/../../x' })).toMatchObject({ path: undefined });
+
+    // oasis-tool 存下的文件：输出里「已保存：」那几行（截断前就认出来）
+    const saved = (text: string) =>
+      translateNotification(
+        ...event('tool/result', {
+          message: { toolCallId: 'c', content: [{ type: 'text', text }] },
+        }),
+      )?.data.files;
+    expect(
+      saved(
+        `生成了 2 张图片\n已保存：out/帧-1.png\n已保存：/workspace/out/帧-2.png\n${'x'.repeat(5000)}\n已保存：out/尾.png`,
+      ),
+    ).toEqual(['out/帧-1.png', 'out/帧-2.png', 'out/尾.png']);
+    expect(saved('已保存：/tmp/x.png\n已保存：../x.png')).toBeUndefined();
   });
 
   it('待办单独成一种事件（不算一步）', () => {

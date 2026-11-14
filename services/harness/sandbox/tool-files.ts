@@ -1,11 +1,16 @@
-// oasis-tool 里和文件打交道的部分：结果存到哪、图片和音频按实际格式改后缀、读本地图片、app.check 带上的应用文件。
-import { open, readdir, readFile, stat } from 'node:fs/promises';
-import { extname, join, relative, resolve, sep } from 'node:path';
+// oasis-tool 里和文件打交道的部分：结果存到哪、图片和音频按实际格式改后缀、读本地图片、
+// 3d.render 的场景和资产、app.check 带上的应用文件。
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { lstat, open, readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /**
  * 文件要存到哪：给了 --out 就用它（多个文件时加 -1、-2），否则放进 out/ 用工具给的名字。
  * 几个文件后缀不一样、其中只有一个和 --out 同后缀时，它就是主结果，原样存到 --out（之后都按这个路径找它）；
  * 其余的是附带的（如 app.check 的截图），放在旁边，名字接在后面。
+ * 工具给的名字以「-序号」结尾（如一次生几张图时的 image-3.png）时用同一个序号：中间有一张没做出来，
+ * 后面的也和描述的顺序对得上。
  */
 export function targetsFor(files: { name: string }[], out: string | undefined): string[] {
   if (!out) return files.map((f) => join('out', f.name));
@@ -15,7 +20,12 @@ export function targetsFor(files: { name: string }[], out: string | undefined): 
   const mixed = new Set(files.map((f) => extname(f.name))).size > 1;
   const main = mixed && ext ? files.filter((f) => extname(f.name) === ext) : [];
   if (main.length === 1) return files.map((f) => (f === main[0] ? out : `${stem}-${f.name}`));
-  return files.map((f, i) => `${stem}-${i + 1}${mixed ? extname(f.name) : ext || extname(f.name)}`);
+  const numbers = files.map((f) => /-(\d+)\.[^.]+$/.exec(f.name)?.[1]);
+  const numbered = numbers.every(Boolean) && new Set(numbers).size === files.length;
+  return files.map(
+    (f, i) =>
+      `${stem}-${numbered ? numbers[i] : i + 1}${mixed ? extname(f.name) : ext || extname(f.name)}`,
+  );
 }
 
 /** 认得文件头的图片、音频格式：后缀 → 格式（.jpg 和 .jpeg 是同一种） */
@@ -138,6 +148,48 @@ export async function localImages(paths: unknown) {
     mediaType: (file as { mediaType: string }).mediaType,
     base64: file.base64,
   }));
+}
+
+/**
+ * 3d.render：读本地 scene.json，核对它引用的资产（不能跳出场景目录、不能是链接、大小和摘要对得上），
+ * 把场景和资产清单、渲染设置写进参数；返回要上传的资产文件（提交后逐个上传）。
+ */
+export async function renderScene(args: Record<string, unknown>): Promise<string[]> {
+  if (typeof args.scene !== 'string') throw new Error('--scene 需要本地 scene.json');
+  const source = resolve(args.scene),
+    directory = dirname(source);
+  if ((await stat(source)).size > 1024 ** 2) throw new Error('Scene exceeds limit');
+  const scene = JSON.parse(await readFile(source, 'utf8')) as {
+    assets?: { id: string; path: string; sha256: string }[];
+  };
+  const inputs: string[] = [];
+  const assets = [];
+  for (const asset of scene.assets ?? []) {
+    const target = resolve(directory, asset.path),
+      rel = relative(directory, target);
+    if (rel.startsWith('..') || isAbsolute(rel)) throw new Error('Asset path escapes scene');
+    const actual = relative(await realpath(directory), await realpath(target));
+    if (actual.startsWith('..') || isAbsolute(actual) || (await lstat(target)).isSymbolicLink())
+      throw new Error('Asset symlink escapes scene');
+    const size = (await stat(target)).size;
+    if (size <= 0 || size > 100 * 1024 ** 2 || assets.length >= 20)
+      throw new Error('Asset exceeds limits');
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(target)) hash.update(chunk);
+    if (hash.digest('hex') !== asset.sha256) throw new Error('Asset hash mismatch');
+    inputs.push(target);
+    assets.push({ id: asset.id, size, sha256: asset.sha256 });
+  }
+  args.scene = scene;
+  args.assets = assets;
+  args.render = {
+    width: Number(args.width ?? 512),
+    height: Number(args.height ?? 512),
+    samples: Number(args.samples ?? 32),
+    backend: args.backend ?? 'CUDA',
+  };
+  for (const key of ['width', 'height', 'samples', 'backend']) delete args[key];
+  return inputs;
 }
 
 /** app.check 一次带上的应用文件上限（入口代理收 50 MB 的请求，base64 后要放得下） */

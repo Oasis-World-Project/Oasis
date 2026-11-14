@@ -27,6 +27,8 @@ export interface RunDeps {
   packages: SandboxPackages;
   /** 读给沙箱里 AI 的平台说明和技能（每轮现读，放进 dsh 的用户目录） */
   guide: () => Promise<AgentGuide>;
+  /** 读沙箱里的 oasis-tool 这些命令（每轮现读，放进 /opt/oasis）；没给就用镜像里的 */
+  toolScripts?: () => Promise<{ path: string; content: Buffer }[]>;
   batchEnv?: Record<string, string>;
   maxConcurrent: number;
   /** 显式验收超时；生产调用不设置。 */

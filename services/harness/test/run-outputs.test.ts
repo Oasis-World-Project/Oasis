@@ -1,8 +1,10 @@
 // 运行服务：对话里的一轮从输入到产出（平台说明和技能、用户发的文件、持久工作目录、产出文件、删对话）。
-import { extractFiles } from '@oasis/service-kit';
+import { Readable } from 'node:stream';
+import { extractFiles, packFiles } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
 import { SANDBOX_PATHS } from '../src/adapter/dsh.ts';
 import {
+  executor,
   PAYER,
   CONVERSATION,
   methods,
@@ -211,5 +213,45 @@ describe('对话里的一轮：输入和产出', () => {
         statusCode: 404,
         code: 'file_not_found',
       });
+  });
+
+  it('读这一轮工作目录里的一个文件：沙箱还在就从沙箱读（只给普通文件），收尾后只剩 out/ 里的', async () => {
+    const run = await service.start({ ...base, prompt: '写' });
+    await finished(run.id);
+    const read = async (stream: Readable) => Buffer.concat(await stream.toArray()).toString();
+    // 沙箱还在：Docker 取单个文件得到的 tar 里只有这个文件
+    const asked: string[] = [];
+    executor.readStoredArchive = async (_id, path) => {
+      asked.push(path);
+      if (path.endsWith('missing.png')) return undefined;
+      const files = path.endsWith('folder')
+        ? [{ path: 'folder/a.txt', content: Buffer.from('x') }]
+        : [{ path: '帧-1.png', content: Buffer.from('png') }];
+      return Readable.from([await packFiles(files)]);
+    };
+    try {
+      const file = await service.workspaceFile(run.id, 'out/关键帧/帧-1.png');
+      expect(asked).toEqual([`${SANDBOX_PATHS.workdir}/out/关键帧/帧-1.png`]);
+      expect(file).toMatchObject({ size: 3, contentType: 'image/png' });
+      expect(await read(file.content)).toBe('png');
+      await expect(service.workspaceFile(run.id, 'folder')).rejects.toMatchObject({
+        statusCode: 422,
+      });
+      await expect(service.workspaceFile(run.id, 'missing.png')).rejects.toMatchObject({
+        statusCode: 404,
+      });
+      await expect(service.workspaceFile(run.id, 'out/../x')).rejects.toMatchObject({
+        statusCode: 400,
+      });
+    } finally {
+      delete executor.readStoredArchive;
+    }
+    // 沙箱没了：从产出包读 out/ 下的，别处的 404
+    expect(await read((await service.workspaceFile(run.id, 'out/result.md')).content)).toBe(
+      '# 成果',
+    );
+    await expect(service.workspaceFile(run.id, 'notes.md')).rejects.toMatchObject({
+      statusCode: 404,
+    });
   });
 });

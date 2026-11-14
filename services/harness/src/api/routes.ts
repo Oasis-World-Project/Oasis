@@ -45,6 +45,13 @@ export function registerRoutes(app: ServiceApp, runs: RunService): void {
       .send(file.content);
   });
 
+  /** 读这一轮工作目录里的一个文件（相对 /workspace）：进度页预览中间产物 */
+  app.get('/internal/runs/:runId/workspace/*', async (request, reply) => {
+    const { runId, '*': path } = parseWith(FileParams, request.params);
+    const file = await runs.workspaceFile(runId, path);
+    return reply.type(file.contentType).header('content-length', file.size).send(file.content);
+  });
+
   /** 用户在这一轮进行中插话 */
   app.post('/internal/runs/:runId/messages', async (request, reply) => {
     const { runId } = parseWith(RunParams, request.params);

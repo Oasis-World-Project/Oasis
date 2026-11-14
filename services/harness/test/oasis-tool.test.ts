@@ -34,6 +34,11 @@ describe('oasis-tool', () => {
     expect(parseArgs(['--file', 'in/录音.mp3'])).toEqual({ args: {}, file: 'in/录音.mp3' });
     expect(() => parseArgs(['prompt', 'x'])).toThrow('参数要写成 --名字 值');
     expect(() => parseArgs(['--prompt'])).toThrow('--prompt 后面缺少值');
+    // 几个画面的描述里常有逗号：只认 JSON 数组
+    expect(parseArgs(['--prompts', '["门店外景，白天, 暖色","海报"]']).args).toEqual({
+      prompts: ['门店外景，白天, 暖色', '海报'],
+    });
+    expect(() => parseArgs(['--prompts', '门店外景,海报'])).toThrow('JSON 数组');
   });
 
   it('文件存放位置：一个文件用 --out；多个加编号；没给 --out 就放进 out/', () => {
@@ -43,6 +48,11 @@ describe('oasis-tool', () => {
     ];
     expect(targetsFor(files.slice(0, 1), 'out/首屏.png')).toEqual(['out/首屏.png']);
     expect(targetsFor(files, 'out/首屏.png')).toEqual(['out/首屏-1.png', 'out/首屏-2.png']);
+    // 中间一张没做出来：编号跟着工具给的号走，和描述的顺序对得上
+    expect(targetsFor([files[1]!, { name: 'image-3.png' }], 'out/帧.png')).toEqual([
+      'out/帧-2.png',
+      'out/帧-3.png',
+    ]);
     expect(
       targetsFor(
         [files[0]!, { name: 'project.zip', mediaType: 'application/zip', base64: '' }],
@@ -134,18 +144,22 @@ describe('oasis-tool 长任务', () => {
   });
   fake.get('/v1/tools', async () => ({ tools: [] }));
   const videoRequests: { args: Record<string, unknown>; idempotency_key: string }[] = [];
+  // 「第一段」「第二段」各有自己的任务号（几段一起交、一起等）；别的都是 job-done
+  const videoJobs: Record<string, string> = { 第一段: 'job-one', 第二段: 'job-two' };
   fake.post('/v1/tools/video.generate', async (request) => {
-    videoRequests.push(request.body as (typeof videoRequests)[number]);
+    const body = request.body as (typeof videoRequests)[number];
+    videoRequests.push(body);
     return {
       tool: 'video.generate',
       text: '生成视频已提交',
       files: [],
       costMicro: 0,
-      job: { id: 'job-done' },
+      job: { id: videoJobs[String(body.args.prompt)] ?? 'job-done' },
     };
   });
-  fake.get('/v1/tools/jobs/:id', async (request) =>
-    (request.params as { id: string }).id === 'job-done'
+  fake.get('/v1/tools/jobs/:id', async (request) => {
+    const { id } = request.params as { id: string };
+    return ['job-done', 'job-one', 'job-two'].includes(id)
       ? {
           status: 'completed',
           result: {
@@ -155,14 +169,14 @@ describe('oasis-tool 长任务', () => {
               {
                 name: 'video.mp4',
                 mediaType: 'video/mp4',
-                base64: Buffer.from('mp4').toString('base64'),
+                base64: Buffer.from(id === 'job-done' ? 'mp4' : `mp4 ${id}`).toString('base64'),
               },
             ],
             costMicro: 500_000,
           },
         }
-      : { status: 'pending' },
-  );
+      : { status: 'pending' };
+  });
   const musicId = '00000000-0000-4000-8000-000000000099';
   let musicSubmissions = 0;
   let corruptMusic = false;
@@ -277,6 +291,23 @@ describe('oasis-tool 长任务', () => {
     printed.length = 0;
     await main(['wait', 'job-slow', '--out', 'out/v.mp4']);
     expect(printed.join('')).toContain('oasis-tool wait job-slow --out "out/v.mp4"');
+  });
+  it('--wait false 只提交、马上给任务号；几个一起等，各存到交的时候写的 --out', async () => {
+    const one = join(dir, '镜头一.mp4'),
+      two = join(dir, '镜头二.mp4');
+    printed.length = 0;
+    await main(['video.generate', '--prompt', '第一段', '--out', one, '--wait', 'false']);
+    await main(['video.generate', '--prompt', '第二段', '--out', two, '--wait', 'false']);
+    expect(printed.join('')).toContain('oasis-tool wait job-two');
+    expect(videoRequests.at(-1)?.args).not.toHaveProperty('wait');
+    await expect(readFile(one)).rejects.toThrow();
+
+    printed.length = 0;
+    await main(['wait', 'job-one', 'job-two', 'job-slow']);
+    expect(await readFile(one, 'utf8')).toBe('mp4 job-one');
+    expect(await readFile(two, 'utf8')).toBe('mp4 job-two');
+    expect(printed.join('')).toContain('还没做好（任务号 job-slow）');
+    await expect(main(['wait', 'job-one', 'job-two', '--out', one])).rejects.toThrow('不写 --out');
   });
 
   it('工具目录同时展示本次沙箱实际安装的软件清单', async () => {
