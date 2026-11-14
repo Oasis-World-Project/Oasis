@@ -65,6 +65,13 @@ export interface LiveRun {
   agent?: AgentConnection;
   /** 已交给 dsh 的用户消息条数（含这一轮开头用户说的话） */
   prompts: number;
+  /** AI 还没开始（排队、起沙箱、装 dsh）时先到的插话：开头那句交出去后按顺序送 */
+  queued: string[];
+  /**
+   * 开头那句：unsent 还没交（接着原会话时恢复出来的历史不算插话）、sent 交了还没进会话、
+   * heard 进了会话。之后根会话里来的用户消息都是插话，事件上标 interjection。
+   */
+  opening: 'unsent' | 'sent' | 'heard';
   /** 已经开始收尾，不再接受插话 */
   closing: boolean;
   nextSeq: number;
@@ -83,6 +90,8 @@ export interface LiveRun {
 export const newLiveRun = (nextSeq: number, sessionId: string): LiveRun => ({
   abort: new AbortController(),
   prompts: 0,
+  queued: [],
+  opening: 'unsent',
   closing: false,
   nextSeq,
   writes: Promise.resolve(),

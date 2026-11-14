@@ -182,12 +182,19 @@ export function createRunService(deps: RunDeps) {
       return true;
     },
 
-    /** 用户在这一轮进行中插话：在 AI 的下一步送到。这一轮已经结束或还没开始时 409。 */
+    /**
+     * 用户在这一轮进行中插话：在 AI 的下一步送到。AI 还没开始（排队、起沙箱、装 dsh）时先存着，
+     * 开头那句交出去后按顺序送。这一轮已经在收尾或结束时 409。
+     */
     async message(id: string, text: string): Promise<void> {
       await owned(id);
       const run = live.get(id);
-      if (!run?.agent || run.closing || run.abort.signal.aborted) {
-        throw new HttpError(409, 'run_not_active', '这一轮已经结束或还没开始，不能插话');
+      if (!run || run.closing || run.abort.signal.aborted) {
+        throw new HttpError(409, 'run_not_active', '这一轮已经在收尾或结束了，不能插话');
+      }
+      if (!run.agent) {
+        run.queued.push(text);
+        return;
       }
       run.prompts += 1;
       await run.agent.prompt(text);

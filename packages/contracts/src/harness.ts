@@ -145,7 +145,7 @@ export type RunBody = z.infer<typeof RunBody>;
 /**
  * 运行过程中的事件（已从 dsh 的原始事件翻译过来，调用方不需要认识 dsh）。
  * - status：运行时整体变为忙 / 空闲、服务中断后恢复
- * - user_message：用户的话（开头那句和插话）
+ * - user_message：用户的话（开头那句和插话；插话带 interjection: true，在 AI 看到它时出现）
  * - assistant_text：AI 说的话（一步一段）
  * - tool_call / tool_result：AI 调用工具及结果（内容过长会截断；tool_call 带给人看的一句话 label）
  * - todos：AI 列的待办（{ items: [{ text, status: pending | doing | done }] }）

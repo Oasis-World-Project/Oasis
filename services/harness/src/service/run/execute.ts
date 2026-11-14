@@ -80,8 +80,13 @@ export function createExecution(
     }
     if (row.continueFrom || (recovering && !fresh)) await agent.resume();
     run.prompts += 1;
+    run.opening = 'sent';
     await agent.prompt(recovering && !fresh ? RECOVERED : row.prompt);
-    // 用户的话交出去之后才接受插话，保证插话排在后面
+    // 插话排在开头那句后面：AI 还没开始时先到的按顺序送完，之后来的直接送
+    while (run.queued.length) {
+      run.prompts += 1;
+      await agent.prompt(run.queued.shift()!);
+    }
     run.agent = agent;
     return { agent, failure: await settle(run, agent) };
   }
@@ -118,8 +123,15 @@ export function createExecution(
     record(runId, run, kind, data) {
       const seq = run.nextSeq++;
       if (kind === 'assistant_text' && !data.parentSessionId) run.lastText = String(data.text);
+      // 根会话里的用户消息：开头那句之后来的是插话
+      let interjection = false;
+      if (kind === 'user_message' && !data.parentSessionId) {
+        interjection = run.opening === 'heard';
+        if (run.opening === 'sent') run.opening = 'heard';
+      }
+      const written = interjection ? { ...data, interjection } : data;
       run.writes = run.writes
-        .then(() => repo.appendEvents(runId, [{ seq, kind, data }]))
+        .then(() => repo.appendEvents(runId, [{ seq, kind, data: written }]))
         .catch((err: unknown) => logger.error({ err, runId, seq }, '写运行事件失败'));
     },
 

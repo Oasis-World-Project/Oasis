@@ -26,10 +26,31 @@ describe('对话里的一轮：插话、停止和取消', () => {
     await service.message(run.id, '再补一句');
     const row = await finished(run.id);
     expect(row.status).toBe('succeeded');
-    const said = events.filter((e) => e.kind === 'user_message').map((e) => e.data.text);
-    expect(said).toEqual(['先做这个', '再补一句']);
+    const said = events
+      .filter((e) => e.kind === 'user_message')
+      .map((e) => [e.data.text, e.data.interjection]);
+    expect(said).toEqual([
+      ['先做这个', undefined],
+      ['再补一句', true],
+    ]);
     const err = await service.message(run.id, '还在吗').catch((e: unknown) => e);
     expect((err as HttpError).statusCode).toBe(409);
+  });
+
+  it('AI 还没开始（排队、起沙箱、装 dsh）时插话：先存着，开头那句交出去后按顺序送到', async () => {
+    const run = await service.start({ ...base, prompt: '先做这个' });
+    expect(events.some((e) => e.kind === 'user_message')).toBe(false);
+    await service.message(run.id, '顺便加个标题');
+    await service.message(run.id, '标题用红色');
+    expect((await finished(run.id)).status).toBe('succeeded');
+    const said = events
+      .filter((e) => e.kind === 'user_message')
+      .map((e) => [e.data.text, e.data.interjection]);
+    expect(said).toEqual([
+      ['先做这个', undefined],
+      ['顺便加个标题', true],
+      ['标题用红色', true],
+    ]);
   });
 
   it('最后一轮模型出错：运行失败，带上原因', async () => {
