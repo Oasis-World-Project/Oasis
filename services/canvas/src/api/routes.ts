@@ -18,8 +18,10 @@ import {
   type ServiceClient,
   type ServiceApp,
 } from '@oasis/service-kit';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { Readable } from 'node:stream';
+import type { ArchiveLimits } from '../service/archive.ts';
 import type { ArtifactService } from '../service/artifact-service.ts';
 import type { UploadService } from '../service/upload-service.ts';
 import {
@@ -33,7 +35,7 @@ import { ModelPreviewSource } from '@oasis/contracts/model-preview';
 import { createModelPreviewService } from '../service/model-preview-service.ts';
 
 const IdParams = z.object({ id: z.uuid() });
-const SessionParams = z.object({ sessionId: z.uuid() });
+const RunParams = z.object({ runId: z.uuid() });
 const ConversationParams = z.object({ conversationId: z.uuid() });
 const DownloadQuery = z.object({ download: z.enum(['0', '1']).default('0') });
 
@@ -53,7 +55,7 @@ export function registerRoutes(
     uploadConcurrency?: number;
     transferTimeoutMs?: number;
     preview?: PreviewLimits;
-    archive?: { bytes: number; files: number };
+    archive?: ArchiveLimits;
   },
 ): void {
   const { uploads, artifacts, store, inspector } = services;
@@ -189,10 +191,12 @@ export function registerRoutes(
     return preview(name, Buffer.concat(chunks));
   });
 
-  /** 一个话题的成果打包下载 */
-  app.get('/v1/topics/:sessionId/archive', async (request, reply) => {
-    const owner = requireUserId(request);
-    const { sessionId } = parseWith(SessionParams, request.params);
+  /** 打包下载：同一时间只打一个包 */
+  async function sendArchive(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    pack: (limits: ArchiveLimits) => Promise<{ name: string; content: Readable }>,
+  ) {
     if (archiving)
       return reply.code(503).send({
         error: { code: 'archive_busy', message: '正在打包，请稍后重试', requestId: request.id },
@@ -202,11 +206,7 @@ export function registerRoutes(
       archiving = false;
     });
     try {
-      const result = await artifacts.archive(
-        owner,
-        sessionId,
-        options.archive ?? { bytes: 100 * 1024 * 1024, files: 1000 },
-      );
+      const result = await pack(options.archive ?? { bytes: 100 * 1024 * 1024, files: 1000 });
       return reply
         .headers(fileResponseHeaders('application/zip', result.name, true))
         .send(result.content);
@@ -214,9 +214,23 @@ export function registerRoutes(
       archiving = false;
       throw error;
     }
+  }
+
+  /** 一个任务（一轮）的成果打包下载 */
+  app.get('/v1/runs/:runId/archive', async (request, reply) => {
+    const owner = requireUserId(request);
+    const { runId } = parseWith(RunParams, request.params);
+    return sendArchive(request, reply, (limits) => artifacts.archive(owner, runId, limits));
   });
 
-  /** 对话里一轮结束了：登记这一轮新增和改过的成果，返回它们（conversation 写进 AI 的那条消息） */
+  /** 下载整个应用：应用目录里的全部文件 */
+  app.get('/v1/artifacts/:id/archive', async (request, reply) => {
+    const owner = requireUserId(request);
+    const { id } = parseWith(IdParams, request.params);
+    return sendArchive(request, reply, (limits) => artifacts.appArchive(owner, id, limits));
+  });
+
+  /** 登记对话里一轮做好的成果（进行中做好一个登记一个，结束时再登记一遍），返回这一轮的全部成果 */
   app.post('/internal/artifacts/runs', async (request) => ({
     artifacts: await artifacts.registerRun(parseWith(RegisterRunArtifactsBody, request.body)),
   }));

@@ -1,4 +1,4 @@
-// 真实数据库：成果按话题登记（撤掉任务后收缩过的结构）、仓库的查询，收缩迁移的回退。
+// 真实数据库：成果按话题登记、按任务（一轮）分（撤掉旧任务表后收缩过的结构）、仓库的查询，收缩迁移的回退。
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
@@ -6,6 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createArtifactsRepo, type NewArtifact } from '../src/repo/artifacts-repo.ts';
 
 const CONTRACT = '20261114200000_contract_conversation_artifacts.sql';
+/** 话题名改成任务名：在上面那次收缩之后，回退那次之前要先回退它 */
+const BY_TASK = '20261115010000_artifacts_by_task.sql';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实数据库）', () => {
   const schema = 'canvas_test_' + randomUUID().replaceAll('-', '');
@@ -33,7 +35,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实�
     conversationId: conversation,
     sessionId: s1,
     runId: r1,
-    topic: '小木屋',
+    task: '小木屋',
     path,
     name: path.split('/').at(-1)!,
     sha256: 'a'.repeat(64),
@@ -59,7 +61,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实�
     await pool.end();
   });
 
-  it('同一话题同一路径只登记一次；按对话、话题列出；同步文件夹不算本话题', async () => {
+  it('同一话题同一路径只登记一次；按对话、话题、任务列出；这个人用掉的同步文件夹', async () => {
     expect(await repo.insert(row('首页.md'))).toBe(true);
     expect(await repo.insert(row('首页.md', { runId: r2, syncPath: '小木屋/首页 (2).md' }))).toBe(
       false,
@@ -67,7 +69,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实�
     expect(await repo.insert(row('hero.png'))).toBe(true);
     expect(
       await repo.insert(
-        row('首页.md', { sessionId: s2, topic: '小木屋', syncPath: '小木屋 (2)/首页.md' }),
+        row('首页.md', { sessionId: s2, runId: r2, syncPath: '小木屋 (2)/首页.md' }),
       ),
     ).toBe(true);
     expect(
@@ -83,8 +85,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实�
     expect(await repo.list(owner, { sessionId: s2 }, 10)).toHaveLength(1);
     expect(await repo.list(owner, { conversationId: conversation }, 10)).toHaveLength(3);
     expect(await repo.list(owner, { category: 'media' }, 10)).toEqual([]);
-    expect((await repo.syncDirs(owner, s1)).sort()).toEqual(['小木屋 (2)']);
-    expect((await repo.syncDirs(owner, s2)).sort()).toEqual(['小木屋']);
+    expect(await repo.list(owner, { runId: r2 }, 10)).toHaveLength(1);
+    expect((await repo.syncDirs(owner)).sort()).toEqual(['小木屋', '小木屋 (2)']);
+    expect(await repo.syncDirs(randomUUID())).toEqual([]);
     const ids = (await repo.listBySession(s1)).map((r) => r.id);
     expect((await repo.findMany([...ids, randomUUID()])).map((r) => r.id).sort()).toEqual(
       ids.sort(),
@@ -115,13 +118,15 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实�
       contentType: 'text/markdown',
       models: ['google/g'],
       replacesSha256: 'a'.repeat(64),
-      runId: r2,
+      runId: r1,
+      task: '首页改短',
     });
     expect(await repo.find(first!.id)).toMatchObject({
       size: 9,
       sha256: 'b'.repeat(64),
       replacesSha256: 'a'.repeat(64),
-      runId: r2,
+      runId: r1,
+      task: '首页改短',
       models: ['google/g'],
       annotations: [],
       approvedAt: null,
@@ -140,11 +145,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实�
         [randomUUID(), owner, conversation, `无话题/${randomUUID()}.md`],
       );
     await expect(bare()).rejects.toThrow(/session_id/);
+    await pool.query(await part(BY_TASK, 'down'));
     await pool.query(await part(CONTRACT, 'down'));
     const { rows } = await pool.query<{ task_id: string | null }>('select task_id from artifacts');
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.task_id === null)).toBe(true);
     await pool.query(await part(CONTRACT, 'up'));
+    await pool.query(await part(BY_TASK, 'up'));
     expect(await repo.insert(row('again.md'))).toBe(true);
   });
 });

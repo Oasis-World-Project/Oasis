@@ -9,7 +9,6 @@ import tseslint from 'typescript-eslint';
 /** 2026-11-08 已经超过 500 行的文件和当时的行数 */
 const LONG_FILES = {
   'apps/web/src/canvas/ModelPreview.tsx': 614,
-  'services/canvas/test/artifacts.test.ts': 659,
 };
 
 export default defineConfig(

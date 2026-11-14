@@ -1,5 +1,5 @@
 import type { ArtifactCategory } from '@oasis/contracts/canvas';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { artifacts } from './schema.ts';
@@ -19,13 +19,18 @@ export interface ArtifactsRepo {
   setAvatar(id: string, spec: Artifact['avatarSpec']): Promise<void>;
   list(
     ownerId: string,
-    filter: { category?: ArtifactCategory; conversationId?: string; sessionId?: string },
+    filter: {
+      category?: ArtifactCategory;
+      conversationId?: string;
+      sessionId?: string;
+      runId?: string;
+    },
     limit: number,
   ): Promise<Artifact[]>;
   listBySession(sessionId: string): Promise<Artifact[]>;
   listByConversation(conversationId: string): Promise<Artifact[]>;
-  /** 这个用户在电脑上已经用掉的话题文件夹名（sync_path 的第一段），不含这个话题的 */
-  syncDirs(ownerId: string, exceptSessionId: string): Promise<string[]>;
+  /** 这个用户在电脑上已经用掉的任务文件夹名（sync_path 的第一段） */
+  syncDirs(ownerId: string): Promise<string[]>;
   /** 删掉这些成果行（对象已经删掉） */
   removeRows(artifactIds: string[]): Promise<void>;
   /** 批注整份替换、批准记号 */
@@ -33,12 +38,12 @@ export interface ArtifactsRepo {
     id: string,
     patch: Partial<Pick<Artifact, 'annotations' | 'approvedAt'>>,
   ): Promise<Artifact | undefined>;
-  /** 后来的一轮改了它：内容换成新版，批注和批准清掉，登记时间更新；id、同步路径不变 */
+  /** 又做了一遍：内容换成新版、归到这一轮的任务，批注和批准清掉，登记时间更新；id、同步路径不变 */
   replaceContent(
     id: string,
     patch: Pick<
       Artifact,
-      'size' | 'sha256' | 'contentType' | 'models' | 'replacesSha256' | 'runId'
+      'size' | 'sha256' | 'contentType' | 'models' | 'replacesSha256' | 'runId' | 'task'
     >,
   ): Promise<void>;
 }
@@ -82,6 +87,7 @@ export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
             filter.category ? eq(artifacts.category, filter.category) : undefined,
             filter.conversationId ? eq(artifacts.conversationId, filter.conversationId) : undefined,
             filter.sessionId ? eq(artifacts.sessionId, filter.sessionId) : undefined,
+            filter.runId ? eq(artifacts.runId, filter.runId) : undefined,
           ),
         )
         .orderBy(desc(artifacts.createdAt), artifacts.path)
@@ -90,11 +96,11 @@ export function createArtifactsRepo(pool: pg.Pool): ArtifactsRepo {
       db.select().from(artifacts).where(eq(artifacts.sessionId, sessionId)),
     listByConversation: (conversationId) =>
       db.select().from(artifacts).where(eq(artifacts.conversationId, conversationId)),
-    async syncDirs(ownerId, exceptSessionId) {
+    async syncDirs(ownerId) {
       const rows = await db
         .selectDistinct({ dir: sql<string>`split_part(${artifacts.syncPath}, '/', 1)` })
         .from(artifacts)
-        .where(and(eq(artifacts.ownerId, ownerId), ne(artifacts.sessionId, exceptSessionId)));
+        .where(eq(artifacts.ownerId, ownerId));
       return rows.map((r) => r.dir);
     },
     async removeRows(artifactIds) {

@@ -94,18 +94,17 @@ export function memoryArtifacts(): ArtifactsRepo & { rows: Artifact[] } {
             r.ownerId === ownerId &&
             (!filter.category || r.category === filter.category) &&
             (!filter.conversationId || r.conversationId === filter.conversationId) &&
-            (!filter.sessionId || r.sessionId === filter.sessionId),
+            (!filter.sessionId || r.sessionId === filter.sessionId) &&
+            (!filter.runId || r.runId === filter.runId),
         )
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
         .slice(0, limit),
     listBySession: async (sessionId) => rows.filter((r) => r.sessionId === sessionId),
     listByConversation: async (conversationId) =>
       rows.filter((r) => r.conversationId === conversationId),
-    syncDirs: async (ownerId, exceptSessionId) => [
+    syncDirs: async (ownerId) => [
       ...new Set(
-        rows
-          .filter((r) => r.ownerId === ownerId && r.sessionId !== exceptSessionId)
-          .map((r) => r.syncPath.split('/')[0] ?? ''),
+        rows.filter((r) => r.ownerId === ownerId).map((r) => r.syncPath.split('/')[0] ?? ''),
       ),
     ],
     async removeRows(artifactIds) {

@@ -23,10 +23,10 @@ export const artifacts = pgTable('artifacts', {
   conversationId: uuid('conversation_id').notNull(),
   /** 话题（同一个会话）；同一话题里同一路径只有一份 */
   sessionId: uuid('session_id').notNull(),
-  /** 最近一次做出或改了它的那一轮 */
+  /** 最近一次做出或改了它的那一轮（画布上按它分任务） */
   runId: uuid('run_id').notNull(),
-  /** 话题名（电脑上的文件夹按它起名） */
-  topic: text('topic').notNull(),
+  /** 那一轮的任务名（第一次有成果时电脑上的文件夹按它起名） */
+  task: text('task').notNull(),
   /** out/ 里的相对路径 */
   path: text('path').notNull(),
   name: text('name').notNull(),

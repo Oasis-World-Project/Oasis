@@ -1,8 +1,7 @@
-// 成果：对话里一轮结束时，把 out/ 里新增和改过的文件从 harness 复制进画布；给前端列出、读取。
+// 成果：对话里一轮 out/ 里做好的文件从 harness 复制进画布（进行中做好一个进一个，结束时再登记一遍），
+// 按任务（一轮）归好；给前端列出、读取、打包下载。
 import { randomUUID } from 'node:crypto';
-import { PassThrough, Readable } from 'node:stream';
-import { once } from 'node:events';
-import { Zip, ZipPassThrough } from 'fflate';
+import { Readable } from 'node:stream';
 import {
   ApplicationSpec,
   type Annotation,
@@ -20,6 +19,7 @@ import {
 import { AVATAR_SPEC_SUFFIX, AvatarSpec } from '@oasis/contracts/avatar';
 import type { Artifact, ArtifactsRepo, NewArtifact } from '../repo/artifacts-repo.ts';
 import type { UploadsRepo } from '../repo/uploads-repo.ts';
+import { zipArtifacts, type ArchiveLimits } from './archive.ts';
 import { categoryOf, safePath, safeSegment, uniqueName } from './naming.ts';
 
 /** 数字人配置文件上限（30,000 字知识要点加人设，JSON 转义后留足余量） */
@@ -37,8 +37,8 @@ const toBody = (row: Artifact): ArtifactBody => ({
   avatar: row.avatarSpec,
   conversationId: row.conversationId,
   sessionId: row.sessionId,
-  topic: row.topic,
   runId: row.runId,
+  task: row.task,
   models: row.models,
   syncPath: row.syncPath,
   replacesSha256: row.replacesSha256,
@@ -86,14 +86,21 @@ export function createArtifactService(deps: {
     }
   }
 
-  /** 这个话题在同步文件夹里用哪个目录：已经登记过的沿用，没有就用话题名，和别的话题重名就加序号 */
-  async function topicDir(run: RegisterRunArtifactsBody, existing: Artifact[]): Promise<string> {
-    const used = existing[0]?.syncPath.split('/')[0];
+  /**
+   * 这个任务（一轮）的成果在同步文件夹里放哪个目录：这一轮已经登记过的沿用（目录名是任务名，重名时
+   * 带序号；这一轮改了的旧成果留在原来任务的目录里，不算）；没有就用任务名，和已有的重名就加序号
+   */
+  async function taskDir(run: RegisterRunArtifactsBody, existing: Artifact[]): Promise<string> {
+    const base = safeSegment(run.task);
+    const ours = (dir: string) =>
+      dir === base || (dir.startsWith(`${base} (`) && /^ \(\d+\)$/.test(dir.slice(base.length)));
+    const used = existing
+      .filter((row) => row.runId === run.runId)
+      .map((row) => row.syncPath.split('/')[0] ?? '')
+      .find(ours);
     if (used) return used;
-    const taken = new Set(
-      (await repo.syncDirs(run.ownerId, run.sessionId)).map((d) => d.toLowerCase()),
-    );
-    return uniqueName(safeSegment(run.topic), taken, false);
+    const taken = new Set((await repo.syncDirs(run.ownerId)).map((d) => d.toLowerCase()));
+    return uniqueName(base, taken, false);
   }
 
   /** 从 harness 复制这一轮的一个产出文件进画布，返回要登记的行（同步路径另定） */
@@ -125,7 +132,7 @@ export function createArtifactService(deps: {
       conversationId: run.conversationId,
       sessionId: run.sessionId,
       runId: run.runId,
-      topic: run.topic,
+      task: run.task,
       path: file.path,
       name: file.path.split('/').at(-1) ?? file.path,
       ...saved,
@@ -200,24 +207,20 @@ export function createArtifactService(deps: {
 
   const service = {
     /**
-     * 对话里一轮结束了：out/ 里新增的文件登记进画布，改过的原地换成新版（链接和同步路径不变；
-     * 批注针对的是旧内容，连同截图一起清掉）；内容没变的不动。重复调用不会重复登记。
-     * 返回这一轮做出或改了的成果。
+     * 对话里一轮 out/ 里的文件登记进画布：一轮进行中做好一个登记一个，结束时按产出清单再登记一遍。
+     * 新的登记进来，放进这个任务的同步目录；改过的原地换成新版、归到这一轮（链接和同步路径不变；批注
+     * 针对的是旧内容，连同截图一起清掉）；内容没变的不动。重复调用不会重复登记。
+     * 返回这一轮的全部成果（之前几次登记的也在内），这次交来的按交来的顺序在前。
      */
     async registerRun(run: RegisterRunArtifactsBody): Promise<ArtifactBody[]> {
       const existing = await repo.listBySession(run.sessionId);
       if (existing.some((row) => row.ownerId !== run.ownerId))
         throw new HttpError(409, 'session_owner', '这个话题不属于这个用户');
       const byPath = new Map(existing.map((row) => [row.path, row]));
-      const changed = new Set<string>();
       for (const file of run.outputs) {
         const old = byPath.get(file.path);
         if (!old) continue;
-        // 这一轮已经登记过（重复调用）
-        if (old.runId === run.runId) {
-          changed.add(old.id);
-          continue;
-        }
+        // 进行中登记的没有摘要：拷过来比一比才知道变没变
         if (file.sha256 && file.sha256 === old.sha256) continue;
         const row = await copyFile(run, file);
         if (row.sha256 && row.sha256 === old.sha256) continue;
@@ -229,31 +232,31 @@ export function createArtifactService(deps: {
           models: row.models,
           replacesSha256: old.sha256,
           runId: run.runId,
+          task: run.task,
         });
         await dropFrames(run.ownerId, frames);
-        changed.add(old.id);
         logger.info({ runId: run.runId, path: file.path }, '成果已换成新版');
       }
       const added = run.outputs.filter((file) => !byPath.has(file.path));
-      const dir = added.length ? await topicDir(run, existing) : '';
+      const dir = added.length ? await taskDir(run, existing) : '';
       const takenInDir = new Set(
-        existing.map((row) => row.syncPath.slice(dir.length + 1).toLowerCase()),
+        existing
+          .filter((row) => row.syncPath.startsWith(`${dir}/`))
+          .map((row) => row.syncPath.slice(dir.length + 1).toLowerCase()),
       );
       for (const file of added) {
         const row = await copyFile(run, file);
         const relative = uniqueName(safePath(file.path), takenInDir, true);
         takenInDir.add(relative.toLowerCase());
-        if (await repo.insert({ ...row, syncPath: `${dir}/${relative}`, replacesSha256: null })) {
-          changed.add(row.id);
+        if (await repo.insert({ ...row, syncPath: `${dir}/${relative}`, replacesSha256: null }))
           logger.info({ runId: run.runId, path: file.path }, '成果已登记进画布');
-        }
       }
       await registerApplications(run.sessionId);
-      // 按这一轮交出文件的顺序返回
       const order = new Map(run.outputs.map((file, index) => [file.path, index]));
+      const rank = (row: Artifact) => order.get(row.path) ?? run.outputs.length;
       return (await repo.listBySession(run.sessionId))
-        .filter((row) => changed.has(row.id))
-        .sort((a, b) => order.get(a.path)! - order.get(b.path)!)
+        .filter((row) => row.runId === run.runId)
+        .sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path))
         .map(toBody);
     },
 
@@ -359,73 +362,26 @@ export function createArtifactService(deps: {
       return (await repo.listBySession(source.sessionId)).filter((row) => row.ownerId === ownerId);
     },
 
-    /** 一个话题的成果打包下载：和桌面同步使用完全相同的文件集合与 syncPath。 */
-    async archive(ownerId: string, sessionId: string, limits: { bytes: number; files: number }) {
-      const rows = (await repo.listBySession(sessionId)).filter((row) => row.ownerId === ownerId);
-      if (!rows.length) throw new HttpError(404, 'artifact_not_found', '这个话题还没有成果');
-      if (rows.length > limits.files || rows.reduce((n, row) => n + row.size, 0) > limits.bytes)
-        throw new HttpError(413, 'archive_size', '成果超过打包上限，请分别下载');
-      const seen = new Set<string>();
-      for (const row of rows) {
-        const name = row.syncPath;
-        if (
-          !name ||
-          name.includes('\\') ||
-          name.startsWith('/') ||
-          name
-            .split('/')
-            // eslint-disable-next-line no-control-regex
-            .some((p) => !p || p === '.' || p === '..' || /[:\u0000-\u001f]/.test(p)) ||
-          seen.has(name.toLowerCase())
-        )
-          throw new HttpError(422, 'archive_path', '成果目录异常，不能安全打包');
-        seen.add(name.toLowerCase());
-      }
-      const content = new PassThrough();
-      const cancel = new AbortController();
-      const zip = new Zip((error, bytes, final) => {
-        if (error) content.destroy(error);
-        else {
-          content.write(bytes);
-          if (final) content.end();
-        }
-      });
-      content.on('close', () => {
-        cancel.abort();
-        zip.terminate();
-      });
-      void (async () => {
-        let total = 0;
-        for (const row of rows) {
-          if (content.destroyed) return;
-          const file = new ZipPassThrough(row.syncPath);
-          zip.add(file);
-          const source = await store.read(row.objectKey);
-          let size = 0;
-          try {
-            for await (const chunk of source) {
-              const bytes = Buffer.from(chunk as Uint8Array);
-              size += bytes.length;
-              total += bytes.length;
-              if (size > row.size || total > limits.bytes) throw new Error('成果内容大小不一致');
-              file.push(bytes);
-              if (content.writableNeedDrain)
-                await once(content, 'drain', { signal: cancel.signal });
-              if (content.destroyed) return;
-            }
-            if (size !== row.size) throw new Error('成果内容大小不一致');
-            file.push(new Uint8Array(), true);
-          } finally {
-            source.destroy();
-          }
-        }
-        zip.end();
-      })().catch((error: unknown) =>
-        content.destroy(error instanceof Error ? error : new Error(String(error))),
+    /** 一个任务（一轮）的成果打包下载：包里的路径和桌面同步用的 syncPath 一样 */
+    async archive(ownerId: string, runId: string, limits: ArchiveLimits) {
+      const rows = await repo.list(ownerId, { runId }, LIST_LIMIT);
+      if (!rows.length) throw new HttpError(404, 'artifact_not_found', '这个任务还没有成果');
+      return {
+        name: `${safeSegment(rows[0]!.task)}.zip`,
+        content: zipArtifacts(store, rows, (row) => row.syncPath, limits),
+      };
+    },
+
+    /** 下载整个应用：应用目录里的全部文件（不管是哪一轮做的），包里按 out/ 里的路径 */
+    async appArchive(ownerId: string, id: string, limits: ArchiveLimits) {
+      const app = (await service.get(ownerId, id)).appSpec;
+      if (!app) throw new HttpError(404, 'artifact_not_found', '这不是一个应用');
+      const rows = (await service.family(ownerId, id)).filter((row) =>
+        row.path.startsWith(`${app.root}/`),
       );
       return {
-        name: `${safeSegment(rows[0]!.topic)}.zip`,
-        content,
+        name: `${safeSegment(app.root)}.zip`,
+        content: zipArtifacts(store, rows, (row) => row.path, limits),
       };
     },
 

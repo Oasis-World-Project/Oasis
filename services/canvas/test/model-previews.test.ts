@@ -63,7 +63,7 @@ function setup() {
       conversationId,
       sessionId,
       runId,
-      topic: '模型',
+      task: '模型',
       path,
       name: path.split('/').at(-1)!,
       size: body.length,

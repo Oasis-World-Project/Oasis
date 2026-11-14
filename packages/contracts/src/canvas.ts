@@ -147,8 +147,8 @@ export const AnnotationList = z
 const Sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 
 /**
- * 画布里的一个成果：对话里 AI 在沙箱 out/ 里做出的一个文件，那一轮结束时复制进画布。
- * 同一个话题里同一个路径只有一份：后来的一轮改了它，原地换成新版（链接和同步路径不变）。
+ * 画布里的一个成果：对话里 AI 在沙箱 out/ 里做出的一个文件，做好一个就复制进画布，一直留着。
+ * 同一个话题里同一个路径只有一份：后来的一轮改了它，原地换成新版（链接和同步路径不变），归到那一轮的任务下。
  */
 export const ArtifactBody = z.object({
   sha256: Sha256.nullable().optional(),
@@ -169,10 +169,10 @@ export const ArtifactBody = z.object({
   conversationId: z.uuid(),
   /** 哪个话题（同一个会话）：开新话题后是新的 */
   sessionId: z.uuid(),
-  /** 话题名：这个话题的成果在电脑上放在同名文件夹里 */
-  topic: z.string(),
-  /** 最近一次做出或改了它的那一轮 */
+  /** 最近一次做出或改了它的那一轮（画布上按它分任务） */
   runId: z.uuid(),
+  /** 那一轮的任务名（画布上任务框的标题）；任务做出的成果在电脑上放在同名文件夹里 */
+  task: z.string(),
   /** 做它的模型（供应商型号） */
   models: z.array(z.string()),
   /** 同步到电脑时放在哪：相对同步文件夹的路径，如 小木屋民宿官网首页/首页文案.md */
@@ -216,23 +216,23 @@ export const ArtifactLookupResult = z.object({
 export type ArtifactLookupResult = z.infer<typeof ArtifactLookupResult>;
 
 /**
- * 内部：对话里一轮结束了，把 out/ 里新增和改过的文件登记进画布（conversation 调）。
- * canvas 按 sha256 和已登记的比，只从 harness 复制变了的；重复调用不会重复登记。
+ * 内部：把对话里一轮 out/ 里的文件登记进画布（conversation 调）：一轮进行中做好一个登记一个，
+ * 结束时再按产出清单登记一遍。canvas 按 sha256 和已登记的比，只留下变了的；重复调用不会重复登记。
  */
 export const RegisterRunArtifactsBody = z.object({
   ownerId: z.uuid(),
   conversationId: z.uuid(),
   sessionId: z.uuid(),
   runId: z.uuid(),
-  /** 话题名：这个话题第一次有成果时，用它给电脑上的文件夹起名 */
-  topic: z.string().trim().min(1).max(200),
+  /** 任务名：这一轮第一次有成果时，用它给电脑上的文件夹起名 */
+  task: z.string().trim().min(1).max(200),
   models: z.array(z.string().max(200)).max(10),
-  /** 这一轮结束时 out/ 里的文件（harness 的产出清单） */
+  /** out/ 里的文件：进行中登记的没有大小和摘要（从沙箱里读）；结束时是 harness 的产出清单 */
   outputs: z
     .array(
       z.object({
         path: z.string().min(1).max(500),
-        size: z.number().int().nonnegative(),
+        size: z.number().int().nonnegative().optional(),
         sha256: Sha256.optional(),
       }),
     )
