@@ -1,11 +1,11 @@
-// 真实数据库：成果按话题登记的迁移（旧任务成果还在时也能加上）、仓库的查询和回退。
+// 真实数据库：成果按话题登记（撤掉任务后收缩过的结构）、仓库的查询，收缩迁移的回退。
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createArtifactsRepo, type NewArtifact } from '../src/repo/artifacts-repo.ts';
 
-const LAST = '20261114120000_conversation_artifacts.sql';
+const CONTRACT = '20261114200000_contract_conversation_artifacts.sql';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实数据库）', () => {
   const schema = 'canvas_test_' + randomUUID().replaceAll('-', '');
@@ -26,8 +26,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实�
     s1 = randomUUID(),
     s2 = randomUUID(),
     r1 = randomUUID(),
-    r2 = randomUUID(),
-    oldTask = randomUUID();
+    r2 = randomUUID();
   const row = (path: string, extra: Partial<NewArtifact> = {}): NewArtifact => ({
     id: randomUUID(),
     ownerId: owner,
@@ -52,18 +51,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实�
 
   beforeAll(async () => {
     await pool.query(`create schema ${schema}`);
-    for (const file of (await readdir(root)).filter((f) => f.endsWith('.sql')).sort()) {
-      // 旧结构里已经有一条任务成果
-      if (file === LAST)
-        await pool.query(
-          `insert into artifacts (id, owner_id, task_id, task_title, node_id, path, name,
-             deliverable, size, content_type, category, object_key, sync_path)
-           values ($1, $2, $3, '旧任务', $4, 'a.md', 'a.md', '文案', 1, 'text/markdown', 'doc',
-             'artifacts/old/a.md', '旧任务/a.md')`,
-          [randomUUID(), owner, oldTask, randomUUID()],
-        );
+    for (const file of (await readdir(root)).filter((f) => f.endsWith('.sql')).sort())
       await pool.query(await part(file, 'up'));
-    }
   });
   afterAll(async () => {
     await pool.query(`drop schema if exists ${schema} cascade`);
@@ -142,11 +131,20 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实�
     expect(await repo.find(first!.id)).toBeUndefined();
   });
 
-  it('回退：新登记的成果删掉，旧任务的成果留下；再升级一次也行', async () => {
-    await pool.query(await part(LAST, 'down'));
-    const { rows } = await pool.query<{ task_id: string }>('select task_id from artifacts');
-    expect(rows.map((r) => r.task_id)).toEqual([oldTask]);
-    await pool.query(await part(LAST, 'up'));
+  it('收缩后话题四列必填；回退收缩只把旧列加回来（空的），再收缩一次也行', async () => {
+    const bare = () =>
+      pool.query(
+        `insert into artifacts (id, owner_id, conversation_id, path, name, size, content_type,
+           category, object_key, sync_path)
+         values ($1, $2, $3, 'x.md', 'x.md', 1, 'text/markdown', 'doc', 'k', $4)`,
+        [randomUUID(), owner, conversation, `无话题/${randomUUID()}.md`],
+      );
+    await expect(bare()).rejects.toThrow(/session_id/);
+    await pool.query(await part(CONTRACT, 'down'));
+    const { rows } = await pool.query<{ task_id: string | null }>('select task_id from artifacts');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.task_id === null)).toBe(true);
+    await pool.query(await part(CONTRACT, 'up'));
     expect(await repo.insert(row('again.md'))).toBe(true);
   });
 });

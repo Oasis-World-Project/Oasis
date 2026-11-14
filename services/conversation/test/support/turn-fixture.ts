@@ -39,7 +39,7 @@ export const fake = {
 export const run = (id: string, patch: Partial<RunBody> = {}): RunBody => ({
   id,
   payerId: OWNER,
-  conversationId: null,
+  conversationId: randomUUID(),
   sessionId: SESSION,
   model: 'deepseek/deepseek-v4.1-flash',
   status: 'running',

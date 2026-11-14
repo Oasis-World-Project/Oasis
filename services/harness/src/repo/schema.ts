@@ -7,7 +7,7 @@ const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' 
 export const runs = pgTable('runs', {
   id: uuid('id').primaryKey(),
   payerId: uuid('payer_id').notNull(),
-  conversationId: uuid('conversation_id'),
+  conversationId: uuid('conversation_id').notNull(),
   model: text('model').notNull(),
   prompt: text('prompt').notNull(),
   status: text('status').$type<RunStatus>().notNull(),

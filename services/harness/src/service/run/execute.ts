@@ -176,7 +176,7 @@ export function createExecution(
           body: {
             runId: id,
             payerId: row.payerId,
-            ...(row.conversationId ? { conversationId: row.conversationId } : {}),
+            conversationId: row.conversationId,
             domesticOnly: request.domesticOnly,
             ttlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
           },

@@ -84,7 +84,7 @@ export type RunOutputFile = z.infer<typeof RunOutputFile>;
 export const RunBody = z.object({
   id: z.uuid(),
   payerId: z.uuid(),
-  conversationId: z.uuid().nullable(),
+  conversationId: z.uuid(),
   /** 这一轮所在的会话（话题）：接着上一轮做的同属一个会话，开新话题就是新的会话 */
   sessionId: z.uuid(),
   model: z.string(),
