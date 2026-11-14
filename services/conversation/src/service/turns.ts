@@ -1,14 +1,12 @@
 // 一轮 = harness 的一次运行：用户说一句开一轮，一轮进行中再说的话是插话。
-// 开一轮、插话、停止在这里；开了以后跟进 harness 的事件，把 AI 说的话和做的步骤写进消息，
-// 进行中定时看 model-gateway 那边（在等用户点的确认卡放进这一轮；用了生图、视频这类工具就出任务卡），
-// 结束时把成品登记进画布、写上用时和花费，收尾时用户发来的话接着开下一轮。服务重启后接着跟进没结束的轮。
+// 开一轮（起好任务名）、插话、停止在这里；开了以后跟进 harness 的事件，把 AI 说的话和做的步骤写进消息，
+// 进行中定时看一眼（在等用户点的确认卡放进这一轮；做好的文件登记进画布；是任务就出任务卡，见 task-cards.ts），
+// 结束时把成品再登记一遍、写上用时和花费，收尾时用户发来的话接着开下一轮。服务重启后接着跟进没结束的轮。
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { isDeepStrictEqual } from 'node:util';
 import { ModelRoute } from '@oasis/contracts/agent';
-import { ArtifactBody, ArtifactLookupResult } from '@oasis/contracts/canvas';
-import { OASIS_HEADERS } from '@oasis/contracts/common';
-import type { TaskCard, TaskFile } from '@oasis/contracts/conversation';
+import { ArtifactLookupResult } from '@oasis/contracts/canvas';
+import type { TaskFile } from '@oasis/contracts/conversation';
 import {
   defaultPermissions,
   RunBody,
@@ -16,21 +14,16 @@ import {
   type StartRunBody,
   type Workplace,
 } from '@oasis/contracts/harness';
-import {
-  GENERATION_TOOLS,
-  RunActivity,
-  ToolList,
-  type ToolEntry,
-} from '@oasis/contracts/model-gateway';
+import { GENERATION_TOOLS, ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
-import { z } from 'zod';
 import type { Conversation, ConversationRepo, Message } from '../repo/conversation-repo.ts';
 import type { Turn } from '../repo/schema.ts';
 import { gather, handOver, withNote } from './hand-over.ts';
+import { createTaskCards } from './task-cards.ts';
+import { taskTitle } from './task-title.ts';
 import {
   contentOf,
   failure,
-  firstLine,
   refused,
   segmentOf,
   settleSteps,
@@ -60,7 +53,8 @@ const CATALOG_MS = 5 * 60_000;
 const HANDOVER_MS = 60_000;
 /** 接不上原会话（工作目录不在了、会话已有更新的一轮）：这一轮开新会话 */
 const SESSION_GONE = new Set(['continue_unavailable', 'session_advanced', 'workspace_unavailable']);
-const RegisteredArtifacts = z.object({ artifacts: z.array(ArtifactBody) });
+/** 起任务名时往回看多少条消息 */
+const TITLE_HISTORY = 40;
 
 export function createTurns(deps: TurnDeps) {
   const { harness, logger } = deps;
@@ -69,6 +63,7 @@ export function createTurns(deps: TurnDeps) {
   const spendMs = deps.spendMs ?? 1500;
   const following = new Map<string, Promise<void>>();
   const closing = new AbortController();
+  const cards = createTaskCards(deps);
 
   async function getRun(runId: string): Promise<RunBody | undefined> {
     try {
@@ -78,13 +73,6 @@ export function createTurns(deps: TurnDeps) {
       throw err;
     }
   }
-
-  /** 这一轮在 model-gateway 那边的情况：花费、用过的工具、在等用户点的确认卡 */
-  const activityOf = (ownerId: string, runId: string) =>
-    deps.modelGateway.json('GET', `/internal/v1/runs/${runId}`, {
-      headers: { [OASIS_HEADERS.payerId]: ownerId },
-      schema: RunActivity,
-    });
 
   /** 工具目录：几分钟拉一次；拉不到就用上次的（第一次拉不到就不写预计用时） */
   let catalog: { at: number; tools: ToolEntry[] } = { at: 0, tools: [] };
@@ -106,73 +94,10 @@ export function createTurns(deps: TurnDeps) {
     };
   }
 
-  /** 任务卡：这一轮用了生图、视频这类工具或交了文件；有就更新，没有就建 */
-  async function saveTaskCard(
-    store: ConversationRepo,
-    conversation: Conversation,
-    turn: Turn,
-    card: TaskCard,
-  ) {
-    const content = card.status === 'running' ? '任务进行中' : '任务结束';
-    if (turn.cardId && (await store.updateMessage(turn.cardId, { content, data: card }))) return;
-    const created = await store.insertMessage({
-      conversationId: conversation.id,
-      authorKind: 'ai',
-      authorId: conversation.modelKey ?? 'unknown',
-      content,
-      status: 'complete',
-      kind: 'task',
-      data: card,
-    });
-    await store.updateTurn(conversation.id, turn.runId, { cardId: created.id });
-    turn.cardId = created.id;
-  }
-
   /**
-   * 进行中看一眼：在等用户点的确认卡放进这一轮（网页上出卡片）；用了做东西的工具就出任务卡，
-   * 任务卡上的花费跟着涨
-   */
-  async function live(store: ConversationRepo, conversation: Conversation, turn: Turn) {
-    const spend = await activityOf(conversation.ownerId, turn.runId);
-    if (!isDeepStrictEqual(spend.confirmations, turn.confirmations ?? []))
-      await store.updateTurn(conversation.id, turn.runId, { confirmations: spend.confirmations });
-    if (!turn.cardId && !spend.tools.some((tool) => GENERATION_TOOLS.includes(tool))) return;
-    await saveTaskCard(store, conversation, turn, {
-      runId: turn.runId,
-      status: 'running',
-      startedAt: turn.startedAt,
-      finishedAt: null,
-      spentMicro: spend.spentMicro,
-      files: [],
-    });
-  }
-
-  /** 这一轮交的文件登记进画布（新的和改过的），返回它们 */
-  async function register(conversation: Conversation, run: RunBody): Promise<TaskFile[]> {
-    const { artifacts } = await deps.canvas.json('POST', '/internal/artifacts/runs', {
-      body: {
-        ownerId: conversation.ownerId,
-        conversationId: conversation.id,
-        sessionId: run.sessionId,
-        runId: run.id,
-        topic: conversation.topic ?? conversation.title,
-        models: [run.model],
-        outputs: run.outputs,
-      },
-      schema: RegisteredArtifacts,
-    });
-    return artifacts.map((a) => ({
-      artifactId: a.id,
-      name: a.name,
-      path: a.path,
-      size: a.size,
-      category: a.category,
-    }));
-  }
-
-  /**
-   * 这一轮结束：最后一段 AI 消息写上结局和花费，成品登记进画布、写到任务卡上，清掉这一轮，
-   * 收尾时用户发来的话接着开下一轮。run 为 undefined：harness 里没有这一轮（没开成）。
+   * 这一轮结束：最后一段 AI 消息写上结局和花费，out/ 里的成品按产出清单再登记一遍（进行中已经登记的
+   * 内容没变就不动）、写到任务卡上，清掉这一轮，收尾时用户发来的话接着开下一轮。
+   * run 为 undefined：harness 里没有这一轮（没开成）。
    */
   async function finish(
     store: ConversationRepo,
@@ -182,17 +107,17 @@ export function createTurns(deps: TurnDeps) {
   ) {
     const status = run?.status ?? 'failed';
     const notices: string[] = [];
-    let files: TaskFile[] = [];
+    let files: TaskFile[] = turn.files ?? [];
     if (run?.outputs.length && status !== 'cancelled') {
       try {
-        files = await register(conversation, run);
+        files = await cards.register(conversation, turn, run, run.outputs);
       } catch (err) {
         logger.warn({ err, runId: turn.runId }, '成品登记进画布失败');
         notices.push('成品没能登记进画布，文件还在工作目录里，可以让 AI 再交一次');
       }
     }
     const spend = run
-      ? await activityOf(conversation.ownerId, run.id).catch((err: unknown) => {
+      ? await cards.activityOf(conversation.ownerId, run.id).catch((err: unknown) => {
           logger.warn({ err, runId: run.id }, '读这一轮的花费失败');
           return { spentMicro: 0, tools: [] };
         })
@@ -219,8 +144,9 @@ export function createTurns(deps: TurnDeps) {
       });
     }
     if (turn.cardId || files.length || spend.tools.some((tool) => GENERATION_TOOLS.includes(tool)))
-      await saveTaskCard(store, conversation, turn, {
+      await cards.save(store, conversation, turn, {
         runId: turn.runId,
+        ...(turn.title ? { title: turn.title } : {}),
         status: status === 'succeeded' ? 'done' : status === 'failed' ? 'failed' : 'stopped',
         startedAt: turn.startedAt,
         finishedAt: run?.finishedAt ?? new Date().toISOString(),
@@ -287,9 +213,11 @@ export function createTurns(deps: TurnDeps) {
         }
         if (Date.now() - spentAt >= spendMs) {
           spentAt = Date.now();
-          await live(store, conversation, turn).catch((err: unknown) =>
-            logger.warn({ err, runId: turn.runId }, '读这一轮的花费失败，下次再看'),
-          );
+          await cards
+            .live(store, conversation, turn, run)
+            .catch((err: unknown) =>
+              logger.warn({ err, runId: turn.runId }, '看这一轮的进展（花费、成果）失败，下次再看'),
+            );
         }
         backoff = pollMs;
         if (written && events.length === EVENT_PAGE) continue;
@@ -369,11 +297,22 @@ export function createTurns(deps: TurnDeps) {
       return [await aiMessage('failed', {}, refused(err))];
     }
     const handed = handOver(attachments, revising, sessionId);
+    // 任务名：往回看这一轮之前的话（确认的任务单、答的题）
+    const history = await store.listMessages(conversation.id, TITLE_HISTORY);
+    const own = new Set(userMessages.map((m) => m.id));
+    const first = history.findIndex((m) => own.has(m.id));
+    const title = taskTitle(
+      (first < 0 ? history : history.slice(0, first)).map((m) => ({
+        author: m.authorKind,
+        kind: m.kind,
+        content: m.content,
+      })),
+      text,
+    );
     const segment = await aiMessage('streaming', { parts: [] });
     const startedAt = new Date().toISOString();
-    const topic = firstLine(text, 30) || `${conversation.title} ${startedAt.slice(0, 10)}`;
-    const turn = { runId, startedAt, cursor: -1, segmentId: segment.id };
-    if (!(await store.startTurn(conversation.id, turn, topic))) {
+    const turn: Turn = { runId, startedAt, title, cursor: -1, segmentId: segment.id };
+    if (!(await store.startTurn(conversation.id, turn))) {
       await store.deleteMessage(segment.id);
       throw new HttpError(409, 'turn_active', '这个对话还有一轮在进行');
     }

@@ -33,7 +33,10 @@ export interface ConversationRepo {
   updateMessage(id: string, patch: MessagePatch): Promise<Message | undefined>;
   deleteMessage(id: string): Promise<void>;
   touchConversation(id: string): Promise<void>;
+  /** 最近的 limit 条消息，按先后 */
   listMessages(conversationId: string, limit: number): Promise<Message[]>;
+  /** 这个人私聊里的任务卡（画布按任务分），新的在前 */
+  listTasks(ownerId: string, limit: number): Promise<Message[]>;
   findMessage(conversationId: string, id: string): Promise<Message | undefined>;
   /** 用户在一轮结束前发来、还没交给 AI 的话（下一轮开头交给它） */
   pendingMessages(conversationId: string): Promise<Message[]>;
@@ -41,15 +44,15 @@ export interface ConversationRepo {
   attachmentIds(conversationId: string): Promise<string[]>;
   /** 删掉整段对话：消息随之级联删除 */
   deleteConversation(id: string): Promise<void>;
-  /** 开一轮：这个对话没有正在进行的一轮时记下（话题还没有名字就用 topic）；已经有就返回 false */
-  startTurn(id: string, turn: Turn, topic: string): Promise<boolean>;
+  /** 开一轮：这个对话没有正在进行的一轮时记下；已经有就返回 false */
+  startTurn(id: string, turn: Turn): Promise<boolean>;
   /** 改正在进行的这一轮（只改给的字段；这一轮已经不是 runId 时不改，返回 false） */
   updateTurn(id: string, runId: string, patch: Partial<Turn>): Promise<boolean>;
   /** 这一轮结束：清掉，记下下一轮接着哪一轮（null：下一轮开新会话） */
   endTurn(id: string, runId: string, lastRunId: string | null): Promise<void>;
   /** 有一轮在进行的对话 */
   activeTurns(): Promise<Conversation[]>;
-  /** 开新话题：下一轮开新会话，话题名清掉 */
+  /** 开新话题：下一轮开新会话 */
   newTopic(id: string): Promise<void>;
   /** 改在哪干活和权限（下一轮起用） */
   saveSetup(id: string, setup: Pick<Conversation, 'workplace' | 'permissions'>): Promise<void>;
@@ -177,13 +180,32 @@ export function createConversationRepo(
         .where(eq(conversations.id, id));
     },
 
-    listMessages: (conversationId, limit) =>
-      db
-        .select()
-        .from(messages)
-        .where(eq(messages.conversationId, conversationId))
-        .orderBy(asc(messages.seq))
-        .limit(limit),
+    listMessages: async (conversationId, limit) =>
+      (
+        await db
+          .select()
+          .from(messages)
+          .where(eq(messages.conversationId, conversationId))
+          .orderBy(desc(messages.seq))
+          .limit(limit)
+      ).reverse(),
+
+    listTasks: async (ownerId, limit) =>
+      (
+        await db
+          .select({ message: messages })
+          .from(messages)
+          .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+          .where(
+            and(
+              eq(conversations.ownerId, ownerId),
+              eq(conversations.kind, 'dm'),
+              eq(messages.kind, 'task'),
+            ),
+          )
+          .orderBy(desc(messages.createdAt))
+          .limit(limit)
+      ).map((row) => row.message),
 
     async findMessage(conversationId, id) {
       const [row] = await db
@@ -219,10 +241,10 @@ export function createConversationRepo(
       await db.delete(conversations).where(eq(conversations.id, id));
     },
 
-    async startTurn(id, turn, topic) {
+    async startTurn(id, turn) {
       const rows = await db
         .update(conversations)
-        .set({ turn, topic: sql`coalesce(${conversations.topic}, ${topic})` })
+        .set({ turn })
         .where(and(eq(conversations.id, id), sql`${conversations.turn} is null`))
         .returning({ id: conversations.id });
       return rows.length > 0;
@@ -247,10 +269,7 @@ export function createConversationRepo(
     activeTurns: () => db.select().from(conversations).where(isNotNull(conversations.turn)),
 
     async newTopic(id) {
-      await db
-        .update(conversations)
-        .set({ lastRunId: null, topic: null })
-        .where(eq(conversations.id, id));
+      await db.update(conversations).set({ lastRunId: null }).where(eq(conversations.id, id));
     },
 
     async saveSetup(id, setup) {

@@ -23,6 +23,11 @@ export function registerRoutes(app: ServiceApp, dms: DmService): void {
     conversations: await dms.listDms(requireUserId(request)),
   }));
 
+  /** 私聊里的任务（任务卡）：画布按任务分框 */
+  app.get('/v1/tasks', async (request) => ({
+    tasks: await dms.listTasks(requireUserId(request)),
+  }));
+
   app.post('/v1/dms', async (request) => {
     const { modelKey } = parseWith(CreateDmBody, request.body);
     return dms.createDm(requireUserId(request), modelKey, request.id);

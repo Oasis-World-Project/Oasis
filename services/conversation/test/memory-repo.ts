@@ -42,7 +42,6 @@ export function memoryRepo(): ConversationRepo & {
         nextMessageSeq: 0,
         turn: null,
         lastRunId: null,
-        topic: null,
         workplace: null,
         permissions: null,
       };
@@ -90,6 +89,18 @@ export function memoryRepo(): ConversationRepo & {
         messages
           .filter((m) => m.conversationId === conversationId)
           .sort((a, b) => a.seq - b.seq)
+          .slice(-limit),
+      ),
+    listTasks: async (ownerId, limit) =>
+      structuredClone(
+        messages
+          .filter(
+            (m) =>
+              m.kind === 'task' &&
+              conversations.get(m.conversationId)?.ownerId === ownerId &&
+              conversations.get(m.conversationId)?.kind === 'dm',
+          )
+          .sort((a, b) => b.seq - a.seq)
           .slice(0, limit),
       ),
     findMessage: async (conversationId, id) => {
@@ -116,11 +127,10 @@ export function memoryRepo(): ConversationRepo & {
       for (let i = messages.length - 1; i >= 0; i -= 1)
         if (messages[i]!.conversationId === id) messages.splice(i, 1);
     },
-    async startTurn(id, turn, topic) {
+    async startTurn(id, turn) {
       const row = conversations.get(id);
       if (!row || row.turn) return false;
       row.turn = { ...turn };
-      row.topic ??= topic;
       return true;
     },
     async updateTurn(id, runId, patch) {
@@ -138,7 +148,7 @@ export function memoryRepo(): ConversationRepo & {
     activeTurns: async () => [...conversations.values()].filter((c) => c.turn),
     async newTopic(id) {
       const row = conversations.get(id);
-      if (row) Object.assign(row, { lastRunId: null, topic: null });
+      if (row) row.lastRunId = null;
     },
     async saveSetup(id, setup) {
       const row = conversations.get(id);

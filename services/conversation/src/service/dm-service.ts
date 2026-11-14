@@ -13,6 +13,8 @@ import type {
   SendResult,
   SetupBody,
   SetupResult,
+  TaskCard,
+  TaskSummary,
   TurnState,
 } from '@oasis/contracts/conversation';
 import { defaultPermissions, RunBody, type Workplace } from '@oasis/contracts/harness';
@@ -65,6 +67,8 @@ function toMessageBody(row: Message): MessageBody {
 
 /** 删对话前等被取消的那一轮收尾，最多等这么久 */
 const CANCEL_WAIT_MS = 60_000;
+/** 画布上最多列多少个任务 */
+const TASK_LIMIT = 500;
 
 export function createDmService(deps: {
   repo: ConversationRepo;
@@ -207,6 +211,14 @@ export function createDmService(deps: {
 
     async listDms(ownerId: string): Promise<ConversationBody[]> {
       return (await repo.listDms(ownerId)).map(toConversationBody);
+    },
+
+    /** 画布按任务分：这个人私聊里的任务（任务卡和它在哪个私聊），新的在前 */
+    async listTasks(ownerId: string): Promise<TaskSummary[]> {
+      return (await repo.listTasks(ownerId, TASK_LIMIT)).map((row) => ({
+        ...(row.data as TaskCard),
+        conversationId: row.conversationId,
+      }));
     },
 
     async listMessages(ownerId: string, conversationId: string): Promise<MessageList> {

@@ -1,4 +1,5 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
+import type { TaskFile } from '@oasis/contracts/conversation';
 import type { Permissions, Workplace } from '@oasis/contracts/harness';
 import type { Confirmation } from '@oasis/contracts/model-gateway';
 import { bigint, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
@@ -9,6 +10,8 @@ const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' 
 export interface Turn {
   runId: string;
   startedAt: string;
+  /** 任务名：画布上任务框的标题、成果在电脑上的文件夹名（以前开的轮没有） */
+  title?: string;
   /** 已经写进消息的最后一个运行事件序号（从 -1 开始） */
   cursor: number;
   /** 正在写的那条 AI 消息（AI 看到插话后换一条新的） */
@@ -19,6 +22,10 @@ export interface Turn {
   cardId?: string;
   /** 这一轮在等用户点的确认卡（跟进时从 model-gateway 拿来） */
   confirmations?: Confirmation[];
+  /** 做好了、还没登记进画布的文件（out/ 下，相对工作目录）：跟进时登记，做好一个进一个 */
+  delivering?: string[];
+  /** 这一轮已经登记进画布的成果 */
+  files?: TaskFile[];
 }
 
 export const conversations = pgTable('conversations', {
@@ -34,8 +41,6 @@ export const conversations = pgTable('conversations', {
   turn: jsonb('turn').$type<Turn>(),
   /** 当前会话最近的一轮：下一轮接着它的会话做；开新话题后为 null */
   lastRunId: uuid('last_run_id'),
-  /** 当前话题的名字：成果在电脑上按它放文件夹 */
-  topic: text('topic'),
   /** 在哪干活：空是云端沙箱 */
   workplace: jsonb('workplace').$type<Workplace>(),
   /** 权限：空按在哪干活的默认 */

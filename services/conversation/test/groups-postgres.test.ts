@@ -125,8 +125,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     });
     await expect(groups.invite(member, group.id)).rejects.toMatchObject({ statusCode: 403 });
     await expect(groups.destroy(member, group.id)).rejects.toMatchObject({ statusCode: 403 });
+    // 过期一小时：数据库和测试机的钟差一两秒也算过期
     await pool.query(
-      "update group_invites set expires_at=now()-interval '1 second' where conversation_id=$1",
+      "update group_invites set expires_at=now()-interval '1 hour' where conversation_id=$1",
       [group.id],
     );
     await expect(groups.redeem(outsider, invite.token, '丙')).rejects.toMatchObject({
@@ -321,35 +322,48 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     const turn = {
       runId: r1,
       startedAt: new Date().toISOString(),
+      title: '做一个网页',
       cursor: -1,
       segmentId: randomUUID(),
     };
-    expect(await store.startTurn(conversation.id, turn, '做一个网页')).toBe(true);
-    expect(await store.startTurn(conversation.id, { ...turn, runId: r2 }, '别的')).toBe(false);
+    expect(await store.startTurn(conversation.id, turn)).toBe(true);
+    expect(await store.startTurn(conversation.id, { ...turn, runId: r2 })).toBe(false);
     expect((await store.activeTurns()).map((c) => c.id)).toContain(conversation.id);
     // 只改给的字段；不是这一轮不改
     expect(await store.updateTurn(conversation.id, r1, { cursor: 7 })).toBe(true);
     expect(await store.updateTurn(conversation.id, r2, { cursor: 99 })).toBe(false);
     const segmentId = randomUUID();
-    expect(await store.updateTurn(conversation.id, r1, { segmentId })).toBe(true);
+    expect(
+      await store.updateTurn(conversation.id, r1, { segmentId, delivering: ['out/a.png'] }),
+    ).toBe(true);
     let row = await store.find(conversation.id);
-    expect(row?.turn).toEqual({ ...turn, cursor: 7, segmentId });
-    expect(row?.topic).toBe('做一个网页');
+    expect(row?.turn).toEqual({ ...turn, cursor: 7, segmentId, delivering: ['out/a.png'] });
     await store.endTurn(conversation.id, r2, r2);
     expect((await store.find(conversation.id))?.turn).not.toBeNull();
     await store.endTurn(conversation.id, r1, r1);
     row = await store.find(conversation.id);
-    expect(row).toMatchObject({ turn: null, lastRunId: r1, topic: '做一个网页' });
+    expect(row).toMatchObject({ turn: null, lastRunId: r1 });
     expect((await store.activeTurns()).map((c) => c.id)).not.toContain(conversation.id);
-    // 同一个话题的下一轮不改话题名
-    expect(await store.startTurn(conversation.id, { ...turn, runId: r2 }, '第二句')).toBe(true);
-    await store.endTurn(conversation.id, r2, null);
-    expect(await store.find(conversation.id)).toMatchObject({
-      lastRunId: null,
-      topic: '做一个网页',
-    });
+    expect(await store.startTurn(conversation.id, { ...turn, runId: r2 })).toBe(true);
+    await store.endTurn(conversation.id, r2, r2);
+    expect(await store.find(conversation.id)).toMatchObject({ lastRunId: r2 });
     await store.newTopic(conversation.id);
-    expect(await store.find(conversation.id)).toMatchObject({ lastRunId: null, topic: null });
+    expect(await store.find(conversation.id)).toMatchObject({ lastRunId: null });
+    // 画布按任务分：这个人私聊里的任务卡；消息列最近的几条
+    await store.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'ai',
+      authorId: 'turn-test',
+      content: '任务结束',
+      status: 'complete',
+      kind: 'task',
+      data: { runId: r1 },
+    });
+    expect((await store.listTasks(owner, 10)).map((m) => m.data.runId)).toEqual([r1]);
+    expect(await store.listTasks(randomUUID(), 10)).toEqual([]);
+    expect((await store.listMessages(conversation.id, 1)).map((m) => m.content)).toEqual([
+      '任务结束',
+    ]);
     // 收尾时用户发来、还没交给 AI 的话
     const pendingUser = await store.insertMessage({
       conversationId: conversation.id,
@@ -427,11 +441,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
   it('一轮的迁移可以回滚再重建：开新话题的分隔先删掉', async () => {
     const root = new URL('../migrations/', import.meta.url);
     const sql = await readFile(new URL('20261114160000_turns.sql', root), 'utf8');
+    // 话题名那一列后来删掉了：回滚一轮的迁移之前先把它加回来，重建后再删
+    const dropTopic = await readFile(
+      new URL('20261115010000_drop_conversation_topic.sql', root),
+      'utf8',
+    );
     const conversation = await createConversationRepo(pool).upsertDm(owner, 'rollback', 'r');
     await pool.query(
       "insert into messages(conversation_id,author_kind,author_id,content,status,kind) values($1,'user',$2,'新话题','complete','topic')",
       [conversation.id, owner],
     );
+    await pool.query(dropTopic.split('-- migrate:down')[1]!);
     await pool.query(sql.split('-- migrate:down')[1]!);
     expect(
       (
@@ -441,6 +461,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       ).rows[0].n,
     ).toBe(0);
     await pool.query(sql.split('-- migrate:up')[1]!.split('-- migrate:down')[0]!);
+    await pool.query(dropTopic.split('-- migrate:up')[1]!.split('-- migrate:down')[0]!);
     expect((await createConversationRepo(pool).find(conversation.id))?.turn).toBeNull();
     await pool.query('delete from conversations where id=$1', [conversation.id]);
   });

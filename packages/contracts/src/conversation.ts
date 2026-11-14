@@ -129,11 +129,13 @@ export const TaskFile = z.object({
 export type TaskFile = z.infer<typeof TaskFile>;
 
 /**
- * 任务卡：调用了生图、视频、配音这类工具，或交了文件的那一轮。进行中实时更新状态和花费，
- * 结束时写上用时、花费和成品。
+ * 任务卡：调用了生图、视频、配音这类工具，或交了文件的那一轮。进行中实时更新状态、花费和登记进画布的
+ * 成果（做好一个进一个），结束时写上用时、花费和全部成果。
  */
 export const TaskCard = z.object({
   runId: z.uuid(),
+  /** 任务名：任务单的标题，没有就是用户要求的开头（以前的任务卡没有） */
+  title: z.string().optional(),
   status: z.enum(['running', 'done', 'stopped', 'failed']),
   startedAt: z.iso.datetime(),
   finishedAt: z.iso.datetime().nullable(),
@@ -141,6 +143,11 @@ export const TaskCard = z.object({
   files: z.array(TaskFile),
 });
 export type TaskCard = z.infer<typeof TaskCard>;
+
+/** 画布上的一个任务：任务卡，加上它在哪个私聊 */
+export const TaskSummary = TaskCard.extend({ conversationId: z.uuid() });
+export type TaskSummary = z.infer<typeof TaskSummary>;
+export const TaskList = z.object({ tasks: z.array(TaskSummary) });
 
 const MessageBase = {
   id: z.uuid(),

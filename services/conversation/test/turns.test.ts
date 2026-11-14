@@ -248,7 +248,7 @@ describe('开一轮、跟进到结束', () => {
       ['user', 'complete', { attachments: files, runId }],
       ['assistant', 'streaming', { runId, parts: [] }],
     ]);
-    expect((await repo.find(conversation.id))?.topic).toBe('照着这两张图做海报');
+    expect((await repo.find(conversation.id))?.turn?.title).toBe('照着这两张图做海报');
   });
 
   it('跟进：AI 说的话和步骤写进消息；做完把成品登记进画布、出任务卡，写上花费；下一轮接着这一轮的会话', async () => {
@@ -313,7 +313,7 @@ describe('开一轮、跟进到结束', () => {
         conversationId: conversation.id,
         sessionId: SESSION,
         runId,
-        topic: '做一个小网页',
+        task: '做一个小网页',
         models: ['deepseek/deepseek-v4.1-flash'],
         outputs: [{ path: 'site/index.html', size: 120, sha256: 'a'.repeat(64) }],
       },
@@ -326,6 +326,7 @@ describe('开一轮、跟进到结束', () => {
     const card = repo.messages.find((m) => m.kind === 'task');
     expect(card?.data).toMatchObject({
       runId,
+      title: '做一个小网页',
       status: 'done',
       spentMicro: 12_345,
       files: [

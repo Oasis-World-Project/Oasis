@@ -98,10 +98,10 @@ describe('开新话题、删对话', () => {
     const divider = await dms.newTopic(OWNER, conversation.id, 'r');
     expect(divider).toMatchObject({ kind: 'topic', role: 'user' });
     expect(fake.purged).toEqual([`harness:${conversation.id}`]);
-    expect(await repo.find(conversation.id)).toMatchObject({ lastRunId: null, topic: null });
+    expect(await repo.find(conversation.id)).toMatchObject({ lastRunId: null });
     await send('新的事');
     expect(fake.starts[1]).not.toHaveProperty('continueFrom');
-    expect((await repo.find(conversation.id))?.topic).toBe('新的事');
+    expect((await repo.find(conversation.id))?.turn?.title).toBe('新的事');
   });
 
   it('删对话：先取消正在进行的一轮，再清掉 AI 的工作目录、工具结果、画布成品和附件，消息全删', async () => {

@@ -179,33 +179,46 @@ others.post('/internal/conversations/:id/purge', async (request, reply) => {
   );
   return reply.code(204).send();
 });
-others.post('/internal/artifacts/runs', async (request) => {
+/** 假画布：每一轮登记过的成果（按路径；site/index.html 的 id 是 ARTIFACT） */
+const inRun = new Map<string, Map<string, string>>();
+/** 登记时读不到的文件（一个读不到，整次登记失败） */
+export const unreadable = new Set<string>();
+others.post('/internal/artifacts/runs', async (request, reply) => {
   registered.push(request.body as Record<string, unknown>);
-  const body = request.body as { conversationId: string; runId: string; topic: string };
+  const body = request.body as {
+    conversationId: string;
+    runId: string;
+    task: string;
+    outputs: { path: string }[];
+  };
+  if (body.outputs.some((file) => unreadable.has(file.path)))
+    return reply.code(404).send(fail(404, 'file_not_found', '没有这个文件'));
+  const paths = inRun.get(body.runId) ?? new Map<string, string>();
+  inRun.set(body.runId, paths);
+  for (const { path } of body.outputs)
+    if (!paths.has(path)) paths.set(path, path === 'site/index.html' ? ARTIFACT : randomUUID());
   return {
-    artifacts: [
-      {
-        sha256: 'a'.repeat(64),
-        id: ARTIFACT,
-        name: 'index.html',
-        path: 'site/index.html',
-        size: 120,
-        contentType: 'text/html',
-        category: 'app',
-        application: null,
-        avatar: null,
-        conversationId: body.conversationId,
-        sessionId: SESSION,
-        topic: body.topic,
-        runId: body.runId,
-        models: [],
-        syncPath: 'x/site/index.html',
-        replacesSha256: null,
-        annotations: [],
-        approvedAt: null,
-        createdAt: new Date().toISOString(),
-      },
-    ],
+    artifacts: [...paths].map(([path, id]) => ({
+      sha256: 'a'.repeat(64),
+      id,
+      name: path.split('/').at(-1)!,
+      path,
+      size: 120,
+      contentType: 'text/html',
+      category: path.endsWith('.html') ? 'app' : 'doc',
+      application: null,
+      avatar: null,
+      conversationId: body.conversationId,
+      sessionId: SESSION,
+      runId: body.runId,
+      task: body.task,
+      models: [],
+      syncPath: `${body.task}/${path}`,
+      replacesSha256: null,
+      annotations: [],
+      approvedAt: null,
+      createdAt: new Date().toISOString(),
+    })),
   };
 });
 /** 核对过的上传文件（核对时会被标成已用上） */
@@ -229,7 +242,7 @@ export const OLD_SESSION = '5b5b5b5b-5b5b-4b5b-8b5b-5b5b5b5b5b5b';
 export const PAGE = '6c6c6c6c-6c6c-4c6c-8c6c-6c6c6c6c6c61';
 export const OLD_PAGE = '6c6c6c6c-6c6c-4c6c-8c6c-6c6c6c6c6c62';
 export const POSTER = '6c6c6c6c-6c6c-4c6c-8c6c-6c6c6c6c6c63';
-export const canvasFile = (id: string, sessionId: string, topicDir: string, path: string) => ({
+export const canvasFile = (id: string, sessionId: string, task: string, path: string) => ({
   id,
   name: path.split('/').at(-1)!,
   path,
@@ -238,10 +251,10 @@ export const canvasFile = (id: string, sessionId: string, topicDir: string, path
   category: 'data',
   conversationId: randomUUID(),
   sessionId,
-  topic: topicDir,
   runId: randomUUID(),
+  task,
   models: [],
-  syncPath: `${topicDir}/${path}`,
+  syncPath: `${task}/${path}`,
   createdAt: new Date().toISOString(),
 });
 export const inCanvas = [
@@ -326,6 +339,8 @@ beforeEach(async () => {
   Object.assign(activity, { spentMicro: 0, tools: [], confirmations: [] });
   decisions.length = 0;
   registered.length = 0;
+  inRun.clear();
+  unreadable.clear();
   deletedUploads.length = 0;
   uploadLookups.length = 0;
   scope.domesticOnly = false;

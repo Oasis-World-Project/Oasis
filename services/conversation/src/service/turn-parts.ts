@@ -121,7 +121,7 @@ export function settleSteps(segment: Segment, succeeded: boolean, at: string): S
 }
 
 /** 一段话的第一行，太长截短 */
-export const firstLine = (text: string, max: number) => {
+const firstLine = (text: string, max: number) => {
   const line = text.trim().split('\n')[0]?.trim() ?? '';
   return line.length > max ? `${line.slice(0, max)}…` : line;
 };
@@ -144,21 +144,43 @@ export function refused(err: unknown): string {
 export const terminal = (status: RunBody['status']) =>
   ['succeeded', 'failed', 'cancelled', 'stopped'].includes(status);
 
-/** 把一段事件写进这条 AI 消息 */
+/**
+ * 这批事件里做完的步骤存下的 out/ 里的文件（隐藏的不算）：做好一个就登记进画布。
+ * segment 是写进这批事件以后的那一段
+ */
+function deliveredFiles(segment: Segment, events: RunEventBody[]): string[] {
+  const done = new Set(
+    events.flatMap((e) =>
+      e.kind === 'tool_result' && typeof e.data.parentSessionId !== 'string'
+        ? [String(e.data.callId ?? '')]
+        : [],
+    ),
+  );
+  return segment.parts.flatMap((part) =>
+    part.type === 'step' && done.has(part.id)
+      ? (part.files ?? []).filter(
+          (path) => path.startsWith('out/') && !path.split('/').some((p) => p.startsWith('.')),
+        )
+      : [],
+  );
+}
+
+/** 把一段事件写进这条 AI 消息，返回这段里做好的 out/ 里的文件 */
 async function append(
   store: ConversationRepo,
   conversationId: string,
   segmentId: string,
   events: RunEventBody[],
   durations: Durations | undefined,
-) {
+): Promise<string[]> {
   const message = events.length ? await store.findMessage(conversationId, segmentId) : undefined;
-  if (!message) return;
+  if (!message) return [];
   const next = applyEvents(segmentOf(message), events, durations);
   await store.updateMessage(message.id, {
     content: contentOf(next),
     data: { ...message.data, parts: next.parts, ...(next.todos ? { todos: next.todos } : {}) },
   });
+  return deliveredFiles(next, events);
 }
 
 /**
@@ -198,6 +220,7 @@ async function afterInterjection(
  * 把这一批事件写进正在写的那条 AI 消息。插话在 AI 看到时（这一轮里又来一条用户的话）分段：
  * AI 在那之前说的、做的留在插话前面。拿着 message 锁写，和用户发话错开；锁被占着（用户正在发话）
  * 就这次不写、返回 false，下次再拉这批事件。durations：生图、视频这类工具通常要多久。
+ * 做好的 out/ 里的文件记到这一轮上，跟进时登记进画布。
  */
 export async function writeEvents(
   store: ConversationRepo,
@@ -212,6 +235,10 @@ export async function writeEvents(
       const turn = conversation?.turn;
       if (!conversation || turn?.runId !== runId) return false;
       let { segmentId, unheard = 0 } = turn;
+      const delivering = [...(turn.delivering ?? [])];
+      const deliver = (paths: string[]) => {
+        for (const path of paths) if (!delivering.includes(path)) delivering.push(path);
+      };
       let pending: RunEventBody[] = [];
       for (const event of events) {
         // 开头那句（和服务恢复时的提醒）不算：只有送进来、AI 还没看到的插话才分段
@@ -223,16 +250,17 @@ export async function writeEvents(
           pending.push(event);
           continue;
         }
-        await append(locked, conversationId, segmentId, pending, durations);
+        deliver(await append(locked, conversationId, segmentId, pending, durations));
         pending = [];
         segmentId = await afterInterjection(locked, conversation, runId, segmentId);
         unheard -= 1;
       }
-      await append(locked, conversationId, segmentId, pending, durations);
+      deliver(await append(locked, conversationId, segmentId, pending, durations));
       await locked.updateTurn(conversationId, runId, {
         cursor: events.at(-1)!.seq,
         segmentId,
         unheard,
+        ...(delivering.length ? { delivering } : {}),
       });
       return true;
     });
