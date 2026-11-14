@@ -1,6 +1,5 @@
-// 画布（5.5c）：全部成果、类别和搜索、打开成果；桌面端把成果同步到电脑。
+// 画布：全部成果按话题分组、类别和搜索、只看某个私聊的、打开成果；桌面端把成果同步到电脑。
 import type { ArtifactBody } from '@oasis/contracts/canvas';
-import type { TaskSummary } from '@oasis/contracts/task';
 import type { OasisDesktop } from '@oasis/contracts/desktop';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -9,8 +8,20 @@ import { createApp } from '../src/app.tsx';
 import { pendingOf, syncOnce, syncProgress } from '../src/desktop/sync.ts';
 import { installFakeApi, json } from './fake-api.ts';
 
-const TASK = '00000000-0000-4000-8000-0000000000f1';
 const CONV = '00000000-0000-4000-8000-0000000000c1';
+const OTHER_CONV = '00000000-0000-4000-8000-0000000000c2';
+const SESSION = '00000000-0000-4000-8000-0000000000f1';
+const OTHER_SESSION = '00000000-0000-4000-8000-0000000000f2';
+const dm = (id: string, title: string, modelKey: string) => ({
+  id,
+  kind: 'dm',
+  title,
+  modelKey,
+  createdAt: '2026-10-24T00:00:00.000Z',
+  lastMessageAt: null,
+  turn: null,
+});
+const DMS = [dm(CONV, 'Claude', 'claude'), dm(OTHER_CONV, '文心', 'ernie')];
 
 function artifact(
   n: number,
@@ -25,10 +36,10 @@ function artifact(
     size: 2048,
     contentType: 'text/markdown',
     category,
-    deliverable: '首页文案',
-    taskId: TASK,
-    taskTitle: '民宿首页',
     conversationId: CONV,
+    sessionId: SESSION,
+    topic: '民宿首页',
+    runId: '00000000-0000-4000-8000-0000000000a1',
     models: ['deepseek/x'],
     syncPath: `民宿首页/${path}`,
     annotations: [],
@@ -42,24 +53,31 @@ const ARTIFACTS = [
   artifact(1, '首页文案.md', 'doc'),
   artifact(2, '预热短片.mp4', 'media', { contentType: 'video/mp4' }),
   artifact(3, '价格.xlsx', 'data', {
-    taskTitle: '价格表',
-    taskId: '00000000-0000-4000-8000-0000000000f2',
+    conversationId: OTHER_CONV,
+    sessionId: OTHER_SESSION,
+    topic: '价格表',
+    syncPath: '价格表/价格.xlsx',
   }),
 ];
 
-function fakeCanvas(list = ARTIFACTS, tasks: TaskSummary[] = []) {
+/** 假画布：和接口一样新的在前 */
+function fakeCanvas(list = ARTIFACTS) {
+  const newest = [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return installFakeApi({
     signedIn: true,
+    dms: DMS,
     extra: (method, path) => {
       if (method !== 'GET') return undefined;
-      if (path === '/task/v1/tasks') return json(200, { tasks });
-      if (path === '/canvas/v1/artifacts') return json(200, { artifacts: list });
-      if (path === `/canvas/v1/artifacts?taskId=${TASK}`)
-        return json(200, { artifacts: list.filter((a) => a.taskId === TASK) });
+      if (path === '/canvas/v1/artifacts') return json(200, { artifacts: newest });
+      if (path === `/canvas/v1/artifacts?conversationId=${CONV}`)
+        return json(200, { artifacts: newest.filter((a) => a.conversationId === CONV) });
+      if (path.startsWith('/canvas/v1/artifacts?sessionId='))
+        return json(200, {
+          artifacts: newest.filter((a) => path.endsWith(a.sessionId)),
+        });
       const one = list.find((a) => path === `/canvas/v1/artifacts/${a.id}`);
       if (one) return json(200, one);
       if (path.endsWith('/content')) return new Response('# 山里的小木屋');
-      if (path === '/task/v1/workflow/names') return json(200, { models: [], tools: [] });
       return undefined;
     },
   });
@@ -77,110 +95,26 @@ afterEach(() => {
 });
 
 describe('画布', () => {
-  it('没有成果也列出运行中和已取消任务；成果类别不隐藏任务，搜索匹配任务标题', async () => {
-    fakeCanvas(
-      [],
-      ['running', 'cancelled'].map((status, i) => ({
-        id: i === 0 ? TASK : CONV,
-        title: i === 0 ? '正在制作的便利店' : '已取消的街景',
-        status: status as TaskSummary['status'],
-        nodesDone: 4,
-        nodesTotal: 10,
-        spentMicro: 7_634_465,
-        revising: false,
-        createdAt: '2026-11-04T01:00:00.000Z',
-      })),
+  it('按话题分组，最近有成果的话题在前；每个话题能回到私聊、打包下载；卡片上是做它的 AI', async () => {
+    fakeCanvas();
+    await open('/canvas');
+    const home = await screen.findByRole('region', { name: '民宿首页' });
+    const price = screen.getByRole('region', { name: '价格表' });
+    expect(price.compareDocumentPosition(home) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(home).getAllByRole('article')).toHaveLength(2);
+    expect(within(home).getByRole('link', { name: '回到私聊' }).getAttribute('href')).toBe(
+      `/dms/${CONV}`,
     );
-    await open('/canvas');
-    const tasks = screen.getByRole('region', { name: '任务工作流' });
-    const cancelled = await within(tasks).findByRole('link', { name: '打开工作流：已取消的街景' });
-    expect(cancelled.getAttribute('href')).toBe(`/canvas/tasks/${CONV}`);
-    expect(cancelled.textContent).toContain('已取消');
-    expect(cancelled.textContent).toContain('4/10');
-    expect(
-      await within(tasks).findByRole('link', { name: '打开工作流：正在制作的便利店' }),
-    ).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /音频和视频/ }));
-    expect(within(tasks).getAllByRole('link')).toHaveLength(2);
-    fireEvent.change(screen.getByLabelText('搜成果'), { target: { value: '街景' } });
-    expect(within(tasks).getAllByRole('link')).toHaveLength(1);
-    expect(screen.getByText(/还没有交付成果/)).toBeTruthy();
+    expect(within(home).getByRole('link', { name: '打包下载' }).getAttribute('href')).toBe(
+      `/api/canvas/v1/topics/${SESSION}/archive`,
+    );
+    expect(within(home).getAllByText('Claude')).toHaveLength(2);
+    expect(within(price).getByText('文心')).toBeTruthy();
+    // 浏览器里没有桌面端接口，不显示同步条
+    expect(screen.queryByRole('region', { name: '同步到电脑' })).toBeNull();
   });
 
-  it('任务卡片上能删任务：再确认一次；还在做的会先停下，删完从列表里消失', async () => {
-    let tasks: TaskSummary[] = [
-      {
-        id: TASK,
-        title: '重复的马车',
-        status: 'planning',
-        nodesDone: 0,
-        nodesTotal: 0,
-        spentMicro: 10_700,
-        revising: false,
-        createdAt: '2026-11-04T10:24:47.000Z',
-      },
-    ];
-    const api = installFakeApi({
-      signedIn: true,
-      extra: (method, path) => {
-        if (method === 'DELETE' && path === `/task/v1/tasks/${TASK}`) {
-          tasks = [];
-          return new Response(null, { status: 204 });
-        }
-        if (method !== 'GET') return undefined;
-        if (path === '/task/v1/tasks') return json(200, { tasks });
-        if (path === '/canvas/v1/artifacts') return json(200, { artifacts: [] });
-        return undefined;
-      },
-    });
-    await open('/canvas');
-    const card = await screen.findByRole('article', { name: '重复的马车' });
-    fireEvent.click(within(card).getByRole('button', { name: '删除任务' }));
-    const ask = within(card).getByRole('group', { name: '停下并彻底删除？' });
-    expect(api.requests).not.toContain(`DELETE /task/v1/tasks/${TASK}`);
-    fireEvent.click(within(ask).getByRole('button', { name: '取消' }));
-    expect(within(card).queryByRole('group')).toBeNull();
-    fireEvent.click(within(card).getByRole('button', { name: '删除任务' }));
-    fireEvent.click(within(card).getByRole('button', { name: '删除' }));
-    await waitFor(() => expect(screen.queryByRole('article', { name: '重复的马车' })).toBeNull());
-    expect(api.requests).toContain(`DELETE /task/v1/tasks/${TASK}`);
-  });
-
-  it('任务列表失败不挡住成果；重试后可找回工作流入口', async () => {
-    let available = false;
-    installFakeApi({
-      signedIn: true,
-      extra: (method, path) => {
-        if (method !== 'GET') return;
-        if (path === '/canvas/v1/artifacts') return json(200, { artifacts: ARTIFACTS });
-        if (path === '/task/v1/tasks')
-          return available
-            ? json(200, {
-                tasks: [
-                  {
-                    id: TASK,
-                    title: '恢复的任务',
-                    status: 'planning',
-                    nodesDone: 0,
-                    nodesTotal: 0,
-                    spentMicro: 0,
-                    createdAt: '2026-11-04T01:00:00.000Z',
-                  },
-                ],
-              })
-            : json(503, { error: { code: 'unavailable', message: '不可用' } });
-        if (path === '/task/v1/workflow/names') return json(200, { models: [], tools: [] });
-      },
-    });
-    await open('/canvas');
-    expect(await screen.findByRole('link', { name: '打开 首页文案.md' })).toBeTruthy();
-    const retry = await screen.findByRole('button', { name: '重试加载任务' });
-    available = true;
-    fireEvent.click(retry);
-    expect(await screen.findByRole('link', { name: '打开工作流：恢复的任务' })).toBeTruthy();
-  });
-
-  it('列出全部成果；按类别筛选，标签上有数量；能搜任务名', async () => {
+  it('按类别筛选，标签上有数量；能搜话题名', async () => {
     fakeCanvas();
     await open('/canvas');
     expect(await screen.findByRole('link', { name: '打开 首页文案.md' })).toBeTruthy();
@@ -193,15 +127,20 @@ describe('画布', () => {
     fireEvent.click(within(tabs).getByRole('button', { name: /全部/ }));
     fireEvent.change(screen.getByLabelText('搜成果'), { target: { value: '价格表' } });
     expect(screen.getAllByRole('article')).toHaveLength(1);
-    // 浏览器里没有桌面端接口，不显示同步条
-    expect(screen.queryByRole('region', { name: '同步到电脑' })).toBeNull();
   });
 
-  it('只看某个任务的成果，可以回到全部', async () => {
+  it('只看某个私聊的成果，可以回到全部', async () => {
     fakeCanvas();
-    await open(`/canvas?task=${TASK}`);
-    expect(await screen.findByRole('link', { name: /只看「民宿首页」/ })).toBeTruthy();
+    await open(`/canvas?conversation=${CONV}`);
+    const only = await screen.findByRole('link', { name: /只看「Claude」/ });
+    expect(only.getAttribute('href')).toBe('/canvas');
     expect(screen.getAllByRole('article')).toHaveLength(2);
+  });
+
+  it('还没有成果：说去私聊里让 AI 做', async () => {
+    fakeCanvas([]);
+    await open('/canvas');
+    expect(await screen.findByText(/还没有成果/)).toBeTruthy();
   });
 
   it('打开一个成果：预览内容；顶栏只有返回、批注、下载三个图标', async () => {
@@ -214,21 +153,45 @@ describe('画布', () => {
     expect(screen.getByRole('link', { name: '下载' }).getAttribute('href')).toBe(
       `/api/canvas/v1/artifacts/${ARTIFACTS[0]!.id}/content?download=1`,
     );
-    for (const gone of ['工作流', '回到私聊'])
-      expect(screen.queryByRole('link', { name: gone })).toBeNull();
-    expect(screen.queryByRole('button', { name: /发给 AI 团队修改|删除|批准/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /工作流|看进度/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /让 AI 改|删除|批准/ })).toBeNull();
+  });
+
+  it('做它的 AI 正在做一轮：批注换成「看进度」，点开回到私聊', async () => {
+    installFakeApi({
+      signedIn: true,
+      dms: [
+        {
+          ...DMS[0]!,
+          turn: {
+            runId: '00000000-0000-4000-8000-0000000000b1',
+            startedAt: '2026-10-24T09:00:00.000Z',
+          },
+        },
+      ],
+      extra: (method, path) => {
+        if (method !== 'GET') return undefined;
+        if (path === `/canvas/v1/artifacts/${ARTIFACTS[0]!.id}`) return json(200, ARTIFACTS[0]);
+        if (path.startsWith('/canvas/v1/artifacts?')) return json(200, { artifacts: ARTIFACTS });
+        if (path.endsWith('/content')) return new Response('# 山里的小木屋');
+        return undefined;
+      },
+    });
+    await open(`/canvas/artifacts/${ARTIFACTS[0]!.id}`);
+    const busy = await screen.findByRole('link', { name: 'AI 正在做，看进度' });
+    expect(busy.getAttribute('href')).toBe(`/dms/${CONV}`);
+    expect(screen.queryByRole('button', { name: '批注' })).toBeNull();
   });
 });
 
 describe('网页应用在画布里运行', () => {
   const app = [
     artifact(4, 'site/oasis-app.json', 'app', {
-      nodeId: 'n1',
       contentType: 'application/json',
       application: { version: 1, kind: 'static', root: 'site', entry: 'index.html' },
     }),
-    artifact(5, 'site/index.html', 'app', { nodeId: 'n1', contentType: 'text/html' }),
-    artifact(6, 'site/style.css', 'app', { nodeId: 'n1', contentType: 'text/css' }),
+    artifact(5, 'site/index.html', 'app', { contentType: 'text/html' }),
+    artifact(6, 'site/style.css', 'app', { contentType: 'text/css' }),
   ];
   const content: Record<string, string> = {
     [app[1]!.id]:
@@ -240,8 +203,8 @@ describe('网页应用在画布里运行', () => {
       signedIn: true,
       extra: (method, path) => {
         if (method !== 'GET') return undefined;
-        if (path === '/task/v1/tasks') return json(200, { tasks: [] });
-        if (path === `/canvas/v1/artifacts?taskId=${TASK}`) return json(200, { artifacts: app });
+        if (path === `/canvas/v1/artifacts?sessionId=${SESSION}`)
+          return json(200, { artifacts: app });
         const one = app.find((a) => path === `/canvas/v1/artifacts/${a.id}`);
         if (one) return json(200, one);
         const file = app.find((a) => path === `/canvas/v1/artifacts/${a.id}/content`);
@@ -250,7 +213,7 @@ describe('网页应用在画布里运行', () => {
       },
     });
 
-  it('打开静态应用：入口网页带上同成果的样式，在只给脚本权限的隔离框里运行；没有平台容器预览', async () => {
+  it('打开静态应用：入口网页带上同话题的样式，在只给脚本权限的隔离框里运行；没有平台容器预览', async () => {
     const api = install();
     await open(`/canvas/artifacts/${app[0]!.id}`);
     const frame = await screen.findByTitle('site');
@@ -263,7 +226,7 @@ describe('网页应用在画布里运行', () => {
     expect(screen.queryByRole('button', { name: '平台容器预览' })).toBeNull();
   });
 
-  it('单独打开应用里的网页也会运行，并能引用同成果的文件', async () => {
+  it('单独打开应用里的网页也会运行，并能引用同话题的文件', async () => {
     install();
     await open(`/canvas/artifacts/${app[1]!.id}`);
     const frame = await screen.findByTitle('index.html');
@@ -301,7 +264,7 @@ describe('桌面端同步到电脑', () => {
     await syncOnce(api, ARTIFACTS, await api.syncStatus());
     expect(written).toEqual([
       [ARTIFACTS[1]!.id, '民宿首页/预热短片.mp4', 3],
-      [ARTIFACTS[2]!.id, '民宿首页/价格.xlsx', 3],
+      [ARTIFACTS[2]!.id, '价格表/价格.xlsx', 3],
     ]);
     expect(syncProgress.get()).toMatchObject({ running: false, done: 2, total: 2, error: null });
   });
@@ -357,7 +320,7 @@ describe('桌面端同步到电脑', () => {
     await open('/canvas');
     const bar = await screen.findByRole('region', { name: '同步到电脑' });
     expect(within(bar).getByText('D:\\Oasis')).toBeTruthy();
-    await waitFor(() => expect(written.map((w) => w[1])).toEqual(['民宿首页/价格.xlsx']));
+    await waitFor(() => expect(written.map((w) => w[1])).toEqual(['价格表/价格.xlsx']));
     expect(await within(bar).findByText('全部已同步')).toBeTruthy();
     fireEvent.click(within(bar).getByRole('button', { name: '打开文件夹' }));
     expect(api.openSyncFolder).toHaveBeenCalled();

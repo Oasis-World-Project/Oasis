@@ -1,18 +1,17 @@
-// 私聊里的任务卡片（5.5a）：问题卡 → 任务单 → 任务卡 → 交付，以及「发任务」。
-import type { MessageBody } from '@oasis/contracts/conversation';
-import type { TaskBody } from '@oasis/contracts/task';
+// 私聊里的一轮：AI 说的话和步骤、待办、问卷卡和任务单卡（AI 回复里的代码块）、任务卡、插话、
+// 要改的成果、开新话题、删私聊。
+import type { MessageBody, TurnState } from '@oasis/contracts/conversation';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
 import { installFakeApi, json, type ExtraRoute } from './fake-api.ts';
 
-const NOW = '2026-10-23T08:00:00.000Z';
+const NOW = '2026-11-14T08:00:00.000Z';
 const CONV = '00000000-0000-4000-8000-0000000000c1';
-const INTAKE = '00000000-0000-4000-8000-0000000000e1';
-const TASK = '00000000-0000-4000-8000-0000000000f1';
-const NODE_A = '00000000-0000-4000-8000-0000000000a1';
-const NODE_B = '00000000-0000-4000-8000-0000000000a2';
+const RUN = '00000000-0000-4000-8000-0000000000b1';
+const PATH = `/conversation/v1/conversations/${CONV}/messages`;
+const TURN: TurnState = { runId: RUN, startedAt: NOW };
 
 const DM = {
   id: CONV,
@@ -21,6 +20,7 @@ const DM = {
   modelKey: 'claude',
   createdAt: NOW,
   lastMessageAt: NOW,
+  turn: null,
 };
 
 let seq = 0;
@@ -31,119 +31,43 @@ function message(
   data: object,
   role: 'user' | 'assistant' = 'assistant',
   content = '',
+  status: MessageBody['status'] = 'complete',
 ): MessageBody {
   return {
     id: nextId(),
     role,
     content,
-    status: 'complete',
+    status,
     error: null,
     createdAt: NOW,
     kind,
     data,
   } as MessageBody;
 }
+const user = (content: string, data: object = {}) =>
+  message('text', { runId: RUN, ...data }, 'user', content);
+/** AI 在这一轮里的一段话：按顺序的话、步骤、提示 */
+const ai = (parts: object[], data: object = {}, status: MessageBody['status'] = 'complete') =>
+  message('text', { runId: RUN, parts, ...data }, 'assistant', '', status);
+const say = (text: string) => ({ type: 'text', text });
 
-const SHEET = {
-  title: '小木屋民宿官网首页',
-  deliverables: [{ name: '首页文案', form: 'Markdown' }],
-  criteria: ['有标题、卖点和预订方式'],
-  style: ['温馨'],
-  assumptions: ['用 Markdown 写'],
-  materials: [],
-};
-
-const QUESTIONS = {
-  intakeId: INTAKE,
-  round: 1,
-  intro: '先确认两件事。',
-  questions: [
-    {
-      id: 'q1',
-      text: '给谁看？',
-      options: [
-        { id: 'a', label: '游客' },
-        { id: 'b', label: '合作方' },
-      ],
-      default: 'a',
-    },
-    {
-      id: 'q2',
-      text: '什么风格？',
-      options: [
-        { id: 'a', label: '温馨' },
-        { id: 'b', label: '简洁' },
-      ],
-      default: 'a',
-    },
-  ],
-  answers: null,
-};
-
-function node(id: string, key: string, title: string, status: string) {
-  return {
-    id,
-    key,
-    title,
-    kind: 'work',
-    role: '',
-    goal: title,
-    model: 'deepseek/x',
-    expects: [],
-    line: null,
-    adjust: null,
-    discussion: null,
-    steps: null,
-    status,
-    attempts: 1,
-    userNotes: [],
-    reworks: 0,
-    warning: null,
-    summary: null,
-    outputs: [],
-    spentMicro: 0,
-    startedAt: null,
-    finishedAt: null,
-  };
-}
-
-function task(overrides: Partial<TaskBody> = {}): TaskBody {
-  return {
-    id: TASK,
-    title: SHEET.title,
-    brief: '',
-    status: 'running',
-    attention: null,
-    spentMicro: 12_300,
-    sheet: SHEET,
-    acceptance: null,
-    deliverables: [{ name: '首页文案', form: 'Markdown', nodeId: NODE_A }],
-    nodes: [
-      node(NODE_A, 'write', '写文案', 'succeeded'),
-      node(NODE_B, 'image', '出效果图', 'running'),
-    ],
-    edges: [],
-    createdAt: NOW,
-    finishedAt: null,
-    ...overrides,
-  } as TaskBody;
-}
-
-/** 一个私聊会话的假后端：消息列表和任务都能在测试里改 */
-function fakeChat(
-  initial: MessageBody[],
-  handlers: { task?: () => TaskBody; extra?: ExtraRoute } = {},
-) {
-  const chat = { messages: [...initial] };
+/** 一个私聊的假后端：消息和正在进行的一轮都能在测试里改；发的话接在后面 */
+function fakeChat(initial: MessageBody[], options: { turn?: TurnState; extra?: ExtraRoute } = {}) {
+  const chat = { messages: [...initial], turn: options.turn ?? null };
   const api = installFakeApi({
     signedIn: true,
     dms: [DM],
     extra: (method, path, body) => {
-      if (method === 'GET' && path === `/conversation/v1/conversations/${CONV}/messages`)
-        return json(200, { messages: chat.messages });
-      if (method === 'GET' && path === `/task/v1/tasks/${TASK}` && handlers.task)
-        return json(200, handlers.task());
-      return handlers.extra?.(method, path, body);
+      const custom = options.extra?.(method, path, body);
+      if (custom) return custom;
+      if (method === 'GET' && path === PATH)
+        return json(200, { messages: chat.messages, turn: chat.turn });
+      if (method === 'POST' && path === PATH) {
+        const sent = user((body as { content: string }).content);
+        chat.messages = [...chat.messages, sent];
+        return json(201, { messages: [sent], turn: chat.turn });
+      }
+      return undefined;
     },
   });
   return { chat, api };
@@ -161,414 +85,278 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('问题卡和任务单', () => {
-  it('已回答但生成失败时可继续；失败消息不隐藏入口，重试沿用保存的答案', async () => {
-    const questions = message('questions', { ...QUESTIONS, answers: { q1: 'b', q2: 'a' } });
-    const failed = {
-      ...message('text', {}),
-      status: 'failed',
-      error: '任务单生成失败',
-    } as MessageBody;
-    const sheet = message('sheet', {
-      intakeId: INTAKE,
-      intro: '',
-      sheet: SHEET,
-      status: 'open',
-      taskId: null,
-    });
-    const { chat, api } = fakeChat([questions, failed], {
-      extra: (method, path) => {
-        if (method === 'POST' && path.endsWith('/intake/answers')) {
-          chat.messages = [questions, failed, sheet];
-          return json(200, { messages: [sheet] });
-        }
-      },
-    });
+describe('AI 在一轮里说的话和做的事', () => {
+  it('按顺序显示：话（Markdown）、步骤（默认折叠，显示正在做的一步）、系统提示、待办', async () => {
+    fakeChat(
+      [
+        user('做个网页'),
+        ai(
+          [
+            say('好的，**先写页面**'),
+            {
+              type: 'step',
+              id: 'c1',
+              tool: 'write',
+              label: '写文件 out/index.html',
+              status: 'done',
+            },
+            {
+              type: 'step',
+              id: 'c2',
+              tool: 'bash',
+              label: '运行命令：npm test',
+              status: 'running',
+            },
+            { type: 'notice', text: '服务恢复了，接着做' },
+          ],
+          {
+            todos: [
+              { text: '写页面', status: 'done' },
+              { text: '测一遍', status: 'doing' },
+            ],
+          },
+          'streaming',
+        ),
+      ],
+      { turn: TURN },
+    );
     await openChat();
-    const resume = await screen.findByRole('button', { name: '继续整理' });
-    expect(screen.queryByRole('radio')).toBeNull();
-    fireEvent.click(resume);
-    await screen.findByRole('region', { name: '任务单' });
-    expect(screen.queryByRole('button', { name: '继续整理' })).toBeNull();
-    expect(api.bodies.find((b) => b.path.endsWith('/intake/answers'))?.body).toEqual({
-      messageId: questions.id,
-      answers: { q1: 'b', q2: 'a' },
-      skip: false,
-    });
-    expect(api.bodies.some((b) => b.path.endsWith('/intake/confirm'))).toBe(false);
-  });
-  it('选好答案提交 → 任务单 → 确认后出现「正在搭建工作流」的任务卡', async () => {
-    const asked = message('text', {}, 'user', '帮我给小木屋民宿写个官网首页');
-    const questions = message('questions', QUESTIONS);
-    const sheet = message('sheet', {
-      intakeId: INTAKE,
-      intro: '整理好了：',
-      sheet: SHEET,
-      status: 'open',
-      taskId: null,
-    });
-    const taskCard = message('task', { taskId: TASK });
-    const { chat, api } = fakeChat([asked, questions], {
-      task: () => task({ status: 'planning', nodes: [], spentMicro: 0 }),
-      extra: (method, path) => {
-        if (method === 'POST' && path.endsWith('/intake/answers')) {
-          chat.messages = [
-            asked,
-            { ...questions, data: { ...QUESTIONS, answers: { q1: 'b', q2: 'a' } } } as MessageBody,
-            sheet,
-          ];
-          return json(200, { messages: [sheet] });
-        }
-        if (method === 'POST' && path.endsWith('/intake/confirm')) {
-          chat.messages = [
-            ...chat.messages.slice(0, 2),
-            { ...sheet, data: { ...sheet.data, status: 'confirmed', taskId: TASK } } as MessageBody,
-            taskCard,
-          ];
-          return json(200, { messages: [taskCard] });
-        }
-        return undefined;
-      },
-    });
-    await openChat();
-
-    const card = await screen.findByRole('region', { name: '问题卡' });
-    expect(within(card).getByText('先确认两件事。')).toBeTruthy();
-    // 默认项已经选好，每题都有「你看着办」
-    expect(within(card).getByRole('radio', { name: /游客/ })).toHaveProperty('checked', true);
-    expect(within(card).getAllByRole('radio', { name: '你看着办' })).toHaveLength(2);
-    fireEvent.click(within(card).getByRole('radio', { name: '合作方' }));
-    fireEvent.click(within(card).getByRole('button', { name: '好了，继续' }));
-
-    const sheetCard = await screen.findByRole('region', { name: '任务单' });
-    expect(within(sheetCard).getByText('小木屋民宿官网首页')).toBeTruthy();
-    expect(within(sheetCard).getByText('有标题、卖点和预订方式')).toBeTruthy();
-    expect(api.bodies.find((b) => b.path.endsWith('/intake/answers'))?.body).toEqual({
-      messageId: questions.id,
-      answers: { q1: 'b', q2: 'a' },
-      skip: false,
-    });
-    // 答过的问题卡只显示答案
-    const answered = screen.getByRole('region', { name: '问题卡' });
-    expect(within(answered).getByText('已回答')).toBeTruthy();
-    expect(within(answered).queryByRole('radio')).toBeNull();
-
-    fireEvent.click(within(sheetCard).getByRole('button', { name: '确认，开始做' }));
-    const taskRegion = await screen.findByRole('region', { name: `任务：${SHEET.title}` });
-    expect(await within(taskRegion).findAllByText('正在搭建工作流')).not.toHaveLength(0);
-    // 确认时不选预算：没有预算这回事
-    expect(api.bodies.find((b) => b.path.endsWith('/intake/confirm'))?.body).toEqual({});
-    expect(
-      within(screen.getByRole('region', { name: '任务单' })).getByText('已交给 AI 团队'),
-    ).toBeTruthy();
+    expect((await screen.findByText('先写页面')).tagName).toBe('STRONG');
+    const steps = screen.getByRole('list', { name: '步骤', hidden: true });
+    const summary = steps.closest('details')!.querySelector('summary')!;
+    expect(summary.textContent).toContain('运行命令：npm test');
+    expect(within(steps).getAllByRole('listitem', { hidden: true })).toHaveLength(2);
+    expect(screen.getByText('服务恢复了，接着做')).toBeTruthy();
+    expect(screen.getByText('待办 1/2')).toBeTruthy();
+    // 一轮在做：输入框照样能发（插话），旁边有停止按钮
+    expect(screen.getByPlaceholderText('AI 正在做，可以随时插话…')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停下这一轮' })).toBeTruthy();
   });
 
-  it('选项都不合适时可以自己写；没写内容不能提交，写了按原话交给后端', async () => {
-    const questions = message('questions', QUESTIONS);
-    const { api } = fakeChat([message('text', {}, 'user', '写首页'), questions], {
-      extra: (method, path) =>
-        method === 'POST' && path.endsWith('/intake/answers')
-          ? json(200, { messages: [] })
-          : undefined,
-    });
+  it('做完：步骤说一共做了几步、几步没成；写上这一轮的花费；只是聊天时没有任务卡', async () => {
+    fakeChat([
+      user('你好'),
+      ai(
+        [
+          say('你好！'),
+          { type: 'step', id: 'c1', tool: 'bash', label: '运行命令：ls', status: 'done' },
+          {
+            type: 'step',
+            id: 'c2',
+            tool: 'bash',
+            label: '运行命令：npm test',
+            status: 'failed',
+            detail: '测试没过',
+          },
+        ],
+        { spentMicro: 12_345 },
+      ),
+    ]);
     await openChat();
-    const card = await screen.findByRole('region', { name: '问题卡' });
-    expect(within(card).getAllByRole('radio', { name: '自己写' })).toHaveLength(2);
-    fireEvent.click(within(card).getAllByRole('radio', { name: '自己写' })[0]!);
-    const submit = within(card).getByRole('button', { name: '好了，继续' });
-    expect(submit).toHaveProperty('disabled', true);
-    expect(within(card).getByText('选了「自己写」的题目还没写内容。')).toBeTruthy();
-    fireEvent.change(within(card).getByRole('textbox', { name: '给谁看？：自己写' }), {
-      target: { value: '  来出差的商务客  ' },
-    });
-    expect(submit).toHaveProperty('disabled', false);
-    fireEvent.click(submit);
-    await waitFor(() =>
-      expect(api.bodies.find((b) => b.path.endsWith('/intake/answers'))?.body).toEqual({
-        messageId: questions.id,
-        answers: { q1: 'custom:来出差的商务客', q2: 'a' },
-        skip: false,
+    expect(await screen.findByText('做了 2 步，1 步没成')).toBeTruthy();
+    expect(screen.getByText('测试没过')).toBeTruthy();
+    expect(screen.getByText('这一轮花了 $0.0123')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: '任务' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '停下这一轮' })).toBeNull();
+  });
+});
+
+describe('问卷卡和任务单卡', () => {
+  const QUESTIONS = {
+    questions: [
+      { id: 'q1', text: '给谁看？', options: ['游客', '合作方'] },
+      { id: 'q2', text: '什么风格？', options: ['温馨', '简洁'] },
+    ],
+  };
+  const asked = () =>
+    ai([say(`先问两件事。\n\n\`\`\`oasis-questions\n${JSON.stringify(QUESTIONS)}\n\`\`\``)]);
+
+  it('问卷：每题选一个再发，可以自己写；回答作为一条普通消息发出，之后问卷只显示内容', async () => {
+    const { api } = fakeChat([user('做个首页'), asked()]);
+    await openChat();
+    const card = await screen.findByRole('region', { name: '问卷' });
+    expect(screen.getByText('先问两件事。')).toBeTruthy();
+    const send = within(card).getByRole('button', { name: '发送回答' });
+    expect((send as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(card).getByRole('radio', { name: '游客' }));
+    fireEvent.click(
+      within(within(card).getByRole('group', { name: '什么风格？' })).getByRole('radio', {
+        name: '自己写',
       }),
     );
+    fireEvent.change(within(card).getByLabelText('什么风格？：自己写'), {
+      target: { value: '复古' },
+    });
+    fireEvent.click(send);
+    await waitFor(() =>
+      expect(api.bodies.find((b) => b.path === PATH)?.body).toEqual({
+        content: '1. 给谁看？——游客\n2. 什么风格？——复古',
+        attachments: [],
+      }),
+    );
+    await waitFor(() =>
+      expect(within(card).queryByRole('button', { name: '发送回答' })).toBeNull(),
+    );
+    expect(within(card).getByText('游客 / 合作方')).toBeTruthy();
   });
 
-  it('「要改一下」把焦点交给输入框并提示怎么说；「不是任务」退出', async () => {
-    const sheet = message('sheet', {
-      intakeId: INTAKE,
-      sheet: SHEET,
-      status: 'open',
-      taskId: null,
-    });
-    const { chat, api } = fakeChat([message('text', {}, 'user', '写首页'), sheet], {
-      extra: (method, path) => {
-        if (method !== 'POST' || !path.endsWith('/intake/cancel')) return undefined;
-        const reply = message('text', {}, 'assistant', '好的，先不做了。');
-        chat.messages = [...chat.messages, reply];
-        return json(200, { messages: [reply] });
-      },
-    });
+  it('格式不对的代码块照原样当文字显示', async () => {
+    fakeChat([ai([say('```oasis-questions\n{不是 JSON}\n```')])]);
+    await openChat();
+    expect(await screen.findByText('{不是 JSON}')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: '问卷' })).toBeNull();
+  });
+
+  it('任务单：确认发一句「确认，开始做」；「要改一下」把焦点给输入框并换提示', async () => {
+    const plan = {
+      title: '开业视频',
+      steps: ['写分镜', '一起生成 3 张关键帧'],
+      estimate: '约 $1.5、20 分钟',
+    };
+    const { api } = fakeChat([
+      user('做个开业视频'),
+      ai([say(`\`\`\`oasis-plan\n${JSON.stringify(plan)}\n\`\`\``)]),
+    ]);
     await openChat();
     const card = await screen.findByRole('region', { name: '任务单' });
+    expect(within(card).getByRole('heading', { name: '开业视频' })).toBeTruthy();
+    expect(within(card).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(card).getByText('预计 约 $1.5、20 分钟')).toBeTruthy();
     fireEvent.click(within(card).getByRole('button', { name: '要改一下' }));
-    const input = screen.getByLabelText('消息');
-    expect(document.activeElement).toBe(input);
-    expect(input.getAttribute('placeholder')).toMatch(/要改哪里/);
-
-    fireEvent.click(within(card).getByRole('button', { name: '不做了' }));
-    expect(await screen.findByText('好的，先不做了。')).toBeTruthy();
-    expect(api.requests).toContain(`POST /conversation/v1/conversations/${CONV}/intake/cancel`);
+    expect(screen.getByPlaceholderText('说说要改哪里，比如：分镜改成 4 个')).toBe(
+      document.activeElement,
+    );
+    fireEvent.click(within(card).getByRole('button', { name: '确认，开始做' }));
+    await waitFor(() =>
+      expect(api.bodies.find((b) => b.path === PATH)?.body).toEqual({
+        content: '确认，开始做',
+        attachments: [],
+      }),
+    );
   });
 });
 
 describe('任务卡', () => {
-  it('显示完成几步、每步的状态和花费', async () => {
-    fakeChat([message('task', { taskId: TASK })], { task: () => task() });
-    await openChat();
-    const card = await screen.findByRole('region', { name: `任务：${SHEET.title}` });
-    expect(await within(card).findByText('2 个步骤，完成了 1 个')).toBeTruthy();
-    const steps = within(card).getByRole('list', { name: '步骤' });
-    expect(within(steps).getByText('：运行中')).toBeTruthy();
-    expect(within(card).getByText('$0.0123')).toBeTruthy();
-    expect(within(card).getByRole('button', { name: '停止' })).toBeTruthy();
-    expect(within(card).getByRole('link', { name: '看工作流' }).getAttribute('href')).toBe(
-      `/canvas/tasks/${TASK}`,
-    );
-  });
-
-  it('需要处理仅保留简短状态和工作流入口，历史重复提醒不再刷屏', async () => {
-    const details = '「写首页文案」连不上模型服务商（网络中断或超时）';
-    const { api } = fakeChat(
-      [
-        message('task', { taskId: TASK }),
-        message('notice', { taskId: TASK, status: 'needs_attention', message: details }),
-        message('notice', { taskId: TASK, status: 'needs_attention', message: details }),
-      ],
-      {
-        task: () =>
-          task({
-            status: 'needs_attention',
-            attention: { reason: 'node_failed', nodeId: NODE_B, message: details },
-          }),
-      },
-    );
-    await openChat();
-    const card = await screen.findByRole('region', { name: `任务：${SHEET.title}` });
-    expect(await within(card).findByText('有待处理项，请到工作流查看对应节点。')).toBeTruthy();
-    expect(within(card).getByRole('link', { name: '看工作流' }).getAttribute('href')).toBe(
-      `/canvas/tasks/${TASK}`,
-    );
-    expect(screen.queryByText(details)).toBeNull();
-    expect(screen.queryByRole('region', { name: '任务提醒' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '继续' })).toBeNull();
-    expect(api.requests.some((r) => r.startsWith('POST'))).toBe(false);
-  });
-
-  it('规划失败也可从原任务卡进入工作流处理', async () => {
-    fakeChat([message('task', { taskId: TASK })], {
-      task: () =>
-        task({
-          status: 'needs_attention',
-          nodes: [],
-          attention: { reason: 'plan_failed', nodeId: null, message: '工作流没排好' },
-        }),
+  it('进行中：显示用时和花费，可以停下', async () => {
+    const card = message('task', {
+      runId: RUN,
+      status: 'running',
+      startedAt: new Date(Date.now() - 65_000).toISOString(),
+      finishedAt: null,
+      spentMicro: 40_000,
+      files: [],
+    });
+    const { api } = fakeChat([user('画一只猫'), ai([], {}, 'streaming'), card], {
+      turn: TURN,
+      extra: (method, path) =>
+        method === 'POST' && path === `/conversation/v1/conversations/${CONV}/stop`
+          ? new Response(null, { status: 204 })
+          : undefined,
     });
     await openChat();
-    const card = await screen.findByRole('region', { name: `任务：${SHEET.title}` });
-    expect(await within(card).findByRole('link', { name: '看工作流' })).toBeTruthy();
-    expect(screen.queryByText('工作流没排好')).toBeNull();
-    expect(screen.queryByRole('button', { name: '重新规划' })).toBeNull();
+    const region = await screen.findByRole('region', { name: '任务' });
+    expect(within(region).getByText('进行中')).toBeTruthy();
+    expect(region.textContent).toMatch(/用时 1 分 \d+ 秒/);
+    expect(region.textContent).toContain('$0.0400');
+    fireEvent.click(within(region).getByRole('button', { name: '停下' }));
+    await waitFor(() =>
+      expect(api.requests).toContain(`POST /conversation/v1/conversations/${CONV}/stop`),
+    );
   });
-});
 
-describe('交付消息', () => {
-  it('按交付物列出文件，可以预览和下载；没满足的地方写出来', async () => {
-    fakeChat(
-      [
-        message('delivery', {
-          taskId: TASK,
-          title: SHEET.title,
-          files: [{ deliverable: '首页文案', nodeId: NODE_A, path: '文案/首页.md', size: 2048 }],
-          unmet: ['没写预订电话'],
-          warnings: [],
-        }),
+  it('做完：写上用时、花费和成品；成品能预览、下载，能去画布看这个私聊的成果', async () => {
+    const PAGE = '00000000-0000-4000-8000-0000000000d1';
+    const card = message('task', {
+      runId: RUN,
+      status: 'done',
+      startedAt: '2026-11-14T08:00:00.000Z',
+      finishedAt: '2026-11-14T08:03:20.000Z',
+      spentMicro: 120_000,
+      files: [
+        {
+          artifactId: PAGE,
+          name: 'index.html',
+          path: 'site/index.html',
+          size: 2048,
+          category: 'app',
+        },
       ],
-      { task: () => task({ status: 'succeeded', spentMicro: 18_700 }) },
-    );
+    });
+    fakeChat([user('做个网页'), ai([say('做好了')], { spentMicro: 120_000 }), card]);
     await openChat();
-    const card = await screen.findByRole('region', { name: `交付：${SHEET.title}` });
-    expect(within(card).getByText('没写预订电话')).toBeTruthy();
-    expect(within(card).getByText('2.0 KB')).toBeTruthy();
-    const download = within(card).getByRole('link', { name: '下载 首页.md' });
-    expect(download.getAttribute('href')).toBe(
-      `/api/task/v1/tasks/${TASK}/files/${NODE_A}/${encodeURIComponent('文案')}/${encodeURIComponent('首页.md')}?download=1`,
+    const region = await screen.findByRole('region', { name: '任务' });
+    expect(within(region).getByText('已完成')).toBeTruthy();
+    expect(region.textContent).toContain('用时 3 分 20 秒');
+    expect(within(region).getByRole('link', { name: '下载 index.html' }).getAttribute('href')).toBe(
+      `/api/canvas/v1/artifacts/${PAGE}/content?download=1`,
     );
-    fireEvent.click(within(card).getByRole('button', { name: '预览 首页.md' }));
-    expect(screen.getByRole('heading', { name: '首页.md', hidden: true })).toBeTruthy();
+    expect(
+      within(region)
+        .getByRole('link', { name: /在画布里看/ })
+        .getAttribute('href'),
+    ).toBe(`/canvas?conversation=${CONV}`);
+    expect(within(region).queryByRole('button', { name: '停下' })).toBeNull();
   });
 });
 
-describe('私聊文字操作', () => {
-  it('长文保持短预览，全文放弹窗；任务消息带标记且没有修改入口', async () => {
-    const text = '很长的任务内容。'.repeat(100) + '正文末尾';
-    fakeChat([message('text', { intent: 'task' }, 'user', text)]);
+describe('用户的话', () => {
+  it('插话和没送进去的话有标记；要改的成果链到画布；很长的话只显示开头', async () => {
+    const ARTIFACT = '00000000-0000-4000-8000-0000000000d2';
+    const text = '很长的修改意见。'.repeat(100) + '正文末尾';
+    fakeChat([
+      user('做个视频'),
+      ai([say('先写分镜')]),
+      user('改成竖屏', { interjection: true }),
+      ai([say('好，改成竖屏')], {}, 'streaming'),
+      user('配上字幕', { interjection: true }),
+      user('再快一点', { pending: true }),
+      user(text, { artifacts: [{ id: ARTIFACT, name: 'index.html', path: 'site/index.html' }] }),
+    ]);
     await openChat();
-    expect(await screen.findByText('任务 · 已锁定')).toBeTruthy();
+    // AI 看到了的插话后面接着它的话；还没看到的（前面那段还在写）标明它做完手上这一步就看到
+    expect(await screen.findByText('插话')).toBeTruthy();
+    expect(screen.getByText('插话 · AI 做完手上这一步就会看到')).toBeTruthy();
+    expect(screen.getByText('这一轮在收尾，下一轮开头交给 AI')).toBeTruthy();
+    expect(screen.getByRole('link', { name: /要改：index\.html/ }).getAttribute('href')).toBe(
+      `/canvas/artifacts/${ARTIFACT}`,
+    );
     expect(screen.queryByText(/正文末尾/)).toBeNull();
-    expect(screen.queryByRole('button', { name: '编辑消息' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '删除消息' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /查看全文/ }));
     const dialog = screen.getByRole('dialog', { hidden: true });
     expect(within(dialog).getByText(text)).toBeTruthy();
-    fireEvent.click(within(dialog).getByRole('button', { name: '关闭', hidden: true }));
-    expect(screen.queryByRole('dialog', { hidden: true })).toBeNull();
-    expect(screen.queryByText(/正文末尾/)).toBeNull();
-  });
-
-  it('普通聊天可以编辑、重新生成、删除；前端替换缓存中的旧回复', async () => {
-    const user = message('text', { intent: 'chat' }, 'user', '旧问题');
-    const reply = message('text', { replyTo: user.id }, 'assistant', '旧回复');
-    const { chat, api } = fakeChat([user, reply], {
-      extra: (method, path, body) => {
-        if (method === 'POST' && path.endsWith(`/${user.id}/reply`)) {
-          const content = (body as { content?: string }).content;
-          const updated = { ...user, content: content ?? chat.messages[0]!.content };
-          const answered = { ...reply, content: content ? '编辑后的回复' : '重生成的回复' };
-          chat.messages = [updated, answered];
-          return new Response(
-            [
-              { type: 'accepted', userMessage: updated },
-              { type: 'done', message: answered },
-            ]
-              .map((e) => `data: ${JSON.stringify(e)}\n\n`)
-              .join(''),
-            { headers: { 'content-type': 'text/event-stream' } },
-          );
-        }
-        if (method === 'DELETE' && path.endsWith(`/${user.id}`)) {
-          chat.messages = [];
-          return new Response(null, { status: 204 });
-        }
-      },
-    });
-    await openChat();
-    fireEvent.click(await screen.findByRole('button', { name: '编辑消息' }));
-    const dialog = screen.getByRole('dialog', { hidden: true });
-    fireEvent.change(within(dialog).getByLabelText('修改消息内容'), {
-      target: { value: '新问题' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存并重新生成', hidden: true }));
-    expect(await screen.findByText('编辑后的回复')).toBeTruthy();
-    expect(screen.queryByText('旧问题')).toBeNull();
-    expect(screen.queryByText('旧回复')).toBeNull();
-    // 重新生成和删除先问一句：取消不执行，确认才执行
-    fireEvent.click(await screen.findByRole('button', { name: '重新生成回复' }));
-    fireEvent.click(
-      within(screen.getByRole('alertdialog', { name: '重新生成回复？' })).getByRole('button', {
-        name: '取消',
-      }),
-    );
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(api.bodies.filter((b) => b.path.endsWith('/reply'))).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: '重新生成回复' }));
-    fireEvent.click(
-      within(screen.getByRole('alertdialog')).getByRole('button', { name: '重新生成' }),
-    );
-    expect(await screen.findByText('重生成的回复')).toBeTruthy();
-    expect(api.bodies.filter((b) => b.path.endsWith('/reply')).map((b) => b.body)).toEqual([
-      { content: '新问题' },
-      {},
-    ]);
-    fireEvent.click(screen.getByRole('button', { name: '删除消息' }));
-    // 点外面收起，不删
-    fireEvent.pointerDown(document.body);
-    expect(screen.queryByRole('alertdialog')).toBeNull();
-    expect(screen.getByText('新问题')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: '删除消息' }));
-    fireEvent.click(
-      within(screen.getByRole('alertdialog', { name: '删除这条消息？' })).getByRole('button', {
-        name: '删除',
-      }),
-    );
-    await screen.findByText(/打个招呼/);
-    expect(screen.queryByText('新问题')).toBeNull();
-    expect(screen.queryByText('重生成的回复')).toBeNull();
-  });
-
-  it('回复期间按钮变为停止，只调用私聊 stop，不调用任务控制', async () => {
-    const user = message('text', { intent: 'chat' }, 'user', '聊天');
-    const stopped = message('text', { replyTo: user.id, stopped: true }, 'assistant', '保留的部分');
-    let stream!: ReadableStreamDefaultController<Uint8Array>;
-    const push = (event: object) =>
-      stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
-    const { chat, api } = fakeChat([], {
-      extra: (method, path) => {
-        if (method === 'POST' && path.endsWith('/messages')) {
-          chat.messages = [user];
-          return new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                stream = controller;
-                push({ type: 'accepted', userMessage: user });
-                push({ type: 'delta', text: '保留的部分' });
-              },
-            }),
-            { headers: { 'content-type': 'text/event-stream' } },
-          );
-        }
-        if (method === 'POST' && path.endsWith(`/${user.id}/stop`)) {
-          chat.messages = [user, stopped];
-          push({ type: 'done', message: stopped });
-          stream.close();
-          return new Response(null, { status: 204 });
-        }
-      },
-    });
-    await openChat();
-    fireEvent.change(screen.getByLabelText('消息'), { target: { value: '聊天' } });
-    fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    fireEvent.click(await screen.findByRole('button', { name: '停止回复' }));
-    expect(await screen.findByText('已停止')).toBeTruthy();
-    expect(api.requests.some((r) => r.includes('/task/') || r.includes('/harness/'))).toBe(false);
+    // 没有编辑、重新生成、删除单条消息
+    expect(screen.queryByRole('button', { name: /编辑消息|重新生成|删除消息/ })).toBeNull();
   });
 });
 
-describe('发任务', () => {
-  it('「＋」里选「作为任务发布」，发消息时带上 asTask', async () => {
-    const { chat, api } = fakeChat([], {
-      extra: (method, path) => {
-        if (method !== 'POST' || path !== `/conversation/v1/conversations/${CONV}/messages`)
-          return undefined;
-        const userMessage = message('text', {}, 'user', '做个海报');
-        const card = message('questions', QUESTIONS);
-        chat.messages = [userMessage, card];
-        const events = [
-          { type: 'accepted', userMessage },
-          { type: 'done', message: card },
-        ];
-        return new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), {
-          headers: { 'content-type': 'text/event-stream' },
-        });
-      },
+describe('开新话题、删私聊', () => {
+  it('开新话题：问一句再开，聊天里出现分隔；一轮进行中不能开', async () => {
+    const divider = message('topic', {}, 'user', '开了新话题');
+    const { api } = fakeChat([user('你好'), ai([say('你好！')])], {
+      extra: (method, path) =>
+        method === 'POST' && path === `/conversation/v1/conversations/${CONV}/topics`
+          ? json(201, { message: divider })
+          : undefined,
     });
     await openChat();
-    fireEvent.click(await screen.findByRole('button', { name: '更多发送方式' }));
-    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /作为任务发布/ }));
-    fireEvent.change(screen.getByLabelText('消息'), { target: { value: '做个海报' } });
-    fireEvent.click(screen.getByRole('button', { name: '发布任务' }));
-    expect(await screen.findByRole('region', { name: '问题卡' })).toBeTruthy();
-    expect(api.bodies.find((b) => b.path.endsWith('/messages'))?.body).toEqual({
-      content: '做个海报',
-      asTask: true,
-      attachments: [],
-    });
-    // 发出去后回到普通发送
-    expect(screen.getByRole('button', { name: '发送' })).toBeTruthy();
+    await screen.findByText('你好！');
+    fireEvent.click(screen.getByRole('button', { name: '开新话题' }));
+    const ask = screen.getByRole('group', { name: '开新话题？' });
+    expect(ask.textContent).toContain('AI 会忘掉之前聊的');
+    fireEvent.click(within(ask).getByRole('button', { name: '开新话题' }));
+    expect(await screen.findByRole('separator')).toBeTruthy();
+    expect(api.requests).toContain(`POST /conversation/v1/conversations/${CONV}/topics`);
   });
-});
 
-describe('删除私聊', () => {
-  it('右上角删除：问一句再删，删完回到私聊列表；只删聊天，不碰任务', async () => {
-    const { api } = fakeChat([message('text', {}, 'user', '在吗')], {
+  it('一轮进行中「开新话题」不能点', async () => {
+    fakeChat([user('做个网页'), ai([], {}, 'streaming')], { turn: TURN });
+    await openChat();
+    const button = await screen.findByRole('button', { name: '开新话题' });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+  });
+
+  it('删除私聊：问一句再删，删完回到私聊列表', async () => {
+    const { api } = fakeChat([user('在吗')], {
       extra: (method, path) =>
         method === 'DELETE' && path === `/conversation/v1/conversations/${CONV}`
           ? new Response(null, { status: 204 })
@@ -577,57 +365,11 @@ describe('删除私聊', () => {
     await openChat();
     fireEvent.click(await screen.findByRole('button', { name: '删除私聊' }));
     const ask = screen.getByRole('group', { name: '删除这段私聊？' });
-    expect(ask.textContent).toContain('任务和成果不受影响');
+    expect(ask.textContent).toContain('聊天、成果和 AI 的记忆都删掉');
     fireEvent.click(within(ask).getByRole('button', { name: '删除' }));
     await waitFor(() =>
       expect(api.requests).toContain(`DELETE /conversation/v1/conversations/${CONV}`),
     );
     await waitFor(() => expect(screen.queryByRole('region', { name: '私聊' })).toBeNull());
-    expect(api.requests.some((r) => r.startsWith('DELETE /task/'))).toBe(false);
-  });
-});
-
-describe('修改成果', () => {
-  const delivery = (extra: object = {}) =>
-    message('delivery', {
-      taskId: TASK,
-      title: SHEET.title,
-      files: [{ deliverable: '首页文案', nodeId: NODE_A, path: '首页.md', size: 120 }],
-      unmet: [],
-      warnings: [],
-      ...extra,
-    });
-
-  it('交付消息上「改一版」：修改意见直接交给 AI 团队，不经过私聊、私聊里不多消息', async () => {
-    const card = delivery();
-    const { api } = fakeChat([card], {
-      task: () => task({ status: 'succeeded', finishedAt: NOW }),
-      extra: (method, path) => {
-        if (method === 'POST' && path === `/task/v1/tasks/${TASK}/revisions`)
-          return json(200, task({ status: 'running' }));
-        if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
-        return undefined;
-      },
-    });
-    await openChat();
-    const region = await screen.findByRole('region', { name: `交付：${SHEET.title}` });
-    fireEvent.click(await within(region).findByRole('button', { name: /改一版/ }));
-    // jsdom 里 <dialog> 没有 showModal，里面的元素按 aria-label、hidden 查
-    const dialog = await screen.findByLabelText(`修改「${SHEET.title}」`);
-    // 不再选发给哪个 AI
-    expect(within(dialog).queryByRole('combobox', { hidden: true })).toBeNull();
-    fireEvent.change(within(dialog).getByLabelText('要怎么改'), {
-      target: { value: '标题改成山居' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 团队修改', hidden: true }));
-    await waitFor(() => expect(screen.queryByLabelText(`修改「${SHEET.title}」`)).toBeNull());
-    expect(api.bodies.find((b) => b.path.endsWith(`/tasks/${TASK}/revisions`))?.body).toEqual({
-      request: '标题改成山居',
-      annotations: [],
-      parameters: [],
-      attachments: [],
-      nodeIds: [],
-    });
-    expect(api.bodies.some((b) => b.path.includes('/conversation/'))).toBe(false);
   });
 });

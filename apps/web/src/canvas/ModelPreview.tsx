@@ -23,16 +23,13 @@ import type { PreviewFile } from '../chat/files.ts';
 function sourceOf(url: string) {
   const artifact = /^\/api\/canvas\/v1\/artifacts\/([^/?]+)\/content(?:\?|$)/.exec(url);
   const upload = /^\/api\/canvas\/v1\/uploads\/([^/?]+)(?:\?|$)/.exec(url);
-  const task = /^\/api\/task\/v1\/tasks\/([^/]+)\/files\/([^/]+)\/([^?#]+)/.exec(url);
   try {
     const parsed = ModelPreviewSource.safeParse(
       artifact
         ? { kind: 'artifact', id: artifact[1] }
         : upload
           ? { kind: 'upload', id: upload[1] }
-          : task
-            ? { kind: 'task', taskId: task[1], nodeId: task[2], path: decodeURIComponent(task[3]!) }
-            : null,
+          : null,
     );
     return parsed.success ? parsed.data : null;
   } catch {

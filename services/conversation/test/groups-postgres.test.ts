@@ -246,7 +246,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       controller.abort();
     }
   });
-  it('跨仓库实例互斥；持锁不占连接，生成失败保留已存消息并释放锁，租约过期可接手', async () => {
+  it('跨仓库实例互斥；持锁不占连接，出错保留已存消息并释放锁，租约过期可接手；跟进锁和操作锁互不挡', async () => {
     const singlePool = new pg.Pool({
       connectionString: process.env.TEST_DATABASE_URL,
       options: `-c search_path=${schema}`,
@@ -262,43 +262,47 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       entered = resolve;
     });
     let messageId = '';
-    const pending = single.withIntakeLock(dm, async (scoped) => {
+    const pending = single.withLock('message', dm, async (scoped) => {
       const message = await scoped.insertMessage({
         conversationId: dm,
         authorKind: 'user',
         authorId: owner,
-        content: 'saved before model failure',
+        content: 'saved before failure',
         status: 'complete',
       });
       messageId = message.id;
-      // 持锁期间不占连接：同一个只有 1 条连接的池，锁外的查询（如拼上下文）照样能跑
-      expect((await single.completeMessages(dm)).some((m) => m.id === message.id)).toBe(true);
+      // 持锁期间不占连接：同一个只有 1 条连接的池，锁外的查询照样能跑
+      expect((await single.listMessages(dm, 100)).some((m) => m.id === message.id)).toBe(true);
       entered();
       await gate;
-      throw new Error('model failed');
+      throw new Error('harness failed');
     });
-    const rejected = expect(pending).rejects.toThrow('model failed');
+    const rejected = expect(pending).rejects.toThrow('harness failed');
     try {
       await ready;
-      await expect(other.withIntakeLock(dm, async () => undefined)).rejects.toMatchObject({
-        code: 'intake_busy',
+      await expect(other.withLock('message', dm, async () => undefined)).rejects.toMatchObject({
+        code: 'conversation_busy',
       });
+      // 跟进一轮用另一把锁：用户操作拿着锁时也能跟进
+      await other.withLock('follow', dm, async () => undefined);
       unblock();
       await rejected;
-      expect((await other.findMessage(dm, messageId))?.content).toBe('saved before model failure');
-      await other.withIntakeLock(dm, async (scoped) => {
+      expect((await other.findMessage(dm, messageId))?.content).toBe('saved before failure');
+      await other.withLock('message', dm, async (scoped) => {
         expect(await scoped.findOwned(dm, owner)).toBeDefined();
+        // 同一个实例里嵌套拿同一把锁不会自己挡自己
+        await scoped.withLock('message', dm, async () => undefined);
       });
       // 持锁的进程崩了：租约过期后别的实例能接手
       await pool.query(
         "insert into conversation_locks(key,holder,expires_at) values($1,$2,now() - interval '1 second')",
-        [`intake:${dm}`, randomUUID()],
+        [`message:${dm}`, randomUUID()],
       );
-      await other.withIntakeLock(dm, async () => undefined);
+      await other.withLock('message', dm, async () => undefined);
       expect(
         (
           await pool.query('select count(*)::int n from conversation_locks where key=$1', [
-            `intake:${dm}`,
+            `message:${dm}`,
           ])
         ).rows[0].n,
       ).toBe(0);
@@ -309,114 +313,82 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       await singlePool.end();
     }
   });
-  it('卡片与状态原子推进，模拟中途保存失败不留孤儿卡片或错误答案', async () => {
-    const repo = createConversationRepo(pool);
-    const intake = await repo.createIntake({
-      id: randomUUID(),
-      conversationId: dm,
-      request: 'test atomic save',
-      materials: [],
-    });
-    const initial = await repo.commitIntakeReply(
-      intake!.id,
-      {
-        conversationId: dm,
-        authorKind: 'ai',
-        authorId: 'deepseek',
-        content: 'original questions',
-        status: 'complete',
-        kind: 'questions',
-        data: { intakeId: intake!.id, round: 1, answers: null },
-      },
-      { round: 1 },
-    );
-    expect((await repo.findOpenIntake(dm))?.cardMessageId).toBe(initial.id);
-    const before = (
-      await pool.query('select count(*)::int n from messages where conversation_id=$1', [dm])
-    ).rows[0].n;
-    await expect(
-      repo.commitIntakeReply(
-        intake!.id,
-        {
-          conversationId: dm,
-          authorKind: 'ai',
-          authorId: 'deepseek',
-          content: 'must roll back',
-          status: 'complete',
-        },
-        { turns: null as never },
-      ),
-    ).rejects.toBeDefined();
-    expect(
-      (await pool.query('select count(*)::int n from messages where conversation_id=$1', [dm]))
-        .rows[0].n,
-    ).toBe(before);
-    await expect(
-      repo.saveIntakeAnswers(intake!.id, initial.id, null as never, { q1: 'a' }),
-    ).rejects.toBeDefined();
-    expect((await repo.findMessage(dm, initial.id))?.data.answers).toBeNull();
-    await repo.withIntakeLock(dm, (scoped) =>
-      scoped.saveIntakeAnswers(intake!.id, initial.id, [], { q1: 'a' }),
-    );
-    expect((await repo.findMessage(dm, initial.id))?.data.answers).toEqual({ q1: 'a' });
-    await pool.query('delete from messages where id=$1', [initial.id]);
-    await pool.query('delete from intakes where id=$1', [intake!.id]);
-  });
-  it('私聊删除/替换真实事务：清除草稿上下文，保留任务快照，停止与任务识别原子互斥', async () => {
+
+  it('一轮的记录：没有正在进行的一轮才能开；只改这一轮；结束后记下下一轮接着哪一轮；开新话题清掉', async () => {
     const store = createConversationRepo(pool);
-    const conversation = await store.upsertDm(owner, 'chat-actions-test', 'actions');
-    const user = await store.insertMessage({
+    const conversation = await store.upsertDm(owner, 'turn-test', 'turns');
+    const [r1, r2] = [randomUUID(), randomUUID()];
+    const turn = {
+      runId: r1,
+      startedAt: new Date().toISOString(),
+      cursor: -1,
+      segmentId: randomUUID(),
+    };
+    expect(await store.startTurn(conversation.id, turn, '做一个网页')).toBe(true);
+    expect(await store.startTurn(conversation.id, { ...turn, runId: r2 }, '别的')).toBe(false);
+    expect((await store.activeTurns()).map((c) => c.id)).toContain(conversation.id);
+    // 只改给的字段；不是这一轮不改
+    expect(await store.updateTurn(conversation.id, r1, { cursor: 7 })).toBe(true);
+    expect(await store.updateTurn(conversation.id, r2, { cursor: 99 })).toBe(false);
+    const segmentId = randomUUID();
+    expect(await store.updateTurn(conversation.id, r1, { segmentId })).toBe(true);
+    let row = await store.find(conversation.id);
+    expect(row?.turn).toEqual({ ...turn, cursor: 7, segmentId });
+    expect(row?.topic).toBe('做一个网页');
+    await store.endTurn(conversation.id, r2, r2);
+    expect((await store.find(conversation.id))?.turn).not.toBeNull();
+    await store.endTurn(conversation.id, r1, r1);
+    row = await store.find(conversation.id);
+    expect(row).toMatchObject({ turn: null, lastRunId: r1, topic: '做一个网页' });
+    expect((await store.activeTurns()).map((c) => c.id)).not.toContain(conversation.id);
+    // 同一个话题的下一轮不改话题名
+    expect(await store.startTurn(conversation.id, { ...turn, runId: r2 }, '第二句')).toBe(true);
+    await store.endTurn(conversation.id, r2, null);
+    expect(await store.find(conversation.id)).toMatchObject({
+      lastRunId: null,
+      topic: '做一个网页',
+    });
+    await store.newTopic(conversation.id);
+    expect(await store.find(conversation.id)).toMatchObject({ lastRunId: null, topic: null });
+    // 收尾时用户发来、还没交给 AI 的话
+    const pendingUser = await store.insertMessage({
       conversationId: conversation.id,
       authorKind: 'user',
       authorId: owner,
-      content: '旧聊天正文',
+      content: '再加一句',
       status: 'complete',
-      data: { intent: 'chat' },
+      data: { pending: true },
     });
-    const reply = await store.insertMessage({
-      conversationId: conversation.id,
-      authorKind: 'ai',
-      authorId: 'test',
-      content: '旧回答',
-      status: 'complete',
-      data: { replyTo: user.id },
-    });
-    const draft = await store.createIntake({
-      id: randomUUID(),
-      conversationId: conversation.id,
-      request: '任务原话',
-      materials: [],
-    });
-    await store.setContextSummary(conversation.id, { throughSeq: reply.seq, text: '旧摘要' });
-    await store.mutateChat(conversation.id, [user, reply], {
-      id: user.id,
-      content: '新聊天正文',
-      replyId: reply.id,
-    });
-    expect((await store.findMessage(conversation.id, reply.id))?.content).toBe('');
-    // 改掉的消息已压进摘要：摘要作废
-    expect((await store.findOwned(conversation.id, owner))?.contextSummary).toBeNull();
-    await store.updateIntake(draft!.id, { status: 'confirmed' });
-    const source = await store.insertMessage({
+    await store.insertMessage({
       conversationId: conversation.id,
       authorKind: 'user',
       authorId: owner,
-      content: '任务原话',
+      content: '已交给 AI 的',
       status: 'complete',
+      data: { runId: r2 },
     });
-    expect(await store.taskSourceIds(conversation.id)).toContain(source.id);
-    expect(await store.requestStop(conversation.id, user.id)).toBe(true);
-    expect(await store.mergeMessageData(user.id, { intent: 'task' }, true)).toBeUndefined();
-    await store.mergeMessageData(source.id, { intent: 'task' });
-    expect(await store.requestStop(conversation.id, source.id)).toBe(false);
-    await store.mutateChat(conversation.id, [user, reply]);
-    expect((await store.listMessages(conversation.id, 500)).map((m) => m.id)).toEqual([source.id]);
-    await pool.query('delete from intakes where conversation_id=$1', [conversation.id]);
-    await pool.query('delete from messages where conversation_id=$1', [conversation.id]);
-    await pool.query('delete from conversations where id=$1', [conversation.id]);
+    expect((await store.pendingMessages(conversation.id)).map((m) => m.id)).toEqual([
+      pendingUser.id,
+    ]);
+    // 新的消息种类：开新话题的分隔；改消息、删消息
+    const divider = await store.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'user',
+      authorId: owner,
+      content: '开了新话题',
+      status: 'complete',
+      kind: 'topic',
+      data: {},
+    });
+    expect(await store.updateMessage(divider.id, { content: 'x' })).toMatchObject({
+      content: 'x',
+    });
+    await store.deleteMessage(divider.id);
+    expect(await store.updateMessage(divider.id, { content: 'y' })).toBeUndefined();
+    await store.deleteConversation(conversation.id);
   });
 
-  it('删除私聊：列出全部附件、认出已交付的任务，整段对话连消息和接需求记录一起真删除', async () => {
+  it('删除私聊：列出全部附件，整段对话连消息一起真删除；再点开是全新的私聊', async () => {
     const store = createConversationRepo(pool);
     const conversation = await store.upsertDm(owner, 'delete-dm-test', 'to delete');
     const file = (id: string) => ({ id, name: `${id}.png`, size: 3, contentType: 'image/png' });
@@ -437,38 +409,42 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       status: 'failed',
       data: { attachments: [file(a)] },
     });
-    const taskId = randomUUID();
-    await store.insertMessage({
-      conversationId: conversation.id,
-      authorKind: 'ai',
-      authorId: 'test',
-      content: '交付了',
-      status: 'complete',
-      kind: 'delivery',
-      data: { taskId },
-    });
-    await store.createIntake({
-      id: randomUUID(),
-      conversationId: conversation.id,
-      request: '做个海报',
-      materials: [],
-    });
     expect((await store.attachmentIds(conversation.id)).sort()).toEqual([a, b].sort());
-    expect(await store.hasDelivery(conversation.id, taskId)).toBe(true);
-    expect(await store.hasDelivery(conversation.id, randomUUID())).toBe(false);
     await store.deleteConversation(conversation.id);
     expect(await store.findOwned(conversation.id, owner)).toBeUndefined();
-    const left = await pool.query(
-      `select (select count(*)::int from messages where conversation_id=$1) messages,
-              (select count(*)::int from intakes where conversation_id=$1) intakes`,
-      [conversation.id],
-    );
-    expect(left.rows[0]).toEqual({ messages: 0, intakes: 0 });
-    // 再点开这个 AI 是全新的私聊
+    expect(
+      (
+        await pool.query('select count(*)::int n from messages where conversation_id=$1', [
+          conversation.id,
+        ])
+      ).rows[0].n,
+    ).toBe(0);
     const fresh = await store.upsertDm(owner, 'delete-dm-test', 'to delete');
     expect(fresh.id).not.toBe(conversation.id);
     expect(await store.attachmentIds(fresh.id)).toEqual([]);
   });
+
+  it('一轮的迁移可以回滚再重建：开新话题的分隔先删掉', async () => {
+    const root = new URL('../migrations/', import.meta.url);
+    const sql = await readFile(new URL('20261114160000_turns.sql', root), 'utf8');
+    const conversation = await createConversationRepo(pool).upsertDm(owner, 'rollback', 'r');
+    await pool.query(
+      "insert into messages(conversation_id,author_kind,author_id,content,status,kind) values($1,'user',$2,'新话题','complete','topic')",
+      [conversation.id, owner],
+    );
+    await pool.query(sql.split('-- migrate:down')[1]!);
+    expect(
+      (
+        await pool.query('select count(*)::int n from messages where conversation_id=$1', [
+          conversation.id,
+        ])
+      ).rows[0].n,
+    ).toBe(0);
+    await pool.query(sql.split('-- migrate:up')[1]!.split('-- migrate:down')[0]!);
+    expect((await createConversationRepo(pool).find(conversation.id))?.turn).toBeNull();
+    await pool.query('delete from conversations where id=$1', [conversation.id]);
+  });
+
   it('Contract 与 Expand 可依次回滚重建，原有 DM 数据不丢', async () => {
     await pool.query("delete from conversations where kind='group'");
     const root = new URL('../migrations/', import.meta.url);

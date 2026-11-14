@@ -1,82 +1,12 @@
-// 私聊的输入框：「＋」里作为任务发布、添加文件、只用国内模型；文件也可以粘贴进来（拖进对话区由页面处理）。
+// 私聊的输入框：可以添加文件（也可以粘贴进来，拖进对话区由页面处理）。AI 正在做时照样能发——
+// 发的话是插话；这时旁边多一个停止按钮。文件只能在一轮开始时交给 AI，所以一轮进行中不能带文件发送。
 // 有文件还在上传或上传失败时不能发送。
-import { ArrowUp, ListChecks, Paperclip, Plus, Play, Square, X } from 'lucide-react';
+import { ArrowUp, Paperclip, Square } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { PendingFiles } from './Attachments.tsx';
-import { ModelScopeToggle } from './ModelScopeToggle.tsx';
 import type { useAttachments } from './use-attachments.ts';
 
 type Attachments = ReturnType<typeof useAttachments>;
-
-function ComposerMenu({
-  asTask,
-  onToggleTask,
-  onPickFiles,
-  disabled,
-}: {
-  asTask: boolean;
-  onToggleTask: () => void;
-  onPickFiles: () => void;
-  disabled: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const item =
-    'flex items-center gap-2.5 rounded-item border-0 bg-transparent px-3 py-2.5 text-left text-ink hover:bg-glass-active';
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        disabled={disabled}
-        aria-label="更多发送方式"
-        aria-expanded={open}
-        aria-haspopup="menu"
-        className="flex size-11 items-center justify-center rounded-full border-0 bg-transparent text-ink-muted hover:bg-glass-strong hover:text-ink disabled:opacity-45"
-      >
-        <Plus size={19} aria-hidden="true" />
-      </button>
-      {open && (
-        <div
-          role="menu"
-          className="glass absolute bottom-12 left-0 z-10 flex w-60 flex-col rounded-card bg-glass-strong p-1.5"
-        >
-          <button
-            type="button"
-            role="menuitemcheckbox"
-            aria-checked={asTask}
-            onClick={() => {
-              onToggleTask();
-              setOpen(false);
-            }}
-            className={item}
-          >
-            <ListChecks size={17} aria-hidden="true" />
-            <span className="flex flex-col">
-              <span className="text-[14px] font-medium">作为任务发布</span>
-              <span className="text-[12px] text-ink-muted">交给 AI 团队做出成果</span>
-            </span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              onPickFiles();
-              setOpen(false);
-            }}
-            className={item}
-          >
-            <Paperclip size={17} aria-hidden="true" />
-            <span className="flex flex-col">
-              <span className="text-[14px] font-medium">添加文件</span>
-              <span className="text-[12px] text-ink-muted">图片、文档、音视频都行</span>
-            </span>
-          </button>
-          <ModelScopeToggle className={item} />
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function Composer({
   locked,
@@ -86,9 +16,9 @@ export function Composer({
   attachments,
   onSend,
   textOnly = false,
+  turnActive = false,
   onStop,
   stopping = false,
-  onContinue,
 }: {
   locked: boolean;
   sending: boolean;
@@ -97,33 +27,25 @@ export function Composer({
   inputRef: RefObject<HTMLTextAreaElement | null>;
   attachments: Attachments;
   /** 发出去；返回 false 表示没发成，草稿要还回来 */
-  onSend: (content: string, asTask: boolean) => Promise<boolean>;
-  /** 群聊基础阶段只发文字，不显示文件或任务入口。 */
+  onSend: (content: string) => Promise<boolean>;
+  /** 群聊基础阶段只发文字，不显示文件入口。 */
   textOnly?: boolean;
+  /** AI 正在做这一轮：发的话是插话，不能带文件 */
+  turnActive?: boolean;
   onStop?: (() => void) | undefined;
   stopping?: boolean;
-  onContinue?: (() => void) | undefined;
 }) {
   const [draft, setDraft] = useState('');
-  const [asTask, setAsTask] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
-  const blocked = attachments.uploading || attachments.failed;
-  const canContinue =
-    Boolean(onContinue) &&
-    !locked &&
-    !blocked &&
-    !draft.trim() &&
-    attachments.files.length === 0 &&
-    !asTask;
+  const hasFiles = attachments.files.length > 0;
+  const blocked = attachments.uploading || attachments.failed || (turnActive && hasFiles);
   const canSend = !locked && !blocked && draft.trim() !== '';
 
   async function send() {
     const content = draft.trim();
     if (!canSend) return;
     setDraft('');
-    const ok = await onSend(content, asTask);
-    if (ok) setAsTask(false);
-    else setDraft(content);
+    if (!(await onSend(content))) setDraft(content);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -135,15 +57,10 @@ export function Composer({
   }
 
   const placeholder = sending
-    ? textOnly
-      ? '发送中…'
-      : 'AI 正在回复…'
-    : (hint ??
-      (attachments.files.length > 0
-        ? '说说要拿这些文件做什么…'
-        : asTask
-          ? '说说要交付什么，比如：给我的民宿写个官网首页'
-          : '发消息…'));
+    ? '发送中…'
+    : turnActive
+      ? 'AI 正在做，可以随时插话…'
+      : (hint ?? (hasFiles ? '说说要拿这些文件做什么…' : '发消息…'));
 
   return (
     <>
@@ -154,12 +71,16 @@ export function Composer({
       )}
       <div className="flex items-end gap-1 rounded-card bg-glass-active p-2 shadow-edge-strong">
         {!textOnly && (
-          <ComposerMenu
-            asTask={asTask}
-            onToggleTask={() => setAsTask((v) => !v)}
-            onPickFiles={() => picker.current?.click()}
-            disabled={locked}
-          />
+          <button
+            type="button"
+            onClick={() => picker.current?.click()}
+            disabled={locked || turnActive}
+            aria-label="添加文件"
+            title={turnActive ? '这一轮做完才能带文件' : '添加文件'}
+            className="flex size-11 items-center justify-center rounded-full border-0 bg-transparent text-ink-muted hover:bg-glass-strong hover:text-ink disabled:opacity-45"
+          >
+            <Paperclip size={18} aria-hidden="true" />
+          </button>
         )}
         <input
           ref={picker}
@@ -174,19 +95,6 @@ export function Composer({
         />
         <div className="flex min-w-0 flex-1 flex-col pt-1">
           <PendingFiles files={attachments.files} onRemove={attachments.remove} />
-          {asTask && (
-            <span className="inline-flex items-center gap-1 self-start rounded-full bg-solid py-1 pl-2.5 pr-1 text-[12px] font-medium text-on-solid">
-              任务
-              <button
-                type="button"
-                onClick={() => setAsTask(false)}
-                aria-label="不作为任务发布"
-                className="flex size-4 items-center justify-center rounded-full border-0 bg-transparent p-0 text-on-solid"
-              >
-                <X size={12} aria-hidden="true" />
-              </button>
-            </span>
-          )}
           <label htmlFor="dm-input" className="sr-only">
             消息
           </label>
@@ -210,30 +118,26 @@ export function Composer({
             className="field-sizing-content max-h-40 min-h-10 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-1 py-2 text-[14.5px] text-ink outline-none placeholder:text-ink-muted"
           />
         </div>
+        {turnActive && onStop && (
+          <button
+            type="button"
+            onClick={onStop}
+            disabled={stopping}
+            aria-label={stopping ? '正在停下' : '停下这一轮'}
+            title="停下这一轮（已经做出来的会存下）"
+            className="flex size-11 shrink-0 items-center justify-center rounded-full border-0 bg-solid text-on-solid disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <Square size={14} fill="currentColor" aria-hidden="true" />
+          </button>
+        )}
         <button
           type="button"
-          onClick={() => (onStop ? onStop() : canContinue ? onContinue?.() : void send())}
-          disabled={onStop ? stopping : !canSend && !canContinue}
-          aria-label={
-            onStop
-              ? stopping
-                ? '正在停止'
-                : '停止回复'
-              : canContinue
-                ? '继续回复'
-                : asTask
-                  ? '发布任务'
-                  : '发送'
-          }
+          onClick={() => void send()}
+          disabled={!canSend}
+          aria-label={turnActive ? '插话' : '发送'}
           className="flex size-11 shrink-0 items-center justify-center rounded-full border-0 bg-accent text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
         >
-          {onStop ? (
-            <Square size={15} fill="currentColor" aria-hidden="true" />
-          ) : canContinue ? (
-            <Play size={18} aria-hidden="true" />
-          ) : (
-            <ArrowUp size={18} strokeWidth={2.2} aria-hidden="true" />
-          )}
+          <ArrowUp size={18} strokeWidth={2.2} aria-hidden="true" />
         </button>
       </div>
       <p className="m-0 px-1 text-[11.5px] text-ink-muted">
@@ -241,9 +145,11 @@ export function Composer({
           ? '文件传完就能发送'
           : attachments.failed
             ? '有文件没传上去，移除后再发送'
-            : textOnly
-              ? 'Enter 发送 · Shift + Enter 换行'
-              : 'Enter 发送 · Shift + Enter 换行 · 文件可以拖进来或粘贴'}
+            : turnActive && hasFiles
+              ? '这一轮做完才能带文件发送，或者先停下这一轮'
+              : textOnly
+                ? 'Enter 发送 · Shift + Enter 换行'
+                : 'Enter 发送 · Shift + Enter 换行 · 文件可以拖进来或粘贴'}
       </p>
     </>
   );

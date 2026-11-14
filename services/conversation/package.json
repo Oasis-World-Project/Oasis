@@ -2,7 +2,7 @@
   "name": "@oasis/conversation",
   "version": "0.0.0",
   "private": true,
-  "description": "群聊与私聊：群、成员、邀请、消息、@、发言方式，调 Jev 决定谁接话",
+  "description": "私聊和群聊：私聊里的 AI 就是干活的主 AI（一轮是 harness 的一次运行）；群聊的群、成员、邀请和消息",
   "type": "module",
   "files": [
     "dist",

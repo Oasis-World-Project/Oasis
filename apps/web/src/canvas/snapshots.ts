@@ -12,18 +12,16 @@ export const reviewName = (artifact: Pick<ArtifactBody, 'name' | 'application'>)
 
 const MAX_SIDE = 1600;
 
-/** 演示文稿和 Word 的配套 PDF：同一任务、同一节点、同名的 .pdf（交付时系统配好；成果页预览用同一份） */
+/** 演示文稿和 Word 的配套 PDF：同一话题里同名的 .pdf（交付时系统配好；成果页预览用同一份） */
 export function pdfCompanion(
-  artifact: Pick<ArtifactBody, 'path' | 'taskId' | 'nodeId'>,
+  artifact: Pick<ArtifactBody, 'path' | 'sessionId'>,
   siblings: ArtifactBody[],
 ): ArtifactBody | undefined {
   const office = /\.(pptx?|docx?)$/i;
   if (!office.test(artifact.path)) return undefined;
   const found = siblings.filter(
     (item) =>
-      item.path === artifact.path.replace(office, '.pdf') &&
-      item.taskId === artifact.taskId &&
-      (!artifact.nodeId || item.nodeId === artifact.nodeId),
+      item.path === artifact.path.replace(office, '.pdf') && item.sessionId === artifact.sessionId,
   );
   return found.length === 1 ? found[0] : undefined;
 }

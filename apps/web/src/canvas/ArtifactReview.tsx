@@ -1,8 +1,7 @@
 // 成果页的预览加批注（外观照原型 ⑨⑩）：顶栏的批注图标打开批注模式——底部悬浮工具条（圈 / 画笔 / 点 / 完成），
-// 右侧批注列表（点一条翻到那一页、跳到那一刻；可以删），画好一处就在侧栏写意见，写好立即保存；列表底部「发给 AI 团队修改」。
+// 右侧批注列表（点一条翻到那一页、跳到那一刻；可以删），画好一处就在侧栏写意见，写好立即保存；列表底部「让 AI 改」。
 import type { Annotation, ArtifactBody } from '@oasis/contracts/canvas';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { RevisionParameter } from '@oasis/contracts/task';
 import {
   Camera,
   Circle,
@@ -26,7 +25,7 @@ import { AnnotatedPreview, type Drawn, type Jump } from './AnnotatedPreview.tsx'
 import type { Tool } from './AnnotationLayer.tsx';
 import { frameOrder, liveSurface, nextNumber, surfaceOf, whereOf } from './annotations.ts';
 import { ParameterPanel } from './ParameterPanel.tsx';
-import { fieldsFor, mediaLook, type Values } from './parameters.ts';
+import { fieldsFor, mediaLook, type RevisionParameter, type Values } from './parameters.ts';
 
 const TOOLS: { tool: Tool; label: string; Icon: typeof Circle }[] = [
   { tool: 'ellipse', label: '圈', Icon: Circle },
@@ -442,8 +441,7 @@ export function ArtifactReview({
               onClick={() => onRevise([])}
               className="mt-auto inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-full border-0 bg-accent px-4 text-[13.5px] font-medium text-on-accent"
             >
-              <Send size={14} aria-hidden="true" />
-              发给 AI 团队修改
+              <Send size={14} aria-hidden="true" />让 AI 改
             </button>
           )}
         </aside>

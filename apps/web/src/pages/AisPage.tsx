@@ -1,4 +1,4 @@
-// AI 们：14 个对话 AI 可以私聊；图像、视频等工具模型在后续版本列出（只能查看）。
+// AI 们：14 个对话 AI 可以私聊；「只用国内模型」开关；图像、视频等工具模型在后续版本列出（只能查看）。
 import type { ModelEntry } from '@oasis/contracts/agent';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
@@ -6,6 +6,7 @@ import { MessageCircle } from 'lucide-react';
 import { ApiError } from '../api/client.ts';
 import { createDm, dmsQuery, modelsQuery } from '../api/queries.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
+import { ModelScopeToggle } from '../ui/ModelScopeToggle.tsx';
 import { PageHeader } from '../ui/PageHeader.tsx';
 import { EmptyHint, Panel } from '../ui/Panel.tsx';
 
@@ -71,6 +72,7 @@ export function AisPage() {
         title="AI 们"
         description="对话 AI 可以私聊、拉进群、单独设置；图像、视频等工具模型只能查看，由对话 AI 在干活时调用。"
       />
+      <ModelScopeToggle />
       <Panel title={`大语言模型${llms.length ? ` · ${llms.length}` : ''}`}>
         {isPending && <EmptyHint>正在加载模型目录…</EmptyHint>}
         {error && (

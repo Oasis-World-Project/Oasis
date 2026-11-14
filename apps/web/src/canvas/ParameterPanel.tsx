@@ -1,8 +1,13 @@
 // 参数面板：成品参数的表单，每项默认「不变」。
 // 能预览的改了就在画面上看到（近似效果）；填好后「按这些参数改一版」交给修改对话框。
-import type { RevisionParameter } from '@oasis/contracts/task';
 import { RotateCcw, Sparkles, X } from 'lucide-react';
-import { formatValue, toParameters, type Field, type Values } from './parameters.ts';
+import {
+  formatValue,
+  toParameters,
+  type Field,
+  type RevisionParameter,
+  type Values,
+} from './parameters.ts';
 
 const input =
   'rounded-item border-0 bg-glass-active px-3 py-1.5 text-[13px] text-ink shadow-edge-strong outline-none focus-visible:outline-2 focus-visible:outline-accent';

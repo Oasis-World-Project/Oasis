@@ -1,17 +1,19 @@
-// 「发给 AI 团队修改」（2026-11-05 起不经过私聊）：写下修改意见、可附文件，直接交给这个任务的
-// AI 团队，在原任务里接着原会话改；改好后画布里的成果原地更新。做出这一版的私聊删了也照样能改；
-// 想知道进度，在任意私聊里问 AI 就行。
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+// 「让 AI 改」：写下修改意见、可附文件，连同这个话题里成果上的批注（圈画过的画面合成标注截图）
+// 作为一条消息发到做这个成果的私聊里。系统把要改的成果交给 AI（还在它工作目录里的直接改，
+// 之前话题做的拷一份进去），AI 接着改；改好的新版替换画布里的这一份。发出去后回到私聊看它改。
+import type { ArtifactBody } from '@oasis/contracts/canvas';
+import { MAX_ATTACHMENTS } from '@oasis/contracts/conversation';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { Paperclip, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { MAX_ATTACHMENTS } from '@oasis/contracts/conversation';
-import type { RevisionNote, RevisionParameter } from '@oasis/contracts/task';
 import { ApiError } from '../api/client.ts';
-import { artifactsQuery, reviseTask, taskQuery, tasksQuery } from '../api/queries.ts';
+import { dmsQuery, messagesQuery, sendMessage } from '../api/queries.ts';
 import { uploadFile } from '../api/upload.ts';
 import { PendingFiles } from '../chat/Attachments.tsx';
 import { useAttachments } from '../chat/use-attachments.ts';
-import { toRevisionNotes } from './annotations.ts';
+import { revisionText, toRevisionNotes, type RevisionNote } from './annotations.ts';
+import type { RevisionParameter } from './parameters.ts';
 import { buildSnapshots, reviewName } from './snapshots.ts';
 
 /** 标注截图最多带几张（和自己附的文件合计不超过一条消息的上限） */
@@ -21,16 +23,15 @@ const field =
   'w-full rounded-item border-0 bg-glass-active px-3.5 py-2.5 text-[14px] text-ink shadow-edge-strong outline-none focus-visible:outline-2 focus-visible:outline-accent';
 
 export function RevisePanel({
-  taskId,
-  taskTitle,
+  artifact,
+  siblings,
   parameters = [],
-  nodeId,
   onClose,
 }: {
-  taskId: string;
-  taskTitle: string;
-  /** 当前打开的成果是哪个节点交出的（从成果页发起时才有） */
-  nodeId?: string;
+  /** 当前打开的成果 */
+  artifact: ArtifactBody;
+  /** 同一个话题的成果：上面的批注一起带上 */
+  siblings: ArtifactBody[];
   /** 从参数面板来的成品参数 */
   parameters?: RevisionParameter[];
   onClose: () => void;
@@ -41,12 +42,13 @@ export function RevisePanel({
     if (el && !el.open) el.showModal?.();
   }, []);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [request, setRequest] = useState('');
   const files = useAttachments();
   const fileInput = useRef<HTMLInputElement>(null);
-  // 这个任务的成果上的批注：默认一起带上
-  const { data: artifacts = [] } = useQuery(artifactsQuery(taskId));
-  const noted = artifacts
+  const name = reviewName(artifact);
+  // 这个话题的成果上的批注：默认一起带上
+  const noted = siblings
     .filter((a) => a.annotations.length > 0)
     .map((a) => ({ ...a, name: reviewName(a) }));
   const noteCount = noted.reduce((n, a) => n + a.annotations.length, 0);
@@ -55,41 +57,44 @@ export function RevisePanel({
 
   const send = useMutation({
     mutationFn: async () => {
-      let annotations: RevisionNote[] = [];
+      let notes: RevisionNote[] = [];
       const shots: string[] = [];
       if (withNotes && noteCount > 0) {
         setStage('正在合成标注截图…');
         const room = Math.min(MAX_SNAPSHOTS, MAX_ATTACHMENTS - files.ids.length);
         const built =
           room > 0
-            ? await buildSnapshots(noted, artifacts, room)
+            ? await buildSnapshots(noted, siblings, room)
             : { files: [], nameOf: () => undefined };
         setStage('正在上传标注截图…');
         for (const shot of built.files) shots.push((await uploadFile(shot, () => {})).id);
-        annotations = toRevisionNotes(noted, built.nameOf);
+        notes = toRevisionNotes(noted, built.nameOf);
       }
       setStage(null);
-      // 意见针对哪些节点：批注所在成果的节点；参数来自当前成果，或者没批注时意见针对的就是当前成果
-      const nodeIds = new Set(
-        annotations.length ? noted.flatMap((a) => (a.nodeId ? [a.nodeId] : [])) : ([] as string[]),
-      );
-      if (nodeId && (parameters.length > 0 || nodeIds.size === 0)) nodeIds.add(nodeId);
-      await reviseTask(taskId, {
-        request: request.trim(),
-        annotations,
-        parameters,
+      // 要改的成果：当前这份，加上带了批注的
+      const artifacts = [
+        ...new Set([artifact.id, ...(notes.length ? noted.map((a) => a.id) : [])]),
+      ];
+      return sendMessage(artifact.conversationId, {
+        content: revisionText(request.trim() || `改一下「${name}」`, notes, parameters),
         attachments: [...files.ids, ...shots],
-        nodeIds: [...nodeIds],
+        artifacts,
       });
     },
     onSettled: () => setStage(null),
     onSuccess: async () => {
       files.clear();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: tasksQuery.queryKey }),
-        queryClient.invalidateQueries({ queryKey: taskQuery(taskId).queryKey }),
+        queryClient.invalidateQueries({
+          queryKey: messagesQuery(artifact.conversationId).queryKey,
+        }),
+        queryClient.invalidateQueries({ queryKey: dmsQuery.queryKey }),
       ]);
       onClose();
+      await navigate({
+        to: '/dms/$conversationId',
+        params: { conversationId: artifact.conversationId },
+      });
     },
   });
 
@@ -105,7 +110,7 @@ export function RevisePanel({
   return (
     <dialog
       ref={dialog}
-      aria-label={`修改「${taskTitle}」`}
+      aria-label={`让 AI 改「${name}」`}
       onClose={onClose}
       onCancel={onClose}
       className="m-auto max-h-[88vh] w-[min(92vw,560px)] max-w-none overflow-hidden rounded-panel border-0 bg-transparent p-0 text-ink backdrop:bg-scrim backdrop:backdrop-blur-sm"
@@ -116,7 +121,7 @@ export function RevisePanel({
       >
         <header className="flex items-center gap-3 border-b border-hairline px-6 py-4">
           <h2 className="m-0 min-w-0 flex-1 truncate text-[17px] font-medium">
-            修改「{taskTitle}」
+            让 AI 改「{name}」
           </h2>
           <button
             type="button"
@@ -134,7 +139,7 @@ export function RevisePanel({
               value={request}
               onChange={(e) => setRequest(e.target.value)}
               rows={5}
-              maxLength={8000}
+              maxLength={4000}
               className={`${field} resize-y`}
               placeholder="比如：标题改成「山居」，第二段再短一点，配图换成夜景"
             />
@@ -160,7 +165,7 @@ export function RevisePanel({
                 className="mt-1 accent-accent"
               />
               <span>
-                带上画布上的 {noteCount} 条批注
+                带上这个话题里的 {noteCount} 条批注
                 <span className="block text-[12px] text-ink-muted">
                   每条批注写明在哪个文件、哪里；圈画过的画面会合成标注截图一起发过去
                 </span>
@@ -190,9 +195,9 @@ export function RevisePanel({
             </button>
           </div>
           <p className="m-0 text-[12.5px] leading-relaxed text-ink-muted">
-            直接交给这个任务的 AI
-            团队，接着原来的工作流改，只改你提到的地方。改好后画布里的成果直接更新成新版，旧版本不保留；想知道进度，在任意私聊里问
-            AI 就行。
+            发到做这个成果的私聊里，AI
+            接着改，只改你提到的地方；发出去后会回到私聊，可以看它改、随时插话。
+            改好的新版替换画布里的这一份，上面的批注随之清掉。
           </p>
           {send.isError && (
             <p role="alert" className="m-0 text-[13px] text-accent">
@@ -215,7 +220,7 @@ export function RevisePanel({
           >
             {stage ??
               (send.isPending ? '正在发…' : null) ??
-              (files.uploading ? '文件还在上传…' : '发给 AI 团队修改')}
+              (files.uploading ? '文件还在上传…' : '发给 AI 改')}
           </button>
         </footer>
       </form>

@@ -49,7 +49,6 @@ async function startGateway(overrides: Record<string, string> = {}) {
     BILLING_URL: upstreamUrl,
     AGENT_URL: unreachableUrl,
     CONVERSATION_URL: unreachableUrl,
-    TASK_URL: unreachableUrl,
     CANVAS_URL: unreachableUrl,
     GATEWAY_ALLOWED_ORIGINS: ORIGIN,
     ...overrides,
@@ -173,6 +172,6 @@ describe('路由', () => {
   });
 
   it('上游地址缺失时拒绝启动', async () => {
-    await expect(startGateway({ TASK_URL: '' })).rejects.toThrow(/TASK_URL/);
+    await expect(startGateway({ CANVAS_URL: '' })).rejects.toThrow(/CANVAS_URL/);
   });
 });

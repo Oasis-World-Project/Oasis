@@ -130,46 +130,50 @@ describe('安全格式预览', () => {
     expect(await screen.findByRole('button', { name: '运行网页' })).toBeTruthy();
     expect(screen.getByText('只看内容：不运行网页里的脚本。')).toBeTruthy();
   });
-  it('PPT 仅匹配同一节点的配套 PDF，上传缺少 PDF 时可下载', async () => {
+  it('PPT 用给它配好的 PDF 预览，上传缺少 PDF 时可下载', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response('%PDF-1.7')),
     );
     const { rerender } = render(
       <PreviewBody
-        file={{ ...file, path: '汇报.pptx', url: '/api/task/v1/tasks/t/files/node/out/汇报.pptx' }}
+        file={{
+          ...file,
+          path: '汇报.pptx',
+          url: '/api/canvas/v1/artifacts/a/content',
+          pdfUrl: '/api/canvas/v1/artifacts/b/content',
+        }}
       />,
     );
     expect((await screen.findByTitle('汇报.pptx')).getAttribute('src')).toBe(
-      '/api/task/v1/tasks/t/files/node/out/汇报.pdf',
+      '/api/canvas/v1/artifacts/b/content',
     );
     rerender(
       <PreviewBody file={{ ...file, path: '上传.pptx', url: '/api/canvas/v1/uploads/id' }} />,
     );
     expect(screen.getByText(/未找到同一来源/)).toBeTruthy();
   });
-  it('Word 有配套 PDF 就按 PDF 显示；没有就退回正文预览', async () => {
-    const url = '/api/task/v1/tasks/t/files/node/out/方案.docx';
+  it('Word 有配套 PDF 就按 PDF 显示；PDF 打不开就退回正文预览', async () => {
+    const url = '/api/canvas/v1/artifacts/a/content';
+    const pdfUrl = '/api/canvas/v1/artifacts/b/content';
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response('%PDF-1.7')),
     );
-    const { unmount } = render(<PreviewBody file={{ ...file, path: '方案.docx', url }} />);
-    expect((await screen.findByTitle('方案.docx')).getAttribute('src')).toBe(
-      '/api/task/v1/tasks/t/files/node/out/方案.pdf',
-    );
+    const { unmount } = render(<PreviewBody file={{ ...file, path: '方案.docx', url, pdfUrl }} />);
+    expect((await screen.findByTitle('方案.docx')).getAttribute('src')).toBe(pdfUrl);
     unmount();
     vi.stubGlobal(
       'fetch',
       vi.fn(async (target: string, init?: RequestInit) =>
         init?.method === 'POST'
           ? Response.json({ kind: 'html', html: '<p>正文内容</p>' })
-          : target.endsWith('.pdf')
+          : target === pdfUrl
             ? new Response('没有这个文件', { status: 404 })
             : new Response('docx-bytes'),
       ),
     );
-    render(<PreviewBody file={{ ...file, path: '方案.docx', url }} />);
+    render(<PreviewBody file={{ ...file, path: '方案.docx', url, pdfUrl }} />);
     expect(await screen.findByText(/Word 正文预览/)).toBeTruthy();
     expect(screen.getByTitle('方案.docx').getAttribute('srcdoc')).toContain('正文内容');
   });

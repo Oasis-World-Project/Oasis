@@ -1,108 +1,46 @@
-// conversation：群聊与私聊（MVP 先做私聊）。消息存库，AI 回复经 model-gateway 流式返回；
-// 私聊里认出任务就转去接需求，确认任务单后交给 task。
+// conversation：私聊和群聊。私聊里的 AI 就是干活的主 AI：用户说一句开一轮（harness 的一次运行），
+// 一轮进行中说的话是插话；这里跟进每一轮，把 AI 说的话和做的步骤写进消息，结束时成品登记进画布。
 import { fileURLToPath } from 'node:url';
-import { TASK_STREAM, TaskDeleted, TaskStatusChanged } from '@oasis/contracts/events';
-import {
-  connectPostgresAndEventBus,
-  createServiceClient,
-  startEventConsumer,
-  startService,
-} from '@oasis/service-kit';
+import { createPostgres, createServiceClient, startService } from '@oasis/service-kit';
 import { registerRoutes } from './api/routes.ts';
 import { registerGroupRoutes } from './api/group-routes.ts';
-import { createGroupRepo } from './repo/group-repo.ts';
-import { createGroupService } from './service/group-service.ts';
 import { conversationEnv } from './config.ts';
 import { createConversationRepo } from './repo/conversation-repo.ts';
+import { createGroupRepo } from './repo/group-repo.ts';
 import { createDmService } from './service/dm-service.ts';
-import { createContext } from './service/context.ts';
-import { createIntakeService } from './service/intake-service.ts';
-import { createMaterialReader } from './service/materials.ts';
-import { createTaskNotices } from './service/task-notices.ts';
+import { createGroupService } from './service/group-service.ts';
+import { createTurns } from './service/turns.ts';
+
+/** 多久看一次有没有别的实例丢下的一轮（它的跟进租约过期后接手） */
+const SWEEP_MS = 30_000;
 
 await startService({
   name: 'conversation',
   env: conversationEnv,
-  resources: async (ctx) => {
-    const { postgres, eventBus } = await connectPostgresAndEventBus(ctx);
-    // 任务的结果回到私聊：交付消息、需要处理的提醒
-    const notices = createTaskNotices({
-      repo: createConversationRepo(postgres.pool),
-      task: createServiceClient('task', ctx.config.TASK_URL, { timeoutMs: 10_000 }),
-      logger: ctx.logger,
-    });
-    const taskStatus = startEventConsumer({
-      connection: eventBus.connection,
-      stream: TASK_STREAM,
-      durable: 'conversation-task-status',
-      filterSubject: TaskStatusChanged.type,
-      logger: ctx.logger,
-      handle: (envelope) =>
-        notices.onStatusChanged(envelope.id, TaskStatusChanged.data.parse(envelope.data)),
-    });
-    // 任务被用户删除：它在私聊里的卡片和交付消息一起删掉（真删除）
-    const taskDeleted = startEventConsumer({
-      connection: eventBus.connection,
-      stream: TASK_STREAM,
-      durable: 'conversation-task-deleted',
-      filterSubject: TaskDeleted.type,
-      logger: ctx.logger,
-      handle: (envelope) => notices.onDeleted(TaskDeleted.data.parse(envelope.data)),
-    });
-    return { postgres, eventBus, taskStatus, taskDeleted };
-  },
+  resources: async ({ config, logger }) => ({
+    postgres: createPostgres(config.DATABASE_URL, logger),
+  }),
   migrationsDir: fileURLToPath(new URL('../migrations', import.meta.url)),
   routes: (app, { config, resources, logger }) => {
     const repo = createConversationRepo(resources.postgres.pool);
-    const agent = createServiceClient('agent', config.AGENT_URL, { timeoutMs: 3_000 });
+    const agent = createServiceClient('agent', config.AGENT_URL, { timeoutMs: 5_000 });
     const modelGateway = createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
-      timeoutMs: config.MODEL_GATEWAY_TIMEOUT_MS,
+      timeoutMs: 10_000,
     });
-    const context = createContext({
-      repo,
-      modelGateway,
-      summaryModel: config.CONTEXT_SUMMARY_MODEL,
-      logger,
-    });
-    const task = createServiceClient('task', config.TASK_URL, { timeoutMs: 10_000 });
-    const canvas = createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 5_000 });
-    const intake = createIntakeService({
-      repo,
-      context,
-      agent,
-      modelGateway,
-      task,
-      readMaterials: createMaterialReader({
-        canvas,
-        inspector: createServiceClient('inspector', config.INSPECTOR_URL, { timeoutMs: 45_000 }),
-      }),
-      config: {
-        detectModel: config.TASK_DETECT_MODEL,
-        detectHigh: config.TASK_DETECT_HIGH,
-        detectLow: config.TASK_DETECT_LOW,
-        fallbackModel: config.INTAKE_FALLBACK_MODEL,
-        maxRounds: config.INTAKE_MAX_ROUNDS,
-        maxTokens: config.INTAKE_MAX_TOKENS,
-      },
-      logger,
-    });
-    const dms = createDmService({
+    // 登记成品要从 harness 复制文件，可能要一会儿
+    const canvas = createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 600_000 });
+    const harness = createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 30_000 });
+    const turns = createTurns({
       repo,
       agent,
-      modelGateway,
+      harness,
       canvas,
-      task,
-      intake,
-      context,
-      replyMaxTokens: config.REPLY_MAX_TOKENS,
-      detect: {
-        model: config.TASK_DETECT_MODEL,
-        high: config.TASK_DETECT_HIGH,
-        low: config.TASK_DETECT_LOW,
-      },
+      modelGateway,
       logger,
+      pollMs: config.TURN_POLL_MS,
     });
-    registerRoutes(app, dms, intake);
+    const dms = createDmService({ repo, agent, harness, canvas, modelGateway, turns, logger });
+    registerRoutes(app, dms);
     registerGroupRoutes(
       app,
       createGroupService(
@@ -114,5 +52,16 @@ await startService({
       ),
       config.GROUP_STREAMS_PER_USER,
     );
+    const resume = () =>
+      void turns
+        .resumeAll()
+        .catch((err: unknown) => logger.warn({ err }, '接着跟进没结束的轮失败，稍后再试'));
+    const sweep = setInterval(resume, SWEEP_MS);
+    sweep.unref();
+    app.addHook('onReady', async () => resume());
+    app.addHook('onClose', async () => {
+      clearInterval(sweep);
+      await turns.close();
+    });
   },
 });

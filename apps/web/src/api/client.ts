@@ -33,7 +33,7 @@ export function isConnectionError(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 0 || error.status >= 500);
 }
 
-export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {

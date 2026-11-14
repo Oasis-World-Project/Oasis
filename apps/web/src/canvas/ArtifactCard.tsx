@@ -1,4 +1,4 @@
-// 画布上的一张成果卡片（照原型 ⑧）：缩略图（图片、视频直接显示，其他按类型画个示意）、名字、来自哪个任务、做它的 AI。
+// 画布上的一张成果卡片（照原型 ⑧）：缩略图（图片、视频直接显示，其他按类型画个示意）、名字、大小和日期、做它的 AI。
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import { Link } from '@tanstack/react-router';
 import { Box, Globe, Music, Play, Table, UserRound } from 'lucide-react';
@@ -7,7 +7,6 @@ import { artifactContentUrl } from '../api/queries.ts';
 import { badgeOf, previewKindOf } from '../chat/files.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatBytes } from '../ui/format.ts';
-import type { useSpeakers } from '../workflow/use-speakers.ts';
 
 /** 一页纸：标题线 + 几行字（文档、PDF、文字） */
 function Paper({ label }: { label: string }) {
@@ -116,14 +115,14 @@ function Thumb({ artifact }: { artifact: ArtifactBody }) {
   );
 }
 
-export function ArtifactCard({
-  artifact,
-  speakers,
-}: {
-  artifact: ArtifactBody;
-  speakers: ReturnType<typeof useSpeakers>;
-}) {
-  const who = artifact.models.map((m) => speakers.speakerOf(m));
+/** 做它的 AI：头像字母、光色和名字 */
+export interface Maker {
+  mono: string;
+  glow: string;
+  name: string;
+}
+
+export function ArtifactCard({ artifact, maker }: { artifact: ArtifactBody; maker?: Maker }) {
   return (
     <article className="glass flex min-w-0 flex-col gap-3 rounded-[30px] p-2.5 pb-3.5">
       <Link
@@ -144,24 +143,15 @@ export function ArtifactCard({
           {artifact.application ? artifact.application.root : artifact.name}
         </h3>
         <span className="truncate text-[12px] text-ink-muted">
-          {artifact.taskTitle} · {artifact.deliverable} · {formatBytes(artifact.size)}
+          {formatBytes(artifact.size)} · {new Date(artifact.createdAt).toLocaleDateString('zh-CN')}
         </span>
       </div>
-      <div className="flex items-center gap-1.5 px-2">
-        <span
-          className="relative flex h-6"
-          style={{ width: 24 + (Math.min(who.length, 4) - 1) * 20 }}
-        >
-          {who.slice(0, 4).map((s, i) => (
-            <span key={`${s.name}-${i}`} className="absolute top-0" style={{ left: i * 20 }}>
-              <AiAvatar mono={s.mono} glow={s.glow} size={24} />
-            </span>
-          ))}
-        </span>
-        <span className="truncate text-[12px] text-ink-muted">
-          {who.map((s) => s.name).join('、')}
-        </span>
-      </div>
+      {maker && (
+        <div className="flex items-center gap-1.5 px-2">
+          <AiAvatar mono={maker.mono} glow={maker.glow} size={24} />
+          <span className="truncate text-[12px] text-ink-muted">{maker.name}</span>
+        </div>
+      )}
     </article>
   );
 }

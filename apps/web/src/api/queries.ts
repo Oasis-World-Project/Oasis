@@ -1,30 +1,19 @@
 // 各页面用到的查询和操作。查询的 key 集中在这里，便于在操作后刷新对应数据。
-import { ModelList } from '@oasis/contracts/agent';
+import { AiSettings, ModelList } from '@oasis/contracts/agent';
 import { GroupList, GroupSnapshot, GroupInvite, GroupInvitePreview } from '@oasis/contracts/group';
 import { WalletBody } from '@oasis/contracts/billing';
 import { ArtifactBody, ArtifactList, type Annotation } from '@oasis/contracts/canvas';
 import {
   ConversationBody,
   ConversationList,
-  IntakeResult,
+  MessageBody,
   MessageList,
+  SendResult,
 } from '@oasis/contracts/conversation';
 import { MeBody, VerifyCodeResult } from '@oasis/contracts/identity';
-import { RunEventList, type RunEventBody } from '@oasis/contracts/harness';
-import { ModelScope } from '@oasis/contracts/model-gateway';
-import {
-  NodeRunList,
-  TaskBody,
-  TaskList,
-  WorkflowNames,
-  WorkflowVersionBody,
-  type DecisionBody,
-  type TaskRevisionBody,
-  type TaskStatus,
-} from '@oasis/contracts/task';
 import { queryOptions } from '@tanstack/react-query';
 import { z } from 'zod';
-import { api, ApiError, apiVoid } from './client.ts';
+import { api, ApiError, apiVoid, isConnectionError } from './client.ts';
 
 export const meQuery = queryOptions({
   queryKey: ['me'],
@@ -47,6 +36,14 @@ export const modelsQuery = queryOptions({
   queryFn: async () => (await api('/agent/v1/models', ModelList)).models,
   staleTime: 10 * 60_000,
 });
+
+/** 给 AI 们的设置（「只用国内模型」） */
+export const aiSettingsQuery = queryOptions({
+  queryKey: ['ai-settings'],
+  queryFn: () => api('/agent/v1/settings', AiSettings),
+});
+export const saveAiSettings = (settings: AiSettings) =>
+  api('/agent/v1/settings', AiSettings, { method: 'PUT', body: settings });
 
 export const dmsQuery = queryOptions({
   queryKey: ['dms'],
@@ -87,17 +84,6 @@ export const sendGroupMessage = (id: string, content: string, requestId: string)
     body: { content, requestId },
   });
 
-export const messagesQuery = (conversationId: string) =>
-  queryOptions({
-    queryKey: ['messages', conversationId],
-    queryFn: async ({ signal }) =>
-      (
-        await api(`/conversation/v1/conversations/${conversationId}/messages`, MessageList, {
-          signal,
-        })
-      ).messages,
-  });
-
 export const requestCode = (email: string) =>
   apiVoid('/identity/v1/auth/email-code', { method: 'POST', body: { email } });
 
@@ -106,174 +92,58 @@ export const verifyCode = (email: string, code: string) =>
 
 export const logout = () => apiVoid('/identity/v1/auth/logout', { method: 'POST', body: {} });
 
+// ---- 私聊：用户说一句开一轮，一轮进行中再说的话是插话 ----
 export const createDm = (modelKey: string) =>
   api('/conversation/v1/dms', ConversationBody, { method: 'POST', body: { modelKey } });
-/** 删除私聊：聊天内容真删除，任务和成果不受影响；再点开这个 AI 是全新的私聊 */
+/** 删除私聊（真删除）：消息、成果、AI 的记忆和工作目录都删掉；再点开这个 AI 是全新的私聊 */
 export const deleteDm = (conversationId: string) =>
   apiVoid(`/conversation/v1/conversations/${conversationId}`, { method: 'DELETE' });
 
-// ---- 在私聊里接任务：接口都返回这次新增的消息 ----
-const intakePath = (conversationId: string, action: string) =>
-  `/conversation/v1/conversations/${conversationId}/intake/${action}`;
+const conversationPath = (conversationId: string) =>
+  `/conversation/v1/conversations/${conversationId}`;
 
-const intakeCall = (conversationId: string, action: string, body: object) =>
-  api(intakePath(conversationId, action), IntakeResult, { method: 'POST', body });
+/**
+ * 消息和正在进行的一轮：有一轮在进行时每秒刷新（AI 说的话、做的步骤一段段出来）；
+ * 连不上时和别的查询一样每 5 秒重试。
+ */
+export const messagesQuery = (conversationId: string) =>
+  queryOptions({
+    queryKey: ['messages', conversationId],
+    queryFn: ({ signal }) =>
+      api(`${conversationPath(conversationId)}/messages`, MessageList, { signal }),
+    refetchInterval: (query) =>
+      query.state.data?.turn ? 1_000 : isConnectionError(query.state.error) ? 5_000 : false,
+  });
 
-/** 从某条用户消息开始接需求（点了「当成任务来做」） */
-export const startIntake = (conversationId: string, messageId: string) =>
-  intakeCall(conversationId, 'start', { messageId });
-
-/** 回答问题卡；skip = 直接开始，没答的按默认 */
-export const answerIntake = (
+/** 发一条消息：没有一轮在进行就开一轮，有就是插话；可以带文件、带要改的画布成果 */
+export const sendMessage = (
   conversationId: string,
-  answers: Record<string, string>,
-  skip: boolean,
-  messageId: string,
-) => intakeCall(conversationId, 'answers', { answers, skip, messageId });
+  body: { content: string; attachments?: string[]; artifacts?: string[] },
+) => api(`${conversationPath(conversationId)}/messages`, SendResult, { method: 'POST', body });
 
-export const cancelIntake = (conversationId: string) => intakeCall(conversationId, 'cancel', {});
+/** 停下正在进行的一轮：已经做出来的存下，下一轮接着做 */
+export const stopTurn = (conversationId: string) =>
+  apiVoid(`${conversationPath(conversationId)}/stop`, { method: 'POST', body: {} });
 
-/** 确认任务单，交给 AI 团队开始做 */
-export const confirmIntake = (conversationId: string) => intakeCall(conversationId, 'confirm', {});
-
-/** 修改成果：修改意见直接交给 AI 团队，在原任务里接着改；不经过私聊 */
-export const reviseTask = (taskId: string, body: TaskRevisionBody) =>
-  api(`/task/v1/tasks/${taskId}/revisions`, TaskBody, { method: 'POST', body });
-
-// ---- 任务 ----
-/** 任务和它下面的节点运行、运行过程都挂在 ['task', id] 下，改了任务一起刷新 */
-const taskKey = (taskId: string) => ['task', taskId] as const;
-/** 不会再变的状态：不用再轮询 */
-export const SETTLED_STATUSES: ReadonlySet<TaskStatus> = new Set([
-  'succeeded',
-  'failed',
-  'cancelled',
-]);
-
-/** 还在动的任务每 2.5 秒刷新一次（进度、花费、需要处理）；结束后不再刷新 */
-export const taskQuery = (taskId: string) =>
-  queryOptions({
-    queryKey: taskKey(taskId),
-    queryFn: () => api(`/task/v1/tasks/${taskId}`, TaskBody),
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status && SETTLED_STATUSES.has(status) ? false : 2_500;
-    },
-  });
-
-/** 冻结的某一版工作流：不会再变，不用刷新 */
-export const taskVersionQuery = (taskId: string, version: number) =>
-  queryOptions({
-    queryKey: [...taskKey(taskId), 'version', version],
-    queryFn: () => api(`/task/v1/tasks/${taskId}/versions/${version}`, WorkflowVersionBody),
-    staleTime: Infinity,
-  });
-
-const taskCall = (taskId: string, action: string, body: object = {}) =>
-  apiVoid(`/task/v1/tasks/${taskId}/${action}`, { method: 'POST', body });
-
-/** 需要处理时的选择：继续 / 再试（重新规划）/ 取消 */
-export const decideTask = (taskId: string, choice: DecisionBody['choice']) =>
-  taskCall(taskId, 'decision', { choice });
-
-export const runTask = (taskId: string) => taskCall(taskId, 'run');
-export const stopTask = (taskId: string) => taskCall(taskId, 'stop');
-export const cancelTask = (taskId: string) => taskCall(taskId, 'cancel');
-
-/** 删除任务：连同成果、工作流和中间产物，不可恢复 */
-export const deleteTask = (taskId: string) =>
-  apiVoid(`/task/v1/tasks/${taskId}`, { method: 'DELETE' });
-
-/** 自己最近的任务（成果页据此知道哪份成果正在修改） */
-export const tasksQuery = queryOptions({
-  queryKey: ['tasks'],
-  queryFn: async ({ signal }) => (await api('/task/v1/tasks', TaskList, { signal })).tasks,
-});
-
-/** 节点交出的文件：预览直接用这个地址，download 时让浏览器另存 */
-export function taskFileUrl(
-  taskId: string,
-  nodeId: string,
-  path: string,
-  download = false,
-): string {
-  const encoded = path.split('/').map(encodeURIComponent).join('/');
-  return `/api/task/v1/tasks/${taskId}/files/${nodeId}/${encoded}${download ? '?download=1' : ''}`;
-}
-
-// ---- 工作流----
-const taskPath = (taskId: string) => `/task/v1/tasks/${taskId}`;
-const nodePath = (taskId: string, nodeId: string) => `${taskPath(taskId)}/nodes/${nodeId}`;
-export const applicationReportUrl = (taskId: string, nodeId: string) =>
-  `/api${nodePath(taskId, nodeId)}/application-check`;
-
-/** 这几个操作都返回最新的任务 */
-const taskChange = (path: string, method: string, body?: unknown) =>
-  api(path, TaskBody, { method, body: body ?? {} });
-
-export const runNode = (taskId: string, nodeId: string) =>
-  taskChange(`${nodePath(taskId, nodeId)}/run`, 'POST');
-export const stopNode = (taskId: string, nodeId: string) =>
-  taskChange(`${nodePath(taskId, nodeId)}/stop`, 'POST');
-/** 做几版的节点改用第 version 版：下游做完了的会排成修改，等确认 */
-export const pickVersion = (taskId: string, nodeId: string, version: number) =>
-  taskChange(`${nodePath(taskId, nodeId)}/pick`, 'POST', { version });
-
-/** 追问 / 补充要求：运行中的直接送达，还没开始、已停止的记下来，开跑时带上 */
-export const messageNode = (taskId: string, nodeId: string, text: string) =>
-  api(`${nodePath(taskId, nodeId)}/messages`, NodeMessageResult, {
+/** 开新话题：AI 从这里起不记得之前的事，返回分隔消息 */
+export const newTopic = (conversationId: string) =>
+  api(`${conversationPath(conversationId)}/topics`, z.object({ message: MessageBody }), {
     method: 'POST',
-    body: { text },
+    body: {},
   });
-const NodeMessageResult = z.object({ result: z.enum(['delivered', 'noted']) });
-
-/** 节点的每次运行；节点在动时跟着任务一起刷新 */
-export const nodeRunsQuery = (taskId: string, nodeId: string, live: boolean) =>
-  queryOptions({
-    queryKey: [...taskKey(taskId), 'node', nodeId, 'runs'],
-    queryFn: async () => (await api(`${nodePath(taskId, nodeId)}/runs`, NodeRunList)).runs,
-    refetchInterval: live ? 2_500 : false,
-  });
-
-/** 一次运行的过程：运行中每 2 秒增量拉一次，接在已有的后面 */
-export const runEventsQuery = (taskId: string, nodeId: string, runId: string, live: boolean) =>
-  queryOptions({
-    queryKey: [...taskKey(taskId), 'node', nodeId, 'events', runId],
-    queryFn: async ({ client, queryKey }) => {
-      const old = client.getQueryData<RunEventBody[]>(queryKey) ?? [];
-      const after = old.at(-1)?.seq ?? -1;
-      const { events } = await api(
-        `${nodePath(taskId, nodeId)}/events?runId=${runId}&after=${after}`,
-        RunEventList,
-      );
-      return [...old, ...events];
-    },
-    refetchInterval: live ? 2_000 : false,
-  });
-
-/** 工作流页显示用的名字：型号是哪个 AI、工具叫什么 */
-export const workflowNamesQuery = queryOptions({
-  queryKey: ['workflow-names'],
-  queryFn: () => api('/task/v1/workflow/names', WorkflowNames),
-  staleTime: 5 * 60_000,
-});
-
-/** 「只用国内模型」开关：这个账号的 AI 团队用哪些模型 */
-export const modelScopeQuery = queryOptions({
-  queryKey: ['model-scope'],
-  queryFn: () => api('/task/v1/model-scope', ModelScope),
-});
-export const setModelScope = (scope: ModelScope) =>
-  api('/task/v1/model-scope', ModelScope, { method: 'PUT', body: scope });
 
 // ---- 画布----
-/** 全部成果（类别和搜索在前端筛，数量也在前端算）；可以只看某个任务的 */
-export const artifactsQuery = (taskId?: string) =>
+/** 成果（类别和搜索在前端筛，数量也在前端算）；可以只看某个对话、某个话题的 */
+export const artifactsQuery = (filter: { conversationId?: string; sessionId?: string } = {}) =>
   queryOptions({
-    queryKey: ['artifacts', taskId ?? 'all'],
-    queryFn: async () =>
-      (await api(`/canvas/v1/artifacts${taskId ? `?taskId=${taskId}` : ''}`, ArtifactList))
-        .artifacts,
+    queryKey: ['artifacts', filter.conversationId ?? 'all', filter.sessionId ?? 'all'],
+    queryFn: async () => {
+      const search = new URLSearchParams(
+        Object.entries(filter).filter((entry): entry is [string, string] => !!entry[1]),
+      ).toString();
+      return (await api(`/canvas/v1/artifacts${search ? `?${search}` : ''}`, ArtifactList))
+        .artifacts;
+    },
   });
 
 export const artifactQuery = (id: string) =>
@@ -293,4 +163,5 @@ export const saveAnnotations = (id: string, annotations: Annotation[]) =>
 export const artifactContentUrl = (id: string, download = false) =>
   `/api/canvas/v1/artifacts/${id}/content${download ? '?download=1' : ''}`;
 
-export const taskArchiveUrl = (taskId: string) => `/api/canvas/v1/tasks/${taskId}/archive`;
+/** 一个话题的成果打包下载 */
+export const topicArchiveUrl = (sessionId: string) => `/api/canvas/v1/topics/${sessionId}/archive`;

@@ -10,7 +10,6 @@ export const PUBLIC_SERVICES = {
   billing: 'BILLING_URL',
   agent: 'AGENT_URL',
   conversation: 'CONVERSATION_URL',
-  task: 'TASK_URL',
   canvas: 'CANVAS_URL',
 } as const;
 
@@ -19,7 +18,6 @@ export const gatewayEnv = {
   BILLING_URL: z.url(),
   AGENT_URL: z.url(),
   CONVERSATION_URL: z.url(),
-  TASK_URL: z.url(),
   CANVAS_URL: z.url(),
   /** 允许发起改数据请求的页面来源（逗号分隔），用于防跨站请求伪造 */
   GATEWAY_ALLOWED_ORIGINS: z

@@ -5,7 +5,6 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
 import { api } from '../src/api/client.ts';
-import { sendMessage } from '../src/api/stream.ts';
 import { installFakeApi, json } from './fake-api.ts';
 
 const ID = '00000000-0000-4000-8000-0000000000c1';
@@ -42,7 +41,8 @@ describe('中断后的消息恢复', () => {
     const network = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
     const fake = installFakeApi({
       signedIn: true,
-      extra: (_method, path) => (path === PATH ? json(200, { messages: [message] }) : undefined),
+      extra: (_method, path) =>
+        path === PATH ? json(200, { messages: [message], turn: null }) : undefined,
     });
     const app = createApp({ history: createMemoryHistory({ initialEntries: [`/dms/${ID}`] }) });
     clients.push(app.queryClient);
@@ -84,7 +84,7 @@ describe('中断后的消息恢复', () => {
       extra: (_method, path) => {
         if (path === '/identity/v1/me' && !available)
           return json(503, { error: { code: 'unavailable', message: '服务未启动' } });
-        if (path === PATH) return json(200, { messages: [message] });
+        if (path === PATH) return json(200, { messages: [message], turn: null });
         return undefined;
       },
     });
@@ -107,7 +107,7 @@ describe('中断后的消息恢复', () => {
       extra: (_method, path) =>
         path === PATH
           ? available
-            ? json(200, { messages: [message] })
+            ? json(200, { messages: [message], turn: null })
             : Promise.reject(new TypeError('offline'))
           : undefined,
     });
@@ -128,7 +128,7 @@ describe('中断后的消息恢复', () => {
     installFakeApi({
       signedIn: true,
       extra: (_method, path) =>
-        path === PATH ? json(200, { messages: [{ ...message, content }] }) : undefined,
+        path === PATH ? json(200, { messages: [{ ...message, content }], turn: null }) : undefined,
     });
     await open();
     await screen.findByText('已有消息');
@@ -206,20 +206,6 @@ describe('中断后的消息恢复', () => {
     await expect(api('/broken-body', z.unknown())).rejects.toMatchObject({ code: 'network_error' });
   });
 
-  it('收到 accepted 后 EOF 不能冒充完成，也不重新 POST', async () => {
-    const fetcher = vi.fn(
-      async () =>
-        new Response(`data: ${JSON.stringify({ type: 'accepted', userMessage: message })}\n\n`),
-    );
-    vi.stubGlobal('fetch', fetcher);
-    const seen = vi.fn();
-    await expect(sendMessage(ID, { content: '测试', asTask: false }, seen)).rejects.toMatchObject({
-      code: 'stream_interrupted',
-    });
-    expect(seen).toHaveBeenCalledTimes(1);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-  });
-
   it('已有消息后台读取失败仍可见，点击重试恢复', async () => {
     let broken = false;
     installFakeApi({
@@ -228,7 +214,7 @@ describe('中断后的消息恢复', () => {
         path === PATH
           ? broken
             ? json(503, { error: { code: 'unavailable', message: '暂时不可用' } })
-            : json(200, { messages: [message] })
+            : json(200, { messages: [message], turn: null })
           : undefined,
     });
     const app = await open();
@@ -245,68 +231,75 @@ describe('中断后的消息恢复', () => {
   });
 });
 
-describe('停止和中断后的继续入口', () => {
-  it.each(['stopped', 'length', 'legacy'] as const)(
-    '%s 刷新后仍能从右下角继续，原消息和正文保留',
+describe('停下、出错后的「继续」', () => {
+  it.each(['stopped', 'failed'] as const)(
+    '%s：刷新后 AI 消息下面仍有「继续」，点了发一句「继续」开下一轮；进行中能停下',
     async (mode) => {
-      const replyId = '00000000-0000-4000-8000-0000000000c2';
-      let reply = {
+      const RUN = '00000000-0000-4000-8000-0000000000b1';
+      const NEXT = '00000000-0000-4000-8000-0000000000b2';
+      const reply = {
         ...message,
-        id: replyId,
+        id: '00000000-0000-4000-8000-0000000000c2',
         role: 'assistant',
-        content: '已收到的正文',
-        status: mode === 'stopped' ? 'complete' : 'failed',
-        error: mode === 'stopped' ? null : '回复未完成',
+        content: '已经写了一半',
+        status: mode === 'failed' ? 'failed' : 'complete',
+        error: mode === 'failed' ? '这一轮出错了：上游 500。说「继续」可以接着做' : null,
         data: {
-          replyTo: ID,
-          ...(mode === 'stopped'
-            ? { stopped: true }
-            : mode === 'length'
-              ? { resumable: true }
-              : {}),
+          runId: RUN,
+          parts: [{ type: 'text', text: '已经写了一半' }],
+          ...(mode === 'stopped' ? { stopped: true } : {}),
         },
       };
+      let messages: unknown[] = [message, reply];
+      let turn: { runId: string; startedAt: string } | null = null;
       const fake = installFakeApi({
         signedIn: true,
         extra: (method, path) => {
-          if (method === 'GET' && path === PATH) return json(200, { messages: [message, reply] });
-          if (method === 'POST' && path === PATH + '/' + ID + '/reply') {
-            reply = {
-              ...reply,
-              status: 'complete',
-              error: null,
-              content: '已收到的正文，续写完成',
-              data: { replyTo: ID },
+          if (method === 'GET' && path === PATH) return json(200, { messages, turn });
+          if (method === 'POST' && path === PATH) {
+            turn = { runId: NEXT, startedAt: '2026-11-04T00:01:00Z' };
+            const user = {
+              ...message,
+              id: '00000000-0000-4000-8000-0000000000c3',
+              content: '继续',
+              data: { runId: NEXT },
             };
-            const events = [
-              { type: 'accepted', userMessage: message },
-              { type: 'delta', text: reply.content },
-              { type: 'done', message: reply },
-            ];
-            return new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), {
-              headers: { 'content-type': 'text/event-stream' },
-            });
+            const ai = {
+              ...message,
+              id: '00000000-0000-4000-8000-0000000000c4',
+              role: 'assistant',
+              content: '',
+              status: 'streaming',
+              data: { runId: NEXT, parts: [] },
+            };
+            messages = [...messages, user, ai];
+            return json(201, { messages: [user, ai], turn });
           }
+          if (method === 'POST' && path === `/conversation/v1/conversations/${ID}/stop`)
+            return new Response(null, { status: 204 });
           return undefined;
         },
       });
       await open();
-      const resume = await screen.findByRole('button', { name: '继续回复' });
-      expect(resume.hasAttribute('disabled')).toBe(false);
-      fireEvent.change(screen.getByRole('textbox', { name: '消息' }), {
-        target: { value: '新问题' },
-      });
-      expect(screen.queryByRole('button', { name: '继续回复' })).toBeNull();
-      expect(screen.getByRole('button', { name: '发送' }).hasAttribute('disabled')).toBe(false);
-      fireEvent.change(screen.getByRole('textbox', { name: '消息' }), { target: { value: '' } });
-      fireEvent.click(screen.getByRole('button', { name: '继续回复' }));
-      await screen.findByText('已收到的正文，续写完成');
-      expect(fake.bodies).toContainEqual({
-        path: PATH + '/' + ID + '/reply',
-        body: { continue: true },
-      });
-      expect(fake.requests.filter((r) => r.startsWith('POST '))).toHaveLength(1);
-      await waitFor(() => expect(screen.queryByRole('button', { name: '继续回复' })).toBeNull());
+      expect(await screen.findByText('已经写了一半')).toBeTruthy();
+      expect(
+        await screen.findByText(mode === 'failed' ? /说「继续」可以接着做/ : '已停下'),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: '继续' }));
+      await waitFor(() =>
+        expect(fake.bodies).toContainEqual({
+          path: PATH,
+          body: { content: '继续', attachments: [] },
+        }),
+      );
+      // 这一轮在做：「继续」不见了，可以插话，也可以停下
+      const stop = await screen.findByRole('button', { name: '停下这一轮' });
+      expect(screen.queryByRole('button', { name: '继续' })).toBeNull();
+      expect(screen.getByPlaceholderText('AI 正在做，可以随时插话…')).toBeTruthy();
+      fireEvent.click(stop);
+      await waitFor(() =>
+        expect(fake.requests).toContain(`POST /conversation/v1/conversations/${ID}/stop`),
+      );
     },
   );
 });

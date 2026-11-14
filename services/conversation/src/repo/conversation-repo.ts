@@ -1,97 +1,56 @@
+// 私聊的存储：对话、消息，以及正在进行的一轮（turn）。
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { HttpError } from '@oasis/service-kit';
-import { conversations, intakes, messages } from './schema.ts';
+import { conversations, messages, type Turn } from './schema.ts';
 
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
-export type Intake = typeof intakes.$inferSelect;
 type NewMessage = Pick<
   typeof messages.$inferInsert,
-  'conversationId' | 'authorKind' | 'authorId' | 'content' | 'status' | 'kind' | 'data'
+  'conversationId' | 'authorKind' | 'authorId' | 'content' | 'status' | 'kind' | 'data' | 'error'
 >;
-type IntakePatch = Partial<
-  Pick<Intake, 'status' | 'round' | 'turns' | 'cardMessageId' | 'sheet' | 'taskId' | 'materials'>
->;
+type MessagePatch = Partial<Pick<Message, 'content' | 'status' | 'error' | 'data'>>;
+
+/** 租约锁的用途：处理用户的操作（开一轮、插话、开新话题、删除）；跟进一轮（同一时间只有一个实例在跟） */
+type LockName = 'message' | 'follow';
 
 export interface ConversationRepo {
-  withMessageLock<T>(
+  /** 拿到这个对话的锁才做；别人拿着时 409（跟进的锁在 follow 名下，和用户操作互不挡） */
+  withLock<T>(
+    name: LockName,
     conversationId: string,
     work: (repo: ConversationRepo) => Promise<T>,
   ): Promise<T>;
-  taskSourceIds(conversationId: string): Promise<string[]>;
-  /** 合并元数据；unlessStopped 用于任务识别与停止之间的原子竞态裁决。 */
-  mergeMessageData(
-    id: string,
-    data: Record<string, unknown>,
-    unlessStopped?: boolean,
-  ): Promise<Message | undefined>;
-  requestStop(conversationId: string, id: string): Promise<boolean>;
-  mutateChat(
-    conversationId: string,
-    obsolete: Message[],
-    edit?: { id: string; content: string; replyId?: string },
-  ): Promise<void>;
-  saveIntakeAnswers(
-    id: string,
-    cardId: string,
-    turns: Intake['turns'],
-    answers: Record<string, string>,
-  ): Promise<Intake>;
-  commitIntakeReply(id: string, message: NewMessage, patch: IntakePatch): Promise<Message>;
-  withIntakeLock<T>(
-    conversationId: string,
-    work: (repo: ConversationRepo) => Promise<T>,
-  ): Promise<T>;
-  findQuestionCard(
-    conversationId: string,
-    intakeId: string,
-    round: number,
-  ): Promise<Message | undefined>;
   upsertDm(ownerId: string, modelKey: string, title: string): Promise<Conversation>;
   listDms(ownerId: string): Promise<Conversation[]>;
   findOwned(id: string, ownerId: string): Promise<Conversation | undefined>;
+  find(id: string): Promise<Conversation | undefined>;
   insertMessage(message: NewMessage): Promise<Message>;
-  /** 由事件触发的消息（data.eventId）：同一个事件只插一次，重复时返回 undefined */
-  insertMessageOnce(
-    message: NewMessage & { data: { eventId: string } },
-  ): Promise<Message | undefined>;
-  finishMessage(
-    id: string,
-    update: { content: string; status: 'complete' | 'failed'; error?: string },
-  ): Promise<Message>;
+  /** 改一条消息；消息已经不在了（被删）返回 undefined */
+  updateMessage(id: string, patch: MessagePatch): Promise<Message | undefined>;
+  deleteMessage(id: string): Promise<void>;
   touchConversation(id: string): Promise<void>;
-  /**
-   * 已完成的消息（不含 excludeId），按时间正序：seq 不超过 beforeSeq，不限条数
-   * （上下文默认带整段对话，快到窗口时由摘要代替较早部分）。
-   */
-  completeMessages(
-    conversationId: string,
-    excludeId?: string,
-    beforeSeq?: number,
-  ): Promise<Message[]>;
-  /** 这段对话里所有消息带的附件 ID（删私聊时用） */
-  attachmentIds(conversationId: string): Promise<string[]>;
-  /** 删掉整段对话：消息、接需求记录随之级联删除 */
-  deleteConversation(id: string): Promise<void>;
-  /** 这段对话里是不是已经有这个任务的交付消息 */
-  hasDelivery(conversationId: string, taskId: string): Promise<boolean>;
-  /** 存较早部分的摘要 */
-  setContextSummary(id: string, summary: { throughSeq: number; text: string }): Promise<void>;
   listMessages(conversationId: string, limit: number): Promise<Message[]>;
   findMessage(conversationId: string, id: string): Promise<Message | undefined>;
-  setMessageData(id: string, data: Record<string, unknown>): Promise<Message>;
-  /** 任务被删除：它的任务卡、交付消息和提醒一起删掉（2026-11-05 真删除）；返回删了几条 */
-  removeTaskMessages(conversationId: string, taskId: string): Promise<number>;
-  /** 开始接需求；这个会话已经有进行中的就返回 undefined */
-  createIntake(
-    intake: Pick<Intake, 'id' | 'conversationId' | 'request' | 'materials'>,
-  ): Promise<Intake | undefined>;
-  /** 这个会话进行中的接需求（在问或等确认） */
-  findOpenIntake(conversationId: string): Promise<Intake | undefined>;
-  updateIntake(id: string, patch: IntakePatch): Promise<Intake>;
+  /** 用户在一轮结束前发来、还没交给 AI 的话（下一轮开头交给它） */
+  pendingMessages(conversationId: string): Promise<Message[]>;
+  /** 这段对话里所有消息带的附件 ID（删私聊时用） */
+  attachmentIds(conversationId: string): Promise<string[]>;
+  /** 删掉整段对话：消息随之级联删除 */
+  deleteConversation(id: string): Promise<void>;
+  /** 开一轮：这个对话没有正在进行的一轮时记下（话题还没有名字就用 topic）；已经有就返回 false */
+  startTurn(id: string, turn: Turn, topic: string): Promise<boolean>;
+  /** 改正在进行的这一轮（只改给的字段；这一轮已经不是 runId 时不改，返回 false） */
+  updateTurn(id: string, runId: string, patch: Partial<Turn>): Promise<boolean>;
+  /** 这一轮结束：清掉，记下下一轮接着哪一轮（null：下一轮开新会话） */
+  endTurn(id: string, runId: string, lastRunId: string | null): Promise<void>;
+  /** 有一轮在进行的对话 */
+  activeTurns(): Promise<Conversation[]>;
+  /** 开新话题：下一轮开新会话，话题名清掉 */
+  newTopic(id: string): Promise<void>;
 }
 
 /** 会话锁的租约：持有期间每 10 秒续一次；进程崩了，30 秒后别的实例就能接着处理这段对话 */
@@ -104,15 +63,15 @@ export function createConversationRepo(
 ): ConversationRepo {
   const db = drizzle(pool);
   /**
-   * 同一会话同时只处理一轮：锁是 conversation_locks 里的一行租约，不占着连接等模型回复
-   * （以前用会话级 advisory lock，每轮要占一条连接直到回复结束，几个人同时发任务就把连接池占满）。
+   * 锁是 conversation_locks 里的一行租约，不占着连接等别的服务
+   * （以前用会话级 advisory lock，每轮要占一条连接，几个人同时用就把连接池占满）。
    */
   async function lock<T>(
-    namespace: string,
+    name: LockName,
     conversationId: string,
     work: (repo: ConversationRepo) => Promise<T>,
   ): Promise<T> {
-    const key = `${namespace}:${conversationId}`;
+    const key = `${name}:${conversationId}`;
     if (heldLocks.has(key)) return work(repo);
     const holder = randomUUID();
     const taken = await pool.query(
@@ -123,12 +82,8 @@ export function createConversationRepo(
       [key, holder, LOCK_LEASE_SECONDS],
     );
     if (!taken.rowCount)
-      throw new HttpError(
-        409,
-        namespace === 'intake' ? 'intake_busy' : 'conversation_busy',
-        '正在处理这段对话，请稍候或先停止回复',
-      );
-    // 续租失败（数据库短暂不可用）不打断这一轮：下次再续，真过期了别的请求才可能接手
+      throw new HttpError(409, 'conversation_busy', '正在处理这段对话，请稍候再试');
+    // 续租失败（数据库短暂不可用）不打断：下次再续，真过期了别的请求才可能接手
     const renew = setInterval(() => {
       pool
         .query(
@@ -148,146 +103,10 @@ export function createConversationRepo(
         .catch(() => {});
     }
   }
+
   const repo: ConversationRepo = {
-    withMessageLock: (id, work) => lock('message', id, work),
-    async taskSourceIds(conversationId) {
-      const rows = await db
-        .select({ id: messages.id })
-        .from(messages)
-        .where(
-          and(
-            eq(messages.conversationId, conversationId),
-            eq(messages.authorKind, 'user'),
-            sql`(${messages.data}->>'intent' = 'task' or (${messages.data}->>'intent' is null and exists (
-          select 1 from intakes i where i.conversation_id = ${messages.conversationId}
-          and (i.request = ${messages.content} or exists (
-            select 1 from jsonb_array_elements(i.turns) t
-            where t->>'kind' = 'user' and left(t->>'text', length(${messages.content})) = ${messages.content}
-          ))
-        )))`,
-          ),
-        );
-      return rows.map((r) => r.id);
-    },
-    async mergeMessageData(id, data, unlessStopped = false) {
-      const [row] = await db
-        .update(messages)
-        .set({ data: sql`${messages.data} || ${JSON.stringify(data)}::jsonb` })
-        .where(
-          and(
-            eq(messages.id, id),
-            unlessStopped
-              ? sql`coalesce(${messages.data}->>'stopRequested','false') <> 'true'`
-              : undefined,
-          ),
-        )
-        .returning();
-      return row;
-    },
-    async requestStop(conversationId, id) {
-      const rows = await db
-        .update(messages)
-        .set({ data: sql`${messages.data} || '{"stopRequested":true}'::jsonb` })
-        .where(
-          and(
-            eq(messages.conversationId, conversationId),
-            eq(messages.id, id),
-            eq(messages.authorKind, 'user'),
-            eq(messages.kind, 'text'),
-            sql`coalesce(${messages.data}->>'intent','chat') <> 'task'`,
-          ),
-        )
-        .returning({ id: messages.id });
-      return rows.length > 0;
-    },
-    async mutateChat(conversationId, obsolete, edit) {
-      await db.transaction(async (tx) => {
-        const ids = obsolete
-          .map((m) => m.id)
-          .filter((id) => id !== edit?.id && id !== edit?.replyId);
-        if (ids.length)
-          await tx
-            .delete(messages)
-            .where(and(eq(messages.conversationId, conversationId), inArray(messages.id, ids)));
-        if (edit)
-          await tx
-            .update(messages)
-            .set({
-              content: edit.content,
-              data: sql`${messages.data} || '{"stopRequested":false}'::jsonb`,
-            })
-            .where(and(eq(messages.conversationId, conversationId), eq(messages.id, edit.id)));
-        if (edit?.replyId)
-          await tx
-            .update(messages)
-            .set({
-              content: '',
-              status: 'streaming',
-              error: null,
-              data: { replyTo: edit.id, stopped: false },
-            })
-            .where(eq(messages.id, edit.replyId));
-        // 改掉或删掉的消息可能已经压进摘要：作废，下次需要时重新压缩（问需求的上下文每步现取，不用另改）
-        const firstSeq = Math.min(...obsolete.map((m) => m.seq));
-        if (obsolete.length)
-          await tx
-            .update(conversations)
-            .set({ contextSummary: null })
-            .where(
-              and(
-                eq(conversations.id, conversationId),
-                sql`(${conversations.contextSummary}->>'throughSeq')::bigint >= ${firstSeq}`,
-              ),
-            );
-      });
-    },
-    saveIntakeAnswers: (id, cardId, turns, answers) =>
-      db.transaction(async (tx) => {
-        await tx
-          .update(messages)
-          .set({ data: sql`${messages.data} || ${JSON.stringify({ answers })}::jsonb` })
-          .where(eq(messages.id, cardId));
-        const [updated] = await tx
-          .update(intakes)
-          .set({ turns, cardMessageId: cardId, updatedAt: new Date() })
-          .where(eq(intakes.id, id))
-          .returning();
-        if (!updated) throw new HttpError(404, 'intake_not_found', '没有这件任务');
-        return updated;
-      }),
-    commitIntakeReply: (id, message, patch) =>
-      db.transaction(async (tx) => {
-        const [previous] = await tx.select().from(intakes).where(eq(intakes.id, id));
-        if (!previous) throw new HttpError(404, 'intake_not_found', '没有这件任务');
-        if (previous.status === 'sheet' && previous.cardMessageId)
-          await tx
-            .update(messages)
-            .set({ data: sql`${messages.data} || '{"status":"superseded"}'::jsonb` })
-            .where(eq(messages.id, previous.cardMessageId));
-        const [row] = await tx.insert(messages).values(message).returning();
-        await tx
-          .update(intakes)
-          .set({ ...patch, cardMessageId: row!.id, updatedAt: new Date() })
-          .where(eq(intakes.id, id));
-        return row!;
-      }),
-    withIntakeLock: (id, work) => lock('intake', id, work),
-    async findQuestionCard(conversationId, intakeId, round) {
-      const [row] = await db
-        .select()
-        .from(messages)
-        .where(
-          and(
-            eq(messages.conversationId, conversationId),
-            eq(messages.kind, 'questions'),
-            sql`${messages.data}->>'intakeId' = ${intakeId}`,
-            sql`${messages.data}->>'round' = ${String(round)}`,
-          ),
-        )
-        .orderBy(desc(messages.createdAt))
-        .limit(1);
-      return row;
-    },
+    withLock: lock,
+
     async upsertDm(ownerId, modelKey, title) {
       await db
         .insert(conversations)
@@ -330,23 +149,23 @@ export function createConversationRepo(
       return row;
     },
 
+    async find(id) {
+      const [row] = await db.select().from(conversations).where(eq(conversations.id, id));
+      return row;
+    },
+
     async insertMessage(message) {
       const [row] = await db.insert(messages).values(message).returning();
       return row!;
     },
 
-    async insertMessageOnce(message) {
-      const [row] = await db.insert(messages).values(message).onConflictDoNothing().returning();
+    async updateMessage(id, patch) {
+      const [row] = await db.update(messages).set(patch).where(eq(messages.id, id)).returning();
       return row;
     },
 
-    async finishMessage(id, update) {
-      const [row] = await db
-        .update(messages)
-        .set({ content: update.content, status: update.status, error: update.error ?? null })
-        .where(eq(messages.id, id))
-        .returning();
-      return row!;
+    async deleteMessage(id) {
+      await db.delete(messages).where(eq(messages.id, id));
     },
 
     async touchConversation(id) {
@@ -356,20 +175,34 @@ export function createConversationRepo(
         .where(eq(conversations.id, id));
     },
 
-    async completeMessages(conversationId, excludeId, beforeSeq) {
-      return db
+    listMessages: (conversationId, limit) =>
+      db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, conversationId))
+        .orderBy(asc(messages.seq))
+        .limit(limit),
+
+    async findMessage(conversationId, id) {
+      const [row] = await db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.id, id), eq(messages.conversationId, conversationId)));
+      return row;
+    },
+
+    pendingMessages: (conversationId) =>
+      db
         .select()
         .from(messages)
         .where(
           and(
             eq(messages.conversationId, conversationId),
-            eq(messages.status, 'complete'),
-            excludeId === undefined ? undefined : ne(messages.id, excludeId),
-            beforeSeq === undefined ? undefined : sql`${messages.seq} <= ${beforeSeq}`,
+            eq(messages.authorKind, 'user'),
+            sql`${messages.data}->>'pending' = 'true'`,
           ),
         )
-        .orderBy(messages.seq);
-    },
+        .orderBy(asc(messages.seq)),
 
     async attachmentIds(conversationId) {
       const rows = await db.execute<{ id: string }>(
@@ -384,99 +217,39 @@ export function createConversationRepo(
       await db.delete(conversations).where(eq(conversations.id, id));
     },
 
-    async hasDelivery(conversationId, taskId) {
-      const [row] = await db
-        .select({ id: messages.id })
-        .from(messages)
-        .where(
-          and(
-            eq(messages.conversationId, conversationId),
-            eq(messages.kind, 'delivery'),
-            sql`${messages.data}->>'taskId' = ${taskId}`,
-          ),
-        )
-        .limit(1);
-      return !!row;
+    async startTurn(id, turn, topic) {
+      const rows = await db
+        .update(conversations)
+        .set({ turn, topic: sql`coalesce(${conversations.topic}, ${topic})` })
+        .where(and(eq(conversations.id, id), sql`${conversations.turn} is null`))
+        .returning({ id: conversations.id });
+      return rows.length > 0;
     },
 
-    async setContextSummary(id, summary) {
+    async updateTurn(id, runId, patch) {
+      const rows = await db
+        .update(conversations)
+        .set({ turn: sql`${conversations.turn} || ${JSON.stringify(patch)}::jsonb` })
+        .where(and(eq(conversations.id, id), sql`${conversations.turn}->>'runId' = ${runId}`))
+        .returning({ id: conversations.id });
+      return rows.length > 0;
+    },
+
+    async endTurn(id, runId, lastRunId) {
       await db
         .update(conversations)
-        .set({ contextSummary: summary })
+        .set({ turn: null, lastRunId })
+        .where(and(eq(conversations.id, id), sql`${conversations.turn}->>'runId' = ${runId}`));
+    },
+
+    activeTurns: () => db.select().from(conversations).where(isNotNull(conversations.turn)),
+
+    async newTopic(id) {
+      await db
+        .update(conversations)
+        .set({ lastRunId: null, topic: null })
         .where(eq(conversations.id, id));
     },
-
-    async findMessage(conversationId, id) {
-      const [row] = await db
-        .select()
-        .from(messages)
-        .where(and(eq(messages.id, id), eq(messages.conversationId, conversationId)));
-      return row;
-    },
-
-    async setMessageData(id, data) {
-      const [row] = await db.update(messages).set({ data }).where(eq(messages.id, id)).returning();
-      return row!;
-    },
-
-    async removeTaskMessages(conversationId, taskId) {
-      const rows = await db
-        .delete(messages)
-        .where(
-          and(
-            eq(messages.conversationId, conversationId),
-            inArray(messages.kind, ['task', 'delivery', 'notice']),
-            sql`${messages.data}->>'taskId' = ${taskId}`,
-          ),
-        )
-        .returning({ id: messages.id });
-      // 真删除：摘要里可能还写着这个任务，作废，下次需要时重新压缩
-      if (rows.length)
-        await db
-          .update(conversations)
-          .set({ contextSummary: null })
-          .where(eq(conversations.id, conversationId));
-      return rows.length;
-    },
-
-    async createIntake(intake) {
-      const [row] = await db
-        .insert(intakes)
-        .values({ ...intake, status: 'asking' })
-        .onConflictDoNothing()
-        .returning();
-      return row;
-    },
-
-    async findOpenIntake(conversationId) {
-      const [row] = await db
-        .select()
-        .from(intakes)
-        .where(
-          and(
-            eq(intakes.conversationId, conversationId),
-            inArray(intakes.status, ['asking', 'sheet']),
-          ),
-        );
-      return row;
-    },
-
-    async updateIntake(id, patch) {
-      const [row] = await db
-        .update(intakes)
-        .set({ ...patch, updatedAt: new Date() })
-        .where(eq(intakes.id, id))
-        .returning();
-      return row!;
-    },
-
-    listMessages: (conversationId, limit) =>
-      db
-        .select()
-        .from(messages)
-        .where(eq(messages.conversationId, conversationId))
-        .orderBy(asc(messages.seq))
-        .limit(limit),
   };
   return repo;
 }

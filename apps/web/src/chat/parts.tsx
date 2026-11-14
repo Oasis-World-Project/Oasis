@@ -79,15 +79,6 @@ export function StatusTag({
   );
 }
 
-/** 「修改中」标签：任务在按修改意见改（排方案、等确认、新版还没做完） */
-export function RevisingTag() {
-  return (
-    <span className="shrink-0 rounded-full border border-accent px-2.5 py-[3px] text-[12px] font-medium leading-none text-accent">
-      修改中
-    </span>
-  );
-}
-
 type ButtonTone = 'accent' | 'solid' | 'plain' | 'text';
 
 const BUTTON: Record<ButtonTone, string> = {
@@ -168,28 +159,7 @@ export function CardActions({ children }: { children: ReactNode }) {
   return <div className="flex flex-wrap items-center gap-2 pt-0.5">{children}</div>;
 }
 
-/** 一组带小标题的条目（任务单里的「要交付的东西」「怎么算做好」等） */
-export function ItemList({ title, items }: { title?: string; items: ReactNode[] }) {
-  if (items.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-1.5">
-      {title && <h4 className="m-0 text-[12.5px] font-medium text-ink-muted">{title}</h4>}
-      <ul className="m-0 flex list-none flex-col gap-1 p-0">
-        {items.map((item, index) => (
-          <li key={index} className="flex gap-2 text-[14px] leading-relaxed">
-            <span
-              aria-hidden="true"
-              className="mt-[9px] size-1.5 shrink-0 rounded-full bg-ink-muted opacity-50"
-            />
-            <span className="min-w-0">{item}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-/** 卡片里的单选项（问题卡的选项、任务单的预算档位共用） */
+/** 卡片里的单选项（问卷的选项） */
 export function Choice({
   name,
   label,

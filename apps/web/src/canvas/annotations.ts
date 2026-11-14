@@ -1,7 +1,43 @@
-// 批注的纯逻辑：编号、位置的说法、编号画在哪、在一张画布上画出来（合成标注截图）。
+// 批注的纯逻辑：编号、位置的说法、编号画在哪、在一张画布上画出来（合成标注截图），
+// 以及「让 AI 改」时发给 AI 的那段话。
 import { MAX_ANNOTATIONS, type Annotation, type AnnotationShape } from '@oasis/contracts/canvas';
-import type { RevisionNote } from '@oasis/contracts/task';
 import type { PreviewKind } from '../chat/files.ts';
+import type { RevisionParameter } from './parameters.ts';
+
+/** 发给 AI 的一条批注：在哪个文件、哪里、什么意见，见哪张标注截图 */
+export interface RevisionNote {
+  file: string;
+  number: number;
+  /** 给人看的位置，如「第 2 页」「0:12」「画面左上」 */
+  where: string;
+  note: string;
+  quote?: string;
+  /** 随消息发的标注截图的文件名 */
+  snapshot?: string;
+}
+
+/** 「让 AI 改」的那段话：用户写的意见，加上每条批注一行、每项参数一行 */
+export function revisionText(
+  request: string,
+  notes: RevisionNote[],
+  parameters: RevisionParameter[] = [],
+): string {
+  const lines = notes.map((a) => {
+    const extra = [
+      a.quote ? `原文「${a.quote}」` : '',
+      a.snapshot ? `见截图 ${a.snapshot}` : '',
+    ].filter(Boolean);
+    return `${a.number}.「${a.file}」${a.where}：${a.note}${extra.length ? `（${extra.join('；')}）` : ''}`;
+  });
+  const params = parameters.map((p) => `「${p.file}」${p.name}：${p.value}`);
+  return [
+    request,
+    ...(lines.length ? ['批注：', ...lines] : []),
+    ...(params.length ? ['参数：', ...params] : []),
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
 
 /** 能在画面上圈画的类型；其余只能写意见（可带引用原文）。app：运行中的网页或应用，截下当前画面再圈画（只有桌面版能截） */
 export type Surface = 'image' | 'pdf' | 'video' | 'audio' | 'text' | 'app';

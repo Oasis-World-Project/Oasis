@@ -90,8 +90,8 @@ export function installFakeApi(options: {
         return json(200, { conversations: options.dms ?? [] });
       case '/conversation/v1/groups':
         return json(200, { groups: [] });
-      // 「＋」菜单一打开就读「只用国内模型」开关：默认关着
-      case '/task/v1/model-scope':
+      // 「AI 们」页读「只用国内模型」开关：默认关着
+      case '/agent/v1/settings':
         return json(200, { domesticOnly: false });
       default:
         return json(404, { error: { code: 'not_found', message: '没有这个接口' } });
@@ -99,23 +99,4 @@ export function installFakeApi(options: {
   });
   vi.stubGlobal('fetch', handler);
   return state;
-}
-
-/** 修改成果的接口返回的任务（在原任务里接着改，状态回到运行中） */
-export function revisingTask(id: string, title: string) {
-  return {
-    id,
-    title,
-    brief: '',
-    status: 'running',
-    attention: null,
-    spentMicro: 0,
-    sheet: null,
-    acceptance: null,
-    deliverables: [],
-    nodes: [],
-    edges: [],
-    createdAt: new Date().toISOString(),
-    finishedAt: null,
-  };
 }

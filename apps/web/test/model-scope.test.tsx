@@ -1,11 +1,11 @@
-// 「只用国内模型」开关：读出当前状态；点一下开、再点一下关，每次都存到服务端。
+// 「AI 们」页上的「只用国内模型」开关：读出当前状态；点一下开、再点一下关，每次都存到 agent。
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { ModelScopeToggle } from '../src/chat/ModelScopeToggle.tsx';
+import { ModelScopeToggle } from '../src/ui/ModelScopeToggle.tsx';
 import { installFakeApi, json } from './fake-api.ts';
 
-const PATH = '/task/v1/model-scope';
+const PATH = '/agent/v1/settings';
 
 describe('只用国内模型', () => {
   it('显示当前状态；点一下打开、再点一下关上，每次都存下来', async () => {
@@ -20,12 +20,10 @@ describe('只用国内模型', () => {
     });
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <div role="menu">
-          <ModelScopeToggle className="" />
-        </div>
+        <ModelScopeToggle />
       </QueryClientProvider>,
     );
-    const toggle = await screen.findByRole<HTMLButtonElement>('menuitemcheckbox', {
+    const toggle = await screen.findByRole<HTMLButtonElement>('switch', {
       name: /只用国内模型/,
     });
     const settled = (checked: string) =>
@@ -37,7 +35,7 @@ describe('只用国内模型', () => {
     expect(toggle.textContent).toContain('所有模型都能用');
     fireEvent.click(toggle);
     await settled('true');
-    expect(toggle.textContent).toContain('不用国外厂商的模型');
+    expect(toggle.textContent).toContain('国外厂商的 AI 先暂停');
     fireEvent.click(toggle);
     await settled('false');
     expect(api.bodies.filter((b) => b.path === PATH).map((b) => b.body)).toEqual([
@@ -58,10 +56,10 @@ describe('只用国内模型', () => {
       <QueryClientProvider
         client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
       >
-        <ModelScopeToggle className="" />
+        <ModelScopeToggle />
       </QueryClientProvider>,
     );
-    const toggle = await screen.findByRole<HTMLButtonElement>('menuitemcheckbox');
+    const toggle = await screen.findByRole<HTMLButtonElement>('switch');
     await waitFor(() => expect(toggle.textContent).toContain('没连上，稍后再试'));
     expect(toggle.disabled).toBe(true);
   });

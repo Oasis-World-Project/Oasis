@@ -118,11 +118,10 @@ const artifact: ArtifactBody = {
   contentType: 'application/json',
   category: 'app',
   avatar: spec,
-  deliverable: '数字人',
-  taskId: '00000000-0000-4000-8000-0000000000f1',
-  nodeId: '00000000-0000-4000-8000-0000000000a1',
-  taskTitle: '民宿前台数字人',
-  conversationId: null,
+  conversationId: '00000000-0000-4000-8000-0000000000c1',
+  sessionId: '00000000-0000-4000-8000-0000000000f1',
+  topic: '民宿前台数字人',
+  runId: '00000000-0000-4000-8000-0000000000a1',
   models: [],
   syncPath: '民宿前台数字人/民宿前台.oasis-avatar.json',
   annotations: [],
@@ -142,7 +141,6 @@ describe('数字人对话页', () => {
           return json(200, artifact);
         if (method === 'GET' && path.startsWith('/canvas/v1/artifacts'))
           return json(200, { artifacts: [artifact] });
-        if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
         if (path.includes('avatar-sessions')) calls.push(`${method} ${path}`);
         if (method === 'POST' && path === `/canvas/v1/artifacts/${ARTIFACT}/avatar-sessions`)
           return json(201, {
@@ -227,7 +225,6 @@ describe('数字人对话页', () => {
           return json(200, artifact);
         if (method === 'GET' && path.startsWith('/canvas/v1/artifacts'))
           return json(200, { artifacts: [artifact] });
-        if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
         return undefined;
       },
     });
@@ -249,7 +246,7 @@ describe('数字人对话页', () => {
       }),
     );
     fireEvent.click(within(panel).getByRole('button', { name: '按这些参数改一版（2 项）' }));
-    const dialog = await screen.findByLabelText('修改「民宿前台数字人」');
+    const dialog = await screen.findByLabelText('让 AI 改「民宿前台.oasis-avatar.json」');
     const list = within(dialog).getByRole('region', { name: '参数修改', hidden: true });
     expect(list.textContent).toContain('语气：更正式');
     expect(list.textContent).toContain('单次最长时长：10 分钟');

@@ -20,14 +20,11 @@ const ModelPreview = lazy(() =>
 const TEXT_LIMIT = 200_000;
 
 /**
- * 演示文稿和 Word 的配套 PDF（同名 .pdf，交付时系统配好）：有就按 PDF 显示，和下载下来的样子一致；
- * 没有就显示 fallback（Word 退回正文预览）。
+ * 演示文稿和 Word 的配套 PDF（同名 .pdf，交付时系统配好，调用方找到后放在 pdfUrl）：有就按 PDF 显示，
+ * 和下载下来的样子一致；没有就显示 fallback（Word 退回正文预览）。
  */
 function CompanionPdf({ file, fallback }: { file: PreviewFile; fallback: ReactNode }) {
-  const taskPdf = /^\/api\/task\/v1\/tasks\/[^/]+\/files\/[^/]+\//.test(file.url)
-    ? file.url.replace(/\.(pptx?|docx?)(?=\?|$)/i, '.pdf')
-    : undefined;
-  const candidate = file.pdfUrl ?? taskPdf;
+  const candidate = file.pdfUrl;
   const [found, setFound] = useState<{ url: string; ok: boolean } | null>(null);
   useEffect(() => {
     if (!candidate) return;

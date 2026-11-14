@@ -1,5 +1,5 @@
 // 网页和静态应用在画布里直接运行：sandbox 框只给脚本权限，CSP 禁网；画面由本机浏览器渲染，可直接拖动、点选、键盘操作。
-// 组装规则在 @oasis/live-page，节点的 app.check 用的是同一套，检查过了这里就打得开。
+// 组装规则在 @oasis/live-page，AI 自查的 app.check 用的是同一套，检查过了这里就打得开。
 // 报告类网页可以切到「只看内容」：沿用清洗后的无脚本预览（含看板）。
 import { LIVE_SANDBOX, livePage, type LivePage } from '@oasis/live-page';
 import { RotateCcw } from 'lucide-react';

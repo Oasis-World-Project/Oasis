@@ -26,7 +26,6 @@ import { LoginPage } from './pages/LoginPage.tsx';
 import { MePage } from './pages/MePage.tsx';
 import { NotFoundPage } from './pages/NotFoundPage.tsx';
 import { PlazaPage } from './pages/PlazaPage.tsx';
-import { WorkflowPage } from './pages/WorkflowPage.tsx';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -137,9 +136,9 @@ const aisRoute = createRoute({
 const canvasRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/canvas',
-  // ?task= 只看某个任务的成果（交付消息里的「在画布里看」）
-  validateSearch: (search: Record<string, unknown>): { task?: string | undefined } => ({
-    task: typeof search.task === 'string' ? search.task : undefined,
+  // ?conversation= 只看某个私聊的成果（任务卡上的「在画布里看」）
+  validateSearch: (search: Record<string, unknown>): { conversation?: string | undefined } => ({
+    conversation: typeof search.conversation === 'string' ? search.conversation : undefined,
   }),
   component: CanvasPage,
 });
@@ -148,12 +147,6 @@ const artifactRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/canvas/artifacts/$artifactId',
   component: ArtifactPage,
-});
-/** 任务的工作流：从私聊里的任务卡进来；成果属于画布，侧栏亮「画布」 */
-const workflowRoute = createRoute({
-  getParentRoute: () => shellRoute,
-  path: '/canvas/tasks/$taskId',
-  component: WorkflowPage,
 });
 const groupsRoute = createRoute({
   getParentRoute: () => shellRoute,
@@ -189,7 +182,6 @@ const routeTree = rootRoute.addChildren([
     homeRoute,
     aisRoute,
     canvasRoute,
-    workflowRoute,
     artifactRoute,
     groupsRoute,
     groupRoute,

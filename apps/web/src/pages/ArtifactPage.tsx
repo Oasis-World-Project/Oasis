@@ -1,7 +1,7 @@
 // 画布里打开一个成果（外观照原型 ⑨⑩）：点阵底；顶栏只有返回、批注、下载三个图标（2026-11-04 精简）。
 // 中间预览（图片、视频、音频、PDF、Markdown、文字、网页；其他格式提示下载）。网页和静态应用在本机隔离框里直接运行；
 // 带后端的应用不在画布里运行，只能下载（画面转发式的平台容器预览已经删掉）。
-// 批注面板里「发给 AI 团队修改」，直接交给 AI 团队在原任务里接着改。
+// 批注面板里「让 AI 改」，作为一条消息发到做这个成果的私聊里，AI 接着改。
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ArrowLeft, Download, LoaderCircle, PencilLine, SlidersHorizontal } from 'lucide-react';
@@ -10,15 +10,13 @@ import {
   artifactContentUrl,
   artifactQuery,
   artifactsQuery,
-  SETTLED_STATUSES,
-  taskArchiveUrl,
-  tasksQuery,
+  dmsQuery,
+  topicArchiveUrl,
 } from '../api/queries.ts';
-import type { RevisionParameter } from '@oasis/contracts/task';
 import { ArtifactReview } from '../canvas/ArtifactReview.tsx';
 import { AvatarPreview } from '../canvas/AvatarPreview.tsx';
 import { ParameterPanel } from '../canvas/ParameterPanel.tsx';
-import { AVATAR_FIELDS, type Values } from '../canvas/parameters.ts';
+import { AVATAR_FIELDS, type RevisionParameter, type Values } from '../canvas/parameters.ts';
 import { LivePreview } from '../canvas/LivePreview.tsx';
 import { RevisePanel } from '../canvas/RevisePanel.tsx';
 import { pdfCompanion } from '../canvas/snapshots.ts';
@@ -32,14 +30,15 @@ const icon =
 export function ArtifactPage() {
   const { artifactId } = route.useParams();
   const { data: artifact, isPending, isError } = useQuery(artifactQuery(artifactId));
+  // 同一个话题的成果：网页按相对地址引用它们，批注一起带给 AI
   const { data: siblings = [] } = useQuery({
-    ...artifactsQuery(artifact?.taskId),
+    ...artifactsQuery({ sessionId: artifact?.sessionId }),
     enabled: !!artifact,
   });
-  const { data: tasks = [] } = useQuery(tasksQuery);
-  // 这份成果正在修改：原任务又跑起来了（在原任务里改）；改完之前不能再改
-  const ownTask = artifact ? tasks.find((t) => t.id === artifact.taskId) : undefined;
-  const revising = ownTask && !SETTLED_STATUSES.has(ownTask.status) ? ownTask : undefined;
+  const { data: dms = [] } = useQuery({ ...dmsQuery, refetchInterval: 5_000 });
+  // 做这个成果的 AI 正在做一轮：做完之前不能再让它改（文件只在一轮开始时交给它）
+  const working = artifact ? dms.find((dm) => dm.id === artifact.conversationId)?.turn : null;
+  const revising = working ? artifact : undefined;
   const [reviseOpen, setReviseOpen] = useState(false);
   /** 从参数面板来的修改：参数随对话框一起发 */
   const [parameters, setParameters] = useState<RevisionParameter[]>([]);
@@ -55,25 +54,18 @@ export function ArtifactPage() {
   const canAnnotate = !!artifact && !artifact.avatar;
   const appFiles = artifact?.application
     ? siblings.filter(
-        (item) =>
-          item.taskId === artifact.taskId &&
-          item.nodeId === artifact.nodeId &&
-          item.path.startsWith(`${artifact.application!.root}/`) &&
-          item.id !== artifact.id,
+        (item) => item.path.startsWith(`${artifact.application!.root}/`) && item.id !== artifact.id,
       )
     : [];
 
-  // 同一节点交出的文件：网页按相对地址引用它们（图片、脚本、样式等）
-  const nodeFiles = artifact
-    ? siblings.filter((item) => item.taskId === artifact.taskId && item.nodeId === artifact.nodeId)
-    : [];
-  const assets = nodeFiles.map((item) => ({ path: item.path, url: artifactContentUrl(item.id) }));
+  // 同一话题的文件：网页按相对地址引用它们（图片、脚本、样式等）
+  const assets = siblings.map((item) => ({ path: item.path, url: artifactContentUrl(item.id) }));
   const staticApp = artifact?.application?.kind === 'static' ? artifact.application : undefined;
   const appEntry = staticApp
-    ? nodeFiles.find((item) => item.path === `${staticApp.root}/${staticApp.entry}`)
+    ? siblings.find((item) => item.path === `${staticApp.root}/${staticApp.entry}`)
     : undefined;
   // 单独打开静态应用里的网页时，以 / 开头的地址仍按应用根目录算
-  const pageRoot = nodeFiles.find(
+  const pageRoot = siblings.find(
     (item) =>
       item.application?.kind === 'static' && artifact?.path.startsWith(`${item.application.root}/`),
   )?.application?.root;
@@ -90,7 +82,7 @@ export function ArtifactPage() {
           </Link>
           {artifact && (
             <h1 className="m-0 min-w-0 truncate text-[15px] font-medium">
-              {artifact.taskTitle}
+              {artifact.topic}
               <span className="ml-2 text-[13px] font-normal text-ink-muted">
                 {artifact.application ? artifact.application.root : artifact.name}
               </span>
@@ -101,10 +93,10 @@ export function ArtifactPage() {
           <div className="flex shrink-0 items-center gap-2">
             {revising ? (
               <Link
-                to="/canvas/tasks/$taskId"
-                params={{ taskId: revising.id }}
-                aria-label="正在修改，看进度"
-                title="正在修改，点开看进度"
+                to="/dms/$conversationId"
+                params={{ conversationId: revising.conversationId }}
+                aria-label="AI 正在做，看进度"
+                title="做这个成果的 AI 正在做，点开私聊看进度"
                 className={icon}
               >
                 <LoaderCircle size={17} aria-hidden="true" className="animate-spin" />
@@ -126,12 +118,12 @@ export function ArtifactPage() {
             <a
               href={
                 artifact.application
-                  ? taskArchiveUrl(artifact.taskId)
+                  ? topicArchiveUrl(artifact.sessionId)
                   : artifactContentUrl(artifact.id, true)
               }
               download={artifact.application ? true : artifact.name}
               aria-label="下载"
-              title={artifact.application ? '下载整个应用' : '下载'}
+              title={artifact.application ? '下载整个应用（连同这个话题的其他成果）' : '下载'}
               className={`${icon} bg-solid text-on-solid`}
             >
               <Download size={17} aria-hidden="true" />
@@ -141,10 +133,9 @@ export function ArtifactPage() {
       </div>
       {artifact && reviseOpen && (
         <RevisePanel
-          taskId={artifact.taskId}
-          taskTitle={artifact.taskTitle}
+          artifact={artifact}
+          siblings={siblings}
           parameters={parameters}
-          nodeId={artifact.nodeId}
           onClose={() => setReviseOpen(false)}
         />
       )}
@@ -252,8 +243,7 @@ export function ArtifactPage() {
       )}
       {artifact && (
         <p className="m-0 px-5 pb-3 text-[12px] text-ink-muted">
-          交付物「{artifact.deliverable}」 · {new Date(artifact.createdAt).toLocaleString('zh-CN')}{' '}
-          放进画布
+          话题「{artifact.topic}」 · {new Date(artifact.createdAt).toLocaleString('zh-CN')} 放进画布
         </p>
       )}
     </section>

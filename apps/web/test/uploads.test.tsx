@@ -4,7 +4,7 @@ import { createMemoryHistory } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
-import { installFakeApi } from './fake-api.ts';
+import { installFakeApi, json } from './fake-api.ts';
 
 const NOW = '2026-10-23T08:00:00.000Z';
 const CONV = '00000000-0000-4000-8000-0000000000c1';
@@ -16,6 +16,7 @@ const DM = {
   modelKey: 'claude',
   createdAt: NOW,
   lastMessageAt: NOW,
+  turn: null,
 };
 
 /** 假 XHR：记下上传的请求，按 respond 的设定应答；hold 时先不应答 */
@@ -69,7 +70,7 @@ function chat() {
     dms: [DM],
     extra: (method, path) => {
       if (path !== `/conversation/v1/conversations/${CONV}/messages`) return undefined;
-      if (method === 'GET') return new Response(JSON.stringify({ messages: state.messages }));
+      if (method === 'GET') return json(200, { messages: state.messages, turn: null });
       const userMessage = {
         id: '00000000-0000-4000-8000-0000000000e1',
         role: 'user',
@@ -85,9 +86,7 @@ function chat() {
         },
       } as MessageBody;
       state.messages = [userMessage];
-      return new Response(`data: ${JSON.stringify({ type: 'accepted', userMessage })}\n\n`, {
-        headers: { 'content-type': 'text/event-stream' },
-      });
+      return json(201, { messages: [userMessage], turn: null });
     },
   });
   return api;
@@ -137,7 +136,6 @@ describe('上传素材', () => {
     const sent = await screen.findByRole('list', { name: '附件' });
     expect(api.bodies.find((b) => b.path.endsWith('/messages'))?.body).toEqual({
       content: '用这张照片',
-      asTask: false,
       attachments: [UPLOAD],
     });
     expect(within(sent).getByRole('link', { name: '下载 民宿照片.jpg' }).getAttribute('href')).toBe(

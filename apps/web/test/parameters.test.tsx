@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
 import { fieldsFor, formatValue, mediaLook, toParameters } from '../src/canvas/parameters.ts';
-import { installFakeApi, json, revisingTask } from './fake-api.ts';
+import { installFakeApi, json } from './fake-api.ts';
 
 describe('成品参数', () => {
   it('每类成果有自己的参数；文档没有', () => {
@@ -44,7 +44,6 @@ describe('成品参数', () => {
   });
 });
 
-const TASK = '00000000-0000-4000-8000-0000000000f1';
 const CONV = '00000000-0000-4000-8000-0000000000c1';
 const video: ArtifactBody = {
   id: '00000000-0000-4000-8000-000000000911',
@@ -53,11 +52,10 @@ const video: ArtifactBody = {
   size: 100,
   contentType: 'video/mp4',
   category: 'media',
-  deliverable: '短片',
-  taskId: TASK,
-  nodeId: '00000000-0000-4000-8000-0000000000a1',
-  taskTitle: '民宿短片',
   conversationId: CONV,
+  sessionId: '00000000-0000-4000-8000-0000000000f1',
+  topic: '民宿短片',
+  runId: '00000000-0000-4000-8000-0000000000a1',
   models: [],
   syncPath: '民宿短片/宣传短片.mp4',
   annotations: [],
@@ -80,6 +78,7 @@ describe('从参数面板发起修改', () => {
           modelKey: 'deepseek',
           createdAt: video.createdAt,
           lastMessageAt: null,
+          turn: null,
         },
       ],
       extra: (method, path, body) => {
@@ -87,13 +86,12 @@ describe('从参数面板发起修改', () => {
           return json(200, video);
         if (method === 'GET' && path.startsWith('/canvas/v1/artifacts'))
           return json(200, { artifacts: [video] });
-        if (method === 'GET' && path === '/task/v1/tasks') return json(200, { tasks: [] });
-        if (method === 'POST' && path === `/task/v1/tasks/${TASK}/revisions`) {
+        const messages = `/conversation/v1/conversations/${CONV}/messages`;
+        if (method === 'POST' && path === messages) {
           sent.push(body);
-          return json(200, revisingTask(TASK, '民宿短片'));
+          return json(201, { messages: [], turn: null });
         }
-        if (method === 'GET' && path === `/conversation/v1/conversations/${CONV}/messages`)
-          return json(200, { messages: [] });
+        if (method === 'GET' && path === messages) return json(200, { messages: [], turn: null });
         return undefined;
       },
     });
@@ -118,18 +116,17 @@ describe('从参数面板发起修改', () => {
     expect(document.querySelector('video')?.style.filter).toBe('brightness(1.1)');
     fireEvent.click(within(panel).getByRole('button', { name: '按这些参数改一版（2 项）' }));
 
-    const dialog = await screen.findByLabelText('修改「民宿短片」');
+    const dialog = await screen.findByLabelText('让 AI 改「宣传短片.mp4」');
     const list = within(dialog).getByRole('region', { name: '参数修改', hidden: true });
     expect(list.textContent).toContain('字幕字号：大');
     expect(list.textContent).toContain('亮度：+10%');
-    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 团队修改', hidden: true }));
+    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 改', hidden: true }));
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]).toMatchObject({
-      request: '',
-      parameters: [
-        { file: '宣传短片.mp4', name: '字幕字号', value: '大' },
-        { file: '宣传短片.mp4', name: '亮度', value: '+10%' },
-      ],
+    expect(sent[0]).toEqual({
+      content:
+        '改一下「宣传短片.mp4」\n参数：\n「宣传短片.mp4」字幕字号：大\n「宣传短片.mp4」亮度：+10%',
+      attachments: [],
+      artifacts: [video.id],
     });
   });
 });

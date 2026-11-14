@@ -1,7 +1,13 @@
 // 参数面板：各类成果能改哪些成品参数、怎么写进修改意见、哪些能在浏览器里近似预览。
 // 每项默认「不变」（不在 values 里）；改过的才会变成修改意见里的一行。
-import type { RevisionParameter } from '@oasis/contracts/task';
 import type { PreviewKind } from '../chat/files.ts';
+
+/** 参数面板里改的一项成品参数，如「字幕字号：大」 */
+export interface RevisionParameter {
+  file: string;
+  name: string;
+  value: string;
+}
 
 export type Field =
   | { key: string; label: string; kind: 'choice'; options: string[] }
