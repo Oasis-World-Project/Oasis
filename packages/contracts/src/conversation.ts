@@ -171,9 +171,9 @@ export const MessageBody = z.discriminatedUnion('kind', [
       artifacts: z.array(MessageArtifact).optional(),
       /** 属于哪一轮：用户的话开了这一轮或插话进这一轮；AI 的话是这一轮说的 */
       runId: z.uuid().optional(),
-      /** 用户：这句是插话，送进了正在进行的一轮 */
+      /** 用户：这句是插话，点「引导」送进了正在进行的一轮 */
       interjection: z.boolean().optional(),
-      /** 用户：这一轮在收尾、没送进去，留到下一轮开头交给 AI */
+      /** 用户：AI 干活时发的，还排着队（显示在输入框上面）；这一轮做完接着开下一轮 */
       pending: z.boolean().optional(),
       /** AI：按顺序说的话和做的步骤 */
       parts: z.array(MessagePart).optional(),

@@ -371,6 +371,23 @@ export const send = (
     artifacts: extra.artifacts ?? [],
     requestId: 'r',
   });
+/** 用户说过的这句话的消息 id */
+export const userMessageId = (content: string) => {
+  const message = repo.messages.find((m) => m.authorKind === 'user' && m.content === content);
+  if (!message) throw new Error(`没有「${content}」这句`);
+  return message.id;
+};
+/** 「引导」：把排着队的这句现在交给 AI */
+export const steer = (content: string) =>
+  dms.steer({
+    ownerId: OWNER,
+    conversationId: conversation.id,
+    messageId: userMessageId(content),
+    requestId: 'r',
+  });
+/** 从队里删掉这句 */
+export const unqueue = (content: string) =>
+  dms.unqueue(OWNER, conversation.id, userMessageId(content));
 /** 等到条件成立（跟进在后台跑） */
 export async function until<T>(
   read: () => T | undefined | Promise<T | undefined>,

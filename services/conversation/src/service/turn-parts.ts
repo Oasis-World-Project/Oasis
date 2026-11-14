@@ -241,11 +241,9 @@ export async function writeEvents(
       };
       let pending: RunEventBody[] = [];
       for (const event of events) {
-        // 开头那句（和服务恢复时的提醒）不算：只有送进来、AI 还没看到的插话才分段
+        // 开头那句（和服务恢复时的提醒）不算：只有送进来、AI 还没看到的插话（harness 标了）才分段
         const heard =
-          unheard > 0 &&
-          event.kind === 'user_message' &&
-          typeof event.data.parentSessionId !== 'string';
+          unheard > 0 && event.kind === 'user_message' && event.data.interjection === true;
         if (!heard) {
           pending.push(event);
           continue;

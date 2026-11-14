@@ -16,13 +16,15 @@ import {
   conversation,
   restartTurns,
   send,
+  steer,
+  unqueue,
   until,
   finished,
   aiMessages,
 } from './support/turn-fixture.ts';
 
-describe('插话、停止、出错', () => {
-  it('一轮进行中再说的话送进这一轮；AI 看到它时才分段：之前说的留在插话前面，之后的写进插话后面的新消息', async () => {
+describe('排队、插话、停止、出错', () => {
+  it('一轮进行中再说的话先排队；点「引导」才送进这一轮，AI 看到它时才分段：之前说的留在插话前面，之后的写进插话后面的新消息', async () => {
     const runId = (await send('做个视频')).turn!.runId;
     const events = [
       event(0, 'user_message', { text: '做个视频' }),
@@ -30,16 +32,20 @@ describe('插话、停止、出错', () => {
     ];
     fake.events.set(runId, events);
     await until(() => (aiMessages()[0]?.content ? aiMessages()[0] : undefined));
-    const added = await send('改成竖屏');
+    const queued = await send('改成竖屏');
+    expect(queued.messages.map((m) => [m.role, m.content])).toEqual([['user', '改成竖屏']]);
+    expect(queued.messages[0]?.data).toEqual({ pending: true });
+    expect(fake.interjections).toEqual([]);
+    const added = await steer('改成竖屏');
     expect(fake.interjections).toEqual([{ runId, text: '改成竖屏' }]);
     expect(added.messages.map((m) => [m.role, m.content])).toEqual([['user', '改成竖屏']]);
-    expect(added.messages[0]?.data).toMatchObject({ runId, interjection: true });
+    expect(added.messages[0]?.data).toEqual({ runId, interjection: true });
     // AI 做完手上这一步才看到插话：在那之前说的还写在插话前面那条
     events.push(event(2, 'assistant_text', { text: '分镜写好了' }));
     await until(() => aiMessages()[0]?.content.includes('分镜写好了'));
     expect(aiMessages()).toHaveLength(1);
     events.push(
-      event(3, 'user_message', { text: '改成竖屏' }),
+      event(3, 'user_message', { text: '改成竖屏', interjection: true }),
       event(4, 'assistant_text', { text: '好，改成竖屏' }),
     );
     await until(() => (aiMessages()[1]?.content ? aiMessages()[1] : undefined));
@@ -51,11 +57,13 @@ describe('插话、停止、出错', () => {
       '好，改成竖屏',
     ]);
     // 连着插两句、AI 一起看到：中间什么都没写的那条去掉，不留空白气泡
-    await send('再快一点');
-    await send('配上字幕');
+    for (const text of ['再快一点', '配上字幕']) {
+      await send(text);
+      await steer(text);
+    }
     events.push(
-      event(5, 'user_message', { text: '再快一点' }),
-      event(6, 'user_message', { text: '配上字幕' }),
+      event(5, 'user_message', { text: '再快一点', interjection: true }),
+      event(6, 'user_message', { text: '配上字幕', interjection: true }),
       event(7, 'assistant_text', { text: '都改好了' }),
     );
     await until(() => aiMessages().at(-1)?.content === '都改好了');
@@ -86,10 +94,11 @@ describe('插话、停止、出错', () => {
     ]);
     await until(() => (aiMessages()[0]?.data.parts as unknown[] | undefined)?.length === 2);
     await send('改成竖屏');
+    await steer('改成竖屏');
     fake.events
       .get(runId)!
       .push(
-        event(3, 'user_message', { text: '改成竖屏' }),
+        event(3, 'user_message', { text: '改成竖屏', interjection: true }),
         event(4, 'tool_result', { callId: 'c1', ok: true, text: 'ok' }),
       );
     const [before, after] = await until(() => {
@@ -118,29 +127,88 @@ describe('插话、停止、出错', () => {
       expect(aiMessages()[0]?.content).toBe('');
     });
     await until(() => aiMessages()[0]?.content === '先写分镜');
-    // 锁被占着时发话：等它放开再插话，不报「正在处理」
-    const held = repo.withLock(
-      'message',
-      conversation.id,
-      () => new Promise((resolve) => setTimeout(resolve, 300)),
-    );
+    // 锁被占着时发话、引导：等它放开再做，不报「正在处理」
+    const hold = () =>
+      repo.withLock(
+        'message',
+        conversation.id,
+        () => new Promise((resolve) => setTimeout(resolve, 300)),
+      );
+    let held = hold();
     const added = await send('改成竖屏');
     await held;
-    expect(added.messages[0]).toMatchObject({ content: '改成竖屏', data: { interjection: true } });
+    expect(added.messages[0]).toMatchObject({ content: '改成竖屏', data: { pending: true } });
+    held = hold();
+    const steered = await steer('改成竖屏');
+    await held;
+    expect(steered.messages[0]).toMatchObject({ data: { interjection: true } });
   });
 
-  it('这一轮在收尾、插话送不进去：留到下一轮开头交给 AI', async () => {
+  it('排着队的话：能删掉；引导的那句挪到聊天最后；这一轮做完，剩下的接着开下一轮，也挪到最后', async () => {
     const first = (await send('写首诗')).turn!.runId;
+    const events = [event(0, 'user_message', { text: '写首诗' })];
+    fake.events.set(first, events);
+    for (const text of ['写春天', '要七言的', '算了不要了']) await send(text);
+    await unqueue('算了不要了');
+    expect(repo.messages.some((m) => m.content === '算了不要了')).toBe(false);
+    await steer('要七言的');
+    events.push(
+      event(1, 'user_message', { text: '要七言的', interjection: true }),
+      event(2, 'assistant_text', { text: '好，七言' }),
+    );
+    await until(() => aiMessages().find((m) => m.content === '好，七言'));
+    // 已经交给 AI 的不在队里了：删不了、也不能再引导
+    for (const act of [() => unqueue('要七言的'), () => unqueue('写首诗'), () => steer('要七言的')])
+      await expect(act()).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'queued_message_not_found',
+      });
+    fake.runs.set(first, run(first, { status: 'succeeded', finishedAt: new Date().toISOString() }));
+    const second = await until(() => (fake.starts.length === 2 ? fake.starts[1] : undefined));
+    expect(second).toMatchObject({ prompt: '写春天', continueFrom: first });
+    expect(repo.messages.find((m) => m.content === '写春天')?.data).toEqual({
+      runId: second.runId,
+    });
+    // 聊天按交给 AI 的先后排：先发但后交给 AI 的「写春天」在「好，七言」后面
+    expect(repo.messages.map((m) => [m.authorKind, m.content])).toEqual([
+      ['user', '写首诗'],
+      ['user', '要七言的'],
+      ['ai', '好，七言'],
+      ['user', '写春天'],
+      ['ai', ''],
+    ]);
+  });
+
+  it('这一轮在交接或收尾、引导送不进去：告诉用户，这句还排着，做完接着开下一轮', async () => {
+    const first = (await send('写首诗')).turn!.runId;
+    await send('要七言的');
     fake.interjectStatus = 409;
-    const added = await send('要七言的');
-    expect(added.messages).toHaveLength(1);
-    expect(added.messages[0]?.data).toMatchObject({ pending: true });
+    await expect(steer('要七言的')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'turn_not_ready',
+    });
+    expect(repo.messages.find((m) => m.content === '要七言的')?.data).toEqual({ pending: true });
     fake.interjectStatus = 202;
     fake.runs.set(first, run(first, { status: 'succeeded', finishedAt: new Date().toISOString() }));
     const second = await until(() => (fake.starts.length === 2 ? fake.starts[1] : undefined));
     expect(second).toMatchObject({ prompt: '要七言的', continueFrom: first });
-    const pending = repo.messages.find((m) => m.content === '要七言的');
-    expect(pending?.data).toEqual({ runId: second.runId });
+    expect(fake.interjections).toEqual([]);
+  });
+
+  it('没有在进行的一轮时引导（比如收尾没接上）：用这句开一轮', async () => {
+    await repo.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'user',
+      authorId: OWNER,
+      content: '接着写',
+      status: 'complete',
+      data: { pending: true },
+    });
+    const result = await steer('接着写');
+    expect(fake.starts).toHaveLength(1);
+    expect(fake.starts[0]).toMatchObject({ prompt: '接着写' });
+    expect(result.turn?.runId).toBe(fake.starts[0]!.runId);
+    expect(result.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
   });
 
   it('停止：这一轮停下，AI 消息标成已停下、步骤算没做完；任务卡写「已停下」', async () => {

@@ -12,6 +12,7 @@ import type { DmService } from '../service/dm-service.ts';
 
 const IdParams = z.object({ id: z.uuid() });
 const ConfirmationParams = z.object({ id: z.uuid(), confirmationId: z.uuid() });
+const MessageParams = z.object({ id: z.uuid(), messageId: z.uuid() });
 const RunFileParams = z.object({
   id: z.uuid(),
   runId: z.uuid(),
@@ -46,7 +47,7 @@ export function registerRoutes(app: ServiceApp, dms: DmService): void {
     return dms.listMessages(requireUserId(request), id);
   });
 
-  /** 发一条消息：开一轮，或插话进正在进行的这一轮；可以带文件、带要改的画布成果 */
+  /** 发一条消息：开一轮，或排队等正在进行的这一轮做完；可以带文件、带要改的画布成果 */
   app.post('/v1/conversations/:id/messages', async (request, reply) => {
     const { id } = parseWith(IdParams, request.params);
     const body = parseWith(SendMessageBody, request.body);
@@ -58,6 +59,24 @@ export function registerRoutes(app: ServiceApp, dms: DmService): void {
         requestId: request.id,
       }),
     );
+  });
+
+  /** 「引导」：排着队的一句现在交给 AI（插话进正在进行的这一轮） */
+  app.post('/v1/conversations/:id/messages/:messageId/steer', async (request) => {
+    const { id, messageId } = parseWith(MessageParams, request.params);
+    return dms.steer({
+      ownerId: requireUserId(request),
+      conversationId: id,
+      messageId,
+      requestId: request.id,
+    });
+  });
+
+  /** 从队里删掉一句（只能删还排着、没交给 AI 的） */
+  app.delete('/v1/conversations/:id/messages/:messageId', async (request, reply) => {
+    const { id, messageId } = parseWith(MessageParams, request.params);
+    await dms.unqueue(requireUserId(request), id, messageId);
+    return reply.code(204).send();
   });
 
   /** 某一轮工作目录里的一个文件：进度页预览这一轮做出的中间产物和成品 */

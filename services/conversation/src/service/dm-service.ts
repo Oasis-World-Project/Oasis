@@ -65,6 +65,18 @@ function toMessageBody(row: Message): MessageBody {
   } as MessageBody;
 }
 
+/** 还排着队的一句（用户发的、没交给 AI）；已经交给 AI 或删掉了 404 */
+async function queuedMessage(
+  store: ConversationRepo,
+  conversationId: string,
+  id: string,
+): Promise<Message> {
+  const message = await store.findMessage(conversationId, id);
+  if (message?.authorKind !== 'user' || !message.data.pending)
+    throw new HttpError(404, 'queued_message_not_found', '这句已经交给 AI 了，或者已经删掉了');
+  return message;
+}
+
 /** 删对话前等被取消的那一轮收尾，最多等这么久 */
 const CANCEL_WAIT_MS = 60_000;
 /** 画布上最多列多少个任务 */
@@ -232,8 +244,8 @@ export function createDmService(deps: {
     },
 
     /**
-     * 发一条消息：没有正在进行的一轮就开一轮；有就作为插话交给这一轮（AI 下一步就看到）。
-     * 这一轮正在收尾、送不进去的话留到下一轮开头交给 AI。带的文件和要改的成果都要核对过才收，
+     * 发一条消息：没有正在进行的一轮就开一轮；有就先排队，这一轮做完接着开下一轮
+     * （用户可以点「引导」现在交给这一轮，见 steer）。带的文件和要改的成果都要核对过才收，
      * 有一个不在或不是这个人的就整条消息不收。
      */
     async sendMessage(input: {
@@ -273,14 +285,13 @@ export function createDmService(deps: {
           data: {
             ...(attachments.length ? { attachments } : {}),
             ...(artifacts.length ? { artifacts } : {}),
+            ...(latest.turn ? { pending: true } : {}),
           },
         });
         let added: Message[];
         if (latest.turn) {
           turns.follow(conversation.id);
-          added = (await turns.interject(store, latest, latest.turn, user)) ?? [
-            (await store.updateMessage(user.id, { data: { ...user.data, pending: true } })) ?? user,
-          ];
+          added = [user];
         } else {
           const replies = await turns.begin(store, latest, [user], input.requestId);
           added = [(await store.findMessage(conversation.id, user.id)) ?? user, ...replies];
@@ -288,6 +299,32 @@ export function createDmService(deps: {
         await store.touchConversation(conversation.id);
         const fresh = (await store.find(conversation.id)) ?? latest;
         return { messages: added.map(toMessageBody), turn: turnState(fresh) };
+      });
+    },
+
+    /** 「引导」：排着队的一句现在交给 AI（见 turns.steer）；已经交给 AI 或删掉了 404 */
+    async steer(input: {
+      ownerId: string;
+      conversationId: string;
+      messageId: string;
+      requestId: string;
+    }): Promise<SendResult> {
+      const conversation = await owned(input.conversationId, input.ownerId);
+      return withMessageLock(conversation.id, async (store) => {
+        const latest = (await store.find(conversation.id))!;
+        const queued = await queuedMessage(store, conversation.id, input.messageId);
+        const added = await turns.steer(store, latest, queued, input.requestId);
+        const fresh = (await store.find(conversation.id)) ?? latest;
+        return { messages: added.map(toMessageBody), turn: turnState(fresh) };
+      });
+    },
+
+    /** 从队里删掉一句（真删除）；改一句是删掉后放回输入框，由前端做 */
+    async unqueue(ownerId: string, conversationId: string, messageId: string) {
+      const conversation = await owned(conversationId, ownerId);
+      await withMessageLock(conversation.id, async (store) => {
+        await queuedMessage(store, conversation.id, messageId);
+        await store.deleteMessage(messageId);
       });
     },
 

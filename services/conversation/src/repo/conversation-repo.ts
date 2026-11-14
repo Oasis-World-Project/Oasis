@@ -38,8 +38,10 @@ export interface ConversationRepo {
   /** 这个人私聊里的任务卡（画布按任务分），新的在前 */
   listTasks(ownerId: string, limit: number): Promise<Message[]>;
   findMessage(conversationId: string, id: string): Promise<Message | undefined>;
-  /** 用户在一轮结束前发来、还没交给 AI 的话（下一轮开头交给它） */
+  /** AI 干活时用户发来、还排着队的话（这一轮做完接着开下一轮），按发的先后 */
   pendingMessages(conversationId: string): Promise<Message[]>;
+  /** 排着队的话交给 AI 时挪到最后：聊天里按交给 AI 的先后排。消息不在了返回 undefined */
+  moveToEnd(conversationId: string, id: string): Promise<Message | undefined>;
   /** 这段对话里所有消息带的附件 ID（删私聊时用） */
   attachmentIds(conversationId: string): Promise<string[]>;
   /** 删掉整段对话：消息随之级联删除 */
@@ -227,6 +229,22 @@ export function createConversationRepo(
           ),
         )
         .orderBy(asc(messages.seq)),
+
+    async moveToEnd(conversationId, id) {
+      // 和新消息一样从对话的计数里取下一个序号
+      const [next] = await db
+        .update(conversations)
+        .set({ nextMessageSeq: sql`${conversations.nextMessageSeq} + 1` })
+        .where(eq(conversations.id, conversationId))
+        .returning({ seq: conversations.nextMessageSeq });
+      if (!next) return undefined;
+      const [row] = await db
+        .update(messages)
+        .set({ seq: next.seq })
+        .where(and(eq(messages.id, id), eq(messages.conversationId, conversationId)))
+        .returning();
+      return row;
+    },
 
     async attachmentIds(conversationId) {
       const rows = await db.execute<{ id: string }>(

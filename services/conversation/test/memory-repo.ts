@@ -113,6 +113,15 @@ export function memoryRepo(): ConversationRepo & {
           (m) => m.conversationId === conversationId && m.authorKind === 'user' && m.data.pending,
         ),
       ),
+    async moveToEnd(conversationId, id) {
+      const index = messages.findIndex((m) => m.id === id && m.conversationId === conversationId);
+      if (index < 0) return undefined;
+      // 数组也按序号排，测试直接看 messages 的先后
+      const [row] = messages.splice(index, 1);
+      row!.seq = ++seq;
+      messages.push(row!);
+      return structuredClone(row);
+    },
     attachmentIds: async (conversationId) => [
       ...new Set(
         messages

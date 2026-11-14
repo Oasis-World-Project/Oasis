@@ -381,9 +381,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       status: 'complete',
       data: { runId: r2 },
     });
-    expect((await store.pendingMessages(conversation.id)).map((m) => m.id)).toEqual([
-      pendingUser.id,
-    ]);
+    const pendingIds = async () => (await store.pendingMessages(conversation.id)).map((m) => m.id);
+    expect(await pendingIds()).toEqual([pendingUser.id]);
+    // 排着队的话交给 AI 时挪到最后
+    await store.moveToEnd(conversation.id, pendingUser.id);
+    expect((await store.listMessages(conversation.id, 1))[0]?.id).toBe(pendingUser.id);
     // 新的消息种类：开新话题的分隔；改消息、删消息
     const divider = await store.insertMessage({
       conversationId: conversation.id,

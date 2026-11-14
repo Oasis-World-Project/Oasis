@@ -1,7 +1,7 @@
-// 一轮 = harness 的一次运行：用户说一句开一轮，一轮进行中再说的话是插话。
+// 一轮 = harness 的一次运行：用户说一句开一轮；一轮进行中再说的话先排队，用户点「引导」才作为插话交给这一轮。
 // 开一轮（起好任务名）、插话、停止在这里；开了以后跟进 harness 的事件，把 AI 说的话和做的步骤写进消息，
 // 进行中定时看一眼（在等用户点的确认卡放进这一轮；做好的文件登记进画布；是任务就出任务卡，见 task-cards.ts），
-// 结束时把成品再登记一遍、写上用时和花费，收尾时用户发来的话接着开下一轮。服务重启后接着跟进没结束的轮。
+// 结束时把成品再登记一遍、写上用时和花费，排着队的话接着开下一轮。服务重启后接着跟进没结束的轮。
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ModelRoute } from '@oasis/contracts/agent';
@@ -96,7 +96,7 @@ export function createTurns(deps: TurnDeps) {
 
   /**
    * 这一轮结束：最后一段 AI 消息写上结局和花费，out/ 里的成品按产出清单再登记一遍（进行中已经登记的
-   * 内容没变就不动）、写到任务卡上，清掉这一轮，收尾时用户发来的话接着开下一轮。
+   * 内容没变就不动）、写到任务卡上，清掉这一轮，排着队的话接着开下一轮。
    * run 为 undefined：harness 里没有这一轮（没开成）。
    */
   async function finish(
@@ -244,8 +244,8 @@ export function createTurns(deps: TurnDeps) {
   }
 
   /**
-   * 开一轮（调用方拿着这个对话的 message 锁）：userMessages 是这一轮用户说的话（已经存下），
-   * 交给 AI 的是它们连起来的文字和带的文件。返回这一轮新增的 AI 消息。
+   * 开一轮（调用方拿着这个对话的 message 锁）：userMessages 是这一轮用户说的话（已经存下；排着队的
+   * 挪到最后），交给 AI 的是它们连起来的文字和带的文件。返回这一轮新增的 AI 消息。
    */
   async function begin(
     store: ConversationRepo,
@@ -256,7 +256,8 @@ export function createTurns(deps: TurnDeps) {
     const runId = randomUUID();
     const { text, attachments, revisingIds } = gather(userMessages);
     for (const m of userMessages) {
-      const { pending: _pending, ...data } = m.data;
+      const { pending, ...data } = m.data;
+      if (pending) await store.moveToEnd(conversation.id, m.id);
       await store.updateMessage(m.id, { data: { ...data, runId } });
     }
     const aiMessage = (status: Message['status'], data: Record<string, unknown>, error?: string) =>
@@ -383,28 +384,41 @@ export function createTurns(deps: TurnDeps) {
     follow,
 
     /**
-     * 插话（调用方拿着 message 锁）：交给正在进行的这一轮，AI 做完手上这一步就看到；看到时跟进那边
-     * 换一条新的 AI 消息接着写（见 write）。这一轮已经在收尾、送不进去时返回 undefined
-     * （由调用方留到下一轮开头）。
+     * 「引导」（调用方拿着 message 锁）：把排着队的一句现在交给 AI，返回新增的消息。有一轮在进行就作为
+     * 插话交给它，AI 做完手上这一步就看到（AI 还没开始的话开头那句之后就看到），看到时跟进那边换一条
+     * 新的 AI 消息接着写（见 writeEvents），这句挪到聊天最后；没有就用它开一轮。这一轮在交接或收尾、
+     * 送不进去时 409（还排着，做完接着做）。
      */
-    async interject(
+    async steer(
       store: ConversationRepo,
       conversation: Conversation,
-      turn: Turn,
       user: Message,
-    ): Promise<Message[] | undefined> {
+      requestId: string,
+    ): Promise<Message[]> {
+      const { turn } = conversation;
+      if (!turn) {
+        const replies = await begin(store, conversation, [user], requestId);
+        return [(await store.findMessage(conversation.id, user.id)) ?? user, ...replies];
+      }
+      follow(conversation.id);
       try {
         await harness.json('POST', `/internal/runs/${turn.runId}/messages`, {
           body: { text: user.content },
         });
       } catch (err) {
         if (err instanceof HttpError && (err.statusCode === 409 || err.statusCode === 404))
-          return undefined;
+          throw new HttpError(
+            409,
+            'turn_not_ready',
+            '这一轮正在交接或收尾，暂时送不进去；这句还排着，做完会接着做',
+          );
         throw err;
       }
       await store.updateTurn(conversation.id, turn.runId, { unheard: (turn.unheard ?? 0) + 1 });
+      await store.moveToEnd(conversation.id, user.id);
+      const { pending: _pending, ...data } = user.data;
       const updated = await store.updateMessage(user.id, {
-        data: { ...user.data, runId: turn.runId, interjection: true },
+        data: { ...data, runId: turn.runId, interjection: true },
       });
       return [updated ?? user];
     },
