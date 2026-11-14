@@ -1,7 +1,7 @@
 // 一轮的进度页（任务卡上点「看进度」打开）：最上面是主 AI 卡——状态、正在做的一步、待办、用时、花费，
 // 在做时可以停下；生图、视频这类长任务一张张卡并排（已等多久、通常要多久、做出的图和声音；几段先交后
-// 一起等的按任务号一段一张）；下面按发生的顺序是说的话、做的步骤（折叠）和插话；最后是这一轮做出的
-// 文件（点开预览）和交出的成品。数据就是私聊的消息：有一轮在做时每秒刷新，和私聊页同一份。
+// 一起等的按任务号一段一张）；下面按发生的顺序是说的话、做的步骤（折叠）和插话；最后在做时是这一轮
+// 做出的文件（点开预览），做完后是交出的成品。数据就是私聊的消息：有一轮在做时每秒刷新，和私聊页同一份。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ArrowLeft, Images, Info, LoaderCircle } from 'lucide-react';
@@ -145,15 +145,9 @@ function RunView({ runId, conversationId }: { runId: string; conversationId: str
             </ol>
           </section>
 
-          {(progress.files.length > 0 || progress.gone > 0) && (
+          {progress.files.length > 0 && (
             <section aria-label="做出的文件" className="flex flex-col gap-2.5">
               <h2 className={heading}>这一轮做出的文件</h2>
-              {progress.gone > 0 && (
-                <p className="m-0 text-[12.5px] text-ink-muted">
-                  这一轮结束后只留下 out/ 里的文件；另有 {progress.gone}{' '}
-                  个中间文件只在这一轮进行中能看。
-                </p>
-              )}
               <ul className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(150px,1fr))] items-start gap-3 p-0">
                 {progress.files.map((file) => (
                   <Thumb key={file.path} file={fileOf(file)} onOpen={setPreview} />
@@ -162,26 +156,35 @@ function RunView({ runId, conversationId }: { runId: string; conversationId: str
             </section>
           )}
 
-          {card && card.files.length > 0 && (
+          {((card && card.files.length > 0) || progress.gone > 0) && (
             <section aria-label="成品" className="flex flex-col gap-2.5">
               <h2 className={heading}>交出的成品</h2>
-              <ul className="m-0 flex max-w-[560px] list-none flex-col gap-1.5 p-0">
-                {card.files.map((file) => (
-                  <FileChip
-                    key={file.artifactId}
-                    file={previewOf(file, card.files)}
-                    onOpen={() => setPreview(previewOf(file, card.files))}
-                  />
-                ))}
-              </ul>
-              <Link
-                to="/canvas"
-                search={{ conversation: conversationId }}
-                className="inline-flex h-10 w-fit items-center gap-1.5 rounded-full bg-solid px-4 text-[13.5px] font-medium text-on-solid no-underline"
-              >
-                <Images size={15} aria-hidden="true" />
-                在画布里看
-              </Link>
+              {progress.gone > 0 && (
+                <p className="m-0 text-[12.5px] text-ink-muted">
+                  中间做出的 {progress.gone} 个文件不在成品里，这一轮结束后就看不到了。
+                </p>
+              )}
+              {card && card.files.length > 0 && (
+                <>
+                  <ul className="m-0 flex max-w-[560px] list-none flex-col gap-1.5 p-0">
+                    {card.files.map((file) => (
+                      <FileChip
+                        key={file.artifactId}
+                        file={previewOf(file, card.files)}
+                        onOpen={() => setPreview(previewOf(file, card.files))}
+                      />
+                    ))}
+                  </ul>
+                  <Link
+                    to="/canvas"
+                    search={{ conversation: conversationId }}
+                    className="inline-flex h-10 w-fit items-center gap-1.5 rounded-full bg-solid px-4 text-[13.5px] font-medium text-on-solid no-underline"
+                  >
+                    <Images size={15} aria-hidden="true" />
+                    在画布里看
+                  </Link>
+                </>
+              )}
             </section>
           )}
         </>

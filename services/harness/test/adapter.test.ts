@@ -106,6 +106,11 @@ describe('dsh 事件翻译', () => {
       }),
     ).toBe('生成图片：橘猫在窗台上晒太阳');
     expect(label('bash', { command: 'cd out && oasis-tool wait 1234' })).toBe('等长任务的结果');
+    // 放到后台的命令马上结束，之后看它的输出
+    expect(
+      label('bash', { command: 'oasis-tool wait 1 2 2>&1 | tail -20', run_in_background: true }),
+    ).toBe('等长任务的结果（放到后台）');
+    expect(label('job_output', { job_id: 'bash-1', wait: true })).toBe('看后台命令的输出');
     expect(label('bash', { command: 'oasis-tool brand.new --x 1' })).toBe('用工具 brand.new');
     expect(label('str_replace_editor', { command: 'view', path: 'a.md' })).toBe('读文件 a.md');
     expect(label('str_replace_editor', { command: 'str_replace', path: 'a.md' })).toBe(
@@ -172,6 +177,8 @@ describe('dsh 事件翻译', () => {
     const [a, b, c, d] = ['a', 'b', 'c', 'd'].map(
       (x) => `${x.repeat(8)}-0000-4000-8000-000000000000`,
     );
+    // 等到的长任务存下的文件后面带任务号，不算进路径
+    expect(saved(`已保存：out/片段一.mp4（任务号 ${a}）`)).toEqual(['out/片段一.mp4']);
     const jobs = (text: string) =>
       translateNotification(
         ...event('tool/result', {
@@ -188,10 +195,10 @@ describe('dsh 事件翻译', () => {
         [
           `做好了（任务号 ${a}）`,
           '视频生成好了',
-          '已保存：out/片段一.mp4',
+          `已保存：out/片段一.mp4（任务号 ${a}）`,
           '花费：$0.2125',
           `做好了（任务号 ${b}）`,
-          '已保存：/workspace/out/片段二.mp4',
+          `已保存：/workspace/out/片段二.mp4（任务号 ${b}）`,
           `还没做好（任务号 ${c}）。先做别的，过一会儿运行：oasis-tool wait ${c}`,
           `oasis-tool 出错：内容不合规（任务号 ${d}，供应商没做出来，没有收费；要再试就加 --new true 重新提交）`,
         ].join('\n'),
@@ -201,6 +208,21 @@ describe('dsh 事件翻译', () => {
       { id: b, state: 'done', files: ['out/片段二.mp4'] },
       { id: c, state: 'waiting' },
       { id: d, state: 'failed' },
+    ]);
+    // AI 只看了末几行（| tail），「做好了」那句截掉了；反复等，同一个文件存了两次
+    expect(
+      jobs(
+        [
+          `已保存：out/音乐一.mp3（任务号 ${a}）`,
+          '花费：$0.1500',
+          `做好了（任务号 ${b}）`,
+          `已保存：out/音乐二.mp3（任务号 ${b}）`,
+          `已保存：out/音乐二.mp3（任务号 ${b}）`,
+        ].join('\n'),
+      ),
+    ).toEqual([
+      { id: a, state: 'done', files: ['out/音乐一.mp3'] },
+      { id: b, state: 'done', files: ['out/音乐二.mp3'] },
     ]);
     expect(jobs('ls out')).toBeUndefined();
   });

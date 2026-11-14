@@ -157,9 +157,12 @@ async function list(only?: string): Promise<void> {
     say(`沙箱已安装的软件（安装时生成的实际版本）：\n${await readFile(manifest, 'utf8')}`);
 }
 
-/** 存下工具交回的文件；lead：先说的一句（如哪个任务号做好了） */
-async function save(result: ToolResult, out: string | undefined, lead?: string): Promise<void> {
-  say(lead ? `${lead}\n${result.text}` : result.text);
+/**
+ * 存下工具交回的文件。job：等到的长任务的任务号——先说它做好了，每个「已保存」后面也带上（AI 常只看
+ * 输出的末几行，进度页靠它把文件对上任务号）
+ */
+async function save(result: ToolResult, out: string | undefined, job?: string): Promise<void> {
+  say(job ? `做好了（任务号 ${job}）\n${result.text}` : result.text);
   const targets = targetsFor(result.files, out);
   for (const [i, f] of result.files.entries()) {
     if (basename(f.name) !== f.name || f.name.includes('\\')) throw new Error('工具文件名不安全');
@@ -212,7 +215,7 @@ async function save(result: ToolResult, out: string | undefined, lead?: string):
       say(
         `注意：返回的文件实际是 ${extname(saved).slice(1).toUpperCase()}，按实际格式存成了 ${saved}`,
       );
-    say(`已保存：${saved}`);
+    say(`已保存：${saved}${job ? `（任务号 ${job}）` : ''}`);
   }
   say(`花费：$${(result.costMicro / 1_000_000).toFixed(4)}`);
 }
@@ -251,8 +254,7 @@ async function waitOne(id: string, out: string | undefined, deadline: number): P
     const job = (await request(`/tools/jobs/${encodeURIComponent(id)}`)) as ToolJob;
     if (job.status === 'completed' && job.result) {
       const result = job.result;
-      // 先说是哪个任务号做好了，接着的「已保存」都是它的（进度页按任务号对上）
-      await inTurn(() => save(result, out, `做好了（任务号 ${id}）`));
+      await inTurn(() => save(result, out, id));
       return true;
     }
     // 供应商明确没做出来的不收费，可以重新提交；结果没确认的可能已经收费，不能重新提交

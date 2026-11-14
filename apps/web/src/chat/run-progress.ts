@@ -44,9 +44,9 @@ export interface RunProgress {
   current: StepPart | undefined;
   todos: TodoItem[];
   longTasks: LongTask[];
-  /** 这一轮做出的文件（做完的步骤写的、存下的），最新的在前；一轮结束后只剩 out/ 里的 */
+  /** 这一轮做出的文件（做完的步骤写的、存下的），最新的在前；只在一轮进行中有，结束后看交出的成品 */
   files: RunFile[];
-  /** 一轮结束后看不到了的中间文件有几个（不在 out/ 里的不留） */
+  /** 一轮结束后看不到了的中间文件有几个（不在交出的成品里的不留） */
   gone: number;
 }
 
@@ -55,31 +55,31 @@ const hidden = (path: string) => path.split('/').some((part) => part.startsWith(
 
 /**
  * 长任务卡：生图这类一步做完的，一步一张；视频、音乐交上去没等到的（--wait false，或等到上限还没好），
- * 一个任务号一张，之后等到的那一步按任务号写回它的结局和文件；等的那一步只在等的是这一轮看不到的
- * 任务时自己成卡。一轮结束时还没等到的，说没等到。
+ * 一个任务号一张，之后哪一步等到了（等的命令，或放到后台后看它输出的那一步）按任务号写回结局和文件。
+ * 只说到这些任务号的步骤、等它们的那一步不另成卡；等的是这一轮看不到的任务时，等的那一步自己成卡。
+ * 一轮结束时还没等到的，说没等到。
  */
 function longTasksOf(steps: StepPart[], live: boolean): LongTask[] {
   const cards: LongTask[] = [];
   const byJob = new Map<string, LongTask>();
   const fileOf = (step: StepPart) => (path: string) => ({ path, version: step.finishedAt ?? '' });
   for (const step of steps) {
-    if (!step.oasisTool || !LONG_TOOLS.has(step.oasisTool)) continue;
-    const handed = (step.jobs ?? []).filter(
-      (j) => j.state === 'submitted' || j.state === 'waiting',
-    );
-    const known = (step.jobs ?? []).filter((j) => byJob.has(j.id));
-    for (const job of known) {
-      const card = byJob.get(job.id)!;
-      if (job.state === 'done' || job.state === 'failed') {
-        card.status = job.state;
-        card.finishedAt = step.finishedAt;
-        card.files = (job.files ?? []).map(fileOf(step));
-        if (job.state === 'failed') card.detail = step.detail ?? '没做出来';
-      }
+    const jobs = step.jobs ?? [];
+    for (const job of jobs) {
+      const card = byJob.get(job.id);
+      if (!card || (job.state !== 'done' && job.state !== 'failed')) continue;
+      card.status = job.state;
+      card.finishedAt = step.finishedAt;
+      card.files = (job.files ?? []).map(fileOf(step));
+      if (job.state === 'failed') card.detail = step.detail ?? '没做出来';
     }
-    if (step.oasisTool === 'wait' && (known.length || (step.status === 'running' && byJob.size)))
-      continue;
-    if (step.oasisTool !== 'wait' && handed.length) {
+    if (!step.oasisTool || !LONG_TOOLS.has(step.oasisTool)) continue;
+    const handed = jobs.filter(
+      (j) => !byJob.has(j.id) && (j.state === 'submitted' || j.state === 'waiting'),
+    );
+    const onlyKnown = jobs.length > 0 && jobs.every((j) => byJob.has(j.id));
+    if (onlyKnown || (step.oasisTool === 'wait' && !jobs.length && byJob.size)) continue;
+    if (handed.length) {
       for (const [index, job] of handed.entries()) {
         const card: LongTask = {
           key: job.id,
@@ -143,25 +143,26 @@ export function runProgress(list: MessageList | undefined, runId: string): RunPr
     }
   }
   const made = [...finished].map(([path, version]) => ({ path, version })).reverse();
-  // 一轮结束后沙箱就没了，只留 out/ 里的
-  const kept = (file: RunFile) => status === 'running' || file.path.startsWith('out/');
+  // 一轮结束后沙箱就没了，只留交出的成品（out/ 里最后的样子；中途挪走、删掉的不在了）
+  const running = status === 'running';
+  const delivered = new Set((card?.files ?? []).map((file) => `out/${file.path}`));
+  const kept = (file: RunFile) => running || delivered.has(file.path);
   return {
     messages,
     card,
     status,
     startedAt: card?.startedAt ?? (live ? list?.turn?.startedAt : messages[0]?.createdAt),
     finishedAt:
-      card?.finishedAt ??
-      (status === 'running' ? undefined : steps.findLast((s) => s.finishedAt)?.finishedAt),
+      card?.finishedAt ?? (running ? undefined : steps.findLast((s) => s.finishedAt)?.finishedAt),
     spentMicro:
       card?.spentMicro ?? ai.findLast((m) => m.data.spentMicro !== undefined)?.data.spentMicro ?? 0,
-    current: status === 'running' ? steps.findLast((s) => s.status === 'running') : undefined,
+    current: running ? steps.findLast((s) => s.status === 'running') : undefined,
     todos: ai.findLast((m) => m.data.todos?.length)?.data.todos ?? [],
-    longTasks: longTasksOf(steps, status === 'running').map((task) => ({
+    longTasks: longTasksOf(steps, running).map((task) => ({
       ...task,
       files: task.files.filter(kept),
     })),
-    files: made.filter(kept),
+    files: running ? made : [],
     gone: made.filter((file) => !kept(file)).length,
   };
 }

@@ -22,7 +22,7 @@ function toEntry(row: ModelRow): ModelEntry {
 export function defaultSystemPrompt(name: string): string {
   return [
     `你是 ${name}，正在 Oasis 里和用户一对一聊天，帮用户把事情做成。`,
-    '回答自然、简洁，像朋友一样交流；用户用什么语言，你就用什么语言回答。',
+    '回答自然、简洁，像朋友一样交流。用户用什么语言，你说的每句话都用什么语言，包括做事过程中说明在做什么。',
     '不确定的事情直接说不确定，不要编造。',
   ].join('\n');
 }

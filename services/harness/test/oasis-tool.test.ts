@@ -322,8 +322,10 @@ describe('oasis-tool 长任务', () => {
     await main(['wait', 'job-one', 'job-two', 'job-slow']);
     expect(await readFile(one, 'utf8')).toBe('mp4 job-one');
     expect(await readFile(two, 'utf8')).toBe('mp4 job-two');
-    // 先说哪个任务号做好了，接着是它存下的文件（进度页按任务号对上）
-    expect(printed.join('')).toContain(`做好了（任务号 job-one）\n视频生成好了\n已保存：${one}`);
+    // 先说哪个任务号做好了，存下的每个文件后面也带上任务号（AI 只看末几行时进度页照样对得上）
+    expect(printed.join('')).toContain(
+      `做好了（任务号 job-one）\n视频生成好了\n已保存：${one}（任务号 job-one）`,
+    );
     expect(printed.join('')).toContain('还没做好（任务号 job-slow）');
     await expect(main(['wait', 'job-one', 'job-two', '--out', one])).rejects.toThrow('不写 --out');
   });

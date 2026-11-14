@@ -32,6 +32,19 @@ const step = (id: string, label: string, extra: object) => ({
   status: 'done',
   ...extra,
 });
+const segment = (parts: object[]) => message('text', { runId: RUN, parts });
+
+/** 两个先交上去没等的长任务（--wait false） */
+const A = '00000000-0000-4000-8000-00000000a001';
+const B = '00000000-0000-4000-8000-00000000b002';
+const submit = (id: string, label: string, job: string, oasisTool = 'video.generate') =>
+  step(id, label, {
+    oasisTool,
+    expectSeconds: 150,
+    startedAt: ago(100),
+    finishedAt: ago(96),
+    jobs: [{ id: job, state: 'submitted' }],
+  });
 
 /** 开业视频做到一半：两张关键帧做好了，两段视频交上去了，正在一起等；中间用户插了一句 */
 const messages = [
@@ -177,17 +190,6 @@ describe('一轮的进度页', () => {
   });
 
   it('几段视频先交后一起等：按任务号一段一张卡，等到前「在做」，等到后放出各自的视频；等的那一步不另成卡', async () => {
-    const A = '00000000-0000-4000-8000-00000000a001';
-    const B = '00000000-0000-4000-8000-00000000b002';
-    const submit = (id: string, label: string, job: string) =>
-      step(id, label, {
-        oasisTool: 'video.generate',
-        expectSeconds: 150,
-        startedAt: ago(100),
-        finishedAt: ago(96),
-        jobs: [{ id: job, state: 'submitted' }],
-      });
-    const segment = (parts: object[]) => message('text', { runId: RUN, parts });
     const waiting = step('w', '等长任务的结果', {
       status: 'running',
       oasisTool: 'wait',
@@ -209,7 +211,7 @@ describe('一轮的进度页', () => {
     vi.unstubAllGlobals();
     cleanup();
 
-    // 等到了：一段做好、一段没做出来；一轮结束后只剩 out/ 里的文件
+    // 等到了：一段做好、一段没做出来；一轮结束后只剩交出的成品
     const done = {
       ...waiting,
       status: 'failed',
@@ -221,10 +223,25 @@ describe('一轮的进度页', () => {
         { id: B, state: 'failed' },
       ],
     };
+    const delivered = {
+      artifactId: '00000000-0000-4000-8000-0000000000f1',
+      name: '外景.mp4',
+      path: '外景.mp4',
+      size: 2048,
+      category: 'media',
+    };
     fakeRun(
       [
         message('text', { runId: RUN }, 'user', '做两段开业视频'),
         segment([submit('a', '生成视频：门店外景', A), submit('b', '生成视频：剪彩', B), done]),
+        message('task', {
+          runId: RUN,
+          status: 'failed',
+          startedAt: ago(100),
+          finishedAt: ago(5),
+          spentMicro: 425_000,
+          files: [delivered],
+        }),
       ],
       false,
     );
@@ -236,9 +253,46 @@ describe('一轮的进度页', () => {
     expect(within(after).getByRole('article', { name: '生成视频：剪彩' }).textContent).toContain(
       '有一段没做出来',
     );
-    const files = screen.getByRole('region', { name: '做出的文件' });
-    expect(files.textContent).toContain('另有 1 个中间文件只在这一轮进行中能看');
-    expect(within(files).getAllByRole('button')).toHaveLength(1);
+    // 中间文件随沙箱没了，只列交出的成品
+    expect(screen.queryByRole('region', { name: '做出的文件' })).toBeNull();
+    const result = screen.getByRole('region', { name: '成品' });
+    expect(result.textContent).toContain('中间做出的 1 个文件不在成品里');
+    expect(within(result).getByRole('button', { name: '预览 外景.mp4' })).toBeTruthy();
+  });
+
+  it('等的命令放到后台、AI 只看了输出的末几行：看输出的那一步按任务号写回，等的那一步不另成卡', async () => {
+    fakeRun([
+      message('text', { runId: RUN }, 'user', '做两段开业音乐'),
+      segment([
+        submit('a', '生成音乐：欢快', A, 'audio.music'),
+        submit('b', '生成音乐：温暖', B, 'audio.music'),
+        step('w', '等长任务的结果（放到后台）', {
+          oasisTool: 'wait',
+          startedAt: ago(90),
+          finishedAt: ago(90),
+        }),
+        step('o', '看后台命令的输出', {
+          tool: 'job_output',
+          startedAt: ago(89),
+          finishedAt: ago(20),
+          files: ['out/欢快.mp3', 'out/温暖.mp3'],
+          jobs: [
+            { id: A, state: 'done', files: ['out/欢快.mp3'] },
+            { id: B, state: 'done', files: ['out/温暖.mp3'] },
+          ],
+        }),
+      ]),
+    ]);
+    await openProgress();
+    const tasks = await screen.findByRole('region', { name: '长任务' });
+    expect(
+      within(tasks)
+        .getAllByRole('article')
+        .map((a) => a.getAttribute('aria-label')),
+    ).toEqual(['生成音乐：欢快', '生成音乐：温暖']);
+    const happy = within(tasks).getByRole('article', { name: '生成音乐：欢快' });
+    expect(happy.textContent).toMatch(/用了 1 分 20 秒/);
+    expect(within(happy).getByLabelText('欢快.mp3').getAttribute('src')).toContain('/files/out/');
   });
 
   it('不知道是哪个私聊：说清楚从哪里打开', async () => {

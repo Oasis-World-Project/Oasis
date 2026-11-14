@@ -226,8 +226,12 @@ function toolLabel(name: string, args: string): string {
     case 'bash':
     case 'pwsh': {
       const command = argOf(args, 'command') ?? '';
-      return oasisTool(command) ?? `运行命令：${brief(command, 80)}`;
+      const label = oasisTool(command) ?? `运行命令：${brief(command, 80)}`;
+      // 放到后台的命令这一步马上就结束，之后用 job_output 看它的输出
+      return /"run_in_background"\s*:\s*true/.test(args) ? `${label}（放到后台）` : label;
     }
+    case 'job_output':
+      return '看后台命令的输出';
     case 'write':
       return `写文件 ${path}`;
     case 'edit':

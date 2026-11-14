@@ -38,10 +38,15 @@ export function stepFacts(
   return path ? { path } : {};
 }
 
+const JOB = '([0-9a-f-]{36})';
+/** 「已保存：路径」一行；等到的长任务存下的，后面带「（任务号 X）」 */
+const SAVED = new RegExp(`^已保存：(.+?)(?:（任务号 ${JOB}）)?$`);
+const lines = (output: string) => output.split(/\r?\n/);
+
 /** 命令输出里「已保存：路径」那几行说的文件（oasis-tool、oasis-op 存下的），相对工作目录 */
 export function savedFiles(output: string): string[] {
-  return [...output.matchAll(/^已保存：(.+)$/gm)].flatMap((match) => {
-    const path = inWorkspace(match[1] ?? '');
+  return lines(output).flatMap((line) => {
+    const path = inWorkspace(SAVED.exec(line)?.[1] ?? '');
     return path ? [path] : [];
   });
 }
@@ -55,26 +60,31 @@ export interface JobFact {
   files?: string[];
 }
 
-const JOB = '([0-9a-f-]{36})';
-
 /**
  * 命令输出里长任务的进展，按任务号：「已提交，没等结果（任务号 X）」交上去没等；
- * 「还没做好（任务号 X、Y）」还在做；「做好了（任务号 X）」做好了，接着的「已保存」是它的文件；
- * 「任务号 X，供应商没做出来」「任务号 X，不要重新提交」没做出来。
+ * 「还没做好（任务号 X、Y）」还在做；「做好了（任务号 X）」做好了，带着这个任务号的「已保存」是它的文件
+ * （AI 常只看输出的末几行，「做好了」那句可能截掉了）；「任务号 X，供应商没做出来」「任务号 X，
+ * 不要重新提交」没做出来。
  */
 export function jobFacts(output: string): JobFact[] {
   const jobs = new Map<string, JobFact>();
-  let current: JobFact | undefined;
-  for (const line of output.split('\n')) {
-    const done = new RegExp(`^做好了（任务号 ${JOB}）`).exec(line);
-    if (done) {
-      current = { id: done[1]!, state: 'done', files: [] };
-      jobs.set(current.id, current);
-      continue;
+  const done = (id: string) => {
+    const known = jobs.get(id);
+    if (known?.state === 'done') return known;
+    const job: JobFact = { id, state: 'done', files: [] };
+    jobs.set(id, job);
+    return job;
+  };
+  for (const line of lines(output)) {
+    const finished = new RegExp(`^做好了（任务号 ${JOB}）`).exec(line);
+    if (finished) done(finished[1]!);
+    const saved = SAVED.exec(line);
+    const path = inWorkspace(saved?.[1] ?? '');
+    if (saved?.[2] && path) {
+      const files = done(saved[2]).files!;
+      // AI 反复等同一批时，同一个文件会存好几次
+      if (!files.includes(path)) files.push(path);
     }
-    const saved = /^已保存：(.+)$/.exec(line);
-    const path = saved ? inWorkspace(saved[1] ?? '') : undefined;
-    if (path && current) current.files!.push(path);
     for (const m of line.matchAll(new RegExp(`已提交，没等结果（任务号 ${JOB}）`, 'g')))
       jobs.set(m[1]!, { id: m[1]!, state: 'submitted' });
     const pending = /还没做好（任务号 ([^）]+)）/.exec(line);
