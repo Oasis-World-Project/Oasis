@@ -1,24 +1,25 @@
-// 执行一次运行：排队 → 签发临时 Key、冻结算力 → 起沙箱（挂上这个会话的持久工作目录）、放入输入 →
-// dsh 握手、交任务 → 记录事件 → 等空闲（期间可追问）→ 取出产出存进对象存储 → 销毁沙箱、作废 Key、结算算力
-// → 写结局并发出 harness.run.finished。依赖暂时不可用时保存原会话，等接管（control.ts）。
-// 工具运行不起 dsh：沙箱里跑工具步骤执行器，读它的输出（steps.ts），其余流程相同。
-import { RunFinished } from '@oasis/contracts/events';
-import { TOOL_RUN_MODEL } from '@oasis/contracts/harness';
+// 执行一轮：排队 → 签发临时 Key、冻结算力 → 起沙箱（挂上这个会话的持久工作目录）、放入平台说明、
+// 技能和用户发的文件 → dsh 握手、接着原会话、交用户的话 → 记录事件 → 等这一轮做完（期间可插话）
+// → 给 Word/PPT 配 PDF、取出产出存进对象存储 → 销毁沙箱、作废 Key、结算算力 → 写结局。
+// 依赖暂时不可用时保存原会话，等接管（control.ts）。
 import { ExecutionModels, RunKeyCreated } from '@oasis/contracts/model-gateway';
-import { createEnvelope, HttpError, packFiles, packStreams, scanArchive } from '@oasis/service-kit';
+import { HttpError, packFiles, packStreams, scanArchive } from '@oasis/service-kit';
 import {
   connectAgent,
+  guideFiles,
   isSessionArchive,
   runtimeFiles,
   SANDBOX_PATHS,
   sandboxEnv,
   type AgentConnection,
 } from '../../adapter/dsh.ts';
-import { TOOL_STEPS_CAPABILITY, type Sandbox } from '../../executor/executor.ts';
+import type { Sandbox } from '../../executor/executor.ts';
 import type { Run, RunOutcome } from '../../repo/runs-repo.ts';
 import { startRunLease } from '../run-lease.ts';
 import { KEEP_FILE, savedOutcome, StopRun, type LiveRun, type RunContext } from './shared.ts';
-import { runToolSteps, STEPS_COMMAND, stepsFile } from './steps.ts';
+
+/** 服务重启接管时交给 AI 的话：原会话和工作目录已恢复，接着做 */
+const RECOVERED = '服务连接中断后已恢复原工作目录和原会话。请从未完成处继续，不重做已有工作。';
 
 export function createExecution(
   ctx: RunContext,
@@ -38,23 +39,21 @@ export function createExecution(
     return failure;
   }
 
-  /** 起 dsh、交任务（接管或继续时接着原会话），等它做完；返回连接（收尾时关）和失败原因 */
+  /** 起 dsh、交用户的话（接着上一轮或接管时先恢复原会话），等这一轮做完；返回连接（收尾时关）和失败原因 */
   async function driveAgent(input: {
     row: Run;
     run: LiveRun;
     sandbox: Sandbox;
-    goal: boolean;
     recovering: boolean;
     stopped: () => void;
     stderr: () => string;
   }): Promise<{ agent: AgentConnection; failure: string | undefined }> {
-    const { row, run, sandbox, goal, recovering, stopped } = input;
+    const { row, run, sandbox, recovering, stopped } = input;
     const id = row.id;
     const agent = connectAgent({
       stdin: sandbox.stdin,
       stdout: sandbox.stdout,
       sessionId: row.sessionId ?? id,
-      goal,
       onEvent: (event) => ctx.record(id, run, event.kind, event.data),
     });
     run.abort.signal.addEventListener('abort', () => agent.abort(new Error('运行已中止')), {
@@ -78,47 +77,40 @@ export function createExecution(
         fresh = true; // 原进程尚未创建原生会话，原子保存的请求仍可首次派发。
       }
     }
-    const restoredSession =
-      row.continueFrom || (recovering && !fresh) ? await agent.resume() : undefined;
-    if (!recovering || !goal || fresh || restoredSession?.needsPrompt) {
-      run.prompts += 1;
-      await agent.prompt(
-        recovering && !fresh
-          ? '服务连接中断后已恢复原工作目录和原会话。请从未完成处继续，不重做已有工作。'
-          : row.prompt,
-      );
-    }
-    // 任务说明交出去之后才接受追问，保证追问排在任务说明后面
+    if (row.continueFrom || (recovering && !fresh)) await agent.resume();
+    run.prompts += 1;
+    await agent.prompt(recovering && !fresh ? RECOVERED : row.prompt);
+    // 用户的话交出去之后才接受插话，保证插话排在后面
     run.agent = agent;
     return { agent, failure: await settle(run, agent) };
   }
 
   return {
-    async admit(model, requires = []) {
+    async admit(model, domesticOnly) {
       await executor.check();
       const environment = await executor.environment?.();
-      // 工具运行要镜像里有步骤执行器；不调模型，不按模型目录准入
-      const tool = model === TOOL_RUN_MODEL;
-      const needed = tool ? [...requires, TOOL_STEPS_CAPABILITY] : requires;
-      const missing = needed.filter((name) => !environment?.capabilities.includes(name));
-      if (missing.length)
-        throw new HttpError(
-          422,
-          'execution_capability_unavailable',
-          '运行环境不具备所需能力：' +
-            missing.join('、') +
-            (missing.includes(TOOL_STEPS_CAPABILITY)
-              ? '（沙箱镜像没有工具步骤执行器，需要重建：pnpm sandbox:build）'
-              : ''),
-        );
-      if (tool) return { models: [], environment };
-      const { models } = await deps.modelGateway.json('GET', '/internal/v1/models/execution', {
-        schema: ExecutionModels,
-      });
-      if (!models.length)
-        throw new HttpError(503, 'model_catalog_unavailable', '模型能力目录尚未就绪，请稍后重交');
-      if (!models.some((entry) => entry.id === model))
+      const listed = async (domestic: boolean) =>
+        (
+          await deps.modelGateway.json(
+            'GET',
+            `/internal/v1/models/execution${domestic ? '?domesticOnly=true' : ''}`,
+            { schema: ExecutionModels },
+          )
+        ).models;
+      const models = await listed(domesticOnly);
+      const executable = (list: typeof models) => list.some((entry) => entry.id === model);
+      if (!executable(models)) {
+        // 打开了「只用国内模型」：国外厂商的 AI 暂停，聊天记录都在
+        if (domesticOnly && executable(await listed(false)))
+          throw new HttpError(
+            409,
+            'model_out_of_scope',
+            '已打开「只用国内模型」，这个 AI 是国外厂商的，先暂停（聊天记录都在，在「AI 们」里关掉就能接着聊）',
+          );
+        if (!models.length)
+          throw new HttpError(503, 'model_catalog_unavailable', '模型能力目录尚未就绪，请稍后重交');
         throw new HttpError(422, 'model_unavailable', '模型执行能力缺失或当前不可用：' + model);
+      }
       return { models, environment };
     },
 
@@ -130,9 +122,8 @@ export function createExecution(
         .catch((err: unknown) => logger.error({ err, runId, seq }, '写运行事件失败'));
     },
 
-    async execute(row, inputs, materials, run, mode, catalog, recovering = false) {
+    async execute(row, request, run, catalog, recovering = false) {
       const { id } = row;
-      const { goal, reasoningEffort, steps } = mode;
       const { models, environment } = catalog;
       const release = await state.gate.acquire();
       let sandbox: Sandbox | undefined;
@@ -185,8 +176,8 @@ export function createExecution(
           body: {
             runId: id,
             payerId: row.payerId,
-            ...(row.taskId ? { taskId: row.taskId } : {}),
-            ...(row.nodeId ? { nodeId: row.nodeId } : {}),
+            ...(row.conversationId ? { conversationId: row.conversationId } : {}),
+            domesticOnly: request.domesticOnly,
             ttlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
           },
           requestId: id,
@@ -198,8 +189,6 @@ export function createExecution(
           client: deps.modelGateway,
           runId: id,
           payerId: row.payerId,
-          taskId: row.taskId,
-          nodeId: row.nodeId,
           keyId,
           keyTtlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
           cores: deps.cores,
@@ -213,20 +202,7 @@ export function createExecution(
         stopped();
 
         const files = [
-          // 工具运行不起 dsh，只要交给执行器的步骤
-          ...(steps
-            ? [stepsFile(steps)]
-            : runtimeFiles({
-                models,
-                sessionId: row.sessionId ?? id,
-                objective: row.prompt,
-                goal,
-                ...(reasoningEffort ? { reasoningEffort } : {}),
-                goalRoundWindow: deps.goalRoundWindow ?? 256,
-                recovering,
-                environment,
-              })),
-          ...(recovering ? [] : inputs.map((f) => ({ path: `in/${f.path}`, content: f.content }))),
+          ...runtimeFiles({ models, sessionId: row.sessionId ?? id, recovering, environment }),
           // 保证 out/ 目录存在且属于沙箱用户
           { path: `out/${KEEP_FILE}`, content: Buffer.alloc(0) },
         ];
@@ -235,10 +211,9 @@ export function createExecution(
           workspaceId: row.sessionId ?? id,
           // 接管或接着原会话：持久卷必须已经在，不能从空目录假装恢复
           restore: recovering || Boolean(row.continueFrom),
-          ...(steps ? { command: STEPS_COMMAND } : {}),
           env: {
             ...deps.batchEnv,
-            OASIS_TOOL_SCOPE: row.nodeId ?? row.sessionId ?? id,
+            OASIS_TOOL_SCOPE: row.sessionId ?? id,
             ...sandboxEnv({
               modelBaseUrl: deps.modelBaseUrl,
               runKey: key.key,
@@ -248,14 +223,18 @@ export function createExecution(
           },
           files: [
             { dir: SANDBOX_PATHS.workdir, tar: await packFiles(files) },
+            // 平台说明（带这个 AI 的人设）和技能每轮现放：改了说明，下一轮就用上
+            {
+              dir: SANDBOX_PATHS.dshHome,
+              tar: await packFiles(guideFiles(await deps.guide(), request.persona)),
+            },
             ...(recovering
               ? []
               : [
                   {
                     dir: SANDBOX_PATHS.workdir,
-                    tar: packStreams(await ctx.materialFiles(materials, id, row.payerId)),
+                    tar: packStreams(await ctx.materialFiles(request.materials, id, row.payerId)),
                   },
-                  ...(await ctx.upstreamFiles(row)),
                 ]),
           ],
         });
@@ -294,30 +273,18 @@ export function createExecution(
         });
 
         const stderr = () => stderrTail;
-        let agent: AgentConnection | undefined;
-        let failure: string | undefined;
-        if (steps) {
-          failure = await runToolSteps({
-            sandbox,
-            signal: run.abort.signal,
-            record: (kind, data) => ctx.record(id, run, kind, data),
-            stderr,
-          });
-          run.closing = true;
-        } else
-          ({ agent, failure } = await driveAgent({
-            row,
-            run,
-            sandbox,
-            goal,
-            recovering,
-            stopped,
-            stderr,
-          }));
+        const { agent, failure } = await driveAgent({
+          row,
+          run,
+          sandbox,
+          recovering,
+          stopped,
+          stderr,
+        });
         stopped();
 
         const saved = await ctx.save(sandbox, id, { companions: true });
-        await agent?.shutdown().catch(() => undefined);
+        await agent.shutdown().catch(() => undefined);
         Object.assign(outcome, {
           status: failure ? 'failed' : 'succeeded',
           error: failure ?? null,
@@ -375,10 +342,7 @@ export function createExecution(
             .json('POST', `/internal/v1/tools/runs/${id}/cancel`, {
               body: {},
               requestId: id,
-              headers: {
-                'x-oasis-payer-id': row.payerId,
-                ...(row.taskId ? { 'x-oasis-task-id': row.taskId } : {}),
-              },
+              headers: { 'x-oasis-payer-id': row.payerId },
             })
             .catch((err: unknown) =>
               logger.warn({ err, runId: id }, '长任务取消意图写入失败，费用仍需核对'),
@@ -419,23 +383,12 @@ export function createExecution(
     },
 
     async finish(row, outcome) {
-      const finishedAt = new Date();
-      const status = outcome.status as 'succeeded' | 'failed' | 'cancelled' | 'stopped';
-      const event = createEnvelope(deps.serviceName, RunFinished.type, {
-        runId: row.id,
-        payerId: row.payerId,
-        taskId: row.taskId,
-        nodeId: row.nodeId,
-        status,
-        resumable: await executor.workspaceExists(row.sessionId ?? row.id),
-        error: outcome.error,
-        outputs: outcome.outputs,
-        summary: outcome.summary,
-        finishedAt: finishedAt.toISOString(),
-      });
-      await repo.finish(row.id, { ...outcome, finishedAt }, event);
+      await repo.finish(row.id, { ...outcome, finishedAt: new Date() });
       state.controlRequests.delete(row.id);
-      logger.info({ runId: row.id, status, outputs: outcome.outputs.length }, '运行结束');
+      logger.info(
+        { runId: row.id, status: outcome.status, outputs: outcome.outputs.length },
+        '运行结束',
+      );
     },
   };
 }

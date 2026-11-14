@@ -1,4 +1,4 @@
-// canvas 的接口：用户上传的素材。5.5c 再加成果登记。
+// canvas 的接口：用户上传的文件，以及对话里 AI 做出的成果。
 import { AvatarSpec } from './avatar.ts';
 import { z } from 'zod';
 import { ModelPreviewHint } from './model-preview.ts';
@@ -47,16 +47,8 @@ export const UploadDeleteBody = z.object({
   ids: z.array(z.uuid()).min(1).max(1000),
 });
 export const UploadLookupResult = z.object({ uploads: z.array(UploadBody) });
-/** 内部：这个人的这些文件的临时下载链接（交给 inspector 解析素材）；必须都在、都是他的 */
-export const UploadLinksBody = z.object({
-  ownerId: z.uuid(),
-  ids: z.array(z.uuid()).min(1).max(20),
-});
-export const UploadLinksResult = z.object({
-  uploads: z.array(UploadBody.extend({ url: z.url() })),
-});
 
-/** 交给工作流的素材：任务上记着，规划员和每个节点运行时放进沙箱的 materials/ 下 */
+/** 随消息交给 AI 的素材：harness 运行时放进沙箱的 materials/ 下 */
 export const Material = z.object({
   uploadId: z.uuid(),
   name: z.string(),
@@ -152,46 +144,41 @@ export const AnnotationList = z
     '批注编号不能重复',
   );
 
+const Sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+
 /**
- * 画布里的一个成果：任务完成时，负责交付物的节点交出的一个文件，复制进画布。
+ * 画布里的一个成果：对话里 AI 在沙箱 out/ 里做出的一个文件，那一轮结束时复制进画布。
+ * 同一个话题里同一个路径只有一份：后来的一轮改了它，原地换成新版（链接和同步路径不变）。
  */
 export const ArtifactBody = z.object({
-  sha256: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .nullable()
-    .optional(),
+  sha256: Sha256.nullable().optional(),
   id: z.uuid(),
   /** 文件名（不含目录） */
   name: z.string(),
-  /** 节点产出里的相对路径，如 site/index.html */
+  /** out/ 里的相对路径，如 site/index.html */
   path: z.string(),
   size: z.number().int().nonnegative(),
   contentType: z.string(),
   category: ArtifactCategory,
-  /** 只有经过完整交付文件检查的 oasis-app.json 才带这个字段。 */
+  /** 只有通过检查的 oasis-app.json 才带这个字段。 */
   application: ApplicationSpec.nullable().optional(),
   /** 数字人配置；有它时成果页能开实时对话 */
   avatar: AvatarSpec.nullable().optional(),
   modelPreview: ModelPreviewHint.optional(),
-  /** 属于任务单里的哪样交付物 */
-  deliverable: z.string(),
-  taskId: z.uuid(),
-  /** 新成果带节点来源；历史响应可省略 */
-  nodeId: z.string().optional(),
-  taskTitle: z.string(),
-  /** 任务是在哪个私聊里交代的（回到私聊用）；没有为 null */
-  conversationId: z.uuid().nullable(),
-  /** 做它的模型（供应商型号；讨论节点是每位参与者和写结论的） */
+  /** 在哪个对话里做的（回到对话用） */
+  conversationId: z.uuid(),
+  /** 哪个话题（同一个会话）：开新话题后是新的 */
+  sessionId: z.uuid(),
+  /** 话题名：这个话题的成果在电脑上放在同名文件夹里 */
+  topic: z.string(),
+  /** 最近一次做出或改了它的那一轮 */
+  runId: z.uuid(),
+  /** 做它的模型（供应商型号） */
   models: z.array(z.string()),
   /** 同步到电脑时放在哪：相对同步文件夹的路径，如 小木屋民宿官网首页/首页文案.md */
   syncPath: z.string(),
-  /** 修改出的新版：同一同步路径上被它替换的旧文件摘要（桌面端据此判断能不能覆盖） */
-  replacesSha256: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .nullable()
-    .optional(),
+  /** 改出的新版：同一同步路径上被它替换的旧文件摘要（桌面端据此判断能不能覆盖） */
+  replacesSha256: Sha256.nullable().optional(),
   /** 用户的批注；旧响应缺省为没有 */
   annotations: z.array(Annotation).default([]),
   /** 用户点了「批准」的时间；没批准为 null */
@@ -202,11 +189,59 @@ export type ArtifactBody = z.infer<typeof ArtifactBody>;
 
 export const ArtifactList = z.object({ artifacts: z.array(ArtifactBody) });
 
-/** 列表筛选：类别、某个任务 */
+/** 列表筛选：类别、某个对话、某个话题 */
 export const ArtifactQuery = z.object({
   category: ArtifactCategory.optional(),
-  taskId: z.uuid().optional(),
+  conversationId: z.uuid().optional(),
+  sessionId: z.uuid().optional(),
 });
+
+/**
+ * 内部：按 id 查成果，核对是不是这个人的（「让 AI 改」时 conversation 收消息、harness 拷文件用）；
+ * 有一个不在或不是他的就整个 404。
+ * withFiles：再列出改它们要用到的全部文件——应用是整个应用目录，网页是它所在目录里的文件
+ * （页面按相对地址引用它们），其他成果就是它自己。
+ */
+export const ArtifactLookupBody = z.object({
+  ownerId: z.uuid(),
+  ids: z.array(z.uuid()).min(1).max(1000),
+  withFiles: z.boolean().default(false),
+});
+export const ArtifactLookupResult = z.object({
+  /** 按请求的顺序 */
+  artifacts: z.array(ArtifactBody),
+  /** withFiles 时才有：改它们要用到的全部文件（包括它们自己），按路径排 */
+  files: z.array(ArtifactBody).default([]),
+});
+export type ArtifactLookupResult = z.infer<typeof ArtifactLookupResult>;
+
+/**
+ * 内部：对话里一轮结束了，把 out/ 里新增和改过的文件登记进画布（conversation 调）。
+ * canvas 按 sha256 和已登记的比，只从 harness 复制变了的；重复调用不会重复登记。
+ */
+export const RegisterRunArtifactsBody = z.object({
+  ownerId: z.uuid(),
+  conversationId: z.uuid(),
+  sessionId: z.uuid(),
+  runId: z.uuid(),
+  /** 话题名：这个话题第一次有成果时，用它给电脑上的文件夹起名 */
+  topic: z.string().trim().min(1).max(200),
+  models: z.array(z.string().max(200)).max(10),
+  /** 这一轮结束时 out/ 里的文件（harness 的产出清单） */
+  outputs: z
+    .array(
+      z.object({
+        path: z.string().min(1).max(500),
+        size: z.number().int().nonnegative(),
+        sha256: Sha256.optional(),
+      }),
+    )
+    .max(2000),
+});
+export type RegisterRunArtifactsBody = z.infer<typeof RegisterRunArtifactsBody>;
+
+/** 内部：删对话（真删除）时删掉它的成果和批注截图 */
+export const PurgeConversationArtifactsBody = z.object({ ownerId: z.uuid() });
 
 const PreviewCell = z.union([z.string().max(20_000), z.number().finite(), z.boolean(), z.null()]);
 export const FilePreviewBody = z.discriminatedUnion('kind', [

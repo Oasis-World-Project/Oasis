@@ -1,4 +1,4 @@
-// 续租负责凭证与算力窗口，不负责执行调度，也不定义任务总时长。
+// 续租负责凭证与算力窗口，不负责执行调度，也不限定一轮的总时长。
 import { ComputeHold } from '@oasis/contracts/model-gateway';
 import type { ServiceClient } from '@oasis/service-kit';
 
@@ -6,8 +6,6 @@ export async function startRunLease(input: {
   client: ServiceClient;
   runId: string;
   payerId: string;
-  taskId: string | null;
-  nodeId: string | null;
   keyId: string;
   keyTtlSeconds: number;
   cores: number;
@@ -37,14 +35,7 @@ export async function startRunLease(input: {
   };
   const reserve = () =>
     client.json('POST', '/internal/v1/compute', {
-      body: {
-        runId,
-        payerId: input.payerId,
-        taskId: input.taskId,
-        nodeId: input.nodeId,
-        cores,
-        maxMs: windowMs,
-      },
+      body: { runId, payerId: input.payerId, cores, maxMs: windowMs },
       schema: ComputeHold,
       requestId: runId,
     });

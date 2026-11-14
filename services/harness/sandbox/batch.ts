@@ -245,7 +245,7 @@ export async function runBatch(input: {
         rowBudget: optionalInteger(args.row_budget_micro ?? args.budget_micro, 'row_budget_micro'),
         budget: optionalInteger(args.budget_micro, 'budget_micro'),
       };
-      if (kind === 'text.batch' && !meta.model) throw new Error('当前节点没有模型');
+      if (kind === 'text.batch' && !meta.model) throw new Error('没有指定模型：用 --model 写一个');
       await atomic(metaPath, meta);
     }
     const results = new Map<string, Result>();

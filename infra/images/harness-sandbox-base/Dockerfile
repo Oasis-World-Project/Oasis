@@ -98,10 +98,10 @@ COPY --chown=node:node services/harness/src/adapter/profile/cordis.patch.yml /ho
 COPY services/harness/sandbox/oasis-tool.ts /opt/oasis/oasis-tool.ts
 COPY services/harness/sandbox/batch.ts services/harness/sandbox/tool-files.ts /opt/oasis/
 COPY services/harness/sandbox/media.py /opt/oasis/media.py
-# 工具节点：步骤执行器 oasis-steps 和本地操作 oasis-op（参数定义与 task、model-gateway 共用
-# packages/contracts 里的同一份）。按仓库里的相对位置放，import 路径在仓库和镜像里一致。
+# 本地操作 oasis-op（拼视频、裁剪、抽帧……；参数定义与 model-gateway 共用 packages/contracts 里的同一份）。
+# 按仓库里的相对位置放，import 路径在仓库和镜像里一致。
 COPY packages/contracts/src/tool-args.ts packages/contracts/src/ops.ts /opt/oasis/packages/contracts/src/
-COPY services/harness/sandbox/oasis-steps.ts services/harness/sandbox/oasis-op.ts /opt/oasis/services/harness/sandbox/
+COPY services/harness/sandbox/oasis-op.ts /opt/oasis/services/harness/sandbox/
 USER root
 RUN printf '#!/bin/sh\nexec node --no-warnings /opt/oasis/oasis-tool.ts "$@"\n' > /usr/local/bin/oasis-tool \
  && printf '#!/bin/sh\nexec python3 /opt/oasis/media.py "$@"\n' > /usr/local/bin/oasis-media \

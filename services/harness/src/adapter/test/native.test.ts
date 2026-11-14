@@ -1,41 +1,34 @@
-// 显式指定已构建的镜像后验证真实 DSH；假模型只在断网容器的回环接口运行，费用为 0。
+// 显式指定已构建的镜像后验证真实 dsh：对话里的一轮怎么开始、怎么结束、下一轮怎么接着原会话。
+// 假模型只在断网容器的回环接口运行，费用为 0。
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { zstdCompressSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { connectAgent, runtimeFiles } from '../dsh.ts';
+import { connectAgent, guideFiles, runtimeFiles } from '../dsh.ts';
+
+const FIRST = 'NATIVE_FIRST_TURN: 让 test/secondary 先核对一下，再写出 out/proof.txt。';
+const SECOND = 'NATIVE_SECOND_TURN: 上一轮做了什么？';
 
 async function runNative(
   options: {
+    /** 上一轮留下的会话记录：有它就接着原会话做下一轮 */
     fixture?: Buffer;
     resume?: boolean;
     refused?: boolean;
-    additionalModel?: boolean;
     generation?: number;
-    recovering?: boolean;
-    bootstrap?: boolean;
-    networkFault?: boolean;
-    contextOverflow?: boolean;
-    attachmentRoundTrip?: boolean;
-    /** 模型的一次调用在途时再发一条消息（超支提醒、追问） */
-    steer?: boolean;
+    fault?: 'disconnect' | 'context-overflow' | 'attachment' | 'steer';
   } = {},
 ) {
   const image = process.env.OASIS_NATIVE_IMAGE!;
-  const sessionId = options.recovering ? 'root' : options.resume ? 'legacy-root' : 'root';
+  const sessionId = 'root';
   if (!/^oasis\/[a-z0-9._-]+:[\w.-]+$/.test(image)) throw new Error('test image must use oasis/');
   const directory = await mkdtemp(join(tmpdir(), 'oasis-native-'));
   const name = `oasis-native-${randomUUID()}`;
   await mkdir(join(directory, 'evidence'));
-  const models = [
-    'deepseek/deepseek-v4.1-flash',
-    'test/secondary',
-    'test/tertiary',
-    ...(options.additionalModel ? ['test/unapproved'] : []),
-  ].map((id) => ({
+  const models = ['deepseek/deepseek-v4.1-flash', 'test/secondary', 'test/tertiary'].map((id) => ({
     id,
     name: id,
     contextWindow: 1048576,
@@ -43,18 +36,22 @@ async function runNative(
     input: ['text', 'image'] as ('text' | 'image')[],
     reasoning: true,
   }));
-  for (const file of runtimeFiles({
-    models,
-    sessionId,
-    objective: 'Write out/proof.txt using a delegated secondary model, then complete the goal.',
-    goal: true,
-    goalRoundWindow: 2,
-    recovering: options.recovering,
-  })) {
+  for (const file of runtimeFiles({ models, sessionId }))
     await writeFile(join(directory, file.path.split('/').at(-1)!), file.content);
+  // 平台说明和技能：harness 每轮放进 dsh 的用户目录，假供应商从 guide/ 复制过去
+  const guide = {
+    rules: 'NATIVE_GUIDE_RULES: 交付的文件放进 out/。\n',
+    skills: [
+      { name: 'native-skill', description: 'NATIVE_SKILL_DESCRIPTION 测试', content: '# 测试' },
+    ],
+  };
+  for (const file of guideFiles(guide, '你是测试助手。')) {
+    const target = join(directory, 'guide', file.path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, file.content);
   }
   if (options.fixture)
-    await writeFile(join(directory, 'legacy-session.jsonl.zstd'), options.fixture);
+    await writeFile(join(directory, 'previous-session.jsonl.zstd'), options.fixture);
   await writeFile(
     join(directory, 'provider.mjs'),
     await readFile(new URL('./native-provider.mjs', import.meta.url)),
@@ -72,11 +69,11 @@ async function runNative(
       '--network',
       'none',
       '--env',
-      `OASIS_NATIVE_MODE=${options.recovering && !options.bootstrap ? 'recover' : options.refused ? 'refuse' : options.resume ? 'resume' : 'fresh'}`,
+      `OASIS_NATIVE_MODE=${options.refused ? 'refuse' : options.resume ? 'resume' : 'fresh'}`,
       '--env',
       `OASIS_NATIVE_GENERATION=${options.generation ?? 4}`,
       '--env',
-      `OASIS_NATIVE_FAULT=${options.networkFault ? 'disconnect' : options.contextOverflow ? 'context-overflow' : options.attachmentRoundTrip ? 'attachment' : options.steer ? 'steer' : ''}`,
+      `OASIS_NATIVE_FAULT=${options.fault ?? ''}`,
       '--memory',
       '2g',
       '--pids-limit',
@@ -110,7 +107,6 @@ async function runNative(
     stdin: child.stdin,
     stdout: child.stdout,
     sessionId,
-    goal: true,
     onEvent: (event) => {
       if (event.data.status === 'subagent_started' && event.data.parentSessionId !== sessionId)
         nested = true;
@@ -130,29 +126,25 @@ async function runNative(
       return;
     }
     if (options.resume) await agent.resume();
-    if (!options.recovering || options.bootstrap)
-      await agent.prompt('Carry out the current goal and mark it complete when verified.');
-    if (options.steer) {
+    await agent.prompt(options.resume ? SECOND : FIRST);
+    if (options.fault === 'steer') {
       await steering;
-      await agent.prompt('NATIVE_STEER_MESSAGE: this step has spent more than its share.');
+      await agent.prompt('NATIVE_STEER_MESSAGE: 顺便把标题改短。');
     }
     expect(await agent.waitIdle(), stderr).toBeUndefined();
     await agent.shutdown();
     expect(await exited, stderr).toBe(0);
     expect(stderr).toContain('NATIVE_PROOF');
     expect(stderr).toContain('"policyCount":1');
-    expect(stderr).not.toContain('test/unapproved');
-    expect(nested).toBe(!options.recovering || Boolean(options.bootstrap));
-    if (options.recovering && !options.bootstrap) expect(stderr).toContain('"rootCalls":0');
-    expect(stderr).not.toContain('did not activate');
-    if (options.contextOverflow) {
+    expect(nested).toBe(!options.resume);
+    if (options.fault === 'context-overflow') {
       expect(stderr).toContain('"checkpointSeen":true');
       expect(stderr).toContain('"compactions":1');
       expect(stderr).toContain('"compactionSummaries":1');
       expect(stderr).toContain('"failedCompactions":0');
     }
-    if (options.attachmentRoundTrip) expect(stderr).toContain('"attachmentRecovered":true');
-    if (options.steer) expect(stderr).toContain('"steerSeen":true');
+    if (options.fault === 'attachment') expect(stderr).toContain('"attachmentRecovered":true');
+    if (options.fault === 'steer') expect(stderr).toContain('"steerSeen":true');
     return await readFile(join(directory, 'evidence/session.jsonl.zstd'));
   } finally {
     clearTimeout(timer);
@@ -163,55 +155,36 @@ async function runNative(
   }
 }
 
-describe.skipIf(!process.env.OASIS_NATIVE_IMAGE)('精确版本 DSH 离线集成', () => {
-  it('原生目标跨截断、多轮租约和跨模型子代理执行，实际写出文件才结束', () => runNative(), 120_000);
+describe.skipIf(!process.env.OASIS_NATIVE_IMAGE)('镜像里的 dsh 离线集成', () => {
   it(
-    'Oasis profile 保留原生自动压缩：上下文溢出后生成持久摘要，并在同一目标继续完成',
-    () => runNative({ contextOverflow: true }),
-    120_000,
-  );
-  it(
-    '原生 read_image 对象随 sessions 快照完整恢复，独立附件服务能按原引用读取',
-    () => runNative({ attachmentRoundTrip: true }),
+    '新会话的一轮：读到平台说明和技能、按最高思考档调模型、跨模型子代理、实际写出文件、正常结束',
+    () => runNative(),
     120_000,
   );
   it(
-    '原生供应商读取到真实连接中断时，保留同一目标重试并完成',
-    () => runNative({ networkFault: true }),
+    '上下文溢出：原生自动压缩生成持久摘要，在同一轮里接着做完',
+    () => runNative({ fault: 'context-overflow' }),
     120_000,
   );
   it(
-    '模型调用在途时收到的消息（超支提醒、追问）只挪到下一步一次：下一步看得到，目标照常完成',
-    () => runNative({ steer: true }),
+    '原生 read_image 对象随会话存储完整恢复，独立附件服务能按原引用读取',
+    () => runNative({ fault: 'attachment' }),
     120_000,
   );
+  it('读模型回复时连接中断：同一轮里重试并做完', () => runNative({ fault: 'disconnect' }), 120_000);
   it(
-    '控制进程在原生会话创建前退出，原子请求可以首次执行而不会误判为恢复损坏',
-    () => runNative({ recovering: true, bootstrap: true }),
+    '模型调用在途时用户插话：挪到这一轮的下一步，模型看得到，这一轮照常结束',
+    () => runNative({ fault: 'steer' }),
     120_000,
   );
-  it('已完成目标在接管时不创建新目标、不重发用户任务、不调用模型', async () => {
-    const fixture = await runNative();
-    await runNative({ fixture, resume: true, recovering: true });
-  }, 120_000);
-  it.each(['completed', 'truncated'])(
-    'rc.2 的 %s 归档恢复原身份、历史、文件和跨模型能力',
-    async (ending) => {
-      const fixture = await readFile(
-        new URL('./fixtures/legacy-' + ending + '.jsonl.zstd', import.meta.url),
-      );
-      const resumed = (await runNative({ resume: true, fixture }))!;
-      expect(resumed.subarray(0, fixture.length)).toEqual(fixture);
-      // 已恢复的会话再次恢复：目录新增型号也不能扩大已经记录的授权。
-      await runNative({ resume: true, fixture: resumed, additionalModel: true });
-      expect(
-        await readFile(new URL('./fixtures/legacy-' + ending + '.jsonl.zstd', import.meta.url)),
-      ).toEqual(fixture);
-    },
-    120_000,
-  );
+  it('下一轮接着原会话：看得到上一轮的话和工具结果，不重发、不重做', async () => {
+    const fixture = (await runNative())!;
+    const resumed = (await runNative({ fixture, resume: true }))!;
+    // 原会话记录只往后追加，前面的历史一个字节都不变
+    expect(resumed.subarray(0, fixture.length)).toEqual(fixture);
+  }, 240_000);
   it.each(['missing', 'corrupt', 'future'])(
-    '%s 归档明确拒绝，不能新建空会话继续或调用模型',
+    '%s 会话记录明确拒绝，不能新建空会话继续或调用模型',
     async (kind) => {
       let fixture: Buffer | undefined;
       if (kind === 'corrupt') fixture = Buffer.from('invalid compressed native archive');
@@ -221,7 +194,7 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE)('精确版本 DSH 离线集成'
             JSON.stringify({
               type: 'session',
               version: 999,
-              id: 'legacy-root',
+              id: 'root',
               createdAt: 1,
               cwd: '/workspace',
               isSeeded: false,

@@ -1,5 +1,5 @@
 // 工具参数的定义：和沙箱里的 `oasis-tool <工具> --名字 值`、`oasis-op <操作> --名字 值` 一一对应。
-// 一份定义几处用：工具目录（model-gateway 发给规划员、节点和工作流页）、规划门校验工具节点的参数（task）、
+// 一份定义几处用：工具目录（model-gateway 发给沙箱里的 AI）、
 // 沙箱里的 oasis-op 执行前校验。这个文件原样复制进沙箱镜像，所以不 import 任何东西、只用 Node 自带的能力。
 
 /**
@@ -19,14 +19,14 @@ export interface ToolArgSpec {
   /** number 的范围；paths、list 的个数范围 */
   min?: number;
   max?: number;
-  /** 给规划员、节点和工作流页看的一句话 */
+  /** 给 AI 看的一句话 */
   description: string;
 }
 
-/** 沙箱里能引用的文件：in/（上游交来的）、materials/（用户素材）、out/（前面步骤的产出），不能有 .. */
+/** 沙箱里能引用的文件：in/（平台放的说明）、materials/（用户素材）、out/（做出来的），不能有 .. */
 export const SANDBOX_FILE = /^(?:in|materials|out)\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\\\0\r\n]+$/;
 
-/** 工具节点里一步的结果存到哪：out/ 下的相对路径 */
+/** 工具结果存到哪：out/ 下的相对路径 */
 export const STEP_OUT = /^out\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\\\0\r\n*]+$/;
 
 const isNumber = (value: unknown) =>
@@ -76,11 +76,11 @@ function problemOf(spec: ToolArgSpec, value: unknown, anyPath: boolean): string 
     case 'path':
       return typeof value === 'string' && file.test(value)
         ? undefined
-        : '要写沙箱里的文件路径（in/上游节点/…、materials/… 或 out/…）';
+        : '要写沙箱里的文件路径（materials/… 或 out/…）';
     case 'dir':
       return typeof value === 'string' && file.test(value)
         ? undefined
-        : '要写沙箱里的目录路径（in/上游节点/…、materials/… 或 out/…）';
+        : '要写沙箱里的目录路径（materials/… 或 out/…）';
     case 'paths':
     case 'list': {
       const items = listOf(value);
@@ -91,7 +91,7 @@ function problemOf(spec: ToolArgSpec, value: unknown, anyPath: boolean): string 
         spec.kind === 'paths' && items.some((p) => typeof p === 'string' && p.includes('*'));
       if (!globbed && !inRange(items.length)) return `要写 ${range} 项`;
       if (spec.kind === 'paths' && items.some((p) => typeof p !== 'string' || !file.test(p)))
-        return '每一项都要是沙箱里的文件路径（in/上游节点/…、materials/… 或 out/…）';
+        return '每一项都要是沙箱里的文件路径（materials/… 或 out/…）';
       return items.some(
         (item) => !(typeof item === 'number' || (typeof item === 'string' && item.trim())),
       )

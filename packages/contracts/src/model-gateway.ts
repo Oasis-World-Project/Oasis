@@ -47,17 +47,6 @@ export const ModelCapabilities = z.object({
   input: z.array(z.enum(['text', 'image'])).min(1),
   reasoning: z.boolean(),
   /**
-   * 这个型号负责一个干活节点的典型花费和用时：有调用记录用记录的中位数，
-   * 没有就按价格表 × 所有节点的典型 token 用量估；都没有时不给。
-   */
-  node: z
-    .object({
-      costMicro: z.number().int().nonnegative(),
-      seconds: z.number().int().nonnegative().nullable(),
-      basis: z.enum(['history', 'catalog']),
-    })
-    .optional(),
-  /**
    * 最近的实测：从 agent 运行里的聊天调用记录算——每秒输出多少 token、
    * 每百万 token 实际多少钱（输入输出合计，含缓存折扣，微美元）、上游出错的比例；调用太少时不给。
    */
@@ -97,12 +86,14 @@ export const DecisionRequest = z.looseObject({
 });
 export type DecisionRequest = z.infer<typeof DecisionRequest>;
 
-/** POST /internal/run-keys：为一次 agent 运行签发临时 Key。 */
+/** POST /internal/run-keys：为对话里的一轮（一次 agent 运行）签发临时 Key。 */
 export const CreateRunKeyBody = z.object({
   runId: z.uuid(),
   payerId: z.uuid(),
-  taskId: z.uuid().optional(),
-  nodeId: z.uuid().optional(),
+  /** 这一轮属于哪个对话：调用记录按它归属，删对话时按它清理工具的结果 */
+  conversationId: z.uuid().optional(),
+  /** 用户打开了「只用国内模型」：这一轮的工具只给国内厂商的型号 */
+  domesticOnly: z.boolean().default(false),
   /** 有效期，默认 6 小时，最长 7 天 */
   ttlSeconds: z
     .number()
@@ -127,8 +118,6 @@ export type RunKeyCreated = z.infer<typeof RunKeyCreated>;
 export const ComputeHoldBody = z.object({
   runId: z.uuid(),
   payerId: z.uuid(),
-  taskId: z.uuid().nullable(),
-  nodeId: z.uuid().nullable(),
   /** 沙箱的 CPU 核数 */
   cores: z.number().positive().max(64),
   /** 最长运行多久（毫秒） */
@@ -138,7 +127,7 @@ export const ComputeHoldBody = z.object({
     .positive()
     .max(24 * 3600_000),
   /**
-   * 节点运行的沙箱、检查用的隔离浏览器，或 inspector 解码音视频的检查容器（调用记录里分开标识；
+   * 一轮的沙箱、检查用的隔离浏览器，或 inspector 解码音视频的检查容器（调用记录里分开标识；
    * 检查容器由调用方冻结和结算）
    */
   purpose: z.enum(['run', 'application-check', 'media-check']).default('run'),
@@ -163,7 +152,6 @@ export const ComputeOutcome = z.object({
 
 // ---- 工具：生图、配音、转写、联网搜索、网页抓取、Jev 判断……都经 model-gateway 计量 ----
 
-/** 目录里的一个工具：给规划员和节点里的 AI 看 */
 /** 一个型号用一次（一个计费单位）的典型花费和用时（从调用记录算，不写死） */
 export const ToolRate = z.object({
   model: z.string(),
@@ -186,6 +174,7 @@ export const ToolRate = z.object({
 });
 export type ToolRate = z.infer<typeof ToolRate>;
 
+/** 目录里的一个工具：给沙箱里的 AI 看（oasis-tool list） */
 export const ToolEntry = z.object({
   /** 稳定的名字，如 image.generate */
   key: z.string(),
@@ -207,10 +196,7 @@ export const ToolEntry = z.object({
   /** 可以指定的模型（替某个用户列时已按他的模型范围过滤）；不需要模型的工具为空 */
   models: z.array(z.string()),
   defaultModel: z.string().nullable(),
-  /**
-   * 命令行参数：`oasis-tool <工具> --名字 值` 能写哪些参数。规划门按它校验工具节点，
-   * 工作流页按它展示；旧版网关不返回时当作没有，规划门只核对工具在不在。
-   */
+  /** 命令行参数：`oasis-tool <工具> --名字 值` 能写哪些参数 */
   args: z.array(ToolArgSpecSchema).default([]),
   /** 计费单位数写在哪个参数里（视频的秒数、生图的张数）；没有就按一次一个单位 */
   per: z.object({ arg: z.string(), default: z.number().positive() }).optional(),
@@ -220,12 +206,38 @@ export const ToolEntry = z.object({
 export type ToolEntry = z.infer<typeof ToolEntry>;
 export const ToolList = z.object({ tools: z.array(ToolEntry) });
 
-/**
- * 一个用户让 AI 团队用哪些模型。domesticOnly：只用国内厂商的模型——AI 团队的模型和
- * 各工具的型号都排除国外厂商的；关着（默认）时不排除任何模型。
- */
-export const ModelScope = z.object({ domesticOnly: z.boolean() });
-export type ModelScope = z.infer<typeof ModelScope>;
+/** 沙箱里 AI 调 oasis-tool 时，进度里给人看的说法 */
+export const TOOL_LABELS: Readonly<Record<string, string>> = {
+  'image.generate': '生成图片',
+  'video.generate': '生成视频',
+  'audio.speech': '配音',
+  'audio.music': '生成音乐',
+  'audio.transcribe': '转写音频',
+  'media.inspect': '看图、看视频',
+  '3d.generate': '生成 3D 模型',
+  '3d.render': '渲染 3D',
+  'web.search': '联网搜索',
+  'web.fetch': '读网页',
+  'model.ask': '问另一个模型',
+  'jev.decide': '快速判断',
+  'text.batch': '批量写文字',
+  'app.check': '检查网页',
+  'website.test': '测试网页',
+  'android.test': '测试安卓应用',
+  wait: '等长任务的结果',
+  list: '看有哪些工具',
+};
+
+/** 做东西的工具（生图、视频、配音、音乐、3D、批量写文字）：用过它们的那一轮算任务 */
+export const GENERATION_TOOLS: readonly string[] = [
+  'image.generate',
+  'video.generate',
+  'audio.speech',
+  'audio.music',
+  '3d.generate',
+  '3d.render',
+  'text.batch',
+];
 
 /** 调用工具：参数按工具各自校验 */
 export const ToolCallBody = z.object({
@@ -262,11 +274,15 @@ export const ToolResult = z.object({
 });
 export type ToolResult = z.infer<typeof ToolResult>;
 
-/** 「提出调整」这个工具的名字：只有做成果的 AI 能用，规划员的方案里不能写它 */
-export const ADJUST_TOOL = 'workflow.adjust';
-
-/** task 把规划员对「提出调整」的答复写回长任务 */
-export const ToolJobAnswerBody = z.object({ text: z.string().min(1).max(20_000) });
+/**
+ * 对话里一轮的花费：这一轮里调模型、用工具和沙箱算力的钱（微美元；还在做的长任务按冻结的算），
+ * 以及这一轮用过哪些工具
+ */
+export const RunSpend = z.object({
+  spentMicro: z.number().int().nonnegative(),
+  tools: z.array(z.string()),
+});
+export type RunSpend = z.infer<typeof RunSpend>;
 
 /** 长任务的进度：还在做 / 做好了（带结果）/ 失败了（带原因） */
 export const ToolJobBody = z.object({

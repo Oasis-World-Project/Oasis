@@ -119,7 +119,7 @@ async function list(): Promise<void> {
   const { tools } = (await request('/tools')) as { tools: ToolEntry[] };
   const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro < 10_000 ? 4 : 3)}`;
   for (const tool of tools.filter((t) => t.available)) {
-    // 每个型号的单价和用时：节点用 --model 选，默认第一个
+    // 每个型号的单价和用时：AI 用 --model 选，默认第一个
     const rates = (tool.rates ?? [])
       .map(
         (r) =>
@@ -220,7 +220,7 @@ async function run(key: string, argv: string[]): Promise<void> {
   const { args, out, file } = parseArgs(argv);
   if (key === 'app.check') {
     args.files = await appFiles(args);
-    // 给了 --out（工具节点把检查结果交给下游）就要一份完整报告存进去；没给只看终端里的结论
+    // 给了 --out 就要一份完整报告存进去；没给只看终端里的结论
     if (out) args.report = true;
   }
   const renderInputs: string[] = [];

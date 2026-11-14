@@ -4,7 +4,7 @@ import { extname, join, relative, resolve, sep } from 'node:path';
 
 /**
  * 文件要存到哪：给了 --out 就用它（多个文件时加 -1、-2），否则放进 out/ 用工具给的名字。
- * 几个文件后缀不一样、其中只有一个和 --out 同后缀时，它就是主结果，原样存到 --out（工具节点、下游都按这个路径找它）；
+ * 几个文件后缀不一样、其中只有一个和 --out 同后缀时，它就是主结果，原样存到 --out（之后都按这个路径找它）；
  * 其余的是附带的（如 app.check 的截图），放在旁边，名字接在后面。
  */
 export function targetsFor(files: { name: string }[], out: string | undefined): string[] {
@@ -55,7 +55,7 @@ function extOf(bytes: Buffer): string | undefined {
 
 /**
  * 要存成图片或音频、但内容是另一种格式时，按实际格式改后缀（2026-11-05：JPEG 存成 .png，
- * 后面看图报签名无效、节点返工；2026-11-11：音乐型号回的是 FLAC）。不是这些后缀或认不出内容时原样返回。
+ * 后面看图报签名无效；2026-11-11：音乐型号回的是 FLAC）。不是这些后缀或认不出内容时原样返回。
  */
 export function matchExt(target: string, bytes: Buffer): string {
   const ext = extname(target);
@@ -144,45 +144,24 @@ export async function localImages(paths: unknown) {
 const APP_MAX_FILES = 1000;
 const APP_MAX_BYTES = 25 * 1024 * 1024;
 
-/** 清单里写的 root（应用在做它的那个节点的产出里的位置）；读不出来返回 undefined，留给检查去说清楚 */
-async function manifestRoot(folder: string): Promise<string | undefined> {
-  try {
-    const manifest = JSON.parse(await readFile(join(folder, 'oasis-app.json'), 'utf8')) as {
-      root?: unknown;
-    };
-    return typeof manifest.root === 'string' ? manifest.root.replace(/\/+$/, '') : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * app.check：浏览器检查在平台的隔离容器里跑，读不到沙箱，所以把应用目录里的文件随调用带上。
- * 应用可以是这个节点自己做的（out/<dir>），也可以是上游交来的（in/<上游 key>/<dir>，工具节点检查上游的
- * 网页就是这种）。只认普通文件、不跟随符号链接；超过上限就说清楚，交付后关卡照样会检查。
- * 交给检查的 dir 是「应用在做它的那个节点的产出里的位置」，也就是清单里的 root：自己做的是 out/ 之后的部分；
- * 上游交来的在 in/<上游 key>/ 之后（展开节点的每一条在 in/<上游 key>/<条目号>/ 之后），按清单写的 root 认。
+ * 只查 out/ 里的应用（交给用户的都在那里）；只认普通文件、不跟随符号链接；超过上限就说清楚。
+ * 交给检查的 dir 是应用在 out/ 里的位置，也就是清单里的 root。
  */
 export async function appFiles(
   args: Record<string, unknown>,
 ): Promise<{ path: string; contentBase64: string }[]> {
-  const usage =
-    '--dir 写 oasis-app.json 所在的目录：自己做的如 out/site，上游交来的如 in/<上游 key>/site';
+  const usage = '--dir 写 oasis-app.json 所在的目录，如 out/site';
   if (typeof args.dir !== 'string') throw new Error(usage);
   const given = args.dir.replace(/^(\.\/)?(\/workspace\/)?/, '').replace(/\/+$/, '');
-  // 没写 out/、in/ 的按 out/ 下的目录算
-  const path = /^(?:out|in)\//.test(given) ? given : `out/${given}`;
+  // 没写 out/ 的按 out/ 下的目录算
+  const path = given.startsWith('out/') ? given : `out/${given}`;
   const parts = path.split('/');
   if (parts.some((part) => !part || part === '.' || part === '..')) throw new Error(usage);
-  const upstream = parts[0] === 'in';
-  const outDir = resolve(process.env.OASIS_OUT_DIR ?? 'out');
-  const root = upstream ? resolve(outDir, '..', path) : resolve(outDir, parts.slice(1).join('/'));
-  let dir = parts.slice(upstream ? 2 : 1).join('/');
-  if (upstream) {
-    const declared = await manifestRoot(root);
-    if (declared && path.endsWith(`/${declared}`)) dir = declared;
-  }
+  const dir = parts.slice(1).join('/');
   if (!dir) throw new Error(usage);
+  const root = resolve(process.env.OASIS_OUT_DIR ?? 'out', dir);
   args.dir = dir;
   // 结果里说的是实际检查的那个目录
   args.shown = path;
@@ -195,9 +174,7 @@ export async function appFiles(
       else if (entry.isFile()) {
         total += (await stat(full)).size;
         if (files.length >= APP_MAX_FILES || total > APP_MAX_BYTES)
-          throw new Error(
-            `${path} 超过自查上限（${APP_MAX_FILES} 个文件、25 MB），自查不了；交付后关卡照样会检查`,
-          );
+          throw new Error(`${path} 超过自查上限（${APP_MAX_FILES} 个文件、25 MB），自查不了`);
         files.push({
           path: relative(root, full).split(sep).join('/'),
           contentBase64: (await readFile(full)).toString('base64'),

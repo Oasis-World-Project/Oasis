@@ -52,10 +52,7 @@ export function createControl(ctx: RunContext) {
     await deps.modelGateway.json('POST', `/internal/v1/tools/runs/${row.id}/cancel`, {
       body: {},
       requestId: row.id,
-      headers: {
-        'x-oasis-payer-id': row.payerId,
-        ...(row.taskId ? { 'x-oasis-task-id': row.taskId } : {}),
-      },
+      headers: { 'x-oasis-payer-id': row.payerId },
     });
     await state.controlWrites.get(row.id);
     const latest = state.controlRequests.get(row.id) ?? (await repo.control(row.id)) ?? how;
@@ -136,7 +133,8 @@ export function createControl(ctx: RunContext) {
       });
       return;
     }
-    const catalog = await ctx.admit(row.model, request.body.requires);
+    const domesticOnly = request.body.domesticOnly ?? false;
+    const catalog = await ctx.admit(row.model, domesticOnly);
     const run = newLiveRun(await repo.nextSequence(row.id), row.sessionId ?? row.id);
     if (await restoreControl(row)) return;
     state.live.set(row.id, run);
@@ -144,19 +142,12 @@ export function createControl(ctx: RunContext) {
     run.done = ctx
       .execute(
         row,
-        request.body.inputs.map((f) => ({
-          path: f.path,
-          content: Buffer.from(f.contentBase64, 'base64'),
-        })),
-        request.body.materials ?? [],
-        run,
         {
-          goal: request.body.goal ?? false,
-          ...(request.body.reasoningEffort
-            ? { reasoningEffort: request.body.reasoningEffort }
-            : {}),
-          ...(request.body.steps ? { steps: request.body.steps } : {}),
+          materials: request.body.materials,
+          persona: request.body.persona ?? '',
+          domesticOnly,
         },
+        run,
         catalog,
         Boolean(row.startedAt),
       )

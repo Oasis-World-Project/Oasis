@@ -1,4 +1,4 @@
-// 运行服务：运行中的追问、停止、取消和重复提交。
+// 运行服务：一轮进行中的插话、停止、取消和重复提交。
 import { HttpError } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
 import {
@@ -9,8 +9,9 @@ import {
   lifecycle,
   rows,
   events,
-  outbox,
+  finishes,
   stored,
+  issued,
   revoked,
   service,
   until,
@@ -18,8 +19,8 @@ import {
   base,
 } from './support/run-fixture.ts';
 
-describe('一次 agent 运行：追问、停止和取消', () => {
-  it('运行中追问：排在当前这一轮之后处理，处理完才收尾；结束后再追问是 409', async () => {
+describe('对话里的一轮：插话、停止和取消', () => {
+  it('进行中插话：排在用户的话之后处理，处理完才收尾；结束后再插话是 409', async () => {
     const run = await service.start({ ...base, prompt: '先做这个' });
     await until(() => events.find((e) => e.kind === 'user_message'));
     await service.message(run.id, '再补一句');
@@ -42,7 +43,7 @@ describe('一次 agent 运行：追问、停止和取消', () => {
     });
   });
 
-  it('前一轮 completed 不遮住排队追问缺少结束通知', async () => {
+  it('前面的话 completed 不遮住插话缺少结束通知', async () => {
     const run = await service.start({ ...base, prompt: '先做这个' });
     await until(() => events.find((e) => e.kind === 'user_message'));
     await service.message(run.id, 'NO_END');
@@ -57,10 +58,10 @@ describe('一次 agent 运行：追问、停止和取消', () => {
     expect(row.status).toBe('cancelled');
     expect(destroyed).toContain(run.id);
     expect(revoked).toHaveLength(1);
-    expect(outbox[0]).toMatchObject({ data: { status: 'cancelled' } });
+    expect(finishes[0]?.outcome).toMatchObject({ status: 'cancelled' });
   });
 
-  it('停止：先存下已经做出来的产出，再销毁沙箱；会话留在持久工作目录里，之后可以接着这次运行做', async () => {
+  it('停止：先存下已经做出来的产出，再销毁沙箱；会话留在持久工作目录里，下一轮接着做', async () => {
     const run = await service.start({ ...base, prompt: 'SLOW 慢慢做' });
     await until(() => events.find((e) => e.kind === 'user_message'));
     await service.stop(run.id);
@@ -71,20 +72,19 @@ describe('一次 agent 运行：追问、停止和取消', () => {
       outputs: [{ path: 'result.md' }],
     });
     expect(lifecycle.slice(0, 3)).toEqual(['pause', 'archive', 'destroy']);
-    expect(outbox[0]).toMatchObject({ data: { resumable: true } });
+    expect(await service.get(run.id)).toMatchObject({ resumable: true });
     expect(destroyed).toContain(run.id);
     expect(revoked).toHaveLength(1);
-    expect(outbox[0]).toMatchObject({ data: { status: 'stopped' } });
+    expect(finishes[0]?.outcome).toMatchObject({ status: 'stopped' });
 
-    outbox.length = 0;
     const next = await service.start({ ...base, prompt: '接着做', continueFrom: run.id });
     expect((await finished(next.id)).status).toBe('succeeded');
     expect(methods).toContain('session/resume');
     expect(started[1]).toMatchObject({ workspaceId: run.id, restore: true });
   });
 
-  it('停止后马上继续：等那次运行停好再接着，不当成「还没结束」拒掉', async () => {
-    // 2026-11-08 回归测试发现：存会话时继续请求就到了，被 409 拒掉，节点失败
+  it('停止后马上发下一句：等那一轮停好再接着，不当成「还没结束」拒掉', async () => {
+    // 2026-11-08 回归测试发现：存会话时下一轮就到了，被 409 拒掉
     fake.archiveDelayMs = 200;
     const run = await service.start({ ...base, prompt: 'SLOW 慢慢做' });
     await until(() => events.find((e) => e.kind === 'user_message'));
@@ -106,7 +106,7 @@ describe('一次 agent 运行：追问、停止和取消', () => {
     expect(stored.has(`runs/${run.id}/outputs.tar`)).toBe(false);
   });
 
-  it('沙箱还在启动时被取消：起好后立刻销毁，不再交任务', async () => {
+  it('沙箱还在启动时被取消：起好后立刻销毁，不再交用户的话', async () => {
     fake.startDelayMs = 200;
     const run = await service.start({ ...base, prompt: '做一次' });
     await until(() => started.find((s) => s.runId === run.id));
@@ -143,5 +143,24 @@ describe('一次 agent 运行：追问、停止和取消', () => {
       .start({ ...base, runId, model: 'other/model', prompt: '做一次' })
       .catch((e: unknown) => e);
     expect((conflict as HttpError).statusCode).toBe(409);
+  });
+
+  it('打开了「只用国内模型」：国外厂商的模型开不了这一轮（不登记运行）；国内的照常开，临时 Key 带着这个设置', async () => {
+    const paused = await service
+      .start({ ...base, model: 'anthropic/claude-haiku-5.5', domesticOnly: true, prompt: '你好' })
+      .catch((e: unknown) => e);
+    expect(paused).toMatchObject({ statusCode: 409, code: 'model_out_of_scope' });
+    expect(rows.size).toBe(0);
+    const run = await service.start({ ...base, domesticOnly: true, prompt: '你好' });
+    await finished(run.id);
+    expect(issued.at(-1)).toMatchObject({ runId: run.id, domesticOnly: true });
+    // 关着时国外厂商的模型照常能开
+    const open = await service.start({
+      ...base,
+      model: 'anthropic/claude-haiku-5.5',
+      prompt: '嗨',
+    });
+    await finished(open.id);
+    expect(issued.at(-1)).toMatchObject({ runId: open.id, domesticOnly: false });
   });
 });

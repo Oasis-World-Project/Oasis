@@ -1,13 +1,12 @@
 // 运行服务测试的公共部分：假 dsh、假执行器、内存里的运行记录和对象存储、假 model-gateway，每个用例前重置。
 import { extract } from 'tar-stream';
 import { PassThrough, Readable } from 'node:stream';
-import type { EventEnvelope } from '@oasis/contracts/events';
 import { createServiceClient, checkedParts, packFiles, type ObjectStore } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 import type { Executor, Sandbox, SandboxSpec } from '../../src/executor/executor.ts';
-import type { Run, RunEvent, RunsRepo } from '../../src/repo/runs-repo.ts';
+import type { Run, RunEvent, RunOutcome, RunsRepo } from '../../src/repo/runs-repo.ts';
 import { createRunService } from '../../src/service/run-service.ts';
 
 /** 测试里会改的开关和计数（ES 模块导出的变量在别的文件里不能赋值，所以集中放在一个对象里） */
@@ -23,6 +22,7 @@ export const fake = {
 };
 
 export const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
+export const CONVERSATION = '3c3c3c3c-3c3c-4c3c-8c3c-3c3c3c3c3c3c';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -94,54 +94,23 @@ function fakeDsh(stdin: PassThrough, stdout: PassThrough) {
   });
 }
 
-/**
- * 假的工具步骤执行器：按放进沙箱的 in/.oasis-steps.json 报告每一步；工具名带 fail 的那步失败，
- * 带 slow 的那步要很久。和真的执行器一样做完之后不退出，等沙箱被销毁。
- */
-function fakeSteps(stdout: PassThrough, files: { path: string; content: Buffer }[]) {
-  const file = files.find((f) => f.path === 'in/.oasis-steps.json');
-  const steps = file ? (JSON.parse(file.content.toString()) as { tool: string }[]) : [];
-  // 沙箱被销毁（输出关了）之后就不再说话
-  const send = (event: Record<string, unknown>) =>
-    stdout.writableEnded || stdout.write(`${JSON.stringify(event)}\n`);
-  void (async () => {
-    await sleep(20);
-    for (const [i, step] of steps.entries()) {
-      const callId = `step-${i + 1}-1`;
-      send({
-        type: 'tool_call',
-        callId,
-        name: 'bash',
-        arguments: JSON.stringify({ command: `oasis-tool ${step.tool}` }),
-      });
-      if (step.tool.includes('slow')) await sleep(5_000);
-      if (step.tool.includes('fail')) {
-        send({ type: 'tool_result', callId, ok: false, text: '', error: '供应商拒绝了提交' });
-        send({
-          type: 'done',
-          ok: false,
-          error: `第 ${i + 1} 步（${step.tool}）没做成：供应商拒绝了提交`,
-        });
-        return;
-      }
-      send({ type: 'tool_result', callId, ok: true, text: '已保存：out/x' });
-    }
-    send({ type: 'assistant_text', text: `${steps.length} 步都做完了。` });
-    send({ type: 'done', ok: true });
-  })();
-}
-
-/** 工具运行要的执行环境（有步骤执行器的镜像） */
-export const TOOL_ENVIRONMENT = {
-  image: 'oasis/harness-sandbox-base:test',
-  imageId: 'sha256:test',
-  software: { 'tool-steps': 'oasis-steps' },
-  capabilities: ['tool-steps'],
-  notes: [],
-};
-
 /** 假 dsh 收到的其他方法（initialize、session/resume、shutdown） */
 export const methods: string[] = [];
+
+/** 读出 tar 包里的文件（保留包里的完整路径） */
+export async function tarEntries(tar: Buffer | Readable) {
+  const parser = extract();
+  if (Buffer.isBuffer(tar)) parser.end(tar);
+  else tar.pipe(parser);
+  const files: { path: string; content: Buffer }[] = [];
+  for await (const entry of parser) {
+    const chunks: Buffer[] = [];
+    for await (const value of entry) chunks.push(Buffer.from(value as Uint8Array));
+    if (entry.header.type === 'file')
+      files.push({ path: entry.header.name, content: Buffer.concat(chunks) });
+  }
+  return files;
+}
 
 /** 假执行器：每个沙箱里跑一个假 dsh；产出目录里有 result.md */
 export const started: SandboxSpec[] = [];
@@ -159,19 +128,8 @@ export const executor: Executor = {
   async start(spec) {
     if (spec.workspaceId) workspaces.add(spec.workspaceId);
     const groups = new Map<string, { path: string; content: Buffer }[]>();
-    for (const input of spec.files) {
-      const parser = extract();
-      if (Buffer.isBuffer(input.tar)) parser.end(input.tar);
-      else input.tar.pipe(parser);
-      const collected = groups.get(input.dir) ?? [];
-      for await (const entry of parser) {
-        const chunks: Buffer[] = [];
-        for await (const value of entry) chunks.push(Buffer.from(value as Uint8Array));
-        if (entry.header.type === 'file')
-          collected.push({ path: entry.header.name, content: Buffer.concat(chunks) });
-      }
-      groups.set(input.dir, collected);
-    }
+    for (const input of spec.files)
+      groups.set(input.dir, [...(groups.get(input.dir) ?? []), ...(await tarEntries(input.tar))]);
     started.push({
       ...spec,
       files: await Promise.all(
@@ -181,8 +139,7 @@ export const executor: Executor = {
     await sleep(fake.startDelayMs);
     const stdin = new PassThrough();
     const stdout = new PassThrough();
-    if (spec.command) fakeSteps(stdout, [...groups.values()].flat());
-    else fakeDsh(stdin, stdout);
+    fakeDsh(stdin, stdout);
     const sandbox: Sandbox = {
       async pause() {
         lifecycle.push('pause');
@@ -226,17 +183,16 @@ export const executor: Executor = {
   },
 };
 
-/** 内存里的 runs 表 + 事件 + 发件箱 */
+/** 内存里的 runs 表 + 事件 + 写过的结局 */
 export const rows = new Map<string, Run>();
 export const events: RunEvent[] = [];
-export const outbox: EventEnvelope[] = [];
+export const finishes: { id: string; outcome: RunOutcome }[] = [];
 export const repo: RunsRepo = {
   async insert(run, request) {
     if (rows.has(run.id)) return false;
     rows.set(run.id, {
       ...run,
-      taskId: run.taskId ?? null,
-      nodeId: run.nodeId ?? null,
+      conversationId: run.conversationId ?? null,
       status: 'queued',
       error: null,
       containerId: null,
@@ -244,7 +200,6 @@ export const repo: RunsRepo = {
       outputs: [],
       outputKey: null,
       summary: null,
-      inputsFrom: run.inputsFrom ?? [],
       sessionId: run.sessionId ?? null,
       continueFrom: run.continueFrom ?? null,
       createdAt: new Date(),
@@ -282,10 +237,10 @@ export const repo: RunsRepo = {
     const row = rows.get(id);
     if (row) rows.set(id, { ...row, ...patch });
   },
-  async finish(id, outcome, event) {
+  async finish(id, outcome) {
     const row = rows.get(id);
     if (row) rows.set(id, { ...row, ...outcome });
-    outbox.push(event);
+    finishes.push({ id, outcome });
   },
   listUnfinished: async () =>
     [...rows.values()].filter((r) => ['queued', 'starting', 'running'].includes(r.status)),
@@ -296,7 +251,8 @@ export const repo: RunsRepo = {
     events.filter((e) => e.runId === runId && e.seq > after).slice(0, limit),
   nextSequence: async (runId) =>
     Math.max(-1, ...events.filter((e) => e.runId === runId).map((e) => e.seq)) + 1,
-  listByTask: async (taskId) => [...rows.values()].filter((r) => r.taskId === taskId),
+  listByConversation: async (conversationId) =>
+    [...rows.values()].filter((r) => r.conversationId === conversationId),
   listBySession: async (sessionId) => [...rows.values()].filter((r) => r.sessionId === sessionId),
   async removeMany(ids) {
     for (const id of ids) rows.delete(id);
@@ -339,7 +295,8 @@ const store: ObjectStore = {
 export const issued: Record<string, unknown>[] = [];
 export const revoked: string[] = [];
 const modelGateway = Fastify();
-modelGateway.get('/internal/v1/models/execution', async (_request, reply) =>
+/** 执行目录：一个国内厂商的、一个国外厂商的；?domesticOnly=true 时只列国内的 */
+modelGateway.get('/internal/v1/models/execution', async (request, reply) =>
   fake.gatewayOffline
     ? reply.code(503).send({ error: { code: 'unavailable', message: '临时断开' } })
     : {
@@ -352,7 +309,19 @@ modelGateway.get('/internal/v1/models/execution', async (_request, reply) =>
             input: ['text', 'image'],
             reasoning: true,
           },
-        ],
+          {
+            id: 'anthropic/claude-haiku-5.5',
+            name: 'Claude',
+            contextWindow: 200000,
+            maxTokens: 64000,
+            input: ['text', 'image'],
+            reasoning: true,
+          },
+        ].filter(
+          (model) =>
+            (request.query as { domesticOnly?: string }).domesticOnly !== 'true' ||
+            model.id.startsWith('deepseek/'),
+        ),
       },
 );
 modelGateway.post('/internal/run-keys/:id/renew', async (_request, reply) => {
@@ -423,6 +392,39 @@ modelGateway.get('/internal/uploads/:id/content', async (request, reply) => {
     .code(404)
     .send({ error: { code: 'upload_not_found', message: '没有这个文件', requestId: 'r' } });
 });
+/** 假 canvas：画布里的一个成果（「让 AI 改」时拷进工作目录） */
+export const POSTER = '6d6d6d6d-6d6d-4d6d-8d6d-6d6d6d6d6d6d';
+modelGateway.post('/internal/artifacts/lookup', async (request, reply) => {
+  const { ids } = request.body as { ids: string[] };
+  if (ids.some((id) => id !== POSTER))
+    return reply
+      .code(404)
+      .send({ error: { code: 'artifact_not_found', message: '有成果找不到了', requestId: 'r' } });
+  return {
+    artifacts: ids.map((id) => ({
+      id,
+      name: 'poster.png',
+      path: 'site/poster.png',
+      size: 12,
+      contentType: 'image/png',
+      category: 'media',
+      conversationId: CONVERSATION,
+      sessionId: CONVERSATION,
+      topic: '海报',
+      runId: CONVERSATION,
+      models: [],
+      syncPath: '海报/site/poster.png',
+      createdAt: new Date().toISOString(),
+    })),
+  };
+});
+modelGateway.get('/internal/artifacts/:id/content', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  if (id === POSTER) return reply.type('image/png').send(Buffer.from('poster-bytes'));
+  return reply
+    .code(404)
+    .send({ error: { code: 'artifact_not_found', message: '没有这个成果', requestId: 'r' } });
+});
 
 export let service: ReturnType<typeof createRunService>;
 let url: string;
@@ -440,6 +442,10 @@ export const buildService = (override: Partial<Parameters<typeof createRunServic
       npmRegistry: 'https://registry.npmmirror.com/',
       pipIndexUrl: 'https://pypi.example/simple',
     },
+    guide: async () => ({
+      rules: '# 在 Oasis 里干活\n',
+      skills: [{ name: 'images', description: '图片类。适用：海报', content: '# 图片类\n正文' }],
+    }),
     maxConcurrent: 2,
     timeoutMs: 60_000,
     cores: 2,
@@ -465,7 +471,7 @@ beforeEach(() => {
   fake.noNativeSession = false;
   lifecycle.length = 0;
   fake.pauseFails = false;
-  for (const list of [started, destroyed, events, outbox, issued, revoked, methods, compute])
+  for (const list of [started, destroyed, events, finishes, issued, revoked, methods, compute])
     list.length = 0;
   rows.clear();
   stored.clear();
@@ -482,19 +488,13 @@ export async function until<T>(read: () => T | undefined, ms = 3_000): Promise<T
     await sleep(10);
   }
 }
+/** 等到这一轮写下结局 */
 export const finished = (id: string) =>
-  until(() => {
-    const row = rows.get(id);
-    return row &&
-      ['succeeded', 'failed', 'cancelled', 'stopped'].includes(row.status) &&
-      outbox.length
-      ? row
-      : undefined;
-  });
+  until(() => (finishes.some((f) => f.id === id) ? rows.get(id) : undefined));
 
 export const base = {
   payerId: PAYER,
+  conversationId: CONVERSATION,
   model: 'deepseek/deepseek-v4.1-flash',
-  inputs: [],
-  inputsFrom: [],
+  materials: [],
 };

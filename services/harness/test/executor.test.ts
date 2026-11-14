@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDockerExecutor } from '../src/executor/executor.ts';
 
 describe.skipIf(!process.env.OASIS_NATIVE_IMAGE)('实际镜像环境探测', () => {
-  it('从实际二进制探测并按镜像摘要缓存，不宣称不存在的本地浏览器', async () => {
+  it('从实际二进制探测并按镜像摘要缓存：镜像里装了的才列（2026-11-13 起沙箱带 Chromium）', async () => {
     const docker = createDockerApi(defaultDockerSocket());
     const executor = createDockerExecutor({
       docker: {
@@ -26,10 +26,9 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE)('实际镜像环境探测', () 
     });
     const result = await executor.environment!();
     expect(result.capabilities).toEqual(
-      expect.arrayContaining(['node', 'python', 'ffmpeg', 'libreoffice', 'pdf']),
+      expect.arrayContaining(['node', 'python', 'ffmpeg', 'libreoffice', 'pdf', 'browser']),
     );
     expect(result.imageId).toMatch(/^sha256:/);
-    expect(result.capabilities).not.toContain('browser');
     expect((await executor.environment!()).imageId).toBe(result.imageId);
     if (process.env.OASIS_NATIVE_IMAGE!.includes('sandbox-3d'))
       expect(result.capabilities).toContain('blender');

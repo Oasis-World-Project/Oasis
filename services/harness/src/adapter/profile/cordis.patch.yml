@@ -58,7 +58,7 @@
 - id: tool-web
   disabled: true
 
-# ---- 关掉：运行中问用户（Oasis 规定节点里的 AI 不主动追问） ----
+# ---- 关掉：运行中弹窗问用户（要用户选时 AI 在回复里写 oasis-questions 代码块） ----
 - id: user-questions
   disabled: true
 
@@ -99,13 +99,13 @@
   disabled: true
 
 # ---- 补上：agent-loop 要能看到会话存储，session/resume 才能用 ----
-# dsh 自带的 sdk 模板没给 agent-loop 注入 sessionPersistence，接着原会话（关卡退回修改、停止后继续、
+# dsh 自带的 sdk 模板没给 agent-loop 注入 sessionPersistence，接着原会话（下一轮、停止后继续、
 # 讨论的下一轮）时会报「session persistence is not configured」。2026-10-22 实测加上后可以跨容器恢复。
 - id: agent-loop
   inject:
     - sessionPersistence
 
-# 产品工作流只约束交付；子任务内部使用原生目标和代理树。
+# 平台只约束交付；子任务内部使用原生目标和代理树。
 - id: tool-subagent
   disabled: true
 - id: tool-subagent-fork

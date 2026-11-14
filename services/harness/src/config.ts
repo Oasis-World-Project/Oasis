@@ -1,10 +1,10 @@
-import { objectStoreEnv, postgresAndEventBus } from '@oasis/service-kit';
+import { databaseEnv, objectStoreEnv } from '@oasis/service-kit';
 import { z } from 'zod';
 
 const positiveInt = z.coerce.number().int().positive();
 
 export const harnessEnv = {
-  ...postgresAndEventBus.env,
+  ...databaseEnv,
   /** 签发、作废运行临时 Key */
   MODEL_GATEWAY_URL: z.url(),
   /** 取用户上传的素材放进沙箱 */
@@ -17,7 +17,7 @@ export const harnessEnv = {
     .optional()
     .transform((value) => value || undefined),
   /** 沙箱镜像（dsh 版本锁定在镜像标签里）。默认带 Blender 的 3D 版：它是基础版的超集，
-   *  节点按需求自行决定是否建模（按节点选镜像尚未实现）。 */
+   *  AI 按需要自己决定要不要建模。 */
   SANDBOX_IMAGE: z.string().default('oasis/harness-sandbox-3d:0.2.1-rc.5-blender4.3.2'),
   /** 沙箱所在的内部网络：不通外网，只能访问沙箱入口代理 */
   SANDBOX_NETWORK: z.string().default('oasis-sandbox'),
@@ -43,8 +43,7 @@ export const harnessEnv = {
   MAX_CONCURRENT_RUNS: positiveInt.default(4),
   RECOVERY_INTERVAL_MS: positiveInt.default(15000),
   FILE_TRANSFER_TIMEOUT_MS: positiveInt.default(600_000),
-  /** 计费窗口会续租，不限制任务总时长。 */
-  GOAL_ROUND_WINDOW: positiveInt.min(2).default(256),
+  /** 计费窗口会续租，不限制一轮的总时长。 */
   RUN_LEASE_MS: positiveInt
     .min(1000)
     .max(3600_000)

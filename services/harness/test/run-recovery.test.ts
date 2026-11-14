@@ -1,9 +1,12 @@
 // 运行服务：依赖中断、优雅重启和进程崩溃之后的接管与恢复。
 import { extractFiles } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
+import { SANDBOX_PATHS } from '../src/adapter/dsh.ts';
 import {
   fake,
   PAYER,
+  CONVERSATION,
+  PHOTO,
   methods,
   started,
   orphansRemoved,
@@ -11,7 +14,7 @@ import {
   executor,
   rows,
   events,
-  outbox,
+  finishes,
   repo,
   issued,
   compute,
@@ -21,6 +24,7 @@ import {
   until,
   finished,
   base,
+  tarEntries,
 } from './support/run-fixture.ts';
 
 describe('依赖中断后的原运行接管', () => {
@@ -33,7 +37,7 @@ describe('依赖中断后的原运行接管', () => {
     expect(rows.get(run.id)?.runKeyId).toBeTruthy();
     expect(rows.get(run.id)?.outputKey).toBeTruthy();
     expect(workspaces.has(run.id)).toBe(true);
-    expect(outbox).toHaveLength(0);
+    expect(finishes).toHaveLength(0);
     const checkpoint = await repo.suspension!(run.id);
     const replacement = buildService({ executor: { ...executor, suspend: async () => undefined } });
     await replacement.recover();
@@ -49,8 +53,8 @@ describe('依赖中断后的原运行接管', () => {
     expect(started.map((box) => box.runId)).toEqual([run.id, run.id]);
     expect(rows.get(run.id)?.sessionId).toBe(run.id);
     expect(methods).toContain('session/resume');
-    expect(outbox).toHaveLength(1);
-    expect(outbox[0]?.data).toMatchObject({ status: 'succeeded' });
+    expect(finishes).toHaveLength(1);
+    expect(finishes[0]?.outcome).toMatchObject({ status: 'succeeded' });
     expect(new Set(events.map((event) => event.seq)).size).toBe(events.length);
     await replacement.stopAll();
   }, 15000);
@@ -74,7 +78,7 @@ describe('依赖中断后的原运行接管', () => {
       );
       expect(started).toHaveLength(1);
       expect(issued).toHaveLength(1);
-      expect(outbox).toHaveLength(1);
+      expect(finishes).toHaveLength(1);
       await replacement.stopAll();
     },
   );
@@ -91,9 +95,9 @@ describe('依赖中断后的原运行接管', () => {
   });
 });
 
-describe('一次 agent 运行：重启接管', () => {
-  it('优雅重启挂起后保持原运行身份、事件序号和目录，完成只发一次事件', async () => {
-    const run = await service.start({ ...base, prompt: 'SLOW 原始任务' });
+describe('对话里的一轮：重启接管', () => {
+  it('优雅重启挂起后保持原运行身份、事件序号和目录，只写一次结局', async () => {
+    const run = await service.start({ ...base, prompt: 'SLOW 原来的话' });
     await until(() =>
       rows.get(run.id)?.status === 'running' && events.some((e) => e.kind === 'user_message')
         ? true
@@ -101,7 +105,7 @@ describe('一次 agent 运行：重启接管', () => {
     );
     await service.stopAll();
     expect(rows.get(run.id)?.status).toBe('queued');
-    expect(outbox).toHaveLength(0);
+    expect(finishes).toHaveLength(0);
     expect(workspaces.has(run.id)).toBe(true);
     const oldMax = Math.max(...events.map((e) => e.seq));
     const replacement = buildService();
@@ -113,32 +117,29 @@ describe('一次 agent 运行：重启接管', () => {
     expect(started[1]).toMatchObject({ workspaceId: run.id, restore: true });
     expect(events.find((e) => e.data.status === 'recovering')?.seq).toBe(oldMax + 1);
     expect(new Set(events.map((e) => e.seq)).size).toBe(events.length);
-    expect(outbox).toHaveLength(1);
+    expect(finishes).toHaveLength(1);
     expect(methods).toContain('session/resume');
     await replacement.stopAll();
   });
 
-  it('接管排队请求保留内联输入和素材，尚未开始时不恢复不存在的会话', async () => {
+  it('接管排队请求保留用户发的文件和人设，尚未开始时不恢复不存在的会话', async () => {
     const id = '8e8e8e8e-8e8e-4e8e-8e8e-8e8e8e8e8e8e';
     const body = {
       ...base,
       runId: id,
-      prompt: '排队任务',
-      inputs: [
-        { path: 'seed.txt', contentBase64: Buffer.from('durable-input').toString('base64') },
-      ],
+      persona: '你是小绿。',
+      prompt: '排队的话',
+      materials: [{ uploadId: PHOTO, path: 'materials/照片.jpg' }],
     };
     await repo.insert(
       {
         id,
         payerId: PAYER,
-        taskId: null,
-        nodeId: null,
+        conversationId: CONVERSATION,
         sessionId: id,
         continueFrom: null,
         model: base.model,
         prompt: body.prompt,
-        inputsFrom: [],
       },
       { body },
     );
@@ -146,12 +147,15 @@ describe('一次 agent 运行：重启接管', () => {
     await finished(id);
     expect(rows.get(id)?.status).toBe('succeeded');
     expect(methods).not.toContain('session/resume');
-    const files = await extractFiles(started[0]!.files[0]!.tar);
-    expect(files.find((f) => f.path === 'seed.txt')?.content.toString()).toBe('durable-input');
+    const placed = (dir: string) => started[0]!.files.find((f) => f.dir === dir)!.tar;
+    const files = await extractFiles(placed(SANDBOX_PATHS.workdir));
+    expect(files.find((f) => f.path === '照片.jpg')?.content.toString()).toBe('photo-bytes');
+    const guide = await tarEntries(placed(SANDBOX_PATHS.dshHome));
+    expect(guide.find((f) => f.path === 'AGENTS.md')?.content.toString()).toContain('你是小绿。');
   });
 
   it('已开始的运行丢失持久目录时不调用模型、不创建空沙箱', async () => {
-    const run = await service.start({ ...base, prompt: 'SLOW 原始任务' });
+    const run = await service.start({ ...base, prompt: 'SLOW 原来的话' });
     await until(() => (rows.get(run.id)?.status === 'running' ? true : undefined));
     await service.stopAll();
     workspaces.clear();
@@ -186,42 +190,21 @@ describe('一次 agent 运行：重启接管', () => {
       await until(() => (rows.size ? true : undefined));
       await checked.recover();
       expect(started).toHaveLength(0);
-      expect(outbox).toHaveLength(0);
+      expect(finishes).toHaveLength(0);
     } finally {
       release();
     }
     const run = await starting;
     expect((await finished(run.id)).status).toBe('succeeded');
     expect(started).toHaveLength(1);
-    expect(outbox).toHaveLength(1);
+    expect(finishes).toHaveLength(1);
     await checked.stopAll();
-  });
-
-  it('运行环境不具备所需能力时，登记和冻结之前拒绝', async () => {
-    const checked = buildService({
-      executor: {
-        ...executor,
-        environment: async () => ({
-          image: 'oasis/test:1',
-          imageId: 'sha256:test',
-          software: { node: '24' },
-          capabilities: ['node'],
-          notes: [],
-        }),
-      },
-    });
-    await expect(
-      checked.start({ ...base, prompt: '需要本地浏览器', requires: ['browser'] }),
-    ).rejects.toMatchObject({ statusCode: 422, code: 'execution_capability_unavailable' });
-    expect(rows.size).toBe(0);
-    expect(issued).toHaveLength(0);
-    expect(compute).toHaveLength(0);
   });
 
   it.each(['stop', 'cancel'] as const)(
     '恢复等待时的 %s 意图持久化；不唤醒模型、不创建新运行',
     async (how) => {
-      const run = await service.start({ ...base, prompt: 'SLOW 原任务' });
+      const run = await service.start({ ...base, prompt: 'SLOW 原来的话' });
       await until(() => events.find((e) => e.runId === run.id && e.kind === 'user_message'));
       await service.stopAll();
       const replacement = buildService();
@@ -230,7 +213,7 @@ describe('一次 agent 运行：重启接管', () => {
       expect(row.status).toBe(how === 'stop' ? 'stopped' : 'cancelled');
       expect(started).toHaveLength(1);
       expect(rows.size).toBe(1);
-      expect(outbox).toHaveLength(1);
+      expect(finishes).toHaveLength(1);
       expect(events.some((e) => e.data.status === 'control_requested' && e.data.how === how)).toBe(
         true,
       );
@@ -245,13 +228,11 @@ describe('一次 agent 运行：重启接管', () => {
       {
         id,
         payerId: PAYER,
-        taskId: null,
-        nodeId: null,
+        conversationId: CONVERSATION,
         sessionId: id,
         continueFrom: null,
         model: base.model,
         prompt: body.prompt,
-        inputsFrom: [],
       },
       { body },
     );
@@ -270,8 +251,7 @@ describe('一次 agent 运行：重启接管', () => {
     await repo.insert({
       id: '9e9e9e9e-9e9e-4e9e-8e9e-9e9e9e9e9e9e',
       payerId: PAYER,
-      taskId: null,
-      nodeId: null,
+      conversationId: CONVERSATION,
       model: 'm',
       prompt: 'p',
     });
@@ -280,7 +260,7 @@ describe('一次 agent 运行：重启接管', () => {
       status: 'failed',
       error: expect.stringContaining('恢复状态不可用'),
     });
-    expect(outbox[0]).toMatchObject({ data: { status: 'failed' } });
+    expect(finishes[0]?.outcome).toMatchObject({ status: 'failed' });
     expect(orphansRemoved?.size).toBe(0);
   });
 });

@@ -8,7 +8,7 @@ import { BrowserTestResult, UiTestReport, WebsiteTestArgs } from './ui-test.ts';
 /** 所属服务签发的对象存储临时下载链接（inspector 只认配置里放行的对象存储地址） */
 export const SourceLink = z.object({ url: z.url() });
 
-/** 文件解析结果（关卡判断文件能不能用、数量和尺寸） */
+/** 文件解析结果（判断文件能不能用、数量和尺寸） */
 export const InspectedFile = z.object({
   path: z.string(),
   text: z.string(),
@@ -109,7 +109,7 @@ export type ComputeUsage = z.infer<typeof ComputeUsage>;
 export const MediaCheckResult = MediaCheckReport.extend({ usage: ComputeUsage });
 export type MediaCheckResult = z.infer<typeof MediaCheckResult>;
 
-// ---- 网页的浏览器检查：交付关卡、节点自查 app.check、外站测试共用一套检查浏览器 ----
+// ---- 网页的浏览器检查：AI 自查 app.check、检查一轮的产出、外站测试共用一套检查浏览器 ----
 
 /** 检查浏览器容器用几核（付费的调用方定） */
 const BrowserCores = z.number().positive().max(8);
@@ -125,7 +125,7 @@ const RelativePath = z
   );
 
 /**
- * 浏览器检查的结论（交付关卡、节点自查）。页面本身的问题如实写在这里（passed=false 和原因）；
+ * 浏览器检查的结论（检查一轮的产出、AI 自查）。页面本身的问题如实写在这里（passed=false 和原因）；
  * 检查程序自己出错时接口直接报错，调用方记为没检查到。
  */
 export const ApplicationCheckResult = z.object({
@@ -138,12 +138,12 @@ export const ApplicationCheckResult = z.object({
     .string()
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
-  /** 平台截取的画面（打开后的首屏 opening.jpg 与测试步骤截图），不是节点自述 */
+  /** 平台截取的画面（打开后的首屏 opening.jpg 与测试步骤截图），不是 AI 自述 */
   screenshots: z.array(z.object({ name: z.string().max(100), base64: z.string() })).optional(),
 });
 export type ApplicationCheckResult = z.infer<typeof ApplicationCheckResult>;
 
-/** 交付关卡：检查运行产出包里这份清单（out/ 下的路径）所在的应用 */
+/** 检查一轮的产出：运行产出包里这份清单（out/ 下的路径）所在的应用 */
 export const ApplicationCheckBody = z.object({
   source: SourceLink,
   manifest: RelativePath.refine((path) => path.endsWith('/oasis-app.json'), '清单路径不对'),
@@ -151,7 +151,7 @@ export const ApplicationCheckBody = z.object({
 });
 export type ApplicationCheckBody = z.infer<typeof ApplicationCheckBody>;
 
-/** 节点自查（app.check）：out/<dir> 里的文件随调用带来（沙箱上传，经 model-gateway 转来） */
+/** AI 自查（app.check）：out/<dir> 里的文件随调用带来（沙箱上传，经 model-gateway 转来） */
 export const ApplicationFilesCheckBody = z.object({
   dir: RelativePath,
   files: z
@@ -159,7 +159,7 @@ export const ApplicationFilesCheckBody = z.object({
     .min(1)
     .max(1000),
   cores: BrowserCores,
-  /** 把平台截的画面（打开后的首屏、测试步骤截图）也交回：节点要看画面时用 */
+  /** 把平台截的画面（打开后的首屏、测试步骤截图）也交回：AI 要看画面时用 */
   screenshots: z.boolean().optional(),
 });
 export type ApplicationFilesCheckBody = z.infer<typeof ApplicationFilesCheckBody>;
@@ -172,45 +172,3 @@ export const WebsiteCheckBody = WebsiteTestArgs.extend({ cores: BrowserCores });
 export type WebsiteCheckBody = z.infer<typeof WebsiteCheckBody>;
 export const WebsiteCheckReply = BrowserTestResult.extend({ usage: ComputeUsage });
 export type WebsiteCheckReply = z.infer<typeof WebsiteCheckReply>;
-
-/** 解析用户上传的素材：canvas 核对过所有权、签发了下载链接；不接受任意 URL 或本机路径。 */
-export const MaterialsInspectBody = z.object({
-  files: z
-    .array(
-      z.object({
-        uploadId: z.uuid(),
-        name: z.string(),
-        size: z.number().int().nonnegative(),
-        sha256: z
-          .string()
-          .regex(/^[a-f0-9]{64}$/)
-          .nullable()
-          .optional(),
-        url: z.url(),
-      }),
-    )
-    .max(20),
-  maxChars: z.number().int().min(1).max(50_000).default(30_000),
-});
-export type MaterialsInspectBody = z.input<typeof MaterialsInspectBody>;
-
-export const MaterialInspection = z.object({
-  uploadId: z.uuid(),
-  name: z.string(),
-  sha256: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .nullable(),
-  text: z.string(),
-  status: z.enum(['complete', 'partial', 'unsupported', 'failed']),
-  reason: z.string().optional(),
-  /** 图片素材（如批注截图）没有正文，原图交给关卡的看图检查（2026-11-05） */
-  image: z
-    .object({
-      mediaType: z.enum(['image/png', 'image/jpeg', 'image/webp']),
-      base64: z.string(),
-    })
-    .optional(),
-});
-export const MaterialInspectResult = z.object({ files: z.array(MaterialInspection).max(20) });
-export type MaterialInspectResult = z.infer<typeof MaterialInspectResult>;

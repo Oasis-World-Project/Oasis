@@ -1,10 +1,6 @@
-// harness 的内部接口（只给 task 等内部服务用，gateway 不转发）：启动一次 agent 运行、查进度、追问、停止、取消。
+// harness 的内部接口（gateway 不转发）：conversation 用它开一轮、看进度、插话、停止、取消。
+// 一轮 = 一次运行：对话里的主 AI 在沙箱里接着同一个会话（同一个持久工作目录）干活。
 import { z } from 'zod';
-import { ApplicationCheckResult } from './inspector.ts';
-import { ToolSteps } from './tool-step.ts';
-
-/** 工具运行的 model 写这个：不调模型，harness 不按模型目录准入 */
-export const TOOL_RUN_MODEL = 'oasis/tool';
 
 /** 实际运行镜像的软件探测；只描述本地环境，不代表外部供应商能力。 */
 export const ExecutionEnvironment = z.object({
@@ -23,99 +19,55 @@ export const RunStatus = z.enum([
   'succeeded',
   'failed',
   'cancelled',
-  /** 用户点了停止：已经做出来的产出存下了，会话在持久工作目录里，可以用 continueFrom 接着做 */
+  /** 用户点了停止：已经做出来的产出存下了，会话在持久工作目录里，下一轮接着 */
   'stopped',
 ]);
 export type RunStatus = z.infer<typeof RunStatus>;
 
-/** 放进沙箱 /workspace/in 的输入文件（5.1 先内联传；之后由画布提供下载地址） */
-export const RunInputFile = z.object({
-  path: z
-    .string()
-    .min(1)
-    .max(300)
-    .regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$)).+$/, '必须是不含 .. 的相对路径'),
-  contentBase64: z.string(),
-});
-export type RunInputFile = z.infer<typeof RunInputFile>;
+/** 交给 AI 的文件放在沙箱的哪里：只能在 materials/ 下，不能有 .. */
+const MaterialPath = z
+  .string()
+  .min(1)
+  .max(600)
+  .regex(/^materials\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\n]+$/, '必须放在 materials/ 下，不能有 ..');
 
-export const StartRunBody = z
-  .object({
-    /** 调用方可以自带运行 ID（便于幂等）；不给就由 harness 生成 */
-    runId: z.uuid().optional(),
-    payerId: z.uuid(),
-    taskId: z.uuid().optional(),
-    nodeId: z.uuid().optional(),
-    /** 供应商型号，如 deepseek/deepseek-v4.1-flash */
-    model: z.string().min(1).max(200),
-    /** 工作节点使用原生持久目标；普通发言仍可只跑一轮。 */
-    goal: z.boolean().default(false),
-    /** 思考强度：max 用模型支持的最高档（规划员）；不给时最高到 high */
-    reasoningEffort: z.enum(['max']).optional(),
-    /** 规划所需的本地能力；预检失败在登记和冻结之前返回。 */
-    requires: z.array(z.string().min(1).max(100)).default([]),
-    /** 交给 agent 的完整任务说明 */
-    prompt: z.string().min(1).max(200_000),
-    inputs: z.array(RunInputFile).default([]),
-    /**
-     * 把之前某次运行的产出放进本次沙箱的 in/<as>/ 下（工作流里上游节点交给下游）。
-     * as 可以是两层（展开节点每一条的产出放在 in/<节点>/01/）。
-     * 只能引用同一付费人、已成功的运行。
-     */
-    inputsFrom: z
-      .array(
-        z.object({
-          runId: z.uuid(),
-          as: z
-            .string()
-            .regex(
-              /^[\p{L}\p{N}_-][\p{L}\p{N}_.-]{0,63}(?:\/[\p{L}\p{N}_-][\p{L}\p{N}_.-]{0,63})?$/u,
-              '一层或两层目录名：字母、数字、下划线、点和短横线，不能以点开头，每层最长 64 个字符',
-            ),
-        }),
-      )
-      .default([]),
-    /**
-     * 用户给的素材：开沙箱前由 harness 向 canvas 取出，放在沙箱里的 path（如 materials/照片.jpg）。
-     * 是不是这个用户的文件，conversation 收附件时已经核对过。
-     */
-    materials: z
-      .array(
-        z.object({
-          uploadId: z.uuid(),
-          path: z
-            .string()
-            .min(1)
-            .max(300)
-            .regex(
-              /^materials\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\n]+$/,
-              '必须放在 materials/ 下，不能有 ..',
-            ),
-        }),
-      )
-      .default([]),
-    /**
-     * 接着之前某次运行做：挂上它的持久工作目录（会话、out/、装好的依赖都在），AI 记得前面做到哪了；
-     * 没另给 inputsFrom 就沿用它的。用于关卡退回修改、停止后继续、修改、讨论的下一轮。
-     * 只能接同一付费人、已结束、工作目录还在的运行；工作目录不在了返回 409 {@link WORKSPACE_UNAVAILABLE}。
-     */
-    continueFrom: z.uuid().optional(),
-    /**
-     * 工具运行：不启动 AI，在沙箱里按顺序执行这些工具步骤（每步失败自动重试 2 次）；
-     * model 写 {@link TOOL_RUN_MODEL}，prompt 只用来记录。接着原运行做时跳过已经做完的步骤。
-     */
-    steps: ToolSteps.optional(),
-  })
-  .refine(
-    (body) => (body.model === TOOL_RUN_MODEL) === Boolean(body.steps),
-    `工具运行的 model 写 ${TOOL_RUN_MODEL} 并带上 steps；其他运行不带 steps`,
-  );
+export const StartRunBody = z.object({
+  /** 调用方可以自带运行 ID（便于幂等）；不给就由 harness 生成 */
+  runId: z.uuid().optional(),
+  payerId: z.uuid(),
+  /** 这一轮属于哪个对话：删对话时一起清理 */
+  conversationId: z.uuid(),
+  /** 供应商型号，如 deepseek/deepseek-v4.1-flash */
+  model: z.string().min(1).max(200),
+  /** 这个 AI 是谁（人设），写进沙箱里给 AI 的说明 */
+  persona: z.string().max(20_000).default(''),
+  /** 用户打开了「只用国内模型」：国外厂商的型号不能开这一轮，这一轮的工具也只给国内厂商的型号 */
+  domesticOnly: z.boolean().default(false),
+  /** 用户这一轮说的话 */
+  prompt: z.string().min(1).max(200_000),
+  /**
+   * 交给 AI 的文件：开沙箱前由 harness 向 canvas 取出，放在沙箱里的 path（如 materials/照片.jpg）。
+   * uploadId 是用户随消息发的文件；artifactId 是画布里的成果（「让 AI 改」的成果不在这个会话的
+   * 工作目录里时拷一份进来）。是不是这个用户的，conversation 收消息时已经核对过。
+   */
+  materials: z
+    .array(
+      z.union([
+        z.object({ uploadId: z.uuid(), path: MaterialPath }),
+        z.object({ artifactId: z.uuid(), path: MaterialPath }),
+      ]),
+    )
+    .max(2000)
+    .default([]),
+  /**
+   * 接着上一轮做：挂上它的持久工作目录（会话、out/、装好的依赖都在），AI 记得前面的事。
+   * 只能接同一付费人、已结束、工作目录还在的运行；工作目录不在了返回 409 {@link WORKSPACE_UNAVAILABLE}。
+   */
+  continueFrom: z.uuid().optional(),
+});
 export type StartRunBody = z.input<typeof StartRunBody>;
 
-/**
- * 接着的那次运行的持久工作目录已经不在了（持久卷被清掉）：接不上原会话。
- * 调用方应改成重新开一个会话做，把上一版产出作为输入带上（task：修改时的「重新做」）。
- */
+/** 接着的那一轮的持久工作目录已经不在了（被清掉）：接不上原会话，调用方改成开新会话。 */
 export const WORKSPACE_UNAVAILABLE = 'workspace_unavailable';
 
 /** 运行产出的文件（沙箱里 /workspace/out 下的内容） */
@@ -132,15 +84,16 @@ export type RunOutputFile = z.infer<typeof RunOutputFile>;
 export const RunBody = z.object({
   id: z.uuid(),
   payerId: z.uuid(),
-  taskId: z.uuid().nullable(),
-  nodeId: z.uuid().nullable(),
+  conversationId: z.uuid().nullable(),
+  /** 这一轮所在的会话（话题）：接着上一轮做的同属一个会话，开新话题就是新的会话 */
+  sessionId: z.uuid(),
   model: z.string(),
   status: RunStatus,
-  /** 持久工作目录还在，可以用 continueFrom 接着这次运行的会话做 */
+  /** 持久工作目录还在，下一轮可以用 continueFrom 接着这个会话 */
   resumable: z.boolean().optional(),
   error: z.string().nullable(),
   outputs: z.array(RunOutputFile),
-  /** AI 最后说的一句话（下游节点和界面用） */
+  /** AI 最后说的一段话 */
   summary: z.string().nullable(),
   createdAt: z.iso.datetime(),
   startedAt: z.iso.datetime().nullable(),
@@ -150,12 +103,14 @@ export type RunBody = z.infer<typeof RunBody>;
 
 /**
  * 运行过程中的事件（已从 dsh 的原始事件翻译过来，调用方不需要认识 dsh）。
- * - status：运行时整体变为忙 / 空闲
- * - user_message：用户的任务说明或追问
- * - assistant_text：AI 说的话
- * - tool_call / tool_result：AI 调用工具及结果（内容过长会截断）
+ * - status：运行时整体变为忙 / 空闲、服务中断后恢复
+ * - user_message：用户的话（开头那句和插话）
+ * - assistant_text：AI 说的话（一步一段）
+ * - tool_call / tool_result：AI 调用工具及结果（内容过长会截断；tool_call 带给人看的一句话 label）
+ * - todos：AI 列的待办（{ items: [{ text, status: pending | doing | done }] }）
  * - turn_end：一轮结束及原因
  * - error：运行出错
+ * 子任务（AI 派出去的子代理）的事件带 parentSessionId。
  */
 export const RunEventKind = z.enum([
   'status',
@@ -163,6 +118,7 @@ export const RunEventKind = z.enum([
   'assistant_text',
   'tool_call',
   'tool_result',
+  'todos',
   'turn_end',
   'error',
 ]);
@@ -178,23 +134,5 @@ export type RunEventBody = z.infer<typeof RunEventBody>;
 
 export const RunEventList = z.object({ events: z.array(RunEventBody) });
 
-/** 用户在运行中追问或补充要求：排在当前这一轮之后处理，带着完整上下文 */
+/** 用户在这一轮进行中插话：在 AI 的下一步送到，带着完整上下文 */
 export const RunMessageBody = z.object({ text: z.string().trim().min(1).max(20_000) });
-
-/**
- * 一次运行产出包的临时下载链接（给 inspector 检查用）：只给这次运行的付费人和任务，
- * 运行没有产出时 404。
- */
-export const OutputsLinkBody = z.object({ payerId: z.uuid(), taskId: z.uuid() });
-export const OutputsLink = z.object({ url: z.url(), expiresAt: z.iso.datetime() });
-export type OutputsLink = z.infer<typeof OutputsLink>;
-
-/**
- * 交付关卡的浏览器检查报告（inspector 检查、task 存回这次运行）：只给这次运行的付费人和任务，
- * 用户在工作流里下载。
- */
-export const ApplicationReportBody = z.object({
-  payerId: z.uuid(),
-  taskId: z.uuid(),
-  report: ApplicationCheckResult,
-});

@@ -11,8 +11,6 @@ export interface SandboxSpec {
   workspaceId: string;
   /** 接着原会话或接管：持久工作目录必须已经在，不能新建空目录冒充恢复 */
   restore?: boolean;
-  /** 不跑镜像默认的 dsh，改跑这个命令（工具运行的步骤执行器） */
-  command?: string[];
   /** 沙箱里的环境变量（含临时 Key，不得写进日志） */
   env: Record<string, string>;
   /** 启动前解到沙箱里的文件：目录 → tar 包 */
@@ -49,11 +47,6 @@ export interface Executor {
   readStoredArchive?(runId: string, path: string): Promise<Readable | undefined>;
 }
 
-/** 工具运行的步骤执行器在镜像里的位置；探测到它，执行环境才有 tool-steps 能力 */
-export const STEPS_RUNNER = '/opt/oasis/services/harness/sandbox/oasis-steps.ts';
-/** 工具运行要的执行环境能力：旧镜像没有步骤执行器时准入就拒绝，不起沙箱 */
-export const TOOL_STEPS_CAPABILITY = 'tool-steps';
-
 const LABEL_COMPONENT = 'oasis.component=harness-sandbox';
 const LABEL_RUN = 'oasis.run-id';
 const volumeNames = (id: string) => {
@@ -76,7 +69,7 @@ export function createDockerExecutor(deps: {
   const instanceId = randomUUID();
   let detected: { imageId: string; value: Promise<ExecutionEnvironment> } | undefined;
   async function probe(imageId: string): Promise<ExecutionEnvironment> {
-    const script = `const {spawnSync}=require('node:child_process');const fs=require('node:fs');const software={};for(const [key,bin,args] of [['node','node',['--version']],['python','python3',['--version']],['blender','blender',['--version']],['ffmpeg','ffmpeg',['-version']],['libreoffice','libreoffice',['--version']],['pdf','pdftoppm',['-v']],['browser','chromium',['--version']],['git','git',['--version']],['pandoc','pandoc',['--version']],['sqlite','sqlite3',['--version']],['jq','jq',['--version']],['imagemagick','magick',['-version']],['sox','sox',['--version']],['ripgrep','rg',['--version']],['esbuild','esbuild',['--version']],['typescript','tsc',['--version']]]){const r=spawnSync(bin,args,{encoding:'utf8',timeout:15000});if(r.status===0)software[key]=(r.stdout||r.stderr).split('\\n')[0]}if(fs.existsSync('${STEPS_RUNNER}'))software['${TOOL_STEPS_CAPABILITY}']='oasis-steps';const pixelFont=['/usr/share/fonts/opentype/unifont/unifont.otf','/usr/share/fonts/truetype/unifont/unifont.ttf'].find(p=>fs.existsSync(p));process.stdout.write(JSON.stringify({software,capabilities:Object.keys(software),notes:['沙箱仅经代理访问模型、工具和获准的软件包源。',software.browser?'沙箱里有 Chromium（命令 chromium，没有显卡，3D 画面靠 CPU 画）和 playwright-core（chromium.launch() 直接可用），可以打开自己做的页面操作、读页面状态、截图；沙箱不通外网，打不开外站。':'沙箱里没有浏览器。',...(pixelFont?['预装的字体在 /usr/share/fonts 下，可以拷进成果或取子集后内嵌：Noto CJK（中日韩）、点阵像素字体 Unifont（16×16，含中文，'+pixelFont+'）。']:[]),'可运行应用应交齐 oasis-app.json 与配套文件；oasis-tool app.check --dir out/<应用目录> 按画布的方式打开它跑一遍，交付后关卡复跑的是同一套检查；外站测试只使用目录中可用的 website.test。','项目依赖应装入 /workspace，例如项目 node_modules 或 .venv，才能随工作目录恢复。']}))`;
+    const script = `const {spawnSync}=require('node:child_process');const fs=require('node:fs');const software={};for(const [key,bin,args] of [['node','node',['--version']],['python','python3',['--version']],['blender','blender',['--version']],['ffmpeg','ffmpeg',['-version']],['libreoffice','libreoffice',['--version']],['pdf','pdftoppm',['-v']],['browser','chromium',['--version']],['git','git',['--version']],['pandoc','pandoc',['--version']],['sqlite','sqlite3',['--version']],['jq','jq',['--version']],['imagemagick','magick',['-version']],['sox','sox',['--version']],['ripgrep','rg',['--version']],['esbuild','esbuild',['--version']],['typescript','tsc',['--version']]]){const r=spawnSync(bin,args,{encoding:'utf8',timeout:15000});if(r.status===0)software[key]=(r.stdout||r.stderr).split('\\n')[0]}const pixelFont=['/usr/share/fonts/opentype/unifont/unifont.otf','/usr/share/fonts/truetype/unifont/unifont.ttf'].find(p=>fs.existsSync(p));process.stdout.write(JSON.stringify({software,capabilities:Object.keys(software),notes:['沙箱仅经代理访问模型、工具和获准的软件包源。',software.browser?'沙箱里有 Chromium（命令 chromium，没有显卡，3D 画面靠 CPU 画）和 playwright-core（chromium.launch() 直接可用），可以打开自己做的页面操作、读页面状态、截图；沙箱不通外网，打不开外站。':'沙箱里没有浏览器。',...(pixelFont?['预装的字体在 /usr/share/fonts 下，可以拷进成果或取子集后内嵌：Noto CJK（中日韩）、点阵像素字体 Unifont（16×16，含中文，'+pixelFont+'）。']:[]),'可运行应用应交齐 oasis-app.json 与配套文件；oasis-tool app.check --dir out/<应用目录> 按画布的方式打开它跑一遍；外站测试只使用目录中可用的 website.test。','项目依赖应装入 /workspace，例如项目 node_modules 或 .venv，才能随工作目录恢复。']}))`;
     const { Id: id } = await docker.createContainer(`oasis-probe-${randomUUID()}`, {
       Image: imageId,
       Entrypoint: ['node'],
@@ -164,7 +157,6 @@ export function createDockerExecutor(deps: {
       }
       const { Id: id } = await docker.createContainer(`oasis-run-${spec.runId}`, {
         Image: deps.image,
-        ...(spec.command ? { Entrypoint: spec.command } : {}),
         Env: Object.entries(spec.env).map(([key, value]) => `${key}=${value}`),
         Labels: { 'oasis.component': 'harness-sandbox', [LABEL_RUN]: spec.runId },
         WorkingDir: deps.workdir,

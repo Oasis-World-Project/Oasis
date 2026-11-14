@@ -61,18 +61,4 @@ echo "== oasis-tool op.* 转给 oasis-op"
 oasis-tool op.video.trim --in out/cut.mp4 --start 0 --end 1 --out out/via-tool.mp4
 between "$(duration out/via-tool.mp4)" 0.8 1.2
 
-echo "== 工具步骤执行器：只有本地操作的工具节点"
-cat > in/.oasis-steps.json <<'EOF'
-[{"tool":"op.video.concat","args":{"in":["in/shots/1.mp4","in/shots/2.mp4"]},"out":"out/steps/cut.mp4"},
- {"tool":"op.media.convert","args":{"in":"out/steps/cut.mp4","width":320},"out":"out/steps/small.mp4"}]
-EOF
-node --no-warnings /opt/oasis/services/harness/sandbox/oasis-steps.ts < /dev/null > steps.jsonl
-grep -q '"type":"done","ok":true' steps.jsonl || { cat steps.jsonl; exit 1; }
-test "$(size out/steps/small.mp4)" = "320x180"
-grep -q '"done":\[0,1\]' out/.oasis-steps/progress.json
-# 再跑一次：做完的步骤不重做
-node --no-warnings /opt/oasis/services/harness/sandbox/oasis-steps.ts < /dev/null > again.jsonl
-grep -q '前面做完的 2 步不再重做' again.jsonl
-test "$(grep -c '"type":"tool_call"' again.jsonl)" = "0"
-
 echo OPS_OK

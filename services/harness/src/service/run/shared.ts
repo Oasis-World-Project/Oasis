@@ -1,7 +1,6 @@
 // 运行服务（run-service.ts）分成几块：执行一次运行（execute）、沙箱和对象存储之间搬文件（storage）、
 // 停止 / 取消 / 重启接管（control）、读产出和过程（outputs）。各块通过同一个 RunContext 互相调用，
 // 这里只放它们共用的类型、状态和小工具，免得文件之间循环 import。
-import type { Readable } from 'node:stream';
 import type {
   ExecutionEnvironment,
   RunBody,
@@ -10,7 +9,7 @@ import type {
 } from '@oasis/contracts/harness';
 import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
 import type { Logger, ObjectStore, ServiceClient, StreamFile } from '@oasis/service-kit';
-import type { AgentConnection, SandboxPackages } from '../../adapter/dsh.ts';
+import type { AgentConnection, AgentGuide, SandboxPackages } from '../../adapter/dsh.ts';
 import type { Executor, Sandbox } from '../../executor/executor.ts';
 import type { Run, RunOutcome, RunsRepo } from '../../repo/runs-repo.ts';
 
@@ -26,12 +25,13 @@ export interface RunDeps {
   transferTimeoutMs?: number;
   modelBaseUrl: string;
   packages: SandboxPackages;
+  /** 读给沙箱里 AI 的平台说明和技能（每轮现读，放进 dsh 的用户目录） */
+  guide: () => Promise<AgentGuide>;
   batchEnv?: Record<string, string>;
   maxConcurrent: number;
   /** 显式验收超时；生产调用不设置。 */
   timeoutMs?: number;
   leaseMs?: number;
-  goalRoundWindow?: number;
   keyTtlSeconds?: number;
   /** 沙箱的 CPU 核数（算力按 时长 × 核数 计费） */
   cores: number;
@@ -44,23 +44,18 @@ type Status = RunBody['status'];
 
 /** 放进 out/ 的占位文件：保证目录存在且属于沙箱用户，不算产出 */
 export const KEEP_FILE = '.oasis-keep';
-/**
- * 批次恢复状态、工具的中间文件和工具步骤的进度在 out/ 里，会随产出包存下，但不是成果，
- * 也不传给下游节点。
- */
+/** 批次恢复状态、工具的中间文件在 out/ 里，会随产出包存下，但不是成果。 */
 export const isPrivateOutput = (path: string) =>
   path === KEEP_FILE ||
-  ['.oasis-batches', '.oasis-tools', '.oasis-steps'].some(
-    (dir) => path === dir || path.startsWith(`${dir}/`),
-  );
+  ['.oasis-batches', '.oasis-tools'].some((dir) => path === dir || path.startsWith(`${dir}/`));
 
 /** 这个进程里正在执行的一次运行 */
 export interface LiveRun {
   readonly abort: AbortController;
   agent?: AgentConnection;
-  /** 已交给 dsh 的用户消息条数（含最初的任务说明） */
+  /** 已交给 dsh 的用户消息条数（含这一轮开头用户说的话） */
   prompts: number;
-  /** 已经开始收尾，不再接受追问 */
+  /** 已经开始收尾，不再接受插话 */
   closing: boolean;
   nextSeq: number;
   /** AI 最近说的一句话，结束时作为 summary */
@@ -109,8 +104,8 @@ export function toRunBody(run: Run, resumable: boolean): RunBody {
   return {
     id: run.id,
     payerId: run.payerId,
-    taskId: run.taskId,
-    nodeId: run.nodeId,
+    conversationId: run.conversationId,
+    sessionId: run.sessionId ?? run.id,
     model: run.model,
     status: run.status,
     resumable,
@@ -141,6 +136,13 @@ export function createGate(limit: number) {
 
 type Material = Required<StartRunBody>['materials'][number];
 
+/** 开一轮时定下、接管时照原样用的设置：用户发的文件、这个 AI 的人设、「只用国内模型」 */
+interface RunRequest {
+  materials: Material[];
+  persona: string;
+  domesticOnly: boolean;
+}
+
 /** 开跑前查到的：模型能力目录和执行环境 */
 interface Catalog {
   models: ModelCapabilities[];
@@ -169,8 +171,8 @@ export interface RunContext {
   bodyOf(row: Run): Promise<RunBody>;
 
   // ---- 执行（execute.ts）
-  /** 准入：执行环境有所需能力、模型在执行目录里 */
-  admit(model: string, requires?: string[]): Promise<Catalog>;
+  /** 准入：执行环境就绪、模型在执行目录里（打开了「只用国内模型」的只认国内厂商的模型） */
+  admit(model: string, domesticOnly: boolean): Promise<Catalog>;
   /** 按顺序记一条运行事件 */
   record(
     runId: string,
@@ -178,18 +180,18 @@ export interface RunContext {
     kind: RunEventBody['kind'],
     data: Record<string, unknown>,
   ): void;
-  /** 跑完一次运行的整个生命周期；recovering：接管重启前已经开始的运行（工作目录里已有输入） */
+  /**
+   * 跑完一次运行的整个生命周期；request 是开这一轮时定下的设置；
+   * recovering：接管重启前已经开始的运行（工作目录里已有素材）
+   */
   execute(
     row: Run,
-    inputs: { path: string; content: Buffer }[],
-    materials: Material[],
+    request: RunRequest,
     run: LiveRun,
-    /** steps：工具运行要执行的步骤，不起 AI */
-    mode: { goal: boolean; reasoningEffort?: 'max'; steps?: StartRunBody['steps'] },
     catalog: Catalog,
     recovering?: boolean,
   ): Promise<void>;
-  /** 写结局并发出 harness.run.finished */
+  /** 写下结局 */
   finish(row: Run, outcome: Omit<RunOutcome, 'finishedAt'>): Promise<void>;
 
   // ---- 搬文件（storage.ts）
@@ -202,8 +204,6 @@ export interface RunContext {
     id: string,
     options?: { companions?: boolean },
   ): Promise<Saved>;
-  /** 上游运行的产出：解出来放到 in/<as>/ 下 */
-  upstreamFiles(row: Run): Promise<{ dir: string; tar: Readable }[]>;
   /** 用户给的素材：向 canvas 取出来，放到 materials/ 下 */
   materialFiles(materials: Material[], runId: string, ownerId: string): Promise<StreamFile[]>;
 

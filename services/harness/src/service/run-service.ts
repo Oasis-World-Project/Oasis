@@ -1,10 +1,9 @@
-// 一次 agent 运行的完整生命周期：
-// 排队 → 签发临时 Key → 起沙箱（挂上这个会话的持久工作目录）、放入输入 → dsh 握手、交任务
-// → 记录事件 → 等空闲（期间可追问）→ 取出产出存进对象存储 → 销毁沙箱、作废 Key
-// → 写结局并发出 harness.run.finished。
-// 工作目录和 dsh 会话在持久卷里，沙箱销毁后还在：停止、失败、关卡退回、修改时用
-// continueFrom 接着原会话做，AI 记得之前做到哪了。对象存储只存产出，不存会话。
-// 持久卷不在了就接不上原会话（409 workspace_unavailable），由 task 改成重新做、带上上一版产出。
+// 对话里主 AI 的一轮 = 一次运行。完整生命周期：
+// 排队 → 签发临时 Key → 起沙箱（挂上这个会话的持久工作目录）、放入说明和用户发的文件 → dsh 握手、
+// 接着原会话、交用户的话 → 记录事件 → 等这一轮做完（期间可插话）→ 取出产出存进对象存储
+// → 销毁沙箱、作废 Key → 写结局。
+// 工作目录和 dsh 会话在持久卷里，沙箱销毁后还在：下一轮用 continueFrom 接着原会话做，AI 记得之前的事。
+// 对象存储只存每轮的产出，不存会话。持久卷不在了就接不上（409 workspace_unavailable），由调用方开新会话。
 // 这里是对外接口和登记新运行；执行、搬文件、停止与接管、读产出分别在 run/ 下。
 import { randomUUID } from 'node:crypto';
 import { type RunBody, type StartRunBody, WORKSPACE_UNAVAILABLE } from '@oasis/contracts/harness';
@@ -43,16 +42,21 @@ export function createRunService(deps: RunDeps) {
   ctx.recover = control.recover;
   const { live, sessions } = state;
 
-  /** 接着之前的运行：同一付费人、已结束、持久工作目录还在、会话没有更新的运行 */
+  /** 接着之前的运行：同一付费人、同一对话、已结束、持久工作目录还在、会话没有更新的运行 */
   async function continuable(body: StartRunBody, runId: string): Promise<Run> {
-    // 刚点了停止马上点继续：那次运行还在收尾（停沙箱、存产出），等它真正停好再接着，
-    // 不能当成「还没结束」拒掉（2026-11-08 回归测试发现：拒掉后节点失败、会话被取消）
+    // 刚点了停止马上发下一句：那一轮还在收尾（停沙箱、存产出），等它真正停好再接着，
+    // 不能当成「还没结束」拒掉（2026-11-08 回归测试发现过）
     const stopping = live.get(runId);
     if (stopping?.abort.signal.aborted) await stopping.done;
     const previous = await repo.get(runId);
     const ended = ['succeeded', 'failed', 'cancelled', 'stopped'].includes(previous?.status ?? '');
-    if (!previous || previous.payerId !== body.payerId || !ended)
-      throw new HttpError(409, 'continue_unavailable', '要接着的那次运行不存在或还没结束');
+    if (
+      !previous ||
+      previous.payerId !== body.payerId ||
+      previous.conversationId !== body.conversationId ||
+      !ended
+    )
+      throw new HttpError(409, 'continue_unavailable', '要接着的那一轮不存在或还没结束');
     const session = previous.sessionId ?? previous.id;
     // 只有对象存储里的产出、没有会话，不能冒充接着原会话做
     if (!(await executor.workspaceExists(session)))
@@ -64,9 +68,8 @@ export function createRunService(deps: RunDeps) {
   }
 
   return {
-    async start(
-      body: StartRunBody & Required<Pick<StartRunBody, 'inputs' | 'inputsFrom'>>,
-    ): Promise<RunBody> {
+    async start(body: StartRunBody & Required<Pick<StartRunBody, 'materials'>>): Promise<RunBody> {
+      const domesticOnly = body.domesticOnly ?? false;
       if (state.closing)
         throw new HttpError(503, 'harness_closing', '执行服务正在重启，请稍后重交');
       if (body.runId) {
@@ -77,39 +80,24 @@ export function createRunService(deps: RunDeps) {
           return ctx.bodyOf(existing);
         }
       }
-      // 目录未就绪属于准入等待，不登记失败运行，也不消耗节点重试次数。
-      const catalog = await ctx.admit(body.model, body.requires);
-      // 只能拿同一付费人、已成功的运行的产出当输入
-      for (const ref of body.inputsFrom) {
-        const upstream = await repo.get(ref.runId);
-        if (upstream?.payerId !== body.payerId || upstream.status !== 'succeeded') {
-          throw new HttpError(
-            409,
-            'input_run_unavailable',
-            `上游运行 ${ref.runId} 不存在或没有成功`,
-          );
-        }
-      }
-      // 接着之前的运行：没另给输入就沿用它的输入
+      // 目录未就绪属于准入等待，不登记失败运行
+      const catalog = await ctx.admit(body.model, domesticOnly);
       const previous = body.continueFrom ? await continuable(body, body.continueFrom) : undefined;
       const id = body.runId ?? randomUUID();
       const sessionId = previous ? (previous.sessionId ?? previous.id) : id;
       const finishing = [...live.values()].find((r) => r.sessionId === sessionId && r.closing);
       if (finishing) await finishing.done;
       if (sessions.has(sessionId) || [...live.values()].some((r) => r.sessionId === sessionId))
-        throw new HttpError(409, 'session_busy', '原会话仍有运行，不能同时修改同一工作目录');
+        throw new HttpError(409, 'session_busy', '这个会话还有一轮没做完，不能同时开两轮');
       sessions.add(sessionId);
       try {
         const inserted = await repo.insert(
           {
             id,
             payerId: body.payerId,
-            taskId: body.taskId ?? null,
-            nodeId: body.nodeId ?? null,
+            conversationId: body.conversationId,
             model: body.model,
             prompt: body.prompt,
-            inputsFrom:
-              body.inputsFrom.length === 0 && previous ? previous.inputsFrom : body.inputsFrom,
             sessionId,
             continueFrom: previous?.id ?? null,
           },
@@ -125,21 +113,11 @@ export function createRunService(deps: RunDeps) {
         }
         const run = newLiveRun(await repo.nextSequence(id), sessionId);
         live.set(id, run);
-        const inputs = body.inputs.map((f) => ({
-          path: f.path,
-          content: Buffer.from(f.contentBase64, 'base64'),
-        }));
         run.done = ctx
           .execute(
             row,
-            inputs,
-            body.materials ?? [],
+            { materials: body.materials, persona: body.persona ?? '', domesticOnly },
             run,
-            {
-              goal: body.goal ?? false,
-              ...(body.reasoningEffort ? { reasoningEffort: body.reasoningEffort } : {}),
-              ...(body.steps ? { steps: body.steps } : {}),
-            },
             catalog,
           )
           .catch((err: unknown) => logger.error({ err, runId: id }, '运行收尾失败'));
@@ -159,32 +137,27 @@ export function createRunService(deps: RunDeps) {
     },
 
     /**
-     * 任务被删除（用户删除就是真删除）：删掉它已结束的运行的产出包、检查报告、运行记录和持久工作目录。
-     * 还没结束的运行（正常不会有）先留着，返回 false，事件重投时再删。
+     * 删对话、开新话题（用户删除就是真删除）：删掉这个对话已结束的运行的产出包、运行记录和持久工作目录。
+     * 还有没结束的运行时什么都不删，返回 false（调用方先停下那一轮再删）。
      */
-    async purgeTask(taskId: string): Promise<boolean> {
-      const rows = await repo.listByTask(taskId);
-      const ended = rows.filter((row) => !['queued', 'starting', 'running'].includes(row.status));
-      for (const row of ended) {
-        if (row.outputKey) await store.delete(row.outputKey);
-        for (const kind of ['audio', 'video', 'application'])
-          await store.delete(`runs/${row.id}/${kind}-check.json`);
-      }
-      if (ended.length === rows.length)
-        for (const sessionId of new Set(ended.map((r) => r.sessionId ?? r.id)))
-          if (!(await repo.listBySession(sessionId)).some((r) => r.taskId !== taskId))
-            await executor.purgeWorkspace(sessionId);
-      await repo.removeMany(ended.map((row) => row.id));
-      if (ended.length) logger.info({ taskId, runs: ended.length }, '任务已删除，运行存档一并清理');
-      return ended.length === rows.length;
+    async purgeConversation(conversationId: string): Promise<boolean> {
+      const rows = await repo.listByConversation(conversationId);
+      if (rows.some((row) => ['queued', 'starting', 'running'].includes(row.status))) return false;
+      for (const row of rows) if (row.outputKey) await store.delete(row.outputKey);
+      for (const sessionId of new Set(rows.map((r) => r.sessionId ?? r.id)))
+        await executor.purgeWorkspace(sessionId);
+      await repo.removeMany(rows.map((row) => row.id));
+      if (rows.length)
+        logger.info({ conversationId, runs: rows.length }, '对话的运行和工作目录已清理');
+      return true;
     },
 
-    /** 用户在运行中追问：排在当前这一轮之后处理。运行没在进行时 409。 */
+    /** 用户在这一轮进行中插话：在 AI 的下一步送到。这一轮已经结束或还没开始时 409。 */
     async message(id: string, text: string): Promise<void> {
       await owned(id);
       const run = live.get(id);
       if (!run?.agent || run.closing || run.abort.signal.aborted) {
-        throw new HttpError(409, 'run_not_active', '这次运行已经结束或还没开始，不能追问');
+        throw new HttpError(409, 'run_not_active', '这一轮已经结束或还没开始，不能插话');
       }
       run.prompts += 1;
       await run.agent.prompt(text);

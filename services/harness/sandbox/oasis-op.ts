@@ -1,6 +1,6 @@
 // oasis-op：沙箱里的本地确定性操作——拼视频、裁剪、抽帧、配音轨、拼音频、转格式，都用 ffmpeg。
 // 不调外部供应商、不花工具钱，只占沙箱算力。工具目录里叫 op.*，参数定义在 packages/contracts/src/ops.ts
-// （规划门、工具目录和这里共用一份）。工具节点的步骤执行器和节点里的 AI 都用它：
+// （规划门、工具目录和这里共用一份）。沙箱里的 AI 用它：
 //   oasis-op list                                                     看有哪些操作
 //   oasis-op video.concat --in in/镜头/1.mp4,in/镜头/2.mp4 --out out/成片.mp4
 // 镜像里按仓库的相对位置放（infra/images/harness-sandbox-base/Dockerfile），import 路径两边一致。

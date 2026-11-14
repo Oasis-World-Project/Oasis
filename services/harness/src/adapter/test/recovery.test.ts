@@ -13,7 +13,7 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_UR
   '真实控制进程崩溃接管',
   () => {
     it.each(['crash', 'shutdown'])(
-      '%s 后恢复同一原生目标和完整目录，输出只制作一次且只产生一次完成事件',
+      '%s 后接着原会话和完整工作目录做完这一轮：文件只写一次，只写一次结局',
       async (mode) => {
         const schema = 'recovery_test_' + randomUUID().replaceAll('-', '');
         const pool = new pg.Pool({
@@ -25,7 +25,7 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_UR
         );
         const runId = randomUUID(),
           payerId = randomUUID(),
-          taskId = randomUUID();
+          conversationId = randomUUID();
         const docker = createDockerApi(defaultDockerSocket());
         const clean = createDockerExecutor({
           docker: {
@@ -91,7 +91,7 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_UR
                 OASIS_TEST_GATEWAY: gatewayUrl,
                 OASIS_TEST_RUN: runId,
                 OASIS_TEST_PAYER: payerId,
-                OASIS_TEST_TASK: taskId,
+                OASIS_TEST_CONVERSATION: conversationId,
               },
               stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
             },
@@ -138,7 +138,6 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_UR
           expect(
             (await pool.query('select status from runs where id=$1', [runId])).rows[0].status,
           ).toBe(mode === 'crash' ? 'running' : 'queued');
-          expect((await pool.query('select count(*)::int as n from outbox')).rows[0].n).toBe(0);
           start('recover');
           await until(
             async () =>
@@ -152,8 +151,9 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_UR
           expect(
             (await pool.query('select status,error from runs where id=$1', [runId])).rows[0],
           ).toEqual({ status: 'succeeded', error: null });
-          expect((await pool.query('select count(*)::int as n from runs')).rows[0].n).toBe(1);
-          expect((await pool.query('select count(*)::int as n from outbox')).rows[0].n).toBe(1);
+          expect((await pool.query('select conversation_id, finished_at from runs')).rows).toEqual([
+            { conversation_id: conversationId, finished_at: expect.any(Date) },
+          ]);
           expect(
             (
               await pool.query(

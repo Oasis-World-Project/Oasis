@@ -29,11 +29,16 @@ describe('dsh 事件翻译', () => {
   it('工具调用、工具结果（含失败原因）、模型错误、轮次结束、忙闲状态', () => {
     expect(
       translateNotification(
-        ...event('tool/call', { callId: 'c1', name: 'write', arguments: '{}' }),
+        ...event('tool/call', { callId: 'c1', name: 'write', arguments: '{"path":"out/a.md"}' }),
       ),
     ).toEqual({
       kind: 'tool_call',
-      data: { callId: 'c1', name: 'write', arguments: '{}' },
+      data: {
+        callId: 'c1',
+        name: 'write',
+        arguments: '{"path":"out/a.md"}',
+        label: '写文件 out/a.md',
+      },
     });
     expect(
       translateNotification(
@@ -84,6 +89,61 @@ describe('dsh 事件翻译', () => {
     },
   );
 
+  it('每一步给人看的一句话：命令、oasis-tool 工具、读写文件；参数被截断也认得出', () => {
+    const label = (name: string, args: unknown) =>
+      translateNotification(
+        ...event('tool/call', {
+          callId: 'c',
+          name,
+          arguments: typeof args === 'string' ? args : JSON.stringify(args),
+        }),
+      )?.data.label;
+    expect(label('bash', { command: 'npm install\nnpm test' })).toBe('运行命令：npm install');
+    expect(
+      label('bash', {
+        command: 'oasis-tool image.generate --prompt "橘猫在窗台上晒太阳" --out out/a.png',
+      }),
+    ).toBe('生成图片：橘猫在窗台上晒太阳');
+    expect(label('bash', { command: 'cd out && oasis-tool wait 1234' })).toBe('等长任务的结果');
+    expect(label('bash', { command: 'oasis-tool brand.new --x 1' })).toBe('用工具 brand.new');
+    expect(label('str_replace_editor', { command: 'view', path: 'a.md' })).toBe('读文件 a.md');
+    expect(label('str_replace_editor', { command: 'str_replace', path: 'a.md' })).toBe(
+      '改文件 a.md',
+    );
+    // 参数太长被截断、JSON 不完整
+    expect(label('write', `{"path":"out/site/index.html","content":"${'x'.repeat(5000)}`)).toBe(
+      '写文件 out/site/index.html',
+    );
+    expect(label('ask_user_question', {})).toBe('ask_user_question');
+  });
+
+  it('待办单独成一种事件（不算一步）', () => {
+    expect(
+      translateNotification(
+        ...event('tool/call', {
+          callId: 'c',
+          name: 'todo_write',
+          arguments: JSON.stringify({
+            todos: [
+              { content: '写分镜', status: 'completed' },
+              { content: '生成关键帧', status: 'in_progress' },
+              { content: '剪成片', status: 'pending' },
+            ],
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: 'todos',
+      data: {
+        items: [
+          { text: '写分镜', status: 'done' },
+          { text: '生成关键帧', status: 'doing' },
+          { text: '剪成片', status: 'pending' },
+        ],
+      },
+    });
+  });
+
   it('过长的内容截断', () => {
     const translated = translateNotification(
       ...event('tool/call', { callId: 'c', name: 'write', arguments: 'x'.repeat(10_000) }),
@@ -115,51 +175,18 @@ describe('dsh 事件翻译', () => {
         },
       ],
       sessionId: 'root',
-      objective: 'task',
-      goal: true,
-      goalRoundWindow: 256,
     });
+    // 插件默认取最后一档：可以思考的模型最高到 high
     expect(
       JSON.parse(files.find((f) => f.path.endsWith('.oasis-models.json'))!.content.toString()),
-    ).toMatchObject([
-      {
+    ).toEqual([
+      expect.objectContaining({
         maxTokens: 131072,
         contextWindow: 1000000,
         input: ['text', 'image'],
-        reasoningEfforts: { high: 'high' },
-      },
+        reasoningEfforts: { off: null, high: 'high' },
+      }),
     ]);
-    // 规划员要最高思考档：只有这种运行才声明 max（插件默认取最后一档）
-    const strongest = runtimeFiles({
-      models: [
-        {
-          id: 'deepseek/x',
-          name: 'DeepSeek',
-          contextWindow: 1000000,
-          maxTokens: 131072,
-          input: ['text'],
-          reasoning: true,
-        },
-      ],
-      sessionId: 'root',
-      objective: 'task',
-      goal: true,
-      reasoningEffort: 'max',
-      goalRoundWindow: 256,
-    });
-    const declared = JSON.parse(
-      strongest.find((f) => f.path.endsWith('.oasis-models.json'))!.content.toString(),
-    ) as { reasoningEfforts: Record<string, string | null> }[];
-    expect(Object.keys(declared[0]!.reasoningEfforts).at(-1)).toBe('max');
-    expect(
-      Object.keys(
-        (
-          JSON.parse(
-            files.find((f) => f.path.endsWith('.oasis-models.json'))!.content.toString(),
-          ) as { reasoningEfforts: Record<string, string | null> }[]
-        )[0]!.reasoningEfforts,
-      ),
-    ).not.toContain('max');
     expect(env.OASIS_MODELS).toBeUndefined();
     // dsh 运行命令时会去掉 OASIS_RUN_KEY，oasis-tool 用这一份
     expect(env.OASIS_TOOL_AUTH).toBe('k');
@@ -204,8 +231,8 @@ describe('JSON-RPC 客户端', () => {
   });
 });
 
-describe('根目标与代理树', () => {
-  it('子代理错误不终结根；中间 idle 不完成持续目标', async () => {
+describe('根会话与子代理', () => {
+  it('子代理出错不算这一轮失败；根会话这一轮正常结束才算做完', async () => {
     const { connectAgent } = await import('../src/adapter/dsh.ts');
     const input = new PassThrough();
     const output = new PassThrough();
@@ -222,9 +249,13 @@ describe('根目标与代理树', () => {
             data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'do work' }] },
           },
         });
+        send('subagent.started', { parentSessionId: 'root', childSessionId: 'child' });
         send('session.event', {
-          sessionId: 'root',
-          event: { type: 'goal/change', data: { goal: { phase: 'active' } } },
+          sessionId: 'child',
+          event: {
+            type: 'turn/end',
+            data: { reason: { kind: 'error', error: { message: 'child failed' } } },
+          },
         });
         send('session.event', {
           sessionId: 'root',
@@ -237,39 +268,17 @@ describe('根目标与代理树', () => {
       stdin: output,
       stdout: input,
       sessionId: 'root',
-      goal: true,
       onEvent: (event) => observed.push(event),
     });
     await agent.prompt('do work');
-    let ended = false;
-    const done = agent.waitIdle().then((failure) => {
-      ended = true;
-      return failure;
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(ended).toBe(false);
-    send('subagent.started', { parentSessionId: 'root', childSessionId: 'child' });
-    send('session.event', {
-      sessionId: 'child',
-      event: {
-        type: 'turn/end',
-        data: { reason: { kind: 'error', error: { message: 'child failed' } } },
-      },
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(ended).toBe(false);
-    send('session.event', {
-      sessionId: 'root',
-      event: { type: 'goal/change', data: { goal: { phase: 'complete' } } },
-    });
-    expect(await done).toBeUndefined();
+    expect(await agent.waitIdle()).toBeUndefined();
     expect(observed).toContainEqual({
       kind: 'error',
       data: { message: 'child failed', sessionId: 'child', parentSessionId: 'root' },
     });
     agent.abort(new Error('test closed'));
   });
-  it('运行中的追问被插进当前这一轮（不另开一轮）时，这一轮结束就算处理完', async () => {
+  it('一轮进行中的插话被插进这一轮（不另开一轮）时，这一轮结束就算处理完', async () => {
     const { connectAgent } = await import('../src/adapter/dsh.ts');
     const input = new PassThrough();
     const output = new PassThrough();
@@ -295,8 +304,8 @@ describe('根目标与代理树', () => {
     });
     await agent.prompt('do work');
     user('do work');
-    await agent.prompt('【系统提醒】请收尾');
-    user('【系统提醒】请收尾');
+    await agent.prompt('顺便把标题改短');
+    user('顺便把标题改短');
     send('session.event', {
       sessionId: 'root',
       event: { type: 'turn/end', data: { reason: { kind: 'completed' } } },

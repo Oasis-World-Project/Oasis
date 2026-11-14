@@ -20,7 +20,7 @@ export const AvatarHandoff = z.object({
 });
 export type AvatarHandoff = z.infer<typeof AvatarHandoff>;
 
-/** 节点交付的 `<名字>.oasis-avatar.json` */
+/** AI 交付的 `<名字>.oasis-avatar.json` */
 export const AvatarSpec = z
   .object({
     version: z.literal(1).default(1),
@@ -50,7 +50,6 @@ export type AvatarSpec = z.infer<typeof AvatarSpec>;
 export const AvatarSessionStartBody = z.object({
   spec: AvatarSpec,
   artifactId: z.uuid().optional(),
-  taskId: z.uuid().optional(),
 });
 export type AvatarSessionStartBody = z.input<typeof AvatarSessionStartBody>;
 

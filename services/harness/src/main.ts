@@ -1,16 +1,12 @@
 // harness：Agent 运行时。唯一接触 DeepSeek Harness 的服务（只在 src/adapter/ 里），
-// 每次运行起一个沙箱容器跑 dsh，模型调用经 model-gateway 计费。
+// 对话里主 AI 的每一轮起一个沙箱容器跑 dsh，模型调用经 model-gateway 计费。
 import { fileURLToPath } from 'node:url';
-import { HARNESS_STREAM, TASK_STREAM, TaskDeleted } from '@oasis/contracts/events';
 import {
-  connectPostgresAndEventBus,
   createDockerApi,
   createObjectStore,
+  createPostgres,
   createServiceClient,
   defaultDockerSocket,
-  ensureStream,
-  startEventConsumer,
-  startOutboxRelay,
   startService,
   type ObjectStore,
   type ServiceResource,
@@ -20,7 +16,11 @@ import { registerRoutes } from './api/routes.ts';
 import { harnessEnv } from './config.ts';
 import { createDockerExecutor, type Executor } from './executor/executor.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
+import { loadGuide } from './service/guide.ts';
 import { createRunService, type RunService } from './service/run-service.ts';
+
+/** 给主 AI 的平台说明和技能（每轮现读） */
+const GUIDE_DIR = fileURLToPath(new URL('../guide', import.meta.url));
 
 let executor: Executor;
 let store: ObjectStore;
@@ -33,13 +33,7 @@ await startService({
   migrationsDir: fileURLToPath(new URL('../migrations', import.meta.url)),
   resources: async (ctx) => {
     const { config } = ctx;
-    const { postgres, eventBus } = await connectPostgresAndEventBus(ctx);
-    await ensureStream(eventBus.connection, HARNESS_STREAM);
-    const outbox = startOutboxRelay({
-      pool: postgres.pool,
-      connection: eventBus.connection,
-      logger: ctx.logger,
-    });
+    const postgres = createPostgres(config.DATABASE_URL, ctx.logger);
 
     const objects = createObjectStore({
       endpoint: config.S3_ENDPOINT,
@@ -72,21 +66,7 @@ await startService({
         await runs?.stopAll();
       },
     };
-    // 任务被用户删除：删掉运行存档和记录
-    const taskDeleted = startEventConsumer({
-      connection: eventBus.connection,
-      stream: TASK_STREAM,
-      durable: 'harness-task-deleted',
-      filterSubject: TaskDeleted.type,
-      logger: ctx.logger,
-      handle: async (envelope) => {
-        const { taskId } = TaskDeleted.data.parse(envelope.data);
-        // 服务还在启动（接口层还没建好）：抛出让事件稍后重投
-        if (!runs) throw new Error('harness 还没就绪');
-        if (!(await runs.purgeTask(taskId))) throw new Error('任务还有没结束的运行，稍后再清理');
-      },
-    });
-    return { postgres, eventBus, outbox, objectStore: objects.resource, sandboxes, taskDeleted };
+    return { postgres, objectStore: objects.resource, sandboxes };
   },
   routes: async (app, { config, resources, logger, name }) => {
     runs = createRunService({
@@ -105,6 +85,7 @@ await startService({
         npmRegistry: config.SANDBOX_NPM_REGISTRY,
         pipIndexUrl: config.SANDBOX_PIP_INDEX_URL,
       },
+      guide: () => loadGuide(GUIDE_DIR),
       maxConcurrent: config.MAX_CONCURRENT_RUNS,
       batchEnv: Object.fromEntries(
         Object.entries(config)
@@ -112,7 +93,6 @@ await startService({
           .map(([key, value]) => [key, String(value)]),
       ),
       leaseMs: config.RUN_LEASE_MS,
-      goalRoundWindow: config.GOAL_ROUND_WINDOW,
       keyTtlSeconds: config.RUN_KEY_TTL_SECONDS,
       cores: config.SANDBOX_CPUS,
       outputMaxBytes: config.OUTPUT_MAX_BYTES,

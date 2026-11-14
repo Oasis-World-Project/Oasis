@@ -8,11 +8,12 @@ import {
   createDockerApi,
   createServiceClient,
   defaultDockerSocket,
+  packFiles,
   type ObjectStore,
 } from '@oasis/service-kit';
 import { pino } from 'pino';
 import { SANDBOX_PATHS } from '../src/adapter/dsh.ts';
-import { createDockerExecutor } from '../src/executor/executor.ts';
+import { createDockerExecutor, type Executor } from '../src/executor/executor.ts';
 import { createRunsRepo } from '../src/repo/runs-repo.ts';
 import { createRunService } from '../src/service/run-service.ts';
 
@@ -47,7 +48,7 @@ const store: ObjectStore = {
   },
 };
 const docker = createDockerApi(defaultDockerSocket());
-const executor = createDockerExecutor({
+const docked = createDockerExecutor({
   docker: {
     ...docker,
     listContainers: async (label) =>
@@ -85,6 +86,24 @@ const executor = createDockerExecutor({
   workdir: SANDBOX_PATHS.workdir,
   sessionsDir: SANDBOX_PATHS.sessions,
 });
+// 沙箱的入口换成假模型供应商（它再起镜像里的 dsh）：每次起沙箱时把它放进 in/
+const provider = await readFile(
+  new URL('../src/adapter/test/native-provider.mjs', import.meta.url),
+);
+const executor: Executor = {
+  ...docked,
+  start: async (spec) =>
+    docked.start({
+      ...spec,
+      files: [
+        ...spec.files,
+        {
+          dir: SANDBOX_PATHS.workdir,
+          tar: await packFiles([{ path: 'in/provider.mjs', content: provider }]),
+        },
+      ],
+    }),
+};
 const client = createServiceClient('offline-test', process.env.OASIS_TEST_GATEWAY!);
 const service = createRunService({
   repo: createRunsRepo(pool),
@@ -101,7 +120,7 @@ const service = createRunService({
   maxConcurrent: 1,
   cores: 1,
   leaseMs: 60000,
-  goalRoundWindow: 2,
+  guide: async () => ({ rules: '# 离线测试\n', skills: [] }),
   serviceName: 'harness',
   logger: pino({ level: 'silent' }),
 });
@@ -110,20 +129,11 @@ else
   await service.start({
     runId: process.env.OASIS_TEST_RUN!,
     payerId: process.env.OASIS_TEST_PAYER!,
-    taskId: process.env.OASIS_TEST_TASK!,
+    conversationId: process.env.OASIS_TEST_CONVERSATION!,
     model: 'deepseek/deepseek-v4.1-flash',
-    goal: true,
-    prompt:
-      'Write the proof once using delegated models. Verify the preserved workspace and complete the goal.',
-    inputsFrom: [],
-    inputs: [
-      {
-        path: 'provider.mjs',
-        contentBase64: (
-          await readFile(new URL('../src/adapter/test/native-provider.mjs', import.meta.url))
-        ).toString('base64'),
-      },
-    ],
+    persona: '',
+    prompt: 'Write the proof once using delegated models, then verify the preserved workspace.',
+    materials: [],
   });
 const timer = setInterval(() => {}, 1000);
 const shutdown = () => {

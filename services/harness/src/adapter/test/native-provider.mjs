@@ -1,3 +1,8 @@
+// 断网容器里的假模型供应商 + 镜像里真实的 dsh：验证对话里一轮依赖的原生行为，费用为 0。
+// 根会话一轮的流程：派子代理到 test/secondary（它再派 test/tertiary）→ bash 写 out/proof.txt
+// →（附件用例：读一张图）→ 文字收尾。OASIS_NATIVE_FAULT 注入故障。
+// OASIS_NATIVE_MODE：fresh 新会话的第一轮；resume 接着上一轮的会话（夹具是上一轮留下的会话记录）；
+// refuse 会话记录缺失或损坏，必须拒绝；persistent 控制进程崩溃接管（recovery.test.ts）。
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -6,28 +11,37 @@ import process from 'node:process';
 import { zstdDecompressSync } from 'node:zlib';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+
+const mode = process.env.OASIS_NATIVE_MODE ?? 'fresh';
+const fault = process.env.OASIS_NATIVE_FAULT ?? '';
+const execution = JSON.parse(readFileSync('/workspace/in/.oasis-execution.json', 'utf8'));
+const sessionId = execution.sessionId;
+const persistent = mode === 'persistent';
 let rootCalls = 0;
 let childCalls = 0;
 let grandchildCalls = 0;
 let nested = false;
-let goal;
-let spawned = false;
-let wrote = false;
+// 崩溃接管：子代理和写文件在崩溃前已经做过
+let spawned = persistent && execution.recovering;
+let wrote = persistent && execution.recovering;
+let viewed = false;
+let verified = false;
 let cap;
 let reasoning;
+let guideSeen = false;
+let historySeen = false;
+let hugeSent = false;
 let overflowSent = false;
 let compactions = 0;
 let checkpointSeen = false;
-const mode = process.env.OASIS_NATIVE_MODE ?? 'fresh';
-const execution = JSON.parse(readFileSync('/workspace/in/.oasis-execution.json', 'utf8'));
-const sessionId = execution.sessionId;
-const persistent = mode === 'persistent';
-const attachmentTest = process.env.OASIS_NATIVE_FAULT === 'attachment';
-// 运行中的消息（超支提醒、追问）：模型的一次调用在途时宿主再发一条，之后的请求里要看得到它
-const steerTest = process.env.OASIS_NATIVE_FAULT === 'steer';
 let steerHeld = false;
 let steerSeen = false;
-if (attachmentTest) {
+const sleep = (ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+
+// 平台说明和技能：harness 每轮放进 dsh 的用户目录（这里从挂进来的目录复制）
+if (existsSync('/workspace/in/guide'))
+  cpSync('/workspace/in/guide', '/home/node/.dsh', { recursive: true });
+if (fault === 'attachment') {
   const image = spawn('python3', [
     '-c',
     'from PIL import Image; Image.new("RGB", (8, 8), (100, 50, 200)).save("/workspace/attachment.png")',
@@ -36,7 +50,18 @@ if (attachmentTest) {
     image.once('exit', (code) => (code ? reject(new Error('image fixture failed')) : resolve())),
   );
 }
-let verified = false;
+if (mode === 'resume' || mode === 'refuse') {
+  const sessionDirectory = `/home/node/.dsh/sessions/--workspace--/${sessionId}`;
+  mkdirSync(sessionDirectory, { recursive: true });
+  if (existsSync('/workspace/in/previous-session.jsonl.zstd'))
+    copyFileSync(
+      '/workspace/in/previous-session.jsonl.zstd',
+      `${sessionDirectory}/session.v${process.env.OASIS_NATIVE_GENERATION ?? '4'}.jsonl.zstd`,
+    );
+  // 持久工作目录里上一轮的产出还在
+  mkdirSync('/workspace/out', { recursive: true });
+  writeFileSync('/workspace/out/proof.txt', 'native-proof');
+}
 function nativeRecords() {
   const archive = readFileSync(
     `/home/node/.dsh/sessions/--workspace--/${sessionId}/session.v4.jsonl.zstd`,
@@ -50,29 +75,13 @@ function nativeRecords() {
   }
   return { archive, records: log.trim().split('\n').map(JSON.parse) };
 }
-if (persistent && execution.recovering) {
-  goal = nativeRecords()
-    .records.filter((e) => e.type === 'goal/change')
-    .at(-1)?.data.goal;
-  spawned = true;
-  wrote = true;
-}
-let historySeen = false;
-if (mode !== 'fresh' && !persistent) {
-  const sessionDirectory = `/home/node/.dsh/sessions/--workspace--/${sessionId}`;
-  mkdirSync(sessionDirectory, { recursive: true });
-  if (existsSync('/workspace/in/legacy-session.jsonl.zstd'))
-    copyFileSync(
-      '/workspace/in/legacy-session.jsonl.zstd',
-      `${sessionDirectory}/session.v${process.env.OASIS_NATIVE_GENERATION ?? '4'}.jsonl.zstd`,
-    );
-  writeFileSync('/workspace/out/legacy.txt', 'legacy-file-kept');
-  if (mode === 'recover') writeFileSync('/workspace/out/proof.txt', 'native-proof');
-}
+const count = (text, marker) => text.split(marker).length - 1;
+
 const server = createServer(async (request, reply) => {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
   const body = JSON.parse(Buffer.concat(chunks).toString());
+  const history = JSON.stringify(body.messages);
   const summarizing = JSON.stringify(body.messages.at(-1)).includes(
     'Output only the checkpoint text',
   );
@@ -80,10 +89,16 @@ const server = createServer(async (request, reply) => {
   const child = body.model.startsWith('test/');
   if (!summarizing && body.model === 'test/tertiary') grandchildCalls++;
   const n = summarizing ? rootCalls : child ? ++childCalls : ++rootCalls;
-  if (!summarizing && !child && process.env.OASIS_NATIVE_FAULT === 'context-overflow') {
-    if (overflowSent && JSON.stringify(body.messages).includes('NATIVE_CONTEXT_CHECKPOINT'))
-      checkpointSeen = true;
-    if (n === 3 && !overflowSent) {
+  if (mode === 'refuse') throw new Error('A refused archive must never dispatch a model request');
+  const root = !child && !summarizing;
+  if (root) {
+    reasoning = body.reasoning?.effort ?? body.reasoning_effort;
+    if (history.includes('NATIVE_GUIDE_RULES') && history.includes('NATIVE_SKILL_DESCRIPTION'))
+      guideSeen = true;
+  }
+  if (root && fault === 'context-overflow') {
+    if (overflowSent && history.includes('NATIVE_CONTEXT_CHECKPOINT')) checkpointSeen = true;
+    if (hugeSent && !overflowSent) {
       overflowSent = true;
       reply.writeHead(400, { 'content-type': 'application/json' });
       reply.end(
@@ -97,52 +112,50 @@ const server = createServer(async (request, reply) => {
       return;
     }
   }
-  if (!child && n === 1 && process.env.OASIS_NATIVE_FAULT === 'disconnect') {
+  if (root && n === 1 && fault === 'disconnect') {
     reply.writeHead(200, { 'content-type': 'text/event-stream' });
     reply.write('data: {"choices":[{"delta":{"content":"incomplete network reply"}}]}\n\n');
     globalThis.setTimeout(() => reply.destroy(), 20);
     return;
   }
-  if (steerTest && !child && !summarizing) {
-    if (JSON.stringify(body.messages).includes('NATIVE_STEER_MESSAGE')) steerSeen = true;
-    if (n === 2 && !steerHeld) {
-      // 这次调用压住不回，让宿主趁在途时发消息（真实场景：模型正在生成时来了超支提醒）
+  if (root && fault === 'steer') {
+    if (history.includes('NATIVE_STEER_MESSAGE')) steerSeen = true;
+    if (spawned && !wrote && !steerHeld) {
+      // 这次调用压住不回，让宿主趁在途时发消息（真实场景：模型正在生成时用户插了一句）
       steerHeld = true;
       process.stderr.write('NATIVE_STEER_READY\n');
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 1500));
+      await sleep(1500);
     }
   }
-  cap = body.max_tokens ?? body.max_completion_tokens;
-  if (!child) reasoning = body.reasoning?.effort ?? body.reasoning_effort;
-  const tools = new Set((body.tools ?? []).map((tool) => tool.function.name));
-  if (mode === 'refuse') throw new Error('A refused archive must never dispatch a model request');
-  if (mode === 'resume' && !child) {
-    const history = JSON.stringify(body.messages);
+  if (root && mode === 'resume') {
     if (
-      !history.includes('LEGACY_CANONICAL_HISTORY_7e82') ||
-      !history.includes('LEGACY_TOOL_DURABLE_7e82')
+      count(history, 'NATIVE_FIRST_TURN') !== 1 ||
+      !history.includes('NATIVE_TOOL_DURABLE') ||
+      !history.includes('NATIVE_SECOND_TURN')
     )
-      throw new Error('Legacy history or its tool result was lost');
-    historySeen = true;
+      throw new Error('上一轮的话、工具结果或这一轮的话不对');
     const delegation = body.tools?.find((tool) => tool.function.name === 'subagent');
     if (!delegation?.function.parameters.properties.provider)
-      throw new Error('Legacy session resumed without current child-model authorization');
+      throw new Error('恢复原会话后子代理不能再选模型');
+    historySeen = true;
   }
-  let finish = 'stop';
-  let content = summarizing
-    ? 'NATIVE_CONTEXT_CHECKPOINT: Continue the existing goal. Delegate to test/secondary, write out/proof.txt, and verify before completing.'
+  cap = body.max_tokens ?? body.max_completion_tokens;
+  const tools = new Set((body.tools ?? []).map((tool) => tool.function.name));
+  const content = summarizing
+    ? 'NATIVE_CONTEXT_CHECKPOINT: The proof is written to out/proof.txt. Reply that the work is done.'
     : child
       ? 'Secondary task complete.'
-      : 'Continue working.';
+      : 'Verified and complete.';
   let call;
+  /** 调工具时顺带说的话 */
+  let said = null;
   if (summarizing) {
     // 原生压缩器的辅助模型请求只返回摘要，不驱动第二套 Agent Loop。
   } else if (persistent && !execution.recovering && wrote && !child) {
     writeFileSync('/workspace/project/provider-waiting', 'durable');
-    return; // 故障注入：真实供应商长调用尚未返回时杀死宿主控制进程。
-  }
-  if (persistent && execution.recovering && !verified && !child) {
-    if (!JSON.stringify(body.messages).includes('DURABLE_WORKSPACE_CREATED'))
+    return; // 故障注入：模型调用在途时杀死宿主控制进程。
+  } else if (persistent && execution.recovering && !verified && !child) {
+    if (!history.includes('DURABLE_WORKSPACE_CREATED'))
       throw new Error('Native history lost across process crash');
     verified = true;
     call = {
@@ -164,12 +177,9 @@ const server = createServer(async (request, reply) => {
         model: 'test/tertiary',
       },
     };
-  } else if (!child && n === 1 && mode === 'fresh') finish = 'length';
-  else if (!child && n === 2 && attachmentTest)
-    call = { name: 'read_image', args: { file_path: '/workspace/attachment.png' } };
-  else if (!child && n === 2 && process.env.OASIS_NATIVE_FAULT === 'context-overflow')
-    content = `CANONICAL_NATIVE_HISTORY ${'Historical engineering detail. '.repeat(6000)}`;
-  else if (!child && n >= 4 && !spawned) {
+  } else if (child || mode === 'resume') {
+    // 子代理文字收尾；接着上一轮的这一轮只回话
+  } else if (!spawned) {
     if (!tools.has('subagent')) throw new Error('subagent missing');
     spawned = true;
     call = {
@@ -181,7 +191,7 @@ const server = createServer(async (request, reply) => {
         model: 'test/secondary',
       },
     };
-  } else if (!child && childCalls && !wrote) {
+  } else if (!wrote) {
     if (!tools.has('bash')) throw new Error('bash missing: ' + [...tools].join(','));
     wrote = true;
     call = {
@@ -190,29 +200,26 @@ const server = createServer(async (request, reply) => {
         description: 'write acceptance proof',
         command: persistent
           ? `mkdir -p out src project node_modules/.bin; printf durable-source > src/marker.txt; printf 1 > project/invocations; printf '#!/bin/sh\nprintf native-proof\n' > project/proof.sh; chmod +x project/proof.sh; ln -s ../../project/proof.sh node_modules/.bin/proof; printf native-proof > out/proof.txt; printf DURABLE_WORKSPACE_CREATED`
-          : 'mkdir -p out && printf native-proof > out/proof.txt',
+          : 'mkdir -p out && printf native-proof > out/proof.txt && printf NATIVE_TOOL_DURABLE',
       },
     };
-  } else if (
-    !child &&
-    wrote &&
-    goal?.phase === 'active' &&
-    !JSON.stringify(body.messages.at(-1)).includes('GOAL_TOOL_AUTHORITY_REQUIRED') &&
-    !JSON.stringify(body.messages.at(-1)).includes('complete and blocked require')
-  ) {
-    call = {
-      name: 'update_goal',
-      args: { goal_id: goal.id, revision: goal.revision, action: 'complete' },
-    };
-  } else if (!child && goal?.phase === 'complete') content = 'Verified and complete.';
+    // 上下文溢出用例：这一步的话很长，下一次调用超出上下文，dsh 要自动压缩后在这一轮里接着做
+    if (fault === 'context-overflow') {
+      hugeSent = true;
+      said = `CANONICAL_NATIVE_HISTORY ${'Historical engineering detail. '.repeat(6000)}`;
+    }
+  } else if (fault === 'attachment' && !viewed) {
+    viewed = true;
+    call = { name: 'read_image', args: { file_path: '/workspace/attachment.png' } };
+  }
   const delta = call
     ? {
         role: 'assistant',
-        content: null,
+        content: said,
         tool_calls: [
           {
             index: 0,
-            id: `call-${n}`,
+            id: `call-${child ? 'c' : 'r'}${n}`,
             type: 'function',
             function: { name: call.name, arguments: JSON.stringify(call.args) },
           },
@@ -224,7 +231,7 @@ const server = createServer(async (request, reply) => {
     `data: ${JSON.stringify({ id: `chat-${n}`, model: body.model, object: 'chat.completion.chunk', created: 1, choices, ...(usage ? { usage } : {}) })}\n\n`;
   reply.end(
     frame([{ index: 0, delta, finish_reason: null }]) +
-      frame([{ index: 0, delta: {}, finish_reason: call ? 'tool_calls' : finish }], {
+      frame([{ index: 0, delta: {}, finish_reason: call ? 'tool_calls' : 'stop' }], {
         prompt_tokens: 10,
         completion_tokens: 10,
         total_tokens: 20,
@@ -243,27 +250,7 @@ server.listen(0, '127.0.0.1', () => {
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
-  let pending = '';
-  child.stdout.on('data', (chunk) => {
-    pending += chunk.toString();
-    let i;
-    while ((i = pending.indexOf('\n')) >= 0) {
-      const line = pending.slice(0, i);
-      pending = pending.slice(i + 1);
-      try {
-        const message = JSON.parse(line);
-        if (
-          message.method === 'session.event' &&
-          message.params.sessionId === sessionId &&
-          message.params.event.type === 'goal/change'
-        )
-          goal = message.params.event.data.goal;
-      } catch {
-        /* Non-protocol diagnostics are ignored by this fixture. */
-      }
-    }
-    process.stdout.write(chunk);
-  });
+  child.stdout.pipe(process.stdout);
   child.stderr.pipe(process.stderr);
   process.stdin.pipe(child.stdin);
   child.on('exit', async (code) => {
@@ -275,12 +262,10 @@ server.listen(0, '127.0.0.1', () => {
     const proof = readFileSync('/workspace/out/proof.txt', 'utf8');
     const { archive, records } = nativeRecords();
     const policies = records.filter((event) => event.type === 'subagent/model-selection-policy');
-    if (mode === 'recover')
-      goal = records.filter((event) => event.type === 'goal/change').at(-1)?.data.goal;
     mkdirSync('/workspace/evidence', { recursive: true });
     writeFileSync('/workspace/evidence/session.jsonl.zstd', archive);
     let attachmentRecovered = false;
-    if (attachmentTest) {
+    if (fault === 'attachment') {
       const require = createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
       const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
       const { LocalAttachmentStore } = await import(
@@ -304,9 +289,9 @@ server.listen(0, '127.0.0.1', () => {
       grandchildCalls,
       cap,
       reasoning,
-      phase: goal?.phase,
-      maxGoalRounds: goal?.maxGoalRounds,
       proof,
+      guideSeen,
+      historySeen,
       policyCount: policies.length,
       compactions,
       checkpointSeen,
@@ -317,30 +302,19 @@ server.listen(0, '127.0.0.1', () => {
         (event) => event.type === 'compaction/end' && event.data.error,
       ).length,
       policyModels: policies[0]?.data.allowedModels.map((model) => model.model),
-      ...(mode === 'resume'
-        ? { historySeen, legacyOutput: readFileSync('/workspace/out/legacy.txt', 'utf8') }
-        : {}),
     };
     process.stderr.write('NATIVE_PROOF ' + JSON.stringify(result) + '\n');
-    process.exit(
-      code ||
-        !(persistent
-          ? execution.recovering &&
-            verified &&
-            goal?.phase === 'complete' &&
-            proof === 'native-proof'
-          : mode === 'recover'
-            ? rootCalls === 0 && goal?.phase === 'complete'
-            : rootCalls > 4 &&
-              childCalls > 0 &&
-              grandchildCalls > 0 &&
-              reasoning === 'max' &&
-              goal?.phase === 'complete' &&
-              goal.maxGoalRounds > 2 &&
-              proof === 'native-proof' &&
-              (mode !== 'resume' || (historySeen && result.legacyOutput === 'legacy-file-kept')))
-        ? 1
-        : 0,
-    );
+    const ok = persistent
+      ? execution.recovering && verified && proof === 'native-proof'
+      : mode === 'resume'
+        ? historySeen && rootCalls === 1 && proof === 'native-proof'
+        : rootCalls >= 3 &&
+          childCalls > 0 &&
+          grandchildCalls > 0 &&
+          // OpenRouter 原生型号沿用原生档位，Oasis 插件取最高一档（DeepSeek 是 max）
+          reasoning === 'max' &&
+          guideSeen &&
+          proof === 'native-proof';
+    process.exit(code || !ok ? 1 : 0);
   });
 });

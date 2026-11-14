@@ -39,7 +39,6 @@ export const ModelPreviewSpec = z.strictObject({
 export const ModelPreviewSource = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('artifact'), id: z.uuid() }),
   z.strictObject({ kind: z.literal('upload'), id: z.uuid() }),
-  z.strictObject({ kind: z.literal('task'), taskId: z.uuid(), nodeId: z.uuid(), path }),
 ]);
 export type ModelPreviewSource = z.infer<typeof ModelPreviewSource>;
 const vec = z.array(z.number().finite()).length(3);

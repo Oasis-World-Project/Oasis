@@ -3,7 +3,7 @@
 // dsh 升级（SDK 协议、事件格式变化）只改这个目录和 profile/ 下的组合。
 import type { Readable, Writable } from 'node:stream';
 import type { RunEventKind } from '@oasis/contracts/harness';
-import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
+import { TOOL_LABELS, type ModelCapabilities } from '@oasis/contracts/model-gateway';
 import type { ExecutionEnvironment } from '@oasis/contracts/harness';
 import { ApplicationSpec } from '@oasis/contracts/canvas';
 import { BrowserTestPlan } from '@oasis/contracts/ui-test';
@@ -15,12 +15,35 @@ export const SANDBOX_PATHS = {
   workdir: '/workspace',
   inputs: '/workspace/in',
   outputs: '/workspace/out',
-  /**
-   * dsh 的会话存储（含附件），和 /workspace 一起挂在这个会话的持久卷上：关卡退回修改、停止后继续、
-   * 修改、讨论的下一轮时接着原会话
-   */
+  /** dsh 的用户目录：每轮开沙箱时放进平台说明（AGENTS.md）和技能（skills/<名>/SKILL.md） */
+  dshHome: '/home/node/.dsh',
+  /** dsh 的会话存储（含附件），和 /workspace 一起挂在这个会话的持久卷上：下一轮接着原会话 */
   sessions: '/home/node/.dsh/sessions',
 } as const;
+
+/** 给沙箱里 AI 的平台说明和技能（技能是各类活的经验，AI 需要时自己读） */
+export interface AgentGuide {
+  rules: string;
+  skills: { name: string; description: string; content: string }[];
+}
+
+/**
+ * 放进 dsh 用户目录的文件（路径相对 {@link SANDBOX_PATHS.dshHome}）：dsh 把 AGENTS.md 当作用户的
+ * 全局说明放进系统提示，把 skills/ 下的技能列给 AI（2026-11-14 用镜像里的 dsh 实测两处都会读）。
+ * 这个 AI 的人设放在说明最前面。
+ */
+export function guideFiles(guide: AgentGuide, persona: string) {
+  const who = persona.trim() ? `# 你是谁\n\n${persona.trim()}\n\n` : '';
+  return [
+    { path: 'AGENTS.md', content: Buffer.from(who + guide.rules) },
+    ...guide.skills.map((skill) => ({
+      path: `skills/${skill.name}/SKILL.md`,
+      content: Buffer.from(
+        `---\nname: ${skill.name}\ndescription: ${JSON.stringify(skill.description)}\n---\n\n${skill.content.trim()}\n`,
+      ),
+    })),
+  ];
+}
 
 /** dsh 里指向 model-gateway 的模型路由名（profile/cordis.patch.yml 里定义） */
 const PROVIDER = 'openrouter';
@@ -81,11 +104,6 @@ export function sandboxEnv(input: {
 export function runtimeFiles(input: {
   models: ModelCapabilities[];
   sessionId: string;
-  objective: string;
-  goal: boolean;
-  /** 规划员用最强思考档（用户 2026-11-07 要求）；不给时最高到 high */
-  reasoningEffort?: 'max';
-  goalRoundWindow: number;
   recovering?: boolean;
   environment?: ExecutionEnvironment;
 }) {
@@ -109,7 +127,7 @@ export function runtimeFiles(input: {
             schema: BrowserTestPlan.toJSONSchema(),
             location: '与 oasis-app.json 同目录的 oasis-test.json',
           },
-          // 3D 预览的事实（原来写在节点提示里，2026-11-07 挪到这里：用到再读）
+          // 3D 预览的事实：用到再读
           model3d: {
             interactive:
               '画布直接交互预览自包含的 GLB：不引用外部文件、不用扩展，骨骼/形变/压缩暂不支持。',
@@ -138,17 +156,10 @@ export function runtimeFiles(input: {
       path: 'in/.oasis-models.json',
       content: Buffer.from(
         JSON.stringify(
-          // node 是 Oasis 估价用的典型用量，不属于 dsh 的模型配置
-          input.models.map(({ reasoning, node: _node, ...model }) => ({
+          input.models.map(({ reasoning, ...model }) => ({
             ...model,
-            // node-goal 插件默认取最后一档：只有要最强思考的运行才声明 max
-            reasoningEfforts: reasoning
-              ? {
-                  off: null,
-                  high: 'high',
-                  ...(input.reasoningEffort === 'max' ? { max: 'max' } : {}),
-                }
-              : false,
+            // Oasis 插件默认取最后一档：最高到 high
+            reasoningEfforts: reasoning ? { off: null, high: 'high' } : false,
             compat: {
               thinkingFormat: 'openrouter',
               supportsReasoningEffort: reasoning,
@@ -161,13 +172,7 @@ export function runtimeFiles(input: {
     {
       path: 'in/.oasis-execution.json',
       content: Buffer.from(
-        JSON.stringify({
-          sessionId: input.sessionId,
-          objective: input.objective,
-          goal: input.goal,
-          goalRoundWindow: input.goalRoundWindow,
-          recovering: input.recovering ?? false,
-        }),
+        JSON.stringify({ sessionId: input.sessionId, recovering: input.recovering ?? false }),
       ),
     },
   ];
@@ -181,6 +186,89 @@ export interface AgentEvent {
 const MAX_EVENT_TEXT = 4000;
 const clip = (text: string) =>
   text.length > MAX_EVENT_TEXT ? `${text.slice(0, MAX_EVENT_TEXT)}…（已截断）` : text;
+
+/** 参数原文（JSON，可能被截断）里的一个字符串字段 */
+function argOf(args: string, key: string): string | undefined {
+  try {
+    const value = (JSON.parse(args) as Record<string, unknown>)[key];
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    const raw = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`).exec(args)?.[1];
+    return raw?.replace(/\\n/g, '\n').replace(/\\(["\\/])/g, '$1');
+  }
+}
+
+const brief = (text: string, max: number) => {
+  const line = text.trim().split('\n')[0]?.trim() ?? '';
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+};
+
+/** oasis-tool 命令里的工具和要做的内容（提示词、搜索词……） */
+function oasisTool(command: string): string | undefined {
+  const tool = /(?:^|[\s;&|(])oasis-tool\s+([a-z0-9]+(?:\.[a-z0-9_-]+)*)/.exec(command)?.[1];
+  if (!tool) return undefined;
+  const what = /--(?:prompt|query|question|text|url|dir)\s+(?:"([^"]*)|'([^']*)|(\S+))/.exec(
+    command,
+  );
+  const detail = what ? (what[1] ?? what[2] ?? what[3] ?? '') : '';
+  const name = TOOL_LABELS[tool] ?? `用工具 ${tool}`;
+  return detail ? `${name}：${brief(detail, 40)}` : name;
+}
+
+/** 一次工具调用给人看的一句话（dsh 的工具名不出这个文件） */
+function toolLabel(name: string, args: string): string {
+  const path = argOf(args, 'path') ?? argOf(args, 'file_path') ?? '';
+  switch (name) {
+    case 'bash':
+    case 'pwsh': {
+      const command = argOf(args, 'command') ?? '';
+      return oasisTool(command) ?? `运行命令：${brief(command, 80)}`;
+    }
+    case 'write':
+      return `写文件 ${path}`;
+    case 'str_replace_editor':
+      return `${argOf(args, 'command') === 'view' ? '读' : '改'}文件 ${path}`;
+    case 'read':
+      return `读文件 ${path}`;
+    case 'read_image':
+      return `看图片 ${path}`;
+    case 'glob':
+    case 'grep':
+      return `查找 ${argOf(args, 'pattern') ?? ''}`;
+    case 'web_search':
+      return `搜索：${brief(argOf(args, 'query') ?? '', 40)}`;
+    case 'web_fetch':
+      return `读网页 ${argOf(args, 'url') ?? ''}`;
+    case 'skill':
+      return `读经验：${argOf(args, 'name') ?? ''}`;
+    default:
+      return name;
+  }
+}
+
+/** todo_write 的待办：pending / in_progress / completed → pending / doing / done */
+function todosOf(args: string) {
+  try {
+    const { todos } = JSON.parse(args) as { todos?: { content?: unknown; status?: unknown }[] };
+    return (todos ?? []).flatMap((todo) =>
+      typeof todo.content === 'string'
+        ? [
+            {
+              text: todo.content,
+              status:
+                todo.status === 'completed'
+                  ? 'done'
+                  : todo.status === 'in_progress'
+                    ? 'doing'
+                    : 'pending',
+            },
+          ]
+        : [],
+    );
+  } catch {
+    return undefined;
+  }
+}
 
 interface Block {
   type?: string;
@@ -217,15 +305,17 @@ export function translateNotification(method: string, params: unknown): AgentEve
       // 模型调工具前常吐一段空白，不算它说了话
       return text.trim() ? { kind: 'assistant_text', data: { text: clip(text) } } : undefined;
     }
-    case 'tool/call':
+    case 'tool/call': {
+      const name = String(data.name ?? '');
+      const args = String(data.arguments ?? '');
+      // 待办单独成一种事件（进度参考），不算一步
+      const items = name === 'todo_write' ? todosOf(args) : undefined;
+      if (items) return { kind: 'todos', data: { items } };
       return {
         kind: 'tool_call',
-        data: {
-          callId: data.callId,
-          name: data.name,
-          arguments: clip(String(data.arguments ?? '')),
-        },
+        data: { callId: data.callId, name, arguments: clip(args), label: toolLabel(name, args) },
       };
+    }
     case 'tool/result': {
       const message = data.message as
         { toolCallId?: string; content?: unknown; isError?: boolean } | undefined;
@@ -268,42 +358,26 @@ export function connectAgent(io: {
   stdin: Writable;
   stdout: Readable;
   sessionId: string;
-  goal?: boolean;
   onEvent: (event: AgentEvent) => void;
 }) {
   let lastError: string | undefined = '运行未收到正常结束通知';
   let pendingTurns = 0;
   /** 有用户消息进了会话、还没等到它所在那一轮的结束通知 */
   let awaitingEnd = false;
-  let goalPhase: string | undefined;
-  let persistent = io.goal ?? false;
-  let goalActivation: unknown;
-  let goalBlocker: string | undefined;
-  let failureReason: unknown;
-  let revision = 0;
-  const listeners = new Set<() => void>();
   const parents = new Map<string, string>();
   const belongs = (id: string): boolean =>
     id === io.sessionId || (parents.has(id) && belongs(parents.get(id)!));
-  const changed = () => {
-    revision++;
-    for (const listener of listeners) listener();
-    listeners.clear();
-  };
   const rpc = createJsonRpcClient({
     input: io.stdout,
     output: io.stdin,
     onClose: (error) => {
       lastError = error.message;
-      changed();
     },
     onNotification: (method, params) => {
       const p = (params ?? {}) as {
         sessionId?: string;
         parentSessionId?: string;
         childSessionId?: string;
-        status?: string;
-        event?: { type?: string; data?: Record<string, unknown> };
       };
       if (
         method === 'subagent.started' &&
@@ -328,47 +402,10 @@ export function connectAgent(io: {
       }
       if (p.sessionId && !belongs(p.sessionId)) return;
       const root = !p.sessionId || p.sessionId === io.sessionId;
-      if (p.event?.type === 'plugin:oasis/goal-status') {
-        if (root) {
-          goalPhase = p.event.data?.phase as string | undefined;
-          goalActivation = p.event.data?.activation;
-          changed();
-        }
-        io.onEvent({
-          kind: 'status',
-          data: {
-            status: 'goal_status',
-            sessionId: p.sessionId,
-            goalPhase: p.event.data?.phase,
-            goalActivation: p.event.data?.activation,
-          },
-        });
-        return;
-      }
-      if (p.event?.type === 'goal/change') {
-        const goal = p.event.data?.goal as
-          { phase?: string; blockedReason?: { message?: string } } | undefined;
-        if (root) {
-          if (goal?.phase) persistent = true;
-          goalPhase = goal?.phase;
-          goalBlocker = goal?.blockedReason?.message;
-          changed();
-        }
-        io.onEvent({
-          kind: 'status',
-          data: {
-            status: 'goal_changed',
-            sessionId: p.sessionId,
-            goalPhase: goal?.phase,
-            ...(goal?.blockedReason ? { blocker: goal.blockedReason.message } : {}),
-          },
-        });
-        return;
-      }
       const event = translateNotification(method, params);
       if (!event) return;
       if (root) {
-        // 发出的每条消息进了会话历史就算处理了：运行中的追问可能被插进当前这一轮（node-goal 插件），
+        // 发出的每条消息进了会话历史就算处理了：一轮进行中的插话会被插进这一轮的下一步（Oasis 插件），
         // 不再单独开一轮，所以不能按轮次结束来数
         if (event.kind === 'user_message') {
           pendingTurns = Math.max(0, pendingTurns - 1);
@@ -377,9 +414,7 @@ export function connectAgent(io: {
         if (event.kind === 'error' || event.kind === 'turn_end') {
           awaitingEnd = false;
           lastError = event.kind === 'error' ? String(event.data.message) : undefined;
-          failureReason = event.data.reason;
         }
-        changed();
       }
       io.onEvent({
         ...event,
@@ -393,16 +428,12 @@ export function connectAgent(io: {
   });
   const session = { sessionId: io.sessionId };
   return {
-    initialize: (model: string, cwd: string, reasoningEffort?: string) =>
-      rpc.request(
-        'initialize',
-        { cwd, provider: PROVIDER, model, ...(reasoningEffort ? { reasoningEffort } : {}) },
-        60_000,
-      ),
+    initialize: (model: string, cwd: string) =>
+      rpc.request('initialize', { cwd, provider: PROVIDER, model }, 60_000),
+    /** 接着原会话：从持久卷里的会话记录恢复，修好中断的最后一轮，不发新消息 */
     resume: async () => {
-      const result = await rpc.request('session/resume', session, 60_000);
+      await rpc.request('session/resume', session, 60_000);
       lastError = undefined;
-      return { result, needsPrompt: persistent && !goalPhase };
     },
     prompt: (text: string) => {
       pendingTurns++;
@@ -413,21 +444,13 @@ export function connectAgent(io: {
         30_000,
       );
     },
+    /** 等这一轮做完；返回失败原因（正常结束为 undefined） */
     async waitIdle(): Promise<string | undefined> {
       try {
-        for (;;) {
-          const seen = revision;
-          await rpc.request('session/wait', session);
-          if (lastError && !persistent) return lastError;
-          if (pendingTurns > 0 || awaitingEnd) return lastError ?? '运行未收到正常结束通知';
-          if (!persistent || goalPhase === 'complete') return lastError;
-          if (goalPhase !== 'active')
-            return goalBlocker ?? '持续目标未完成：' + (goalPhase ?? '没有目标状态');
-          if (goalActivation === 'disarmed' && failureReason !== 'max-tokens')
-            return lastError ?? '持续目标停止了自动执行，尚未完成';
-          // 原生驱动可能正在 flush/checkpoint；中间 idle 不等于目标结束。
-          if (seen === revision) await new Promise<void>((resolve) => listeners.add(resolve));
-        }
+        await rpc.request('session/wait', session);
+        if (lastError) return lastError;
+        if (pendingTurns > 0 || awaitingEnd) return '运行未收到正常结束通知';
+        return undefined;
       } catch (error) {
         return error instanceof Error ? error.message : String(error);
       }
@@ -436,7 +459,6 @@ export function connectAgent(io: {
     abort: (error: Error) => {
       lastError = error.message;
       rpc.abort(error);
-      changed();
     },
   };
 }

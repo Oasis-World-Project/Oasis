@@ -1,27 +1,18 @@
-import type { EventEnvelope } from '@oasis/contracts/events';
 import type { StartRunBody } from '@oasis/contracts/harness';
 import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { outbox, runEvents, runs } from './schema.ts';
+import { runEvents, runs } from './schema.ts';
 
 export type Run = typeof runs.$inferSelect;
 export type RunEvent = typeof runEvents.$inferSelect;
 /** 和运行行在同一事务里存下的启动请求：重启接管时按它原样再起 */
 export interface DurableRunRequest {
-  body: StartRunBody & Required<Pick<StartRunBody, 'inputs' | 'inputsFrom'>>;
+  body: StartRunBody & Required<Pick<StartRunBody, 'materials'>>;
 }
 type NewRun = Pick<
   typeof runs.$inferInsert,
-  | 'id'
-  | 'payerId'
-  | 'taskId'
-  | 'nodeId'
-  | 'model'
-  | 'prompt'
-  | 'inputsFrom'
-  | 'sessionId'
-  | 'continueFrom'
+  'id' | 'payerId' | 'conversationId' | 'model' | 'prompt' | 'sessionId' | 'continueFrom'
 >;
 type RunPatch = Partial<
   Pick<
@@ -53,14 +44,14 @@ export interface RunsRepo {
   hasRootPrompt(runId: string): Promise<boolean>;
   get(id: string): Promise<Run | undefined>;
   update(id: string, patch: RunPatch): Promise<void>;
-  /** 写下结局，并在同一事务里把要发的事件写进发件箱 */
-  finish(id: string, outcome: RunOutcome, event: EventEnvelope): Promise<void>;
+  /** 写下结局 */
+  finish(id: string, outcome: RunOutcome): Promise<void>;
   listUnfinished(): Promise<Run[]>;
   appendEvents(runId: string, events: Pick<RunEvent, 'seq' | 'kind' | 'data'>[]): Promise<void>;
   listEvents(runId: string, afterSeq: number, limit: number): Promise<RunEvent[]>;
   nextSequence(runId: string): Promise<number>;
-  /** 属于这个任务的全部运行（任务被删除时清理） */
-  listByTask(taskId: string): Promise<Run[]>;
+  /** 属于这个对话的全部运行（删对话、开新话题时清理） */
+  listByConversation(conversationId: string): Promise<Run[]>;
   listBySession(sessionId: string): Promise<Run[]>;
   /** 删掉这些运行（运行事件级联删除） */
   removeMany(ids: string[]): Promise<void>;
@@ -145,11 +136,8 @@ export function createRunsRepo(pool: pg.Pool): RunsRepo {
     async update(id, patch) {
       await db.update(runs).set(patch).where(eq(runs.id, id));
     },
-    async finish(id, outcome, event) {
-      await db.transaction(async (tx) => {
-        await tx.update(runs).set(outcome).where(eq(runs.id, id));
-        await tx.insert(outbox).values({ id: event.id, subject: event.type, payload: event });
-      });
+    async finish(id, outcome) {
+      await db.update(runs).set(outcome).where(eq(runs.id, id));
     },
     listUnfinished: () =>
       db
@@ -177,7 +165,8 @@ export function createRunsRepo(pool: pg.Pool): RunsRepo {
         .where(eq(runEvents.runId, runId));
       return Number(row?.next ?? 0);
     },
-    listByTask: (taskId) => db.select().from(runs).where(eq(runs.taskId, taskId)),
+    listByConversation: (conversationId) =>
+      db.select().from(runs).where(eq(runs.conversationId, conversationId)),
     listBySession: (sessionId) => db.select().from(runs).where(eq(runs.sessionId, sessionId)),
     async removeMany(ids) {
       if (ids.length) await db.delete(runs).where(inArray(runs.id, ids));
