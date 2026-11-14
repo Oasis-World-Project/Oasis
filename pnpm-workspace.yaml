@@ -25,6 +25,9 @@ catalog:
   typescript: 6.0.3
   vite: 8.3.4
   vitest: 5.0.5
+  # 用户电脑上的桌面版和 harness 之间的连接（和 @fastify/http-proxy 用的同一版）
+  ws: 8.22.0
+  '@types/ws': 8.18.2
   zod: 4.6.7
 # 只放行确认可信的依赖安装脚本（pnpm 11 默认全部拦截）
 allowBuilds:

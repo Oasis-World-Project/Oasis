@@ -12,11 +12,15 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@oasis/contracts": "workspace:*"
+    "@oasis/contracts": "workspace:*",
+    "tar-stream": "3.2.2",
+    "ws": "catalog:"
   },
   "devDependencies": {
     "@oasis/tsconfig": "workspace:*",
     "@types/node": "catalog:",
+    "@types/tar-stream": "3.1.5",
+    "@types/ws": "catalog:",
     "electron": "44.9.1",
     "typescript": "catalog:",
     "vitest": "catalog:"

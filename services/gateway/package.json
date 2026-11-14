@@ -22,9 +22,11 @@
   "devDependencies": {
     "@oasis/tsconfig": "workspace:*",
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "typescript": "catalog:",
     "@oasis/contracts": "workspace:*",
     "fastify": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "ws": "catalog:"
   }
 }

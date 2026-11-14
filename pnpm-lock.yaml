@@ -21,6 +21,9 @@ catalogs:
     '@types/pg':
       specifier: 8.23.1
       version: 8.23.1
+    '@types/ws':
+      specifier: 8.18.2
+      version: 8.18.2
     dbmate:
       specifier: 2.37.0
       version: 2.37.0
@@ -51,6 +54,9 @@ catalogs:
     vitest:
       specifier: 5.0.5
       version: 5.0.5
+    ws:
+      specifier: 8.22.0
+      version: 8.22.0
     zod:
       specifier: 4.6.7
       version: 4.6.7
@@ -113,6 +119,12 @@ importers:
       '@oasis/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      tar-stream:
+        specifier: 3.2.2
+        version: 3.2.2
+      ws:
+        specifier: 'catalog:'
+        version: 8.22.0
     devDependencies:
       '@oasis/tsconfig':
         specifier: workspace:*
@@ -120,6 +132,12 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
+      '@types/tar-stream':
+        specifier: 3.1.5
+        version: 3.1.5
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.2
       electron:
         specifier: 44.9.1
         version: 44.9.1(supports-color@7.2.0)
@@ -499,6 +517,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.2
       fastify:
         specifier: 'catalog:'
         version: 5.12.7
@@ -508,6 +529,9 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 5.0.5(@types/node@24.19.2)(jsdom@29.1.1)(vite@8.3.4(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
+      ws:
+        specifier: 'catalog:'
+        version: 8.22.0
 
   services/harness:
     dependencies:
@@ -526,6 +550,9 @@ importers:
       pg:
         specifier: 'catalog:'
         version: 8.23.1
+      ws:
+        specifier: 'catalog:'
+        version: 8.22.0
       zod:
         specifier: 'catalog:'
         version: 4.6.7
@@ -542,6 +569,9 @@ importers:
       '@types/tar-stream':
         specifier: 3.1.5
         version: 3.1.5
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.2
       fastify:
         specifier: 'catalog:'
         version: 5.12.7
@@ -2169,6 +2199,9 @@ packages:
 
   '@types/webxr@0.5.24':
     resolution: {integrity: sha512-h8fgEd/DpoS9CBrjEQXR+dIDraopAEfu4wYVNY2tEPwk60stPWhvZMf4Foo5FakuQ7HFZoa8WceaWFervK2Ovg==}
+
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@typescript-eslint/eslint-plugin@8.72.0':
     resolution: {integrity: sha512-aysKgysPX9XOv/dk95UkvUDe++Q3n3dJPG9CEWT3RUccxfkPJ+Qn6nhKPDhZXU6Ofo9kgwGWwKyQCnZIXTgngg==}
@@ -5375,6 +5408,10 @@ snapshots:
       meshoptimizer: 1.1.1
 
   '@types/webxr@0.5.24': {}
+
+  '@types/ws@8.18.2':
+    dependencies:
+      '@types/node': 24.19.2
 
   '@typescript-eslint/eslint-plugin@8.72.0(@typescript-eslint/parser@8.72.0(eslint@10.13.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3))(eslint@10.13.0(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3)':
     dependencies:
