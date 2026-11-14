@@ -1,29 +1,39 @@
-import type { AiSettings, ModelTier } from '@oasis/contracts/agent';
-import { asc, eq, sql } from 'drizzle-orm';
+import type { AiProfile, AiSettings, ModelTier } from '@oasis/contracts/agent';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { models, userAiSettings } from './schema.ts';
+import { userAiSettings } from './schema.ts';
 
-export type ModelRow = typeof models.$inferSelect;
-
-/** 用户给 AI 们的设置，加上给各个 AI 选的档位（AI 的 key → 档位，没选过的不在里面） */
-export type UserAiPrefs = AiSettings & { tiers: Record<string, ModelTier> };
+/** 用户给 AI 们的设置，加上给各个 AI 选的档位和定的设定（AI 的 key → …，没动过的不在里面） */
+export type UserAiPrefs = AiSettings & {
+  tiers: Record<string, ModelTier>;
+  profiles: Record<string, AiProfile>;
+};
 
 export function createModelRepo(pool: pg.Pool) {
   const db = drizzle(pool);
+  /** 只改一个 AI 的那一项（别的 AI 的不动） */
+  const merge = (
+    column: typeof userAiSettings.tiers | typeof userAiSettings.profiles,
+    key: string,
+    value: unknown,
+  ) => sql`${column} || ${JSON.stringify({ [key]: value })}::jsonb`;
   return {
-    list: (): Promise<ModelRow[]> => db.select().from(models).orderBy(asc(models.sortOrder)),
-    async find(key: string): Promise<ModelRow | undefined> {
-      const [row] = await db.select().from(models).where(eq(models.key, key));
-      return row;
-    },
     /** 没设过就是默认设置 */
     async settings(userId: string): Promise<UserAiPrefs> {
       const [row] = await db
-        .select({ domesticOnly: userAiSettings.domesticOnly, tiers: userAiSettings.tiers })
+        .select({
+          domesticOnly: userAiSettings.domesticOnly,
+          tiers: userAiSettings.tiers,
+          profiles: userAiSettings.profiles,
+        })
         .from(userAiSettings)
         .where(eq(userAiSettings.userId, userId));
-      return { domesticOnly: row?.domesticOnly ?? false, tiers: row?.tiers ?? {} };
+      return {
+        domesticOnly: row?.domesticOnly ?? false,
+        tiers: row?.tiers ?? {},
+        profiles: row?.profiles ?? {},
+      };
     },
     async saveSettings(userId: string, settings: AiSettings): Promise<void> {
       await db
@@ -34,16 +44,16 @@ export function createModelRepo(pool: pg.Pool) {
           set: { ...settings, updatedAt: new Date() },
         });
     },
-    /** 给一个 AI 选档位（别的 AI 选的不动） */
-    async saveTier(userId: string, key: string, tier: ModelTier): Promise<void> {
-      const choice = { [key]: tier };
+    /** 给一个 AI 选档位、定设定（别的 AI 的不动；设定整份替换） */
+    async saveAi(userId: string, key: string, tier: ModelTier, profile: AiProfile): Promise<void> {
       await db
         .insert(userAiSettings)
-        .values({ userId, tiers: choice })
+        .values({ userId, tiers: { [key]: tier }, profiles: { [key]: profile } })
         .onConflictDoUpdate({
           target: userAiSettings.userId,
           set: {
-            tiers: sql`${userAiSettings.tiers} || ${JSON.stringify(choice)}::jsonb`,
+            tiers: merge(userAiSettings.tiers, key, tier),
+            profiles: merge(userAiSettings.profiles, key, profile),
             updatedAt: new Date(),
           },
         });

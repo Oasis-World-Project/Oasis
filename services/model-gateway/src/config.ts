@@ -1,3 +1,4 @@
+import { DOMESTIC_VENDORS, lineupIds } from '@oasis/contracts/lineup';
 import { databaseEnv, objectStoreEnv } from '@oasis/service-kit';
 import { z } from 'zod';
 
@@ -24,7 +25,7 @@ export const modelGatewayEnv = {
   /** 专用决策模型地区不可用时，noul 证据判断经同一计费链路回退；留空关闭。 */
   DECISION_FALLBACK_MODEL: z
     .string()
-    .default('deepseek/deepseek-v4.1-flash')
+    .default(lineupIds('decisionFallback'))
     .transform((value) => value || undefined),
   /** 网络短暂断开（请求没发出去）时等多久再报错；超过才让这一轮停下（2026-11-05） */
   UPSTREAM_RECONNECT_MS: z.coerce
@@ -76,12 +77,10 @@ export const modelGatewayEnv = {
     .transform((value) => value || undefined),
   FAL_BASE_URL: z.url().default('https://queue.fal.run'),
   FAL_MEDIA_HOSTS: list('fal.media'),
-  // fal 上的型号只认工具里对接过的：入参、结果、标价写在 tools/audio.ts、tools/three-d.ts 的表里
-  TOOL_MUSIC_MODELS: list(
-    'fal-ai/minimax-music/v2.6,fal-ai/lyria3/pro,google/lyria/v3,fal-ai/ace-step-1.5',
-  ),
-  // 图生 3D 填了型号才开放，只有 Key 不算
-  TOOL_GEOMETRY_MODELS: list(''),
+  // 各工具用哪些型号、按什么顺序都写在型号清单（@oasis/contracts/lineup）里，下面的默认值从那里读；
+  // .env 只在要临时换时填。fal 上的型号只认 tools/audio.ts、tools/three-d.ts 的表里对接过的
+  TOOL_MUSIC_MODELS: list(lineupIds('music')),
+  TOOL_GEOMETRY_MODELS: list(lineupIds('geometry')),
   TOOL_RESULT_MAX_BYTES: z.coerce
     .number()
     .int()
@@ -125,20 +124,11 @@ export const modelGatewayEnv = {
   /** Tavily 每个积分的价格（微美元；按量付费 $0.008） */
   TAVILY_CREDIT_MICRO: z.coerce.number().int().positive().default(8_000),
   /**
-   * 各工具可以用的模型，逗号分隔，排在前面的是默认（地区用不了的会自动跳过）。
-   * 2026-11-05 用户决定：一律登记各家最强的型号，不替用户省钱（型号照 OpenRouter 目录核对）。
+   * 各工具可以用的型号，逗号分隔，排在前面的是默认；按顺序试，前一个被限流或地区用不了时换下一个。
+   * 默认值和每个型号的来历都在型号清单里（@oasis/contracts/lineup）。
    */
-  TOOL_IMAGE_MODELS: list(
-    'bytedance-seed/seedream-5-0-pro,google/gemini-nano-banana-2.1,openai/gpt-image-2.5-sunburst,black-forest-labs/flux-3-image,qwen/qwen-image-3-pro,microsoft/mai-image-2.6,recraft/recraft-v4.1-pro,bytedance-seed/seedream-4.5,black-forest-labs/flux.2-pro',
-  ),
-  // 按顺序试：前一个被限流或地区用不了时换下一个（不同厂商分摊共享额度上的限流）
-  // 看图、看视频、听音频（media.inspect）共用这一份：每个型号读得了哪几种看供应商目录，这里只管先后。
-  // 三种各至少有三个国内型号，2026-11-11 逐个真实调用过：看视频 qwen3.8-max-prime、kimi-k3.1-pro、mimo-v2.6-pro；
-  // 听音频 mimo-v2.6-pro、mimo-v2.6-flash、mimo-v2.5（两段各 150 秒的 mp3 一起比较都行）。qwen3.8-omni-flash 排在它们后面：
-  // 20 秒的单段能听，两段 5 MB 的 mp3 一起给时供应商报「The audio is empty」。
-  TOOL_INSPECT_MODELS: list(
-    'qwen/qwen3.8-max-prime,moonshotai/kimi-k3.1-pro,xiaomi/mimo-v2.6-pro,xiaomi/mimo-v2.6-flash,xiaomi/mimo-v2.5,qwen/qwen3.8-omni-flash,google/gemini-4-argon,anthropic/claude-opus-5.5,minimax/minimax-m3,stepfun/step-5-preview',
-  ),
+  TOOL_IMAGE_MODELS: list(lineupIds('image')),
+  TOOL_INSPECT_MODELS: list(lineupIds('inspect')),
   /** 输出上限：前面几个是推理型号，推理也占这个额度，给小了会只想不答 */
   TOOL_INSPECT_MAX_TOKENS: z.coerce.number().int().min(1).max(32_000).default(16_000),
   TOOL_FETCH_MAX_BYTES: z.coerce
@@ -147,19 +137,9 @@ export const modelGatewayEnv = {
     .min(1024)
     .max(20 * 1024 * 1024)
     .default(5 * 1024 * 1024),
-  // 配音：前四个国内型号 2026-11-11 真实调用过，念出来的中文再转写回来一字不差。seed-audio 排最后：
-  // 它是按描述生成声音的型号，只给要念的文字时出来的不是这句话（转写成「呜呜」）。
-  TOOL_SPEECH_MODELS: list(
-    'qwen/qwen-audio-3.0-tts-flash,minimax/speech-2.8-turbo,qwen/qwen-audio-3.0-tts-plus,minimax/speech-2.8-hd,fish-audio/s2.1-pro,openai/gpt-4o-mini-tts-2025-12-15,bytedance-seed/seed-audio-1-0',
-  ),
-  // 转写：供应商目录里国内的只有 qwen3-asr 这两个（2026-11-11 真实调用过）
-  TOOL_TRANSCRIBE_MODELS: list(
-    'openai/whisper-large-v3,qwen/qwen3-asr-1.7b,qwen/qwen3-asr-0.6b,google/chirp-3',
-  ),
-  /** 最贵的 Veo 3.1 4K 带声音每秒 $0.60（冻结按每秒 $0.70 算）；换更贵的模型要同时调冻结 */
-  TOOL_VIDEO_MODELS: list(
-    'google/veo-3.1,bytedance/seedance-2.5,kwaivgi/kling-v3.0-pro,alibaba/wan-3.0-prime,minimax/hailuo-3-max,runway/gen-4.5,alibaba/wan-3.0,kwaivgi/kling-v3.0-std',
-  ),
+  TOOL_SPEECH_MODELS: list(lineupIds('speech')),
+  TOOL_TRANSCRIBE_MODELS: list(lineupIds('transcribe')),
+  TOOL_VIDEO_MODELS: list(lineupIds('video')),
   /** 长任务（视频）最多等多久，超时就算失败、退回冻结 */
   TOOL_JOB_TIMEOUT_MS: z.coerce
     .number()
@@ -167,22 +147,13 @@ export const modelGatewayEnv = {
     .min(60_000)
     .default(30 * 60_000),
   /** model.ask（问另一个模型）能问的型号，第一个是不指定时用的 */
-  TOOL_ASK_MODELS: list(
-    'deepseek/deepseek-v4-pro-0813,deepseek/deepseek-v4.1-flash,qwen/qwen3.8-max-prime,moonshotai/kimi-k3.1-pro,z-ai/glm-5.3-prime,anthropic/claude-sonnet-5.5,openai/gpt-6.1-sol,google/gemini-4-argon',
-  ),
+  TOOL_ASK_MODELS: list(lineupIds('ask')),
   /** jev.decide 用的决策模型 */
-  TOOL_JEV_MODEL: z.string().min(1).default('typesafe/jev-1.14'),
+  TOOL_JEV_MODEL: z.string().min(1).default(lineupIds('jev')),
   /** 上面的决策模型用不了时（如「只用国内模型」）回答 jev.decide 的聊天模型：三个国内的轻量型号 */
-  TOOL_DECIDE_CHAT_MODELS: list(
-    'deepseek/deepseek-v4.1-flash,qwen/qwen3.8-flash,z-ai/glm-5.3-flash',
-  ),
-  /**
-   * 国内厂商（模型 ID 里「/」前面的部分）。用户打开「只用国内模型」后，只给他的 AI 们列这些厂商的
-   * 模型和工具型号；不在名单里的都算国外。
-   */
-  DOMESTIC_MODEL_VENDORS: list(
-    'deepseek,qwen,alibaba,moonshotai,bytedance,bytedance-seed,kwaivgi,minimax,stepfun,tencent,xiaomi,z-ai',
-  ),
+  TOOL_DECIDE_CHAT_MODELS: list(lineupIds('decideChat')),
+  /** 「只用国内模型」认的国内厂商（模型 ID 里「/」前面的部分），默认是型号清单里的 */
+  DOMESTIC_MODEL_VENDORS: list(DOMESTIC_VENDORS.join(',')),
   /** 配音拿不到实际花费时每个字估多少（微美元） */
   TOOL_SPEECH_MICRO_PER_CHAR: z.coerce.number().int().nonnegative().default(20),
   /**
@@ -210,7 +181,7 @@ export const modelGatewayEnv = {
     .optional()
     .transform((value) => value || undefined),
   /** 数字人回答用的模型：要出字快 */
-  AVATAR_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
+  AVATAR_MODEL: z.string().min(1).default(lineupIds('avatar')),
   /** 开发期：所有数字人会话都用 LiveAvatar 沙箱（不扣积分，只有官方测试形象，约 1 分钟自动结束） */
   AVATAR_SANDBOX: z
     .enum(['true', 'false'])

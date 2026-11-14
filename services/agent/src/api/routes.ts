@@ -1,4 +1,4 @@
-import { AiSettings, ChooseTierBody } from '@oasis/contracts/agent';
+import { AiSettings, SaveAiBody } from '@oasis/contracts/agent';
 import { parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { ModelService } from '../service/model-service.ts';
@@ -11,12 +11,12 @@ export function registerRoutes(app: ServiceApp, models: ModelService): void {
     models: await models.list(requireUserId(request)),
   }));
 
-  /** 给一个 AI 换档位（快速 / 均衡 / 强力 / 最强） */
-  app.put('/v1/models/:key/tier', async (request) =>
-    models.chooseTier(
+  /** 设置页保存一个 AI：档位（快速 / 均衡 / 强力 / 最强）和设定（名字、性别、人格、其他） */
+  app.put('/v1/models/:key/settings', async (request) =>
+    models.save(
       requireUserId(request),
       parseWith(KeyParams, request.params).key,
-      parseWith(ChooseTierBody, request.body).tier,
+      parseWith(SaveAiBody, request.body),
     ),
   );
 

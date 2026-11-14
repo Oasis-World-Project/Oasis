@@ -75,7 +75,7 @@ pnpm browser:smoke
 | gateway | 8080 | 唯一对外入口：`/api/<服务>/v1/*` → `<服务>/v1/*`；另有桌面版连 harness 的 WebSocket 和电脑上的 dsh 调模型、工具的 `/api/run/v1/*` | ✅ |
 | identity | 4101 | 账号与登录（邮箱验证码） | 经 gateway |
 | billing | 4102 | 额度钱包：注册送 $30、预扣与结算、用量 | 经 gateway |
-| agent | 4103 | AI 目录（每个 AI 几档型号）、人设和型号路由、用户的设置（只用国内模型、每个 AI 用哪一档） | 经 gateway |
+| agent | 4103 | 「AI 们」（型号清单里的对话 AI 和工具型号）、人设和型号路由、用户的设置（只用国内模型、每个 AI 用哪一档、名字和人格） | 经 gateway |
 | conversation | 4104 | 私聊（一轮：开、跟进、插话、停止、收尾）、群聊 | 经 gateway |
 | canvas | 4106 | 成果、批注、文件 | 经 gateway |
 | harness | 4107 | 私聊 AI 的运行时：每一轮在沙箱或用户的电脑上跑 dsh（唯一接触 DeepSeek Harness） | 仅内部（桌面版经 gateway 连上来） |
@@ -113,6 +113,7 @@ docs/       工程方向、现在是怎么做的（design）、回归测试
 |---|---|
 | `pnpm lint` / `pnpm typecheck` / `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、依赖方向、死代码、重复率、数据库迁移检查 |
+| `pnpm models:check` | 型号清单（`packages/contracts/src/lineup.ts`）对着 OpenRouter 目录核对：下架的、标价变了的、同一家新出的；`--probe` 试调对话 AI 的型号 |
 | `pnpm e2e` | 全链路回归（假模型、真容器、真画布，先停 `pnpm dev`）；`--real` 用真模型跑 5 个场景，每场景 ≤ $1（小游戏 `real-game` ≤ $3）。见 `docs/engineering/回归测试.md` |
 | `pnpm trace <对话 ID>` | 查一个私聊每一轮的运行、调用、费用来源和画布成果，并标出异常 |
 | `pnpm accept` | 验收模式：服务从当前代码启动、不随改动重启，Web 用构建版 |

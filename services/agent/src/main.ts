@@ -1,5 +1,5 @@
-// agent：模型目录（8 类，MVP 先上 14 个对话模型，每个 AI 几档型号）、用户给 AI 们的设置（只用国内模型、
-// 每个 AI 用哪一档）；每个 AI 的人设以后再加。
+// agent：「AI 们」（能聊天的 AI 们和各工具用的型号，都在型号清单 @oasis/contracts/lineup 里）、用户给
+// AI 们的设置（只用国内模型、每个 AI 用哪一档、给它定的名字和人格）。
 import { fileURLToPath } from 'node:url';
 import { createPostgres, databaseEnv, startService } from '@oasis/service-kit';
 import { registerRoutes } from './api/routes.ts';

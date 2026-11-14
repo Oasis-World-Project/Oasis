@@ -29,8 +29,20 @@ export const ModelOption = z.object({
 });
 export type ModelOption = z.infer<typeof ModelOption>;
 
+/**
+ * 用户给一个 AI 定的设定（「AI 们」里的设置页），带进它的每一轮：名字（问它叫什么就说这个）、性别（以后开了
+ * 语音决定默认的声音）、人格描述、其他要它记住的。没填的用系统默认。
+ */
+export const AiProfile = z.object({
+  name: z.string().trim().min(1).max(20).optional(),
+  gender: z.enum(['male', 'female']).optional(),
+  persona: z.string().trim().min(1).max(2000).optional(),
+  notes: z.string().trim().min(1).max(2000).optional(),
+});
+export type AiProfile = z.infer<typeof AiProfile>;
+
 export const ModelEntry = z.object({
-  /** 稳定的业务主键，如 claude、gpt */
+  /** 稳定的业务主键，如 claude、gpt；工具用的型号是型号 ID */
   key: z.string(),
   name: z.string(),
   vendor: z.string(),
@@ -46,15 +58,20 @@ export const ModelEntry = z.object({
   tier: ModelTier.nullable(),
   /** 现在用的型号给人看的名字 */
   versionLabel: z.string().nullable(),
-  /** 能否使用；不能用的显示「即将接入」 */
+  /** 能不能私聊（对话 AI 接入了才能）；工具用的型号只能看 */
   available: z.boolean(),
+  /** 这个用户给它定的设定（只有对话 AI 有） */
+  profile: AiProfile.default({}),
+  /** 工具用的型号：哪个工具用它、排第几，如「生图时第一个用」 */
+  usage: z.string().optional(),
 });
 export type ModelEntry = z.infer<typeof ModelEntry>;
 
 export const ModelList = z.object({ models: z.array(ModelEntry) });
 
-/** 给一个 AI 换档位 */
-export const ChooseTierBody = z.object({ tier: ModelTier });
+/** 设置页保存：用哪一档、设定（整份替换；不填的项回到系统默认） */
+export const SaveAiBody = z.object({ tier: ModelTier, profile: AiProfile });
+export type SaveAiBody = z.infer<typeof SaveAiBody>;
 
 /**
  * 用户给 AI 们的设置。domesticOnly：只用国内厂商的模型——国外厂商的 AI 暂停（聊天记录都在，

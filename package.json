@@ -37,6 +37,7 @@
     "media:recover": "node scripts/media.mjs recover",
     "video:smoke": "node scripts/video.mjs",
     "check:engineering": "node scripts/check-engineering.mjs",
+    "models:check": "node scripts/models-check.mjs",
     "e2e": "node scripts/e2e.mjs",
     "trace": "node scripts/trace.mjs",
     "accept": "node scripts/accept.mjs",

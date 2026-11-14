@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { CHAT_AIS } from '../packages/contracts/src/lineup.ts';
 import { createFakeProvider, setRun } from './e2e/fake-provider.mjs';
 import { IMAGE_MODEL, JPEG_IMAGE_MODEL } from './e2e/fake-media.mjs';
 import { literal, query } from './e2e/db.mjs';
@@ -136,11 +137,8 @@ try {
       `真模型回归：${names.join('、')}，每个场景花费上限 ${usd(REAL_BUDGET_MICRO)}${raised.length ? `（${raised.join('、')}）` : ''}`,
     );
   } else {
-    // 假供应商认得私聊里每个 AI 每一档的上游型号（agent 的模型表）
-    const providerModels = query(
-      'agent',
-      "select distinct option ->> 'model' as model from models, jsonb_array_elements(options) as option",
-    ).map((row) => row.model);
+    // 假供应商认得私聊里每个 AI 每一档的上游型号（型号清单）
+    const providerModels = CHAT_AIS.flatMap((ai) => ai.options.map((option) => option.model));
     provider = createFakeProvider({
       scenarios: SCENARIOS,
       fixtures,
