@@ -48,6 +48,7 @@ pnpm sandbox:check
 - 算力按沙箱运行时长 × CPU 核数计费（model-gateway 的 `COMPUTE_PRICE_MICRO_PER_CORE_HOUR`，默认每核每小时 $0.015；设为 0 就不计费）。
 - 本机开发时 model-gateway 跑在宿主机上，入口代理经 `host.docker.internal:4108` 访问它。Docker Desktop（Windows / macOS）上默认配置就能通（2026-10-22 在 Windows 上实测）；在 Linux 宿主机上要把 `services/model-gateway/.env` 里的 `HOST` 改成 `0.0.0.0`（这会让局域网也能访问 4108，只在自己电脑上这样做）。
 - harness 的 `/ready` 会检查 Docker、沙箱镜像和网络是否都在。设计见 [工具与沙箱](docs/design/工具与沙箱.md)。
+- 在你的电脑上干活：私聊右上角选「我的电脑」和一个项目文件夹（要在桌面版里选），这个私聊的每一轮就在那台电脑上跑 dsh，不起沙箱。那台电脑要开着桌面版（登录同一个账号），装好 Node 24（或 22.19 以上的 22 版）；第一次干活时桌面版自己装 dsh（约 3 分钟）。权限和确认卡见 [私聊与一轮](docs/design/私聊与一轮.md) §7。
 - `pnpm dev` 中 harness 使用稳定进程，不随源码变动自动重启；修改它后手动重启开发服务。重启会接管原运行和原生会话，`/workspace` 与会话目录保留在带 Oasis 标签的 named volume 中，删私聊、开新话题时一起清理。项目依赖装进工作目录（如 `.venv`、`node_modules`），不要修改镜像内的系统环境来保存状态。接管依赖暂不可用时保留进度等待恢复，用户停止/取消意图优先处理；详见 [私聊与一轮](docs/design/私聊与一轮.md)。
 
 ### 检查（inspector）
@@ -71,13 +72,13 @@ pnpm browser:smoke
 
 | 服务 | 端口 | 职责 | 对外 |
 |---|---|---|---|
-| gateway | 8080 | 唯一对外入口：`/api/<服务>/v1/*` → `<服务>/v1/*` | ✅ |
+| gateway | 8080 | 唯一对外入口：`/api/<服务>/v1/*` → `<服务>/v1/*`；另有桌面版连 harness 的 WebSocket 和电脑上的 dsh 调模型、工具的 `/api/run/v1/*` | ✅ |
 | identity | 4101 | 账号与登录（邮箱验证码） | 经 gateway |
 | billing | 4102 | 额度钱包：注册送 $30、预扣与结算、用量 | 经 gateway |
 | agent | 4103 | AI 目录（每个 AI 几档型号）、人设和型号路由、用户的设置（只用国内模型、每个 AI 用哪一档） | 经 gateway |
 | conversation | 4104 | 私聊（一轮：开、跟进、插话、停止、收尾）、群聊 | 经 gateway |
 | canvas | 4106 | 成果、批注、文件 | 经 gateway |
-| harness | 4107 | 私聊 AI 的运行时：每一轮在沙箱里跑 dsh（唯一接触 DeepSeek Harness） | 仅内部 |
+| harness | 4107 | 私聊 AI 的运行时：每一轮在沙箱或用户的电脑上跑 dsh（唯一接触 DeepSeek Harness） | 仅内部（桌面版经 gateway 连上来） |
 | model-gateway | 4108 | 所有模型调用的唯一出口，计量上报 billing | 仅内部 |
 | inspector | 4109 | 检查成果：文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览（不调别的服务、不存东西） | 仅内部 |
 | model-gateway（数字人入口） | 4118 | 只有 `/avatar/v1/chat/completions`，给 LiveAvatar 回调大模型；开发期经 `pnpm avatar:tunnel` 和服务器 nginx 暴露为 `https://oasis-dev.elysiumgrid.space/avatar/v1` | 只这一条路径公网可达 |

@@ -193,6 +193,7 @@ try {
       stack,
       fixtures,
       outDir,
+      webUrl,
       log: (line) => log(`[${name}] ${line}`),
       check(condition, message) {
         if (!condition) {

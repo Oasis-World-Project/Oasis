@@ -58,6 +58,7 @@ export async function signIn(options) {
   const api = {
     get: (route, opts) => request('GET', route, undefined, opts),
     post: (route, body = {}, opts) => request('POST', route, body, opts),
+    put: (route, body = {}, opts) => request('PUT', route, body, opts),
     del: (route) => request('DELETE', route),
   };
 
