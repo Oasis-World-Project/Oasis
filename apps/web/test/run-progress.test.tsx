@@ -1,5 +1,5 @@
-// 一轮的进度页：主 AI 卡（状态、正在做的一步、用时、花费、待办、停下）、长任务卡（已等多久、通常要多久、
-// 做出的东西）、经过（说的话、步骤、插话）、这一轮做出的文件（点开预览）、交出的成品。
+// 一轮的进度页：顶上任务名和主 AI 卡（状态、正在做的一步、用时、花费、待办、停下）；成果按类型分框
+// （做好的点开预览，还在做的长任务写已等多久、通常要多久）；过程按 AI 说的话分段（折叠的步骤），不放用户的话。
 import type { MessageBody } from '@oasis/contracts/conversation';
 import { createMemoryHistory } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -33,6 +33,17 @@ const step = (id: string, label: string, extra: object) => ({
   ...extra,
 });
 const segment = (parts: object[]) => message('text', { runId: RUN, parts });
+const card = (extra: object) =>
+  message('task', {
+    runId: RUN,
+    title: '开业视频',
+    status: 'running',
+    startedAt: ago(300),
+    finishedAt: null,
+    spentMicro: 120_000,
+    files: [],
+    ...extra,
+  });
 
 /** 两个先交上去没等的长任务（--wait false） */
 const A = '00000000-0000-4000-8000-00000000a001';
@@ -46,32 +57,30 @@ const submit = (id: string, label: string, job: string, oasisTool = 'video.gener
     jobs: [{ id: job, state: 'submitted' }],
   });
 
-/** 开业视频做到一半：两张关键帧做好了，两段视频交上去了，正在一起等；中间用户插了一句 */
+/** 开业视频做到一半：两张关键帧、分镜做好了，正在生成视频；中间用户插了一句 */
 const messages = [
   message('text', { runId: RUN }, 'user', '做个开业视频'),
-  message('text', {
-    runId: RUN,
-    parts: [
-      { type: 'text', text: '先出两张**关键帧**' },
-      step('i', '生成图片：门店外景', {
-        oasisTool: 'image.generate',
-        expectSeconds: 30,
-        startedAt: ago(200),
-        finishedAt: ago(170),
-        files: ['out/关键帧/帧-1.png', 'out/关键帧/帧-2.png'],
-      }),
-      step('w', '写文件 out/分镜.md', {
-        tool: 'write',
-        files: ['out/分镜.md'],
-        finishedAt: ago(160),
-      }),
-    ],
-  }),
+  segment([
+    { type: 'text', text: '先出两张**关键帧**' },
+    step('i', '生成图片：门店外景', {
+      oasisTool: 'image.generate',
+      expectSeconds: 30,
+      startedAt: ago(200),
+      finishedAt: ago(170),
+      files: ['out/关键帧/帧-1.png', 'out/关键帧/帧-2.png'],
+    }),
+    step('w', '写文件 out/分镜.md', {
+      tool: 'write',
+      files: ['out/分镜.md'],
+      finishedAt: ago(160),
+    }),
+  ]),
   message('text', { runId: RUN, interjection: true }, 'user', '改成竖屏'),
   {
     ...message('text', {
       runId: RUN,
       parts: [
+        { type: 'text', text: '好，换成竖屏接着做视频' },
         step('v', '生成视频：开业', {
           status: 'running',
           oasisTool: 'video.generate',
@@ -86,14 +95,7 @@ const messages = [
     }),
     status: 'streaming',
   } as MessageBody,
-  message('task', {
-    runId: RUN,
-    status: 'running',
-    startedAt: ago(300),
-    finishedAt: null,
-    spentMicro: 120_000,
-    files: [],
-  }),
+  card({}),
 ];
 
 function fakeRun(list = messages, live = true) {
@@ -136,9 +138,10 @@ afterEach(() => {
 });
 
 describe('一轮的进度页', () => {
-  it('主 AI 卡：进行中、正在做的一步、用时、花费、待办；能停下', async () => {
+  it('顶上是任务名；主 AI 卡：进行中、正在做的一步、用时、花费、待办；能停下', async () => {
     const api = fakeRun();
     await openProgress();
+    expect(await screen.findByRole('heading', { level: 1, name: '开业视频' })).toBeTruthy();
     const lead = await screen.findByRole('region', { name: '主 AI' });
     expect(within(lead).getByText('进行中')).toBeTruthy();
     expect(lead.textContent).toContain('生成视频：开业');
@@ -151,45 +154,43 @@ describe('一轮的进度页', () => {
     );
   });
 
-  it('长任务一张张卡：做完的写用了多久、放出做出的图；在做的写已等多久、通常要多久', async () => {
+  it('成果按类型分框：图片（点开预览）、在做的视频（已等多久、通常要多久、大概进度）、文档', async () => {
     fakeRun();
     await openProgress();
-    const tasks = await screen.findByRole('region', { name: '长任务' });
-    const images = within(tasks).getByRole('article', { name: '生成图片：门店外景' });
-    expect(images.textContent).toContain('用了 30 秒 · 通常约 30 秒');
-    const thumb = within(images).getAllByRole('button', { name: /预览 out\/关键帧\/帧-/ })[0]!;
-    expect(thumb.querySelector('img')?.getAttribute('src')).toMatch(
+    const outputs = await screen.findByRole('region', { name: '成果' });
+    const images = within(outputs).getByRole('region', { name: '图片' });
+    const frame = within(images).getByRole('button', { name: '预览 关键帧/帧-1.png' });
+    expect(frame.querySelector('img')?.getAttribute('src')).toMatch(
       new RegExp(
         `^/api/conversation/v1/conversations/${CONV}/runs/${RUN}/files/out/%E5%85%B3%E9%94%AE%E5%B8%A7/%E5%B8%A7-1\\.png\\?v=`,
       ),
     );
-    const video = within(tasks).getByRole('article', { name: '生成视频：开业' });
-    expect(video.textContent).toMatch(/已等 1 分 \d+ 秒 · 通常约 3 分 0 秒/);
-    expect(within(video).getByRole('progressbar', { name: '大概进度' })).toBeTruthy();
+    fireEvent.click(within(images).getByRole('button', { name: '预览 关键帧/帧-2.png' }));
+    expect(await screen.findByLabelText('预览 帧-2.png')).toBeTruthy();
+    const video = within(outputs).getByRole('region', { name: '视频' });
+    const shot = within(video).getByRole('article', { name: '生成视频：开业' });
+    expect(shot.textContent).toMatch(/已等 1 分 \d+ 秒 · 通常约 3 分 0 秒/);
+    expect(within(shot).getByRole('progressbar', { name: '大概进度' })).toBeTruthy();
+    const docs = within(outputs).getByRole('region', { name: '文档' });
+    expect(within(docs).getByRole('button', { name: '预览 分镜.md' })).toBeTruthy();
   });
 
-  it('经过：说的话、折叠的步骤、插话按顺序；这一轮做出的文件点开预览', async () => {
+  it('过程按 AI 说的话分段：那句话、状态、折叠的步骤，连成一条线；不放用户说的话', async () => {
     fakeRun();
     await openProgress();
-    const story = await screen.findByRole('region', { name: '经过' });
-    expect(within(story).getByText('关键帧').tagName).toBe('STRONG');
-    expect(within(story).getByText('插话')).toBeTruthy();
-    expect(within(story).getByText('改成竖屏')).toBeTruthy();
-    const files = screen.getByRole('region', { name: '做出的文件' });
-    // 最新的在前；还在做的那一步没有文件
-    expect(
-      within(files)
-        .getAllByRole('button')
-        .map((b) => b.getAttribute('aria-label')),
-    ).toEqual(['预览 out/分镜.md', '预览 out/关键帧/帧-2.png', '预览 out/关键帧/帧-1.png']);
-    fireEvent.click(within(files).getByRole('button', { name: '预览 out/关键帧/帧-2.png' }));
-    const dialog = await screen.findByLabelText('预览 帧-2.png');
-    expect(within(dialog).getByRole('img', { hidden: true }).getAttribute('src')).toContain(
-      `/runs/${RUN}/files/out/`,
-    );
+    const story = await screen.findByRole('region', { name: '过程' });
+    const first = within(story).getByRole('article', { name: '第 1 段' });
+    expect(within(first).getByText('关键帧').tagName).toBe('STRONG');
+    expect(first.textContent).toContain('做了 2 步');
+    expect(first.textContent).toContain('完成');
+    const second = within(story).getByRole('article', { name: '第 2 段' });
+    expect(second.textContent).toContain('好，换成竖屏接着做视频');
+    expect(second.textContent).toContain('进行中');
+    expect(screen.queryByText('改成竖屏')).toBeNull();
+    expect(screen.queryByText('做个开业视频')).toBeNull();
   });
 
-  it('几段视频先交后一起等：按任务号一段一张卡，等到前「在做」，等到后放出各自的视频；等的那一步不另成卡', async () => {
+  it('几段视频先交后一起等：按任务号一段一张卡；做完后成果从画布读，没做出来的写原因，工作目录外的不放', async () => {
     const waiting = step('w', '等长任务的结果', {
       status: 'running',
       oasisTool: 'wait',
@@ -200,33 +201,36 @@ describe('一轮的进度页', () => {
       segment([submit('a', '生成视频：门店外景', A), submit('b', '生成视频：剪彩', B), waiting]),
     ]);
     await openProgress();
-    const tasks = await screen.findByRole('region', { name: '长任务' });
+    // 没有任务卡上的任务名：用这一轮开头那句话
+    expect(await screen.findByRole('heading', { level: 1, name: '做两段开业视频' })).toBeTruthy();
+    const video = await screen.findByRole('region', { name: '视频' });
     expect(
-      within(tasks)
+      within(video)
         .getAllByRole('article')
         .map((a) => a.getAttribute('aria-label')),
     ).toEqual(['生成视频：门店外景', '生成视频：剪彩']);
-    const outside = within(tasks).getByRole('article', { name: '生成视频：门店外景' });
-    expect(outside.textContent).toMatch(/已等 1 分 \d+ 秒 · 通常约 2 分 30 秒/);
+    expect(within(video).getByRole('article', { name: '生成视频：门店外景' }).textContent).toMatch(
+      /已等 1 分 \d+ 秒 · 通常约 2 分 30 秒/,
+    );
     vi.unstubAllGlobals();
     cleanup();
 
-    // 等到了：一段做好、一段没做出来；一轮结束后只剩交出的成品
+    // 等到了：一段做好（进了画布）、一段没做出来；一轮结束后成果从画布读
     const done = {
       ...waiting,
       status: 'failed',
       detail: '有一段没做出来',
       finishedAt: ago(10),
-      files: ['out/外景.mp4', 'work/草稿.png'],
+      files: ['out/素材/外景.mp4', 'work/草稿.png'],
       jobs: [
-        { id: A, state: 'done', files: ['out/外景.mp4'] },
+        { id: A, state: 'done', files: ['out/素材/外景.mp4'] },
         { id: B, state: 'failed' },
       ],
     };
-    const delivered = {
+    const shot = {
       artifactId: '00000000-0000-4000-8000-0000000000f1',
       name: '外景.mp4',
-      path: '外景.mp4',
+      path: '素材/外景.mp4',
       size: 2048,
       category: 'media',
     };
@@ -234,33 +238,24 @@ describe('一轮的进度页', () => {
       [
         message('text', { runId: RUN }, 'user', '做两段开业视频'),
         segment([submit('a', '生成视频：门店外景', A), submit('b', '生成视频：剪彩', B), done]),
-        message('task', {
-          runId: RUN,
-          status: 'failed',
-          startedAt: ago(100),
-          finishedAt: ago(5),
-          spentMicro: 425_000,
-          files: [delivered],
-        }),
+        card({ status: 'failed', finishedAt: ago(5), spentMicro: 425_000, files: [shot] }),
       ],
       false,
     );
     await openProgress();
-    const after = await screen.findByRole('region', { name: '长任务' });
-    const shot = within(after).getByRole('article', { name: '生成视频：门店外景' });
-    expect(shot.textContent).toMatch(/用了 1 分 30 秒/);
-    expect(within(shot).getByLabelText('外景.mp4').getAttribute('src')).toContain('/files/out/');
+    const after = await screen.findByRole('region', { name: '视频' });
+    expect(within(after).getByLabelText('外景.mp4').getAttribute('src')).toBe(
+      `/api/canvas/v1/artifacts/${shot.artifactId}/content`,
+    );
+    expect(within(after).getByText('素材')).toBeTruthy();
     expect(within(after).getByRole('article', { name: '生成视频：剪彩' }).textContent).toContain(
       '有一段没做出来',
     );
-    // 中间文件随沙箱没了，只列交出的成品
-    expect(screen.queryByRole('region', { name: '做出的文件' })).toBeNull();
-    const result = screen.getByRole('region', { name: '成品' });
-    expect(result.textContent).toContain('中间做出的 1 个文件不在成品里');
-    expect(within(result).getByRole('button', { name: '预览 外景.mp4' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: '图片' })).toBeNull();
+    expect(screen.getByRole('link', { name: '在画布里看' })).toBeTruthy();
   });
 
-  it('等的命令放到后台、AI 只看了输出的末几行：看输出的那一步按任务号写回，等的那一步不另成卡；几秒就好的配音也不成卡', async () => {
+  it('等的命令放到后台、AI 只看了输出的末几行：按任务号写回；几秒就好的配音也在声音框里', async () => {
     fakeRun([
       message('text', { runId: RUN }, 'user', '做两段开业音乐'),
       segment([
@@ -291,15 +286,10 @@ describe('一轮的进度页', () => {
       ]),
     ]);
     await openProgress();
-    const tasks = await screen.findByRole('region', { name: '长任务' });
-    expect(
-      within(tasks)
-        .getAllByRole('article')
-        .map((a) => a.getAttribute('aria-label')),
-    ).toEqual(['生成音乐：欢快', '生成音乐：温暖']);
-    const happy = within(tasks).getByRole('article', { name: '生成音乐：欢快' });
-    expect(happy.textContent).toMatch(/用了 1 分 20 秒/);
-    expect(within(happy).getByLabelText('欢快.mp3').getAttribute('src')).toContain('/files/out/');
+    const audio = await screen.findByRole('region', { name: '声音' });
+    expect(within(audio).queryAllByRole('article')).toEqual([]);
+    for (const name of ['旁白.mp3', '欢快.mp3', '温暖.mp3'])
+      expect(within(audio).getByLabelText(name).getAttribute('src')).toContain('/files/out/');
   });
 
   it('不知道是哪个私聊：说清楚从哪里打开', async () => {

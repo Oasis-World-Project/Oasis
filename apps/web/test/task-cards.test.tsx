@@ -264,10 +264,11 @@ describe('任务卡', () => {
     );
   });
 
-  it('做完：写上用时、花费和成品；成品能预览、下载，能去画布看这个私聊的成果', async () => {
+  it('做完：写上任务名、用时、花费和成品（素材只说几个）；成品能预览、下载，能去画布看这个私聊的成果', async () => {
     const PAGE = '00000000-0000-4000-8000-0000000000d1';
     const card = message('task', {
       runId: RUN,
+      title: '民宿首页',
       status: 'done',
       startedAt: '2026-11-14T08:00:00.000Z',
       finishedAt: '2026-11-14T08:03:20.000Z',
@@ -280,13 +281,23 @@ describe('任务卡', () => {
           size: 2048,
           category: 'app',
         },
+        {
+          artifactId: '00000000-0000-4000-8000-0000000000d2',
+          name: '首屏.png',
+          path: '素材/首屏.png',
+          size: 4096,
+          category: 'doc',
+        },
       ],
     });
     fakeChat([user('做个网页'), ai([say('做好了')], { spentMicro: 120_000 }), card]);
     await openChat();
     const region = await screen.findByRole('region', { name: '任务' });
+    expect(within(region).getByRole('heading', { name: '民宿首页' })).toBeTruthy();
     expect(within(region).getByText('已完成')).toBeTruthy();
     expect(region.textContent).toContain('用时 3 分 20 秒');
+    expect(region.textContent).toContain('素材 1 个');
+    expect(within(region).queryByRole('button', { name: '预览 首屏.png' })).toBeNull();
     expect(within(region).getByRole('link', { name: '下载 index.html' }).getAttribute('href')).toBe(
       `/api/canvas/v1/artifacts/${PAGE}/content?download=1`,
     );

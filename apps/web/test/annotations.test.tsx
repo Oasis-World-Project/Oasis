@@ -94,8 +94,8 @@ function artifact(id: string, path: string, extra: Partial<ArtifactBody> = {}): 
     category: 'doc',
     conversationId: CONVERSATION,
     sessionId: SESSION,
-    topic: '民宿首页',
     runId: '00000000-0000-4000-8000-0000000000a1',
+    task: '民宿首页',
     models: [],
     syncPath: `民宿首页/${path}`,
     annotations: [],
@@ -390,9 +390,9 @@ describe('运行中的应用上批注（桌面版）', () => {
     expect(screen.getByRole('button', { name: '截取当前画面' })).toBeTruthy();
     expect(screen.getByRole('complementary', { name: '批注' })).toBeTruthy();
     expect(within(panel).getByRole('button', { name: /让 AI 改/ })).toBeTruthy();
-    // 应用的下载是整个话题打包（应用目录在里面）
+    // 应用的下载是整个应用目录打包
     expect(screen.getByRole('link', { name: '下载' }).getAttribute('href')).toBe(
-      `/api/canvas/v1/topics/${SESSION}/archive`,
+      `/api/canvas/v1/artifacts/${app.id}/archive`,
     );
   });
 

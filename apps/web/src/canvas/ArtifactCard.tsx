@@ -1,11 +1,11 @@
-// 画布上的一张成果卡片（照原型 ⑧）：缩略图（图片、视频直接显示，其他按类型画个示意）、名字、大小和日期、做它的 AI。
+// 画布上的一张成果卡片（照原型 ⑧）：缩略图（图片、视频直接显示，其他按类型画个示意）、名字、大小和日期。
+// 放在任务框里（做它的 AI 写在任务框上）；素材用小一号的。
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import { Link } from '@tanstack/react-router';
 import { Box, Globe, Music, Play, Table, UserRound } from 'lucide-react';
 import { useState } from 'react';
 import { artifactContentUrl } from '../api/queries.ts';
 import { badgeOf, previewKindOf } from '../chat/files.ts';
-import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatBytes } from '../ui/format.ts';
 
 /** 一页纸：标题线 + 几行字（文档、PDF、文字） */
@@ -115,21 +115,27 @@ function Thumb({ artifact }: { artifact: ArtifactBody }) {
   );
 }
 
-/** 做它的 AI：头像字母、光色和名字 */
-export interface Maker {
-  mono: string;
-  glow: string;
-  name: string;
-}
-
-export function ArtifactCard({ artifact, maker }: { artifact: ArtifactBody; maker?: Maker }) {
+/** compact：小一号（任务框里的素材） */
+export function ArtifactCard({
+  artifact,
+  compact = false,
+}: {
+  artifact: ArtifactBody;
+  compact?: boolean;
+}) {
   return (
-    <article className="glass flex min-w-0 flex-col gap-3 rounded-[30px] p-2.5 pb-3.5">
+    <article
+      className={`glass flex min-w-0 flex-col ${
+        compact ? 'gap-2 rounded-[22px] p-2 pb-2.5' : 'gap-3 rounded-[30px] p-2.5 pb-3.5'
+      }`}
+    >
       <Link
         to="/canvas/artifacts/$artifactId"
         params={{ artifactId: artifact.id }}
         aria-label={`打开 ${artifact.application ? artifact.application.root : artifact.name}`}
-        className="relative block h-[168px] overflow-hidden rounded-[22px] bg-glass-strong oasis-dots"
+        className={`relative block overflow-hidden bg-glass-strong oasis-dots ${
+          compact ? 'h-[112px] rounded-[16px]' : 'h-[168px] rounded-[22px]'
+        }`}
       >
         <Thumb artifact={artifact} />
         {artifact.annotations.length > 0 && (
@@ -138,20 +144,14 @@ export function ArtifactCard({ artifact, maker }: { artifact: ArtifactBody; make
           </span>
         )}
       </Link>
-      <div className="flex min-w-0 flex-col gap-0.5 px-2">
-        <h3 className="m-0 truncate text-[14.5px] font-medium">
+      <div className={`flex min-w-0 flex-col gap-0.5 ${compact ? 'px-1' : 'px-2'}`}>
+        <h3 className={`m-0 truncate font-medium ${compact ? 'text-[12.5px]' : 'text-[14.5px]'}`}>
           {artifact.application ? artifact.application.root : artifact.name}
         </h3>
-        <span className="truncate text-[12px] text-ink-muted">
+        <span className={`truncate text-ink-muted ${compact ? 'text-[11px]' : 'text-[12px]'}`}>
           {formatBytes(artifact.size)} · {new Date(artifact.createdAt).toLocaleDateString('zh-CN')}
         </span>
       </div>
-      {maker && (
-        <div className="flex items-center gap-1.5 px-2">
-          <AiAvatar mono={maker.mono} glow={maker.glow} size={24} />
-          <span className="truncate text-[12px] text-ink-muted">{maker.name}</span>
-        </div>
-      )}
     </article>
   );
 }

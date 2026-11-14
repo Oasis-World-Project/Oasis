@@ -7,11 +7,11 @@ import { getRouteApi, Link } from '@tanstack/react-router';
 import { ArrowLeft, Download, LoaderCircle, PencilLine, SlidersHorizontal } from 'lucide-react';
 import { useState } from 'react';
 import {
+  appArchiveUrl,
   artifactContentUrl,
   artifactQuery,
   artifactsQuery,
   dmsQuery,
-  topicArchiveUrl,
 } from '../api/queries.ts';
 import { ArtifactReview } from '../canvas/ArtifactReview.tsx';
 import { AvatarPreview } from '../canvas/AvatarPreview.tsx';
@@ -82,7 +82,7 @@ export function ArtifactPage() {
           </Link>
           {artifact && (
             <h1 className="m-0 min-w-0 truncate text-[15px] font-medium">
-              {artifact.topic}
+              {artifact.task}
               <span className="ml-2 text-[13px] font-normal text-ink-muted">
                 {artifact.application ? artifact.application.root : artifact.name}
               </span>
@@ -118,12 +118,12 @@ export function ArtifactPage() {
             <a
               href={
                 artifact.application
-                  ? topicArchiveUrl(artifact.sessionId)
+                  ? appArchiveUrl(artifact.id)
                   : artifactContentUrl(artifact.id, true)
               }
               download={artifact.application ? true : artifact.name}
               aria-label="下载"
-              title={artifact.application ? '下载整个应用（连同这个话题的其他成果）' : '下载'}
+              title={artifact.application ? '下载整个应用' : '下载'}
               className={`${icon} bg-solid text-on-solid`}
             >
               <Download size={17} aria-hidden="true" />
@@ -243,7 +243,16 @@ export function ArtifactPage() {
       )}
       {artifact && (
         <p className="m-0 px-5 pb-3 text-[12px] text-ink-muted">
-          话题「{artifact.topic}」 · {new Date(artifact.createdAt).toLocaleString('zh-CN')} 放进画布
+          任务「{artifact.task}」 · {new Date(artifact.createdAt).toLocaleString('zh-CN')} 放进画布
+          ·{' '}
+          <Link
+            to="/canvas/runs/$runId"
+            params={{ runId: artifact.runId }}
+            search={{ conversation: artifact.conversationId }}
+            className="text-ink-muted"
+          >
+            看过程
+          </Link>
         </p>
       )}
     </section>

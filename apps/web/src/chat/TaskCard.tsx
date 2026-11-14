@@ -1,5 +1,5 @@
-// 任务卡：调用了生图、视频、配音这类工具，或交了文件的那一轮。进行中显示用时和花费（跟着消息每秒刷新），
-// 可以停下、看进度；结束后写上结果、用时、花费和交出的成品，成品点开预览，也可以去画布看这个对话的全部成果。
+// 任务卡：调用了生图、视频、配音这类工具，或交了文件的那一轮。顶上是任务名；进行中显示用时和花费（跟着消息
+// 每秒刷新），可以停下、看进度；成品（做好一个进一个）点开预览，素材只说有几个；也可以去画布看这个对话的全部成果。
 import type { TaskCard as TaskData, TaskFile } from '@oasis/contracts/conversation';
 import { Link } from '@tanstack/react-router';
 import { Activity, Images } from 'lucide-react';
@@ -16,6 +16,7 @@ import {
   StatusTag,
   type Speaker,
 } from './parts.tsx';
+import { MATERIALS } from './run-progress.ts';
 import { useChatActions } from './use-chat-actions.ts';
 
 export const TASK_STATUS: Record<
@@ -68,17 +69,24 @@ export function TaskCard({ card, speaker }: { card: TaskData; speaker: Speaker }
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const ended = card.finishedAt ? Date.parse(card.finishedAt) : now;
   const status = TASK_STATUS[card.status];
+  const finals = card.files.filter((file) => !file.path.startsWith(MATERIALS));
+  const materials = card.files.length - finals.length;
 
   return (
     <CardFrame speaker={speaker} label="任务" glowing={running}>
-      <CardHeading kind="任务" status={<StatusTag tone={status.tone}>{status.label}</StatusTag>} />
+      <CardHeading
+        kind="任务"
+        title={card.title}
+        status={<StatusTag tone={status.tone}>{status.label}</StatusTag>}
+      />
       <p className="m-0 text-[13px] text-ink-muted">
         用时 <span className="text-ink">{elapsedText(ended - Date.parse(card.startedAt))}</span> ·
         花费 <span className="font-display text-ink">{formatCost(card.spentMicro)}</span>
+        {materials > 0 && ` · 素材 ${materials} 个`}
       </p>
-      {card.files.length > 0 && (
+      {finals.length > 0 && (
         <ul aria-label="交出的成品" className="m-0 flex list-none flex-col gap-1.5 p-0">
-          {card.files.map((file) => (
+          {finals.map((file) => (
             <FileChip
               key={file.artifactId}
               file={previewOf(file, card.files)}

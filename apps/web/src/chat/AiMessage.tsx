@@ -20,7 +20,7 @@ type Group =
   | { kind: 'notice'; text: string }
   | { kind: 'steps'; steps: StepPart[] };
 
-export function groupParts(parts: MessagePart[]): Group[] {
+function groupParts(parts: MessagePart[]): Group[] {
   const groups: Group[] = [];
   for (const part of parts) {
     const last = groups.at(-1);

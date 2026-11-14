@@ -1,4 +1,5 @@
-// 画布：全部成果按话题分组、类别和搜索、只看某个私聊的、打开成果；桌面端把成果同步到电脑。
+// 画布：成果按任务分框（框顶任务名、状态、用时、花费、做它的 AI，看过程、回到私聊、打包下载；框里成品和素材）、
+// 类别和搜索、只看某个私聊的、打开成果；桌面端把成果同步到电脑。
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import type { OasisDesktop } from '@oasis/contracts/desktop';
 import { createMemoryHistory } from '@tanstack/react-router';
@@ -12,6 +13,9 @@ const CONV = '00000000-0000-4000-8000-0000000000c1';
 const OTHER_CONV = '00000000-0000-4000-8000-0000000000c2';
 const SESSION = '00000000-0000-4000-8000-0000000000f1';
 const OTHER_SESSION = '00000000-0000-4000-8000-0000000000f2';
+/** 两个任务：民宿首页（做完了）、价格表（在做，后开始的） */
+const RUN = '00000000-0000-4000-8000-0000000000a1';
+const OTHER_RUN = '00000000-0000-4000-8000-0000000000a2';
 const dm = (id: string, title: string, modelKey: string) => ({
   id,
   kind: 'dm',
@@ -22,6 +26,28 @@ const dm = (id: string, title: string, modelKey: string) => ({
   turn: null,
 });
 const DMS = [dm(CONV, 'Claude', 'claude'), dm(OTHER_CONV, '文心', 'ernie')];
+const TASKS = [
+  {
+    runId: OTHER_RUN,
+    conversationId: OTHER_CONV,
+    title: '价格表',
+    status: 'running',
+    startedAt: '2026-10-24T03:00:00.000Z',
+    finishedAt: null,
+    spentMicro: 20_000,
+    files: [],
+  },
+  {
+    runId: RUN,
+    conversationId: CONV,
+    title: '民宿首页',
+    status: 'done',
+    startedAt: '2026-10-24T01:00:00.000Z',
+    finishedAt: '2026-10-24T01:10:00.000Z',
+    spentMicro: 350_000,
+    files: [],
+  },
+];
 
 function artifact(
   n: number,
@@ -38,8 +64,8 @@ function artifact(
     category,
     conversationId: CONV,
     sessionId: SESSION,
-    topic: '民宿首页',
-    runId: '00000000-0000-4000-8000-0000000000a1',
+    runId: RUN,
+    task: '民宿首页',
     models: ['deepseek/x'],
     syncPath: `民宿首页/${path}`,
     annotations: [],
@@ -55,17 +81,20 @@ const ARTIFACTS = [
   artifact(3, '价格.xlsx', 'data', {
     conversationId: OTHER_CONV,
     sessionId: OTHER_SESSION,
-    topic: '价格表',
+    runId: OTHER_RUN,
+    task: '价格表',
     syncPath: '价格表/价格.xlsx',
   }),
+  artifact(4, '素材/帧-1.png', 'doc', { contentType: 'image/png' }),
 ];
 
 /** 假画布：和接口一样新的在前 */
-function fakeCanvas(list = ARTIFACTS) {
+function fakeCanvas(list = ARTIFACTS, tasks: unknown[] = TASKS) {
   const newest = [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return installFakeApi({
     signedIn: true,
     dms: DMS,
+    tasks,
     extra: (method, path) => {
       if (method !== 'GET') return undefined;
       if (path === '/canvas/v1/artifacts') return json(200, { artifacts: newest });
@@ -95,26 +124,45 @@ afterEach(() => {
 });
 
 describe('画布', () => {
-  it('按话题分组，最近有成果的话题在前；每个话题能回到私聊、打包下载；卡片上是做它的 AI', async () => {
+  it('按任务分框，最近的任务在前：框顶任务名、状态、用时、花费、做它的 AI；看过程、回到私聊、打包下载', async () => {
     fakeCanvas();
     await open('/canvas');
     const home = await screen.findByRole('region', { name: '民宿首页' });
     const price = screen.getByRole('region', { name: '价格表' });
     expect(price.compareDocumentPosition(home) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(home).getAllByRole('article')).toHaveLength(2);
+    expect(within(home).getByText('已完成')).toBeTruthy();
+    expect(home.textContent).toContain('用时 10 分 0 秒');
+    expect(home.textContent).toMatch(/花费 \$0\.35/);
+    expect(within(home).getByText('Claude')).toBeTruthy();
+    expect(within(home).getByRole('link', { name: '看过程' }).getAttribute('href')).toBe(
+      `/canvas/runs/${RUN}?conversation=${CONV}`,
+    );
     expect(within(home).getByRole('link', { name: '回到私聊' }).getAttribute('href')).toBe(
       `/dms/${CONV}`,
     );
     expect(within(home).getByRole('link', { name: '打包下载' }).getAttribute('href')).toBe(
-      `/api/canvas/v1/topics/${SESSION}/archive`,
+      `/api/canvas/v1/runs/${RUN}/archive`,
     );
-    expect(within(home).getAllByText('Claude')).toHaveLength(2);
+    // 在做的任务：看进度
+    expect(within(price).getByText('进行中')).toBeTruthy();
+    expect(within(price).getByRole('link', { name: '看进度' })).toBeTruthy();
     expect(within(price).getByText('文心')).toBeTruthy();
     // 浏览器里没有桌面端接口，不显示同步条
     expect(screen.queryByRole('region', { name: '同步到电脑' })).toBeNull();
   });
 
-  it('按类别筛选，标签上有数量；能搜话题名', async () => {
+  it('框里分成品和素材；没有成果的任务也列出来，说还在做', async () => {
+    fakeCanvas(ARTIFACTS.filter((a) => a.runId === RUN));
+    await open('/canvas');
+    const home = await screen.findByRole('region', { name: '民宿首页' });
+    expect(within(home).getByRole('heading', { name: '成品' })).toBeTruthy();
+    expect(within(home).getByRole('heading', { name: /素材/ }).textContent).toContain('1');
+    expect(within(home).getAllByRole('article')).toHaveLength(3);
+    const price = screen.getByRole('region', { name: '价格表' });
+    expect(price.textContent).toContain('还在做，做好一个就放到这里');
+  });
+
+  it('按类别筛选，标签上有数量；能搜任务名', async () => {
     fakeCanvas();
     await open('/canvas');
     expect(await screen.findByRole('link', { name: '打开 首页文案.md' })).toBeTruthy();
@@ -123,27 +171,30 @@ describe('画布', () => {
     expect(within(tabs).getByRole('button', { name: /音频和视频/ }).textContent).toContain('1');
     expect(screen.queryByRole('link', { name: '打开 首页文案.md' })).toBeNull();
     expect(screen.getByRole('link', { name: '打开 预热短片.mp4' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: '价格表' })).toBeNull();
 
     fireEvent.click(within(tabs).getByRole('button', { name: /全部/ }));
     fireEvent.change(screen.getByLabelText('搜成果'), { target: { value: '价格表' } });
     expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.queryByRole('region', { name: '民宿首页' })).toBeNull();
   });
 
-  it('只看某个私聊的成果，可以回到全部', async () => {
+  it('只看某个私聊的任务，可以回到全部', async () => {
     fakeCanvas();
     await open(`/canvas?conversation=${CONV}`);
     const only = await screen.findByRole('link', { name: /只看「Claude」/ });
     expect(only.getAttribute('href')).toBe('/canvas');
-    expect(screen.getAllByRole('article')).toHaveLength(2);
+    expect(await screen.findByRole('region', { name: '民宿首页' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: '价格表' })).toBeNull();
   });
 
   it('还没有成果：说去私聊里让 AI 做', async () => {
-    fakeCanvas([]);
+    fakeCanvas([], []);
     await open('/canvas');
     expect(await screen.findByText(/还没有成果/)).toBeTruthy();
   });
 
-  it('打开一个成果：预览内容；顶栏只有返回、批注、下载三个图标', async () => {
+  it('打开一个成果：预览内容；顶栏只有返回、批注、下载三个图标；底下写是哪个任务做的，能看过程', async () => {
     fakeCanvas();
     await open(`/canvas/artifacts/${ARTIFACTS[0]!.id}`);
     expect(await screen.findByRole('heading', { name: /首页文案\.md/ })).toBeTruthy();
@@ -153,7 +204,10 @@ describe('画布', () => {
     expect(screen.getByRole('link', { name: '下载' }).getAttribute('href')).toBe(
       `/api/canvas/v1/artifacts/${ARTIFACTS[0]!.id}/content?download=1`,
     );
-    expect(screen.queryByRole('link', { name: /工作流|看进度/ })).toBeNull();
+    expect(screen.getByText(/任务「民宿首页」/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: '看过程' }).getAttribute('href')).toBe(
+      `/canvas/runs/${RUN}?conversation=${CONV}`,
+    );
     expect(screen.queryByRole('button', { name: /让 AI 改|删除|批准/ })).toBeNull();
   });
 
@@ -265,8 +319,9 @@ describe('桌面端同步到电脑', () => {
     expect(written).toEqual([
       [ARTIFACTS[1]!.id, '民宿首页/预热短片.mp4', 3],
       [ARTIFACTS[2]!.id, '价格表/价格.xlsx', 3],
+      [ARTIFACTS[3]!.id, '民宿首页/素材/帧-1.png', 3],
     ]);
-    expect(syncProgress.get()).toMatchObject({ running: false, done: 2, total: 2, error: null });
+    expect(syncProgress.get()).toMatchObject({ running: false, done: 3, total: 3, error: null });
   });
 
   it('同一个成果修改后原地换成新版：再同步一次，用「id@新摘要」记下并要求覆盖旧版', async () => {
@@ -320,7 +375,9 @@ describe('桌面端同步到电脑', () => {
     await open('/canvas');
     const bar = await screen.findByRole('region', { name: '同步到电脑' });
     expect(within(bar).getByText('D:\\Oasis')).toBeTruthy();
-    await waitFor(() => expect(written.map((w) => w[1])).toEqual(['价格表/价格.xlsx']));
+    await waitFor(() =>
+      expect(written.map((w) => w[1])).toEqual(['价格表/价格.xlsx', '民宿首页/素材/帧-1.png']),
+    );
     expect(await within(bar).findByText('全部已同步')).toBeTruthy();
     fireEvent.click(within(bar).getByRole('button', { name: '打开文件夹' }));
     expect(api.openSyncFolder).toHaveBeenCalled();

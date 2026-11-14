@@ -10,6 +10,7 @@ import {
   MessageList,
   SendResult,
   SetupResult,
+  TaskList,
   type SetupBody,
 } from '@oasis/contracts/conversation';
 import { MeBody, VerifyCodeResult } from '@oasis/contracts/identity';
@@ -165,6 +166,14 @@ export const confirmTurn = (
   });
 
 // ---- 画布----
+/** 私聊里的任务（任务卡）：画布按任务分框；有任务在做时每 3 秒刷新 */
+export const tasksQuery = queryOptions({
+  queryKey: ['tasks'],
+  queryFn: async () => (await api('/conversation/v1/tasks', TaskList)).tasks,
+  refetchInterval: (query) =>
+    query.state.data?.some((task) => task.status === 'running') ? 3_000 : false,
+});
+
 /** 成果（类别和搜索在前端筛，数量也在前端算）；可以只看某个对话、某个话题的 */
 export const artifactsQuery = (filter: { conversationId?: string; sessionId?: string } = {}) =>
   queryOptions({
@@ -195,5 +204,8 @@ export const saveAnnotations = (id: string, annotations: Annotation[]) =>
 export const artifactContentUrl = (id: string, download = false) =>
   `/api/canvas/v1/artifacts/${id}/content${download ? '?download=1' : ''}`;
 
-/** 一个话题的成果打包下载 */
-export const topicArchiveUrl = (sessionId: string) => `/api/canvas/v1/topics/${sessionId}/archive`;
+/** 一个任务（一轮）的成果打包下载 */
+export const taskArchiveUrl = (runId: string) => `/api/canvas/v1/runs/${runId}/archive`;
+/** 下载整个应用（应用目录里的全部文件） */
+export const appArchiveUrl = (artifactId: string) =>
+  `/api/canvas/v1/artifacts/${artifactId}/archive`;

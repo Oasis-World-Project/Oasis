@@ -66,6 +66,8 @@ export type ExtraRoute = (
 export function installFakeApi(options: {
   signedIn: boolean;
   dms?: unknown[];
+  /** 私聊里的任务（画布按任务分框） */
+  tasks?: unknown[];
   extra?: ExtraRoute;
 }) {
   const state = {
@@ -104,6 +106,8 @@ export function installFakeApi(options: {
         return json(200, { conversations: (options.dms ?? []).map(withSetup) });
       case '/conversation/v1/groups':
         return json(200, { groups: [] });
+      case '/conversation/v1/tasks':
+        return json(200, { tasks: options.tasks ?? [] });
       // 「AI 们」页读「只用国内模型」开关：默认关着
       case '/agent/v1/settings':
         return json(200, { domesticOnly: false });
