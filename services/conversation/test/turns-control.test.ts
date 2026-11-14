@@ -201,9 +201,22 @@ describe('插话、停止、出错', () => {
     });
   });
 
-  it('harness 里没有这一轮（没开成就重启了）：算出错收尾', async () => {
+  it('开一轮交接的这一会儿 harness 里还没有它（这时刷新了私聊页）：接着等，不算没开成', async () => {
+    const runId = (await send('你好')).turn!.runId;
+    const handed = fake.runs.get(runId)!;
+    fake.runs.delete(runId);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(aiMessages()[0]).toMatchObject({ status: 'streaming' });
+    fake.runs.set(runId, { ...handed, status: 'succeeded', finishedAt: new Date().toISOString() });
+    await finished();
+    expect(aiMessages()[0]).toMatchObject({ status: 'complete' });
+  });
+
+  it('harness 里没有这一轮（没开成就重启了）：过了交接的时间算出错收尾', async () => {
     const runId = (await send('你好')).turn!.runId;
     fake.runs.delete(runId);
+    const stored = repo.conversations.get(conversation.id)!;
+    stored.turn = { ...stored.turn!, startedAt: new Date(Date.now() - 2 * 60_000).toISOString() };
     await finished();
     expect(aiMessages()[0]).toMatchObject({ status: 'failed' });
   });

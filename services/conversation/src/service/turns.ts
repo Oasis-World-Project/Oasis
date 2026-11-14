@@ -49,6 +49,8 @@ export interface TurnDeps {
 const EVENT_PAGE = 500;
 /** 工具目录（各型号通常要多久）多久重新拉一次 */
 const CATALOG_MS = 5 * 60_000;
+/** 开一轮是先记下这一轮、再交给 harness：交接的这一会儿（请求最多等 10 秒）harness 里还没有它 */
+const HANDOVER_MS = 60_000;
 /** 接不上原会话（工作目录不在了、会话已有更新的一轮）：这一轮开新会话 */
 const SESSION_GONE = new Set(['continue_unavailable', 'session_advanced', 'workspace_unavailable']);
 const RegisteredArtifacts = z.object({ artifacts: z.array(ArtifactBody) });
@@ -246,7 +248,14 @@ export function createTurns(deps: TurnDeps) {
         const turn = conversation?.turn;
         if (!conversation || !turn) return;
         const run = await getRun(turn.runId);
-        if (!run) return await finish(store, conversation, turn, undefined);
+        if (!run) {
+          // 还在交接（比如这时用户刷新了私聊页，开始跟进）就接着等；过了交接的时间还没有，
+          // 才是没开成（交给 harness 之前服务重启了）
+          if (Date.now() - Date.parse(turn.startedAt) > HANDOVER_MS)
+            return await finish(store, conversation, turn, undefined);
+          await sleep(pollMs, undefined, { signal: closing.signal }).catch(() => undefined);
+          continue;
+        }
         const { events } = await harness.json(
           'GET',
           `/internal/runs/${turn.runId}/events?after=${turn.cursor}&limit=${EVENT_PAGE}`,
