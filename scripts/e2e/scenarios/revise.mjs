@@ -94,8 +94,8 @@ export const revise = {
   },
 };
 
-// ---------- 5. 插话：AI 跑一条慢命令时用户插一句，AI 做完那条命令就看到、按新要求做；还是同一轮，
-// AI 看到之后说的话接在插话后面 ----------
+// ---------- 5. 插话：AI 跑一条慢命令时用户说一句（先排队）、点「引导」，AI 做完那条命令就看到、
+// 按新要求做；还是同一轮，AI 看到之后说的话接在插话后面 ----------
 export const interject = {
   says: {
     1: {
@@ -121,11 +121,15 @@ export const interject = {
       'AI 开始跑命令',
     );
     await sleep(2_000);
-    const sent = await t.user.say(id, `改成冬日的 ${marker('interject', 2)}`);
-    const said = sent.messages.find((m) => m.role === 'user');
+    const queued = (await t.user.say(id, `改成冬日的 ${marker('interject', 2)}`)).messages[0];
+    t.check(
+      queued?.data.pending === true,
+      `一轮进行中说的话应先排队：${JSON.stringify(queued?.data ?? null)}`,
+    );
+    const said = (await t.user.steer(id, queued.id)).messages[0];
     t.check(
       said?.data.interjection === true,
-      `一轮进行中说的话应是插话：${JSON.stringify(said?.data ?? null)}`,
+      `点「引导」后应是插话：${JSON.stringify(said?.data ?? null)}`,
     );
     const messages = await t.user.waitTurn(id, '插话后做完');
     const runs = runsOf(id);

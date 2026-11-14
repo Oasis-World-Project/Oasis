@@ -127,9 +127,12 @@ export async function signIn(options) {
       if (!model) throw new Error('没有可用的私聊模型');
       return (await api.post('/conversation/v1/dms', { modelKey: model.key })).id;
     },
-    /** 说一句话：开一轮，或插话进正在进行的一轮；extra 可以带 artifacts（让 AI 改的画布成果） */
+    /** 说一句话：开一轮，或排队等正在进行的一轮做完；extra 可以带 artifacts（让 AI 改的画布成果） */
     say: (conversationId, content, extra = {}) =>
       api.post(`${dm(conversationId)}/messages`, { content, ...extra }),
+    /** 「引导」：排着队的一句现在交给 AI（插话进正在进行的一轮） */
+    steer: (conversationId, messageId) =>
+      api.post(`${dm(conversationId)}/messages/${messageId}/steer`),
     messages: (conversationId) => api.get(`${dm(conversationId)}/messages`),
     /** 等这一轮（和收尾时留下的话接着开的一轮）做完，返回全部消息 */
     async waitTurn(conversationId, label, timeoutMs = 600_000) {
