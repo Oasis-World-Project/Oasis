@@ -12,7 +12,14 @@ export interface DurableRunRequest {
 }
 type NewRun = Pick<
   typeof runs.$inferInsert,
-  'id' | 'payerId' | 'conversationId' | 'model' | 'prompt' | 'sessionId' | 'continueFrom'
+  | 'id'
+  | 'payerId'
+  | 'conversationId'
+  | 'model'
+  | 'prompt'
+  | 'sessionId'
+  | 'continueFrom'
+  | 'workplace'
 >;
 type RunPatch = Partial<
   Pick<

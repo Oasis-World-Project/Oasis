@@ -1,9 +1,42 @@
-// harness 只有内部接口（gateway 不转发 /internal）：conversation 用它开一轮、看进度、插话、停止、
-// 取消、清理对话；canvas 用它读产出文件。harness 不调 inspector。
+// harness 的接口：内部的（gateway 不转发 /internal）给 conversation 开一轮、看进度、插话、停止、
+// 取消、清理对话，给 canvas 读产出文件；对外只有一条——用户电脑上的桌面版经 gateway 连上来
+// （WebSocket，gateway 认过人、在 x-oasis-user-id 里写上是谁）。harness 不调 inspector。
+import { OASIS_HEADERS } from '@oasis/contracts/common';
 import { RunMessageBody, StartRunBody } from '@oasis/contracts/harness';
 import { HttpError, parseWith, type ServiceApp } from '@oasis/service-kit';
+import { WebSocketServer } from 'ws';
 import { z } from 'zod';
+import type { DeviceHub } from '../executor/device.ts';
 import type { RunService } from '../service/run-service.ts';
+
+/** 桌面版一次发来的消息最多多大（取回的产出是 tar 的 base64） */
+const DEVICE_MESSAGE_MAX_BYTES = 768 * 1024 * 1024;
+const DeviceQuery = z.object({
+  pathname: z.literal('/v1/devices/connect'),
+  userId: z.uuid(),
+  deviceId: z.string().regex(/^[\w-]{8,64}$/),
+});
+
+/** 用户电脑上的桌面版连上来（GET /v1/devices/connect?device=<设备号>，升级成 WebSocket） */
+export function registerDevices(app: ServiceApp, devices: DeviceHub): void {
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: DEVICE_MESSAGE_MAX_BYTES });
+  app.server.on('upgrade', (request, socket, head) => {
+    const url = new URL(request.url ?? '/', 'http://harness');
+    const parsed = DeviceQuery.safeParse({
+      pathname: url.pathname,
+      userId: request.headers[OASIS_HEADERS.userId],
+      deviceId: url.searchParams.get('device'),
+    });
+    if (!parsed.success) {
+      socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    const { userId, deviceId } = parsed.data;
+    sockets.handleUpgrade(request, socket, head, (ws) => devices.attach(ws, userId, deviceId));
+  });
+  // 只是不再接新的连接；已连上的电脑等进行中的运行收尾后再断开（见 main.ts）
+  app.addHook('onClose', async () => sockets.close());
+}
 
 const RunParams = z.object({ runId: z.uuid() });
 const ConversationParams = z.object({ conversationId: z.uuid() });

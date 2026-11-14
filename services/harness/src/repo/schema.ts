@@ -1,5 +1,5 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
-import type { RunEventKind, RunOutputFile, RunStatus } from '@oasis/contracts/harness';
+import type { RunEventKind, RunOutputFile, RunStatus, Workplace } from '@oasis/contracts/harness';
 import { integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
@@ -19,6 +19,8 @@ export const runs = pgTable('runs', {
   summary: text('summary'),
   sessionId: text('session_id'),
   continueFrom: uuid('continue_from'),
+  /** 在用户的哪台电脑、哪个项目文件夹里跑；空是云端沙箱 */
+  workplace: jsonb('workplace').$type<Extract<Workplace, { kind: 'device' }>>(),
   createdAt: at('created_at').notNull().defaultNow(),
   startedAt: at('started_at'),
   finishedAt: at('finished_at'),

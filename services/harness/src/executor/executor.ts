@@ -1,5 +1,5 @@
 // 执行器：为一次运行起一个隔离的沙箱，给出它的 stdin/stdout，并能拷文件进出、销毁。
-// 现在只有 Docker 实现；上云后加 K8s Job、云 GPU 等实现，接口不变。
+// 两种实现：云端的 Docker（这里），用户自己的电脑（device.ts，桌面版连着 Oasis）；接口一样。
 import { PassThrough, type Readable, type Writable } from 'node:stream';
 import { randomUUID } from 'node:crypto';
 import { demultiplex, type DockerApi } from '@oasis/service-kit';
@@ -15,6 +15,8 @@ export interface SandboxSpec {
   env: Record<string, string>;
   /** 启动前解到沙箱里的文件：目录 → tar 包 */
   files: { dir: string; tar: Buffer | Readable }[];
+  /** 准备中的进展（如用户电脑上第一次装 dsh），记进这一轮的进度 */
+  notify?: (status: string) => void;
 }
 
 export interface Sandbox {

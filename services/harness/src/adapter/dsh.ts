@@ -1,22 +1,15 @@
 // dsh 的适配层：全仓只有这里认识 DeepSeek Harness（AGENTS.md B.3）。
-// 对外只暴露 Oasis 自己的概念：沙箱里的目录约定、环境变量、一次 agent 会话、翻译后的运行事件。
+// 对外只暴露 Oasis 自己的概念：沙箱里的目录约定、环境变量、一次 agent 会话、翻译后的运行事件（events.ts）。
 // dsh 升级（SDK 协议、事件格式变化）只改这个目录和 profile/ 下的组合。
 import type { Readable, Writable } from 'node:stream';
-import type { RunEventKind } from '@oasis/contracts/harness';
-import { TOOL_LABELS, type ModelCapabilities } from '@oasis/contracts/model-gateway';
-import type { ExecutionEnvironment } from '@oasis/contracts/harness';
+import { DEVICE_ROOTS } from '@oasis/contracts/device';
+import type { ExecutionEnvironment, Permissions, Workplace } from '@oasis/contracts/harness';
+import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
 import { ApplicationSpec } from '@oasis/contracts/canvas';
 import { BrowserTestPlan } from '@oasis/contracts/ui-test';
 import { MODEL_PREVIEW_LIMITS, ModelPreviewSpec } from '@oasis/contracts/model-preview';
+import { translateNotification, type AgentEvent } from './events.ts';
 import { createJsonRpcClient } from './jsonrpc.ts';
-import {
-  jobFacts,
-  OASIS_TOOL,
-  savedFiles,
-  stepFacts,
-  TOOL_HELP,
-  toolFailure,
-} from './step-facts.ts';
 
 /** 沙箱镜像里的目录约定（与 infra/images/harness-sandbox-base/Dockerfile 一致） */
 export const SANDBOX_PATHS = {
@@ -27,25 +20,52 @@ export const SANDBOX_PATHS = {
   dshHome: '/home/node/.dsh',
   /** dsh 的会话存储（含附件），和 /workspace 一起挂在这个会话的持久卷上：下一轮接着原会话 */
   sessions: '/home/node/.dsh/sessions',
-  /** Oasis 自己的命令（oasis-tool、oasis-op）和 dsh 插件 node-goal：每轮开沙箱时放进当前版本，改了不用重建镜像 */
+  /** Oasis 自己的命令（oasis-tool、oasis-op）：每轮开沙箱时放进当前版本，改了不用重建镜像 */
   tools: '/opt/oasis',
 } as const;
+
+/**
+ * 在用户电脑上，沙箱里的这些目录对应哪里（{project}、{home} 由桌面版换成实际的）：平台放的文件在项目里的
+ * .oasis/ 下；dsh 的家目录（说明、技能、组合、会话）和 Oasis 的命令在桌面版自己的数据目录里，按会话分开。
+ */
+export const DEVICE_PATHS: [sandbox: string, device: string][] = [
+  [SANDBOX_PATHS.dshHome, DEVICE_ROOTS.home],
+  [SANDBOX_PATHS.tools, `${DEVICE_ROOTS.home}/tools`],
+  [SANDBOX_PATHS.workdir, `${DEVICE_ROOTS.project}/.oasis`],
+];
 
 /** 给沙箱里 AI 的平台说明和技能（技能是各类活的经验，AI 需要时自己读） */
 export interface AgentGuide {
   rules: string;
+  /** 在用户电脑上干活时换掉说明里的「## 环境」一节 */
+  device: string;
   skills: { name: string; description: string; content: string }[];
+}
+
+/** 说明里和 section 同一标题的一节（到下一个二级标题为止）换成 section */
+function replaceSection(rules: string, section: string): string {
+  const heading = section.trim().split('\n')[0] ?? '';
+  const start = rules.indexOf(`${heading}\n`);
+  if (!heading.startsWith('## ') || start < 0) return `${rules.trim()}\n\n${section.trim()}\n`;
+  const next = rules.indexOf('\n## ', start + heading.length);
+  return `${rules.slice(0, start)}${section.trim()}\n${next < 0 ? '' : rules.slice(next)}`;
 }
 
 /**
  * 放进 dsh 用户目录的文件（路径相对 {@link SANDBOX_PATHS.dshHome}）：dsh 把 AGENTS.md 当作用户的
  * 全局说明放进系统提示，把 skills/ 下的技能列给 AI（2026-11-14 用镜像里的 dsh 实测两处都会读）。
- * 这个 AI 的人设放在说明最前面。
+ * 这个 AI 的人设放在说明最前面；在用户电脑上干活时「环境」一节换成电脑上的。
  */
-export function guideFiles(guide: AgentGuide, persona: string) {
+export function guideFiles(
+  guide: AgentGuide,
+  persona: string,
+  workplace: Workplace = { kind: 'cloud' },
+) {
   const who = persona.trim() ? `# 你是谁\n\n${persona.trim()}\n\n` : '';
+  const rules =
+    workplace.kind === 'device' ? replaceSection(guide.rules, guide.device) : guide.rules;
   return [
-    { path: 'AGENTS.md', content: Buffer.from(who + guide.rules) },
+    { path: 'AGENTS.md', content: Buffer.from(who + rules) },
     ...guide.skills.map((skill) => ({
       path: `skills/${skill.name}/SKILL.md`,
       content: Buffer.from(
@@ -58,17 +78,19 @@ export function guideFiles(guide: AgentGuide, persona: string) {
 /** dsh 里指向 model-gateway 的模型路由名（profile/cordis.patch.yml 里定义） */
 const PROVIDER = 'openrouter';
 
-/** 原生持久文件只在适配层识别；缺失与损坏必须区分。 */
+/**
+ * 原生持久文件只在适配层识别；缺失与损坏必须区分。dsh 按工作目录分开存：沙箱里是 --workspace--，
+ * 用户电脑上是项目文件夹的路径（如 --D-proj--）。
+ */
 export const isSessionArchive = (path: string, sessionId?: string) => {
   const parts = path.split('/');
   return (
-    parts[0] === '--workspace--' &&
+    /^--.+--$/.test(parts[0] ?? '') &&
     (sessionId === undefined || parts[1] === sessionId) &&
     /^session(?:\.v\d+)?\.jsonl(?:\.zstd)?$/.test(parts[2] ?? '')
   );
 };
 
-/** 沙箱的环境变量。runKey 是密钥，调用方不得记进日志。 */
 /** 沙箱装软件包的通路：出口代理和仓库地址 */
 export interface SandboxPackages {
   /** 出口代理；没有时沙箱完全不能出站 */
@@ -77,23 +99,60 @@ export interface SandboxPackages {
   pipIndexUrl: string;
 }
 
+/**
+ * 这一轮的权限 → dsh 的权限档（profile/cordis.patch.yml 里配的 5 个预设）和 approval.mjs 怎么答：
+ * 只读 / 可改项目文件夹 / 完全访问；超出时不做的用 -strict 档（不问、直接不做），直接允许的由插件自己答。
+ */
+export function permissionEnv(permissions: Permissions): Record<string, string> {
+  const mode = (
+    { read: 'read-only', project: 'workspace-write', full: 'danger-full-access' } as const
+  )[permissions.access];
+  return {
+    DSH_PERMISSION_MODE: mode,
+    OASIS_PERMISSION:
+      mode !== 'danger-full-access' && permissions.beyond === 'deny' ? `${mode}-strict` : mode,
+    OASIS_APPROVAL: permissions.beyond === 'allow' ? 'allow' : 'ask',
+  };
+}
+
+/**
+ * 沙箱的环境变量。runKey 是密钥，调用方不得记进日志。place：云端沙箱给入口代理地址和装软件包的通路；
+ * 用户电脑上给这一轮的权限，地方相关的路径写成 {project}、{home}、{origin}，桌面版换成实际的
+ * （平台放的文件在项目里的 .oasis/ 下，dsh 的家目录在桌面版自己的数据目录里，调模型和工具经网页地址上的 gateway）。
+ */
 export function sandboxEnv(input: {
-  modelBaseUrl: string;
   runKey: string;
   model: string;
-  packages: SandboxPackages;
+  place: { modelBaseUrl: string; packages: SandboxPackages } | { permissions: Permissions };
 }): Record<string, string> {
-  const { egressProxy, npmRegistry, pipIndexUrl } = input.packages;
-  // 调模型、工具的入口代理不走出口代理
-  const noProxy = [new URL(input.modelBaseUrl).hostname, 'localhost', '127.0.0.1'].join(',');
-  return {
-    OASIS_MODEL_BASE_URL: input.modelBaseUrl,
+  const { place } = input;
+  const modelBaseUrl =
+    'permissions' in place ? `${DEVICE_ROOTS.origin}/api/run/v1` : place.modelBaseUrl;
+  const base = {
+    OASIS_MODEL_BASE_URL: modelBaseUrl,
     OASIS_RUN_KEY: input.runKey,
     // dsh 运行命令时会去掉名字像密钥的环境变量（含 KEY、TOKEN……），oasis-tool 拿不到 OASIS_RUN_KEY；
     // 这把临时 Key 本来就是给这次运行里的 AI 用工具的，所以用一个不会被去掉的名字再给一份
     OASIS_TOOL_AUTH: input.runKey,
     OASIS_MODEL: input.model,
     DSH_MAX_TOKENS_AS_SUCCESS: 'false',
+  };
+  if ('permissions' in place) {
+    const oasis = `${DEVICE_ROOTS.project}/.oasis`;
+    return {
+      ...base,
+      DSH_HOME: DEVICE_ROOTS.home,
+      OASIS_IN: `${oasis}/in`,
+      OASIS_OUT_DIR: `${oasis}/out`,
+      OASIS_TOOL_STATE_DIR: `${oasis}/out/.oasis-tools`,
+      ...permissionEnv(place.permissions),
+    };
+  }
+  const { egressProxy, npmRegistry, pipIndexUrl } = place.packages;
+  // 调模型、工具的入口代理不走出口代理
+  const noProxy = [new URL(modelBaseUrl).hostname, 'localhost', '127.0.0.1'].join(',');
+  return {
+    ...base,
     ...(egressProxy
       ? {
           HTTP_PROXY: egressProxy,
@@ -187,205 +246,6 @@ export function runtimeFiles(input: {
     },
   ];
 }
-export interface AgentEvent {
-  kind: RunEventKind;
-  data: Record<string, unknown>;
-}
-
-/** 工具参数和结果在事件里最多保留这么多字符（完整内容在持久卷里的 dsh 会话记录里） */
-const MAX_EVENT_TEXT = 4000;
-const clip = (text: string) =>
-  text.length > MAX_EVENT_TEXT ? `${text.slice(0, MAX_EVENT_TEXT)}…（已截断）` : text;
-
-/** 参数原文（JSON，可能被截断）里的一个字符串字段 */
-function argOf(args: string, key: string): string | undefined {
-  try {
-    const value = (JSON.parse(args) as Record<string, unknown>)[key];
-    return typeof value === 'string' ? value : undefined;
-  } catch {
-    const raw = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`).exec(args)?.[1];
-    return raw?.replace(/\\n/g, '\n').replace(/\\(["\\/])/g, '$1');
-  }
-}
-
-const brief = (text: string, max: number) => {
-  const line = text.trim().split('\n')[0]?.trim() ?? '';
-  return line.length > max ? `${line.slice(0, max)}…` : line;
-};
-
-/** oasis-tool 命令里的工具和要做的内容（提示词、搜索词……） */
-function oasisTool(command: string): string | undefined {
-  const tool = OASIS_TOOL.exec(command)?.[1];
-  if (!tool) return undefined;
-  const what = /--(?:prompt|query|question|text|url|dir)\s+(?:"([^"]*)|'([^']*)|(\S+))/.exec(
-    command,
-  );
-  const detail = what ? (what[1] ?? what[2] ?? what[3] ?? '') : '';
-  const name = TOOL_LABELS[tool] ?? `用工具 ${tool}`;
-  if (TOOL_HELP.test(command)) return `看用法：${name}`;
-  return detail ? `${name}：${brief(detail, 40)}` : name;
-}
-
-/** 一次工具调用给人看的一句话（dsh 的工具名不出这个文件） */
-function toolLabel(name: string, args: string): string {
-  const path = argOf(args, 'path') ?? argOf(args, 'file_path') ?? '';
-  switch (name) {
-    case 'bash':
-    case 'pwsh': {
-      const command = argOf(args, 'command') ?? '';
-      const label = oasisTool(command) ?? `运行命令：${brief(command, 80)}`;
-      // 放到后台的命令这一步马上就结束，之后用 job_output 看它的输出
-      return /"run_in_background"\s*:\s*true/.test(args) ? `${label}（放到后台）` : label;
-    }
-    case 'job_output':
-      return '看后台命令的输出';
-    case 'write':
-      return `写文件 ${path}`;
-    case 'edit':
-      return `改文件 ${path}`;
-    case 'str_replace_editor':
-      return `${argOf(args, 'command') === 'view' ? '读' : '改'}文件 ${path}`;
-    case 'read':
-      return `读文件 ${path}`;
-    case 'read_image':
-      return `看图片 ${path}`;
-    case 'glob':
-    case 'grep':
-      return `查找 ${argOf(args, 'pattern') ?? ''}`;
-    case 'web_search':
-      return `搜索：${brief(argOf(args, 'query') ?? '', 40)}`;
-    case 'web_fetch':
-      return `读网页 ${argOf(args, 'url') ?? ''}`;
-    case 'skill':
-      return `读经验：${argOf(args, 'name') ?? ''}`;
-    default:
-      return name;
-  }
-}
-
-/** todo_write 的待办：pending / in_progress / completed → pending / doing / done */
-function todosOf(args: string) {
-  try {
-    const { todos } = JSON.parse(args) as { todos?: { content?: unknown; status?: unknown }[] };
-    return (todos ?? []).flatMap((todo) =>
-      typeof todo.content === 'string'
-        ? [
-            {
-              text: todo.content,
-              status:
-                todo.status === 'completed'
-                  ? 'done'
-                  : todo.status === 'in_progress'
-                    ? 'doing'
-                    : 'pending',
-            },
-          ]
-        : [],
-    );
-  } catch {
-    return undefined;
-  }
-}
-
-interface Block {
-  type?: string;
-  text?: string;
-}
-const textOf = (content: unknown): string =>
-  Array.isArray(content)
-    ? (content as Block[])
-        .filter((b) => b.type === 'text' && typeof b.text === 'string')
-        .map((b) => b.text)
-        .join('')
-    : typeof content === 'string'
-      ? content
-      : '';
-
-/** 把 dsh 的一条通知翻译成 Oasis 的运行事件；不关心的返回 undefined。 */
-export function translateNotification(method: string, params: unknown): AgentEvent | undefined {
-  const p = (params ?? {}) as { status?: string; event?: { type?: string; data?: unknown } };
-  if (method === 'session.status' && typeof p.status === 'string') {
-    return { kind: 'status', data: { status: p.status } };
-  }
-  if (method !== 'session.event' || !p.event?.type) return undefined;
-  const data = (p.event.data ?? {}) as Record<string, unknown>;
-  switch (p.event.type) {
-    case 'user/message': {
-      // dsh 每一步还会插一条「运行时上下文」用户消息，只保留真正来自用户的
-      const source = data.source as { kind?: string } | undefined;
-      if (source?.kind !== 'user') return undefined;
-      return { kind: 'user_message', data: { text: clip(textOf(data.content)) } };
-    }
-    case 'assistant/message': {
-      const message = data.message as { content?: unknown } | undefined;
-      const text = textOf(message?.content);
-      // 模型调工具前常吐一段空白，不算它说了话
-      return text.trim() ? { kind: 'assistant_text', data: { text: clip(text) } } : undefined;
-    }
-    case 'tool/call': {
-      const name = String(data.name ?? '');
-      const args = String(data.arguments ?? '');
-      // 待办单独成一种事件（进度参考），不算一步
-      const items = name === 'todo_write' ? todosOf(args) : undefined;
-      if (items) return { kind: 'todos', data: { items } };
-      return {
-        kind: 'tool_call',
-        data: {
-          callId: data.callId,
-          name,
-          arguments: clip(args),
-          label: toolLabel(name, args),
-          ...stepFacts(name, (key) => argOf(args, key)),
-        },
-      };
-    }
-    case 'tool/result': {
-      const message = data.message as
-        { toolCallId?: string; content?: unknown; isError?: boolean } | undefined;
-      const error = data.error as { reason?: string } | undefined;
-      const output = textOf(message?.content);
-      const files = savedFiles(output);
-      const jobs = jobFacts(output);
-      const failed = toolFailure(output);
-      return {
-        kind: 'tool_result',
-        data: {
-          callId: message?.toolCallId,
-          ok: !message?.isError && !failed,
-          text: clip(output),
-          ...(error?.reason
-            ? { error: clip(error.reason) }
-            : failed
-              ? { error: clip(failed) }
-              : {}),
-          ...(files.length ? { files } : {}),
-          ...(jobs.length ? { jobs } : {}),
-        },
-      };
-    }
-    case 'turn/end': {
-      const reason = data.reason as { kind?: string; error?: { message?: string } } | undefined;
-      if (reason?.kind === 'error') {
-        return { kind: 'error', data: { message: clip(reason.error?.message ?? '模型调用失败') } };
-      }
-      if (reason?.kind === 'completed') return { kind: 'turn_end', data: { reason: 'completed' } };
-      const kind = reason?.kind ?? 'unknown';
-      return {
-        kind: 'error',
-        data: {
-          reason: kind,
-          message:
-            kind === 'max-tokens'
-              ? '输出达到 token 上限，运行未完成'
-              : `运行未正常结束：${clip(kind)}`,
-        },
-      };
-    }
-    default:
-      return undefined;
-  }
-}
-
 /** 一个根会话及其原生托管代理树。子会话的终态不参与根会话完成判定。 */
 export function connectAgent(io: {
   stdin: Writable;

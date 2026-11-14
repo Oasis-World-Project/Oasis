@@ -120,7 +120,7 @@ const service = createRunService({
   maxConcurrent: 1,
   cores: 1,
   leaseMs: 60000,
-  guide: async () => ({ rules: '# 离线测试\n', skills: [] }),
+  guide: async () => ({ rules: '# 离线测试\n', device: '', skills: [] }),
   serviceName: 'harness',
   logger: pino({ level: 'silent' }),
 });

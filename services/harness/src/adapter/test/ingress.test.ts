@@ -93,6 +93,8 @@ http {
       expect(request('/v1/decisions').stdout).toContain('/run/v1/decisions');
       const inputPath = '/v1/tools/jobs/4a2ba294-b720-4a14-a065-4d910fe42a81/inputs/0';
       expect(request(inputPath).stdout).toContain(`/run${inputPath}`);
+      const cardPath = '/v1/confirmations/4a2ba294-b720-4a14-a065-4d910fe42a81';
+      expect(request(cardPath).stdout).toContain(`/run${cardPath}`);
       expect(request('/internal/holds').stderr).toContain('403');
       expect(request('/v1/chat/completions', 'wrong').stderr).toContain('401');
     } finally {

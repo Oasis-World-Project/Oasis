@@ -13,7 +13,8 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
  * 后面的也和描述的顺序对得上。
  */
 export function targetsFor(files: { name: string }[], out: string | undefined): string[] {
-  if (!out) return files.map((f) => join('out', f.name));
+  // 交付目录：沙箱里是 out/，用户电脑上是项目里的 .oasis/out/
+  if (!out) return files.map((f) => join(process.env.OASIS_OUT_DIR ?? 'out', f.name));
   if (files.length === 1) return [out];
   const ext = extname(out);
   const stem = ext ? out.slice(0, -ext.length) : out;
@@ -216,7 +217,11 @@ export async function appFiles(
 ): Promise<{ path: string; contentBase64: string }[]> {
   const usage = '--dir 写 oasis-app.json 所在的目录，如 out/site';
   if (typeof args.dir !== 'string') throw new Error(usage);
-  const given = args.dir.replace(/^(\.\/)?(\/workspace\/)?/, '').replace(/\/+$/, '');
+  // 用户电脑上交付目录是 .oasis/out/，写法和沙箱里的 out/ 一样认
+  const given = args.dir
+    .replaceAll('\\', '/')
+    .replace(/^(\.\/)?(\/workspace\/|\.oasis\/)?/, '')
+    .replace(/\/+$/, '');
   // 没写 out/ 的按 out/ 下的目录算
   const path = given.startsWith('out/') ? given : `out/${given}`;
   const parts = path.split('/');

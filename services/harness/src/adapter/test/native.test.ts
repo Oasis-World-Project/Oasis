@@ -41,6 +41,7 @@ async function runNative(
   // 平台说明和技能：harness 每轮放进 dsh 的用户目录，假供应商从 guide/ 复制过去
   const guide = {
     rules: 'NATIVE_GUIDE_RULES: 交付的文件放进 out/。\n',
+    device: '',
     skills: [
       { name: 'native-skill', description: 'NATIVE_SKILL_DESCRIPTION 测试', content: '# 测试' },
     ],

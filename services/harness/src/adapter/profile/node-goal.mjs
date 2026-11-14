@@ -1,10 +1,15 @@
 // Oasis 的授权与原生 goal 生命周期衔接；不实现 Agent Loop/调度器。
+// 沙箱和用户电脑上路径不同：dsh 装在哪、平台放的文件在哪都从环境变量来（沙箱里用默认值）。
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 const { appendPluginRecord } = await import(
-  createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').resolve(
-    '@deepseek-ai/dsh-session',
-  )
+  pathToFileURL(
+    createRequire(
+      process.env.OASIS_DSH_PACKAGE ?? '/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json',
+    ).resolve('@deepseek-ai/dsh-session'),
+  ).href
 );
 export const name = 'oasis-node-goal';
 export const inject = [
@@ -16,7 +21,9 @@ export const inject = [
   'subagentModelSelection',
 ];
 export function apply(ctx) {
-  const request = JSON.parse(readFileSync('/workspace/in/.oasis-execution.json', 'utf8'));
+  const request = JSON.parse(
+    readFileSync(join(process.env.OASIS_IN ?? '/workspace/in', '.oasis-execution.json'), 'utf8'),
+  );
   const window = request.goalRoundWindow;
   let prepared = false;
   const truncated = new WeakSet();

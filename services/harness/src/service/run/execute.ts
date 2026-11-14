@@ -25,7 +25,7 @@ export function createExecution(
   ctx: RunContext,
 ): Pick<RunContext, 'admit' | 'record' | 'execute' | 'finish'> {
   const { deps, state } = ctx;
-  const { repo, executor, logger } = deps;
+  const { repo, logger } = deps;
 
   /** 等 dsh 空闲；等待期间又收到追问就接着等，直到没有新消息。 */
   async function settle(run: LiveRun, agent: AgentConnection): Promise<string | undefined> {
@@ -60,7 +60,8 @@ export function createExecution(
       once: true,
     });
     try {
-      await agent.initialize(row.model, SANDBOX_PATHS.workdir);
+      // 用户电脑上工作目录是用户选的项目文件夹
+      await agent.initialize(row.model, row.workplace?.folder ?? SANDBOX_PATHS.workdir);
     } catch (err) {
       stopped();
       throw new Error(`dsh 启动失败：${String(err)}；stderr：${input.stderr()}`, { cause: err });
@@ -86,7 +87,7 @@ export function createExecution(
   }
 
   return {
-    async admit(model, domesticOnly) {
+    async admit(executor, model, domesticOnly) {
       await executor.check();
       const environment = await executor.environment?.();
       const listed = async (domestic: boolean) =>
@@ -125,7 +126,10 @@ export function createExecution(
     async execute(row, request, run, catalog, recovering = false) {
       const { id } = row;
       const { models, environment } = catalog;
-      const release = await state.gate.acquire();
+      // 在用户电脑上跑的不占云端沙箱的名额、不收算力钱
+      const device = request.workplace.kind === 'device';
+      const executor = ctx.executorOf({ payerId: row.payerId, workplace: request.workplace });
+      const release = device ? () => undefined : await state.gate.acquire();
       let sandbox: Sandbox | undefined;
       let keyId: string | undefined;
       let keyRevoked = false;
@@ -178,6 +182,7 @@ export function createExecution(
             payerId: row.payerId,
             conversationId: row.conversationId,
             domesticOnly: request.domesticOnly,
+            askPaid: request.permissions.paidTools === 'ask',
             ttlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
           },
           requestId: id,
@@ -191,7 +196,7 @@ export function createExecution(
           payerId: row.payerId,
           keyId,
           keyTtlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
-          cores: deps.cores,
+          cores: device ? 0 : deps.cores,
           windowMs: deps.leaseMs ?? 5 * 60_000,
           onFailure: (error) => {
             if (unavailable(error)) suspend(error);
@@ -215,18 +220,22 @@ export function createExecution(
             ...deps.batchEnv,
             OASIS_TOOL_SCOPE: row.sessionId ?? id,
             ...sandboxEnv({
-              modelBaseUrl: deps.modelBaseUrl,
               runKey: key.key,
               model: row.model,
-              packages: deps.packages,
+              place: device
+                ? { permissions: request.permissions }
+                : { modelBaseUrl: deps.modelBaseUrl, packages: deps.packages },
             }),
           },
+          notify: (status) => ctx.record(id, run, 'status', { status }),
           files: [
             { dir: SANDBOX_PATHS.workdir, tar: await packFiles(files) },
             // 平台说明（带这个 AI 的人设）和技能每轮现放：改了说明，下一轮就用上
             {
               dir: SANDBOX_PATHS.dshHome,
-              tar: await packFiles(guideFiles(await deps.guide(), request.persona)),
+              tar: await packFiles(
+                guideFiles(await deps.guide(), request.persona, request.workplace),
+              ),
             },
             // oasis-tool 这些命令和 dsh 组合也每轮现放：改了，下一轮就用上，不用重建镜像
             ...(deps.sandboxFiles

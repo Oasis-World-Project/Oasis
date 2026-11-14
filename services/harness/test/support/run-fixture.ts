@@ -1,4 +1,5 @@
-// 运行服务测试的公共部分：假 dsh、假执行器、内存里的运行记录和对象存储、假 model-gateway，每个用例前重置。
+// 运行服务测试的公共部分：假执行器（里面跑假 dsh，见 fake-dsh.ts）、内存里的运行记录和对象存储、
+// 假 model-gateway，每个用例前重置。
 import { extract } from 'tar-stream';
 import { PassThrough, Readable } from 'node:stream';
 import { createServiceClient, checkedParts, packFiles, type ObjectStore } from '@oasis/service-kit';
@@ -8,6 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 import type { Executor, Sandbox, SandboxSpec } from '../../src/executor/executor.ts';
 import type { Run, RunEvent, RunOutcome, RunsRepo } from '../../src/repo/runs-repo.ts';
 import { createRunService } from '../../src/service/run-service.ts';
+import { fakeDsh, methods } from './fake-dsh.ts';
 
 /** 测试里会改的开关和计数（ES 模块导出的变量在别的文件里不能赋值，所以集中放在一个对象里） */
 export const fake = {
@@ -25,77 +27,8 @@ export const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 export const CONVERSATION = '3c3c3c3c-3c3c-4c3c-8c3c-3c3c3c3c3c3c';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * 假的 dsh SDK 运行时：说同样的 JSON-RPC。每条用户消息处理成一轮：
- * 回一句 "收到：<内容>"；内容含 FAIL 时这一轮以模型错误结束；含 SLOW 时这一轮要很久。
- */
-function fakeDsh(stdin: PassThrough, stdout: PassThrough) {
-  const queue: string[] = [];
-  const waiters: (() => void)[] = [];
-  let busy = false;
-  let sessionId = '';
-  const send = (msg: unknown) => stdout.write(`${JSON.stringify(msg)}\n`);
-  const event = (type: string, data: unknown) =>
-    send({ jsonrpc: '2.0', method: 'session.event', params: { sessionId, event: { type, data } } });
-  async function drain() {
-    if (busy) return;
-    busy = true;
-    send({ jsonrpc: '2.0', method: 'session.status', params: { sessionId, status: 'running' } });
-    while (queue.length > 0) {
-      const text = queue.shift() ?? '';
-      event('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text }] });
-      event('user/message', {
-        source: { kind: 'runtime' },
-        content: [{ type: 'text', text: 'ctx' }],
-      });
-      await sleep(text.includes('SLOW') ? 5_000 : 20);
-      if (text.includes('FAIL')) {
-        event('turn/end', { reason: { kind: 'error', error: { message: '上游 500' } } });
-      } else if (text.includes('TRUNCATED')) {
-        event('turn/end', { reason: { kind: 'max-tokens' } });
-      } else if (text.includes('NO_END')) {
-        // session/wait 返回空闲，但没有正常结束通知。
-      } else {
-        event('assistant/message', {
-          message: { content: [{ type: 'text', text: `收到：${text}` }] },
-        });
-        event('turn/end', { reason: { kind: 'completed' } });
-      }
-    }
-    busy = false;
-    send({ jsonrpc: '2.0', method: 'session.status', params: { sessionId, status: 'idle' } });
-    waiters.splice(0).forEach((resolve) => resolve());
-  }
-  let buffer = '';
-  stdin.setEncoding('utf8');
-  stdin.on('data', (chunk: string) => {
-    buffer += chunk;
-    let i;
-    while ((i = buffer.indexOf('\n')) >= 0) {
-      const req = JSON.parse(buffer.slice(0, i)) as {
-        id: number;
-        method: string;
-        params: { sessionId?: string; contentBlocks?: { text: string }[] };
-      };
-      buffer = buffer.slice(i + 1);
-      if (req.method === 'session/prompt') {
-        sessionId = req.params.sessionId ?? '';
-        queue.push(req.params.contentBlocks?.[0]?.text ?? '');
-        send({ jsonrpc: '2.0', id: req.id, result: { messageId: 'm' } });
-        void drain();
-      } else if (req.method === 'session/wait') {
-        if (!busy && queue.length === 0) send({ jsonrpc: '2.0', id: req.id, result: {} });
-        else waiters.push(() => send({ jsonrpc: '2.0', id: req.id, result: {} }));
-      } else {
-        methods.push(req.method);
-        send({ jsonrpc: '2.0', id: req.id, result: {} });
-      }
-    }
-  });
-}
-
 /** 假 dsh 收到的其他方法（initialize、session/resume、shutdown） */
-export const methods: string[] = [];
+export { methods };
 
 /** 读出 tar 包里的文件（保留包里的完整路径） */
 export async function tarEntries(tar: Buffer | Readable) {
@@ -202,6 +135,7 @@ export const repo: RunsRepo = {
       summary: null,
       sessionId: run.sessionId ?? null,
       continueFrom: run.continueFrom ?? null,
+      workplace: run.workplace ?? null,
       createdAt: new Date(),
       startedAt: null,
       finishedAt: null,
@@ -444,6 +378,7 @@ export const buildService = (override: Partial<Parameters<typeof createRunServic
     },
     guide: async () => ({
       rules: '# 在 Oasis 里干活\n',
+      device: '## 环境\n\n- 用户的电脑\n',
       skills: [{ name: 'images', description: '图片类。适用：海报', content: '# 图片类\n正文' }],
     }),
     maxConcurrent: 2,

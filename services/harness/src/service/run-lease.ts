@@ -8,6 +8,7 @@ export async function startRunLease(input: {
   payerId: string;
   keyId: string;
   keyTtlSeconds: number;
+  /** 沙箱的核数；0：在用户自己的电脑上跑，不冻结、不收算力钱，只续凭证 */
   cores: number;
   windowMs: number;
   onFailure: (error: unknown) => void;
@@ -33,12 +34,14 @@ export async function startRunLease(input: {
     unpaid.set(lease.id, elapsedMs);
     await pay(lease.id, elapsedMs);
   };
-  const reserve = () =>
-    client.json('POST', '/internal/v1/compute', {
-      body: { runId, payerId: input.payerId, cores, maxMs: windowMs },
-      schema: ComputeHold,
-      requestId: runId,
-    });
+  const reserve = async () =>
+    cores > 0
+      ? client.json('POST', '/internal/v1/compute', {
+          body: { runId, payerId: input.payerId, cores, maxMs: windowMs },
+          schema: ComputeHold,
+          requestId: runId,
+        })
+      : { callId: null };
   const first = await reserve();
   current = { id: first.callId, since: Date.now() };
   function schedule() {

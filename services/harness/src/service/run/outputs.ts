@@ -43,10 +43,14 @@ export function createOutputs(ctx: RunContext) {
      * 删掉以后从产出包读，那时只剩 out/ 下的。只给普通文件，链接、目录、太大的都不给。
      */
     async workspaceFile(id: string, path: string) {
-      await owned(id);
+      const row = await owned(id);
       if (path.split('/').some((part) => !part || part === '.' || part === '..'))
         throw new HttpError(400, 'invalid_path', '路径要相对工作目录');
-      const live = await deps.executor.readStoredArchive?.(id, `${SANDBOX_PATHS.workdir}/${path}`);
+      const live = await ctx
+        .executorOf(row)
+        .readStoredArchive?.(id, `${SANDBOX_PATHS.workdir}/${path}`)
+        // 用户的电脑没连上：只能从产出包里读
+        .catch(() => undefined);
       if (live) {
         const file = await onlyFile(live, PREVIEW_MAX_BYTES).catch((err: unknown) => {
           throw new HttpError(422, 'file_unreadable', `预览不了：${String(err)}`);

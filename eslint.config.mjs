@@ -59,6 +59,11 @@ export default defineConfig(
     rules: { 'no-console': 'off' },
   },
   {
+    // dsh 组合里的插件：在 dsh 的 Node 进程里跑（沙箱里和用户电脑上）
+    files: ['services/harness/src/adapter/profile/*.mjs'],
+    languageOptions: { globals: globals.node },
+  },
+  {
     files: ['**/*.cjs'],
     languageOptions: { sourceType: 'commonjs', globals: globals.node },
     rules: { '@typescript-eslint/no-require-imports': 'off' },

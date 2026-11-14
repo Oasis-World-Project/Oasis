@@ -1,5 +1,5 @@
 // harness：Agent 运行时。唯一接触 DeepSeek Harness 的服务（只在 src/adapter/ 里），
-// 对话里主 AI 的每一轮起一个沙箱容器跑 dsh，模型调用经 model-gateway 计费。
+// 对话里主 AI 的每一轮起一个沙箱容器跑 dsh（或交给用户电脑上的桌面版跑），模型调用经 model-gateway 计费。
 import { fileURLToPath } from 'node:url';
 import {
   createDockerApi,
@@ -11,9 +11,10 @@ import {
   type ObjectStore,
   type ServiceResource,
 } from '@oasis/service-kit';
-import { SANDBOX_PATHS } from './adapter/dsh.ts';
-import { registerRoutes } from './api/routes.ts';
+import { DEVICE_PATHS, SANDBOX_PATHS } from './adapter/dsh.ts';
+import { registerDevices, registerRoutes } from './api/routes.ts';
 import { harnessEnv } from './config.ts';
+import { createDeviceHub, type DeviceHub } from './executor/device.ts';
 import { createDockerExecutor, type Executor } from './executor/executor.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
 import { loadGuide, loadSandboxFiles } from './service/guide.ts';
@@ -25,6 +26,7 @@ const GUIDE_DIR = fileURLToPath(new URL('../guide', import.meta.url));
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
 let executor: Executor;
+let devices: DeviceHub | undefined;
 let store: ObjectStore;
 let runs: RunService | undefined;
 let recoveryTimer: NodeJS.Timeout | undefined;
@@ -66,14 +68,19 @@ await startService({
       close: async () => {
         clearInterval(recoveryTimer);
         await runs?.stopAll();
+        // 进行中的运行（包括用户电脑上的）收好尾再断开电脑，它们会自己重连
+        devices?.close();
       },
     };
     return { postgres, objectStore: objects.resource, sandboxes };
   },
   routes: async (app, { config, resources, logger, name }) => {
+    devices = createDeviceHub({ logger, paths: DEVICE_PATHS });
+    registerDevices(app, devices);
     runs = createRunService({
       repo: createRunsRepo(resources.postgres.pool),
       executor,
+      devices,
       store,
       modelGateway: createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
         timeoutMs: 10_000,

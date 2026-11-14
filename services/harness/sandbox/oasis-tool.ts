@@ -1,6 +1,6 @@
 // oasis-tool：沙箱里的 AI 调用 Oasis 工具的命令，只依赖 Node 自带的能力。harness 每轮把当前版本放进
-// 沙箱的 /opt/oasis（镜像里那份给离线验收用），改了不用重建镜像。
-// 经入口代理连 model-gateway，带本次运行的临时 Key；生成的文件（图片、音频……）写到指定位置。
+// 沙箱的 /opt/oasis（镜像里那份给离线验收用；在用户电脑上是桌面版的会话目录），改了不用重建镜像。
+// 怎么连工具服务见 tool-api.ts；生成的文件（图片、音频……）写到指定位置。
 //
 //   oasis-tool list                                   看有哪些工具、怎么用（<工具> --help 只看一个）
 //   oasis-tool image.generate --prompt "…" --out out/图.png
@@ -15,6 +15,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { basename, dirname, extname, join } from 'node:path';
 import { runBatch } from './batch.ts';
+import { confirmed, openRequest, request, say, waitSeconds } from './tool-api.ts';
 import {
   appFiles,
   localImages,
@@ -43,6 +44,8 @@ interface ToolResult {
   files: ToolFile[];
   costMicro: number;
   job?: { id: string };
+  /** 还没调：要先等用户点这张确认卡 */
+  confirmation?: { id: string };
 }
 interface ToolJob {
   status: 'pending' | 'completed' | 'failed' | 'uncertain';
@@ -50,9 +53,8 @@ interface ToolJob {
   error?: string;
 }
 
-/** 长任务每隔几秒问一次进度；一次命令最多等多久（秒），免得超过运行命令的时间限制 */
+/** 长任务每隔几秒问一次进度（一次命令最多等多久见 tool-api.ts 的 waitSeconds） */
 const POLL_MS = 5_000;
-const waitSeconds = () => Number(process.env.OASIS_TOOL_WAIT_SECONDS) || 100;
 interface ToolEntry {
   key: string;
   name: string;
@@ -102,35 +104,6 @@ export function parseArgs(argv: string[]): {
   return { args, ...(out ? { out } : {}), ...(file ? { file } : {}) };
 }
 
-/** 命令的输出（AI 读的就是这些） */
-const say = (text: string) => process.stdout.write(`${text}\n`);
-
-async function openRequest(path: string, init: RequestInit = {}): Promise<Response> {
-  const base = process.env.OASIS_MODEL_BASE_URL;
-  // 在 dsh 的命令里只有 OASIS_TOOL_AUTH（OASIS_RUN_KEY 会被 dsh 去掉）
-  const key = process.env.OASIS_TOOL_AUTH ?? process.env.OASIS_RUN_KEY;
-  if (!base || !key) throw new Error('这里不是 Oasis 的沙箱，用不了 oasis-tool');
-  const response = await fetch(`${base.replace(/\/$/, '')}${path}`, {
-    ...init,
-    headers: {
-      'content-type': 'application/json',
-      ...init.headers,
-      authorization: `Bearer ${key}`,
-    },
-  });
-  if (response.ok) return response;
-  const body = (await response.json().catch(() => ({}))) as {
-    error?: { message?: string; code?: string };
-  };
-  throw Object.assign(new Error(body.error?.message ?? `工具服务返回 ${response.status}`), {
-    code: body.error?.code,
-    status: response.status,
-  });
-}
-async function request(path: string, init: RequestInit = {}): Promise<unknown> {
-  return (await openRequest(path, init)).json();
-}
-
 /** 列出工具、用法和单价；only：只看这一个，连同每个参数（oasis-tool <工具> --help） */
 async function list(only?: string): Promise<void> {
   const { tools } = (await request('/tools')) as { tools: ToolEntry[] };
@@ -166,7 +139,7 @@ async function save(result: ToolResult, out: string | undefined, job?: string): 
   const targets = targetsFor(result.files, out);
   for (const [i, f] of result.files.entries()) {
     if (basename(f.name) !== f.name || f.name.includes('\\')) throw new Error('工具文件名不安全');
-    const target = targets[i] ?? join('out', f.name);
+    const target = targets[i] ?? join(process.env.OASIS_OUT_DIR ?? 'out', f.name);
     await mkdir(dirname(target), { recursive: true });
     let saved: string;
     if (f.id !== undefined) {
@@ -412,14 +385,22 @@ async function run(key: string, argv: string[]): Promise<void> {
     args.audio_base64 = (await readFile(file)).toString('base64');
     args.format = format;
   }
-  const result = (await request(`/tools/${encodeURIComponent(key)}`, {
-    method: 'POST',
-    body: JSON.stringify({
-      args,
-      ...(requestState ? { idempotency_key: requestState.key } : {}),
-      ...(maxCost === undefined ? {} : { max_cost_micro: maxCost }),
-    }),
-  })) as ToolResult;
+  const body = {
+    args,
+    ...(requestState ? { idempotency_key: requestState.key } : {}),
+    ...(maxCost === undefined ? {} : { max_cost_micro: maxCost }),
+  };
+  const submit = async (extra = {}) =>
+    (await request(`/tools/${encodeURIComponent(key)}`, {
+      method: 'POST',
+      body: JSON.stringify({ ...body, ...extra }),
+    })) as ToolResult;
+  let result = await submit();
+  // 用户设了花钱的工具「问我」：等用户在聊天里点了允许，带上确认号重交
+  if (result.confirmation) {
+    await confirmed(result.confirmation.id);
+    result = await submit({ confirmation_id: result.confirmation.id });
+  }
   if (result.job && statePath && requestState) {
     const partial = `${statePath}.${randomUUID()}.partial`;
     try {

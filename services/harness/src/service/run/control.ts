@@ -2,11 +2,11 @@
 // 服务重启后单实例接管：先停旧进程，再恢复原身份和原工作目录，不发布中间失败。
 import { StartRunBody as StartRunSchema } from '@oasis/contracts/harness';
 import type { DurableRunRequest, Run } from '../../repo/runs-repo.ts';
-import { isPrivateOutput, newLiveRun, StopRun, type RunContext } from './shared.ts';
+import { isPrivateOutput, newLiveRun, requestOf, StopRun, type RunContext } from './shared.ts';
 
 export function createControl(ctx: RunContext) {
   const { deps, state } = ctx;
-  const { repo, executor, logger } = deps;
+  const { repo, logger } = deps;
   let recoveringRuns = false;
   let recoveryDone: Promise<void> = Promise.resolve();
 
@@ -42,6 +42,7 @@ export function createControl(ctx: RunContext) {
     const stored = await repo.control(row.id);
     const how = state.controlRequests.get(row.id) ?? stored;
     if (!how) return false;
+    const executor = ctx.executorOf(row);
     const saved =
       how === 'stop' && executor.readStoredArchive
         ? await ctx.save(
@@ -92,8 +93,19 @@ export function createControl(ctx: RunContext) {
     }
   }
 
-  /** 接管一次运行：作废旧 Key、结清旧算力，用户已经要停的就停，否则在原工作目录里接着跑 */
+  /**
+   * 接管一次运行：作废旧 Key、结清旧算力，用户已经要停的就停，否则在原工作目录里接着跑。
+   * 在用户电脑上跑的：那台电脑重新连上以后接着跑（没连上就一直等，用户可以停下）。
+   */
   async function takeOver(row: Run) {
+    const executor = ctx.executorOf(row);
+    // 执行环境不可用（Docker 停了、用户的电脑没连上）：用户要停的照样停，否则保留原进度等下次接管
+    const unready = await executor.check().then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    if (unready && !state.controlRequests.has(row.id) && !(await repo.control(row.id)))
+      throw unready;
     const suspended = await executor.suspend?.(row.id);
     const savedStop = !suspended ? await repo.suspension?.(row.id) : undefined;
     const checkpoint =
@@ -133,24 +145,14 @@ export function createControl(ctx: RunContext) {
       });
       return;
     }
-    const domesticOnly = request.body.domesticOnly ?? false;
-    const catalog = await ctx.admit(row.model, domesticOnly);
+    const settings = requestOf(request.body);
+    const catalog = await ctx.admit(executor, row.model, settings.domesticOnly);
     const run = newLiveRun(await repo.nextSequence(row.id), row.sessionId ?? row.id);
     if (await restoreControl(row)) return;
     state.live.set(row.id, run);
     ctx.record(row.id, run, 'status', { status: 'recovering', sessionId: run.sessionId });
     run.done = ctx
-      .execute(
-        row,
-        {
-          materials: request.body.materials,
-          persona: request.body.persona ?? '',
-          domesticOnly,
-        },
-        run,
-        catalog,
-        Boolean(row.startedAt),
-      )
+      .execute(row, settings, run, catalog, Boolean(row.startedAt))
       .catch((err: unknown) => logger.error({ err, runId: row.id }, '恢复运行收尾失败'));
   }
 
@@ -197,7 +199,7 @@ export function createControl(ctx: RunContext) {
           ...state.live.keys(),
           ...(await repo.listUnfinished()).map((r) => r.id),
         ]);
-        const removed = await executor.removeOrphans(keep);
+        const removed = await deps.executor.removeOrphans(keep);
         if (removed > 0) logger.info({ removed }, '清理了遗留的沙箱容器');
       } finally {
         recoveringRuns = false;

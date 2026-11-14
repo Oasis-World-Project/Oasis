@@ -1,6 +1,7 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { sandboxEnv, translateNotification, runtimeFiles } from '../src/adapter/dsh.ts';
+import { permissionEnv, sandboxEnv, runtimeFiles } from '../src/adapter/dsh.ts';
+import { translateNotification } from '../src/adapter/events.ts';
 import { createJsonRpcClient, JsonRpcError } from '../src/adapter/jsonrpc.ts';
 
 const event = (type: string, data: unknown) =>
@@ -282,10 +283,9 @@ describe('dsh 事件翻译', () => {
       pipIndexUrl: 'https://p/simple',
     };
     const env = sandboxEnv({
-      modelBaseUrl: 'http://ingress/v1',
       runKey: 'k',
       model: 'deepseek/x',
-      packages,
+      place: { modelBaseUrl: 'http://ingress/v1', packages },
     });
     const files = runtimeFiles({
       models: [
@@ -316,6 +316,50 @@ describe('dsh 事件翻译', () => {
     expect(env.OASIS_TOOL_AUTH).toBe('k');
     expect(env.HTTPS_PROXY).toBeUndefined();
     expect(env.npm_config_registry).toBeUndefined();
+    // 云端沙箱不设权限档：组合默认就是完全访问
+    expect(env.OASIS_PERMISSION).toBeUndefined();
+  });
+
+  it('用户电脑上：经网页地址上的 gateway 调模型，平台的文件在项目的 .oasis/ 下，权限档按设置', () => {
+    const env = sandboxEnv({
+      runKey: 'k',
+      model: 'deepseek/x',
+      place: { permissions: { access: 'project', beyond: 'ask', paidTools: 'allow' } },
+    });
+    expect(env).toMatchObject({
+      OASIS_MODEL_BASE_URL: '{origin}/api/run/v1',
+      DSH_HOME: '{home}',
+      OASIS_IN: '{project}/.oasis/in',
+      OASIS_OUT_DIR: '{project}/.oasis/out',
+      DSH_PERMISSION_MODE: 'workspace-write',
+      OASIS_PERMISSION: 'workspace-write',
+      OASIS_APPROVAL: 'ask',
+    });
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    const levels = (
+      [
+        ['read', 'deny'],
+        ['project', 'allow'],
+        ['full', 'deny'],
+      ] as const
+    ).map(([access, beyond]) => permissionEnv({ access, beyond, paidTools: 'ask' }));
+    expect(levels).toEqual([
+      {
+        DSH_PERMISSION_MODE: 'read-only',
+        OASIS_PERMISSION: 'read-only-strict',
+        OASIS_APPROVAL: 'ask',
+      },
+      {
+        DSH_PERMISSION_MODE: 'workspace-write',
+        OASIS_PERMISSION: 'workspace-write',
+        OASIS_APPROVAL: 'allow',
+      },
+      {
+        DSH_PERMISSION_MODE: 'danger-full-access',
+        OASIS_PERMISSION: 'danger-full-access',
+        OASIS_APPROVAL: 'ask',
+      },
+    ]);
   });
 });
 

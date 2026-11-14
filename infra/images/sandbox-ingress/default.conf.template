@@ -39,6 +39,17 @@ server {
     include /etc/nginx/conf.d/sandbox-proxy.inc;
   }
 
+  # 确认卡：dsh 插件登记超出权限的事、等用户点（长轮询）；oasis-tool 等花钱工具的确认
+  location = /v1/confirmations {
+    proxy_pass ${MODEL_GATEWAY_PROTOCOL}://oasis_model_gateway/run/v1/confirmations;
+    include /etc/nginx/conf.d/sandbox-proxy.inc;
+  }
+
+  location /v1/confirmations/ {
+    proxy_pass ${MODEL_GATEWAY_PROTOCOL}://oasis_model_gateway/run/v1/confirmations/;
+    include /etc/nginx/conf.d/sandbox-proxy.inc;
+  }
+
   location / {
     return 403;
   }

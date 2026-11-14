@@ -1,22 +1,29 @@
 // 运行服务（run-service.ts）分成几块：执行一次运行（execute）、沙箱和对象存储之间搬文件（storage）、
 // 停止 / 取消 / 重启接管（control）、读产出和过程（outputs）。各块通过同一个 RunContext 互相调用，
 // 这里只放它们共用的类型、状态和小工具，免得文件之间循环 import。
-import type {
-  ExecutionEnvironment,
-  RunBody,
-  RunEventBody,
-  StartRunBody,
+import {
+  defaultPermissions,
+  type ExecutionEnvironment,
+  type Permissions,
+  type RunBody,
+  type RunEventBody,
+  type StartRunBody,
+  type Workplace,
 } from '@oasis/contracts/harness';
 import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
 import type { Logger, ObjectStore, ServiceClient, StreamFile } from '@oasis/service-kit';
 import type { AgentConnection, AgentGuide, SandboxPackages } from '../../adapter/dsh.ts';
+import type { DeviceHub } from '../../executor/device.ts';
 import type { Executor, Sandbox } from '../../executor/executor.ts';
 import type { Run, RunOutcome, RunsRepo } from '../../repo/runs-repo.ts';
 import type { SandboxFiles } from '../guide.ts';
 
 export interface RunDeps {
   repo: RunsRepo;
+  /** 云端沙箱（Docker） */
   executor: Executor;
+  /** 连着 Oasis 的用户电脑（桌面版）；没有就只能在云端跑 */
+  devices?: DeviceHub;
   store: ObjectStore;
   modelGateway: ServiceClient;
   /** 取用户上传的素材 */
@@ -139,11 +146,25 @@ export function createGate(limit: number) {
 
 type Material = Required<StartRunBody>['materials'][number];
 
-/** 开一轮时定下、接管时照原样用的设置：用户发的文件、这个 AI 的人设、「只用国内模型」 */
+/** 开一轮时定下、接管时照原样用的设置：用户发的文件、这个 AI 的人设、「只用国内模型」、在哪干活和权限 */
 interface RunRequest {
   materials: Material[];
   persona: string;
   domesticOnly: boolean;
+  workplace: Workplace;
+  permissions: Permissions;
+}
+
+/** 开一轮的请求 → 这一轮的设置（没给的按默认） */
+export function requestOf(body: StartRunBody): RunRequest {
+  const workplace = body.workplace ?? { kind: 'cloud' };
+  return {
+    materials: body.materials ?? [],
+    persona: body.persona ?? '',
+    domesticOnly: body.domesticOnly ?? false,
+    workplace,
+    permissions: body.permissions ?? defaultPermissions(workplace),
+  };
 }
 
 /** 开跑前查到的：模型能力目录和执行环境 */
@@ -172,10 +193,12 @@ export interface RunContext {
   owned(id: string): Promise<Run>;
   /** 对外的运行信息：能不能接着做看持久工作目录还在不在 */
   bodyOf(row: Run): Promise<RunBody>;
+  /** 在哪跑：云端沙箱，或这个人的哪台电脑（那台电脑的桌面版没连上时 409 device_offline） */
+  executorOf(place: { payerId: string; workplace?: Workplace | null }): Executor;
 
   // ---- 执行（execute.ts）
   /** 准入：执行环境就绪、模型在执行目录里（打开了「只用国内模型」的只认国内厂商的模型） */
-  admit(model: string, domesticOnly: boolean): Promise<Catalog>;
+  admit(executor: Executor, model: string, domesticOnly: boolean): Promise<Catalog>;
   /** 按顺序记一条运行事件 */
   record(
     runId: string,

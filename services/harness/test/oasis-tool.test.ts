@@ -229,6 +229,33 @@ describe('oasis-tool 长任务', () => {
   fake.get(`/v1/tools/jobs/${musicId}/files/0`, async (_request, reply) =>
     reply.type('audio/mpeg').send(Buffer.from(corruptMusic ? 'badmusic' : 'ID3music')),
   );
+  // 花钱的工具设了「问我」：第一次交回确认卡，用户点了以后带确认号重交
+  const card = '00000000-0000-4000-8000-0000000000ca';
+  let cardStatus = 'pending';
+  const speechRequests: { confirmation_id?: string }[] = [];
+  fake.post('/v1/tools/audio.speech', async (request) => {
+    const body = request.body as { confirmation_id?: string };
+    speechRequests.push(body);
+    if (!body.confirmation_id)
+      return {
+        tool: 'audio.speech',
+        text: '要先确认',
+        files: [],
+        costMicro: 0,
+        confirmation: { id: card },
+      };
+    const audio = Buffer.from('ID3speech').toString('base64');
+    return {
+      tool: 'audio.speech',
+      text: '配好了',
+      files: [{ name: 'speech.mp3', mediaType: 'audio/mpeg', base64: audio }],
+      costMicro: 2_000,
+    };
+  });
+  fake.get(`/v1/confirmations/${card}`, async () => {
+    if (cardStatus === 'pending') await new Promise((resolve) => setTimeout(resolve, 200));
+    return { id: card, status: cardStatus };
+  });
   let dir = '';
   const printed: string[] = [];
   beforeAll(async () => {
@@ -301,6 +328,25 @@ describe('oasis-tool 长任务', () => {
     await main(command);
     expect(videoRequests.length - before).toBe(2);
     expect(videoRequests.at(-1)?.idempotency_key).not.toBe(prior);
+  });
+
+  it('花钱的工具要先问：用户允许了带确认号重交；拒绝了不调；一直没点就让 AI 回头重跑同一条命令', async () => {
+    printed.length = 0;
+    cardStatus = 'allowed';
+    const out = join(dir, '配音.mp3');
+    await main(['audio.speech', '--text', '你好', '--out', out]);
+    expect(speechRequests.map((body) => body.confirmation_id ?? null)).toEqual([null, card]);
+    expect(await readFile(out, 'utf8')).toBe('ID3speech');
+    expect(printed.join('')).toContain('等用户在聊天里确认');
+    cardStatus = 'denied';
+    await expect(main(['audio.speech', '--text', '再来', '--out', out])).rejects.toThrow(
+      '用户没同意',
+    );
+    cardStatus = 'pending';
+    await expect(main(['audio.speech', '--text', '再来', '--out', out])).rejects.toThrow(
+      '同一条命令',
+    );
+    expect(speechRequests).toHaveLength(4);
   });
 
   it('等到上限还没好：告诉 AI 用 wait 接着等', async () => {

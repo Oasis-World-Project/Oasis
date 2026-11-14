@@ -1,7 +1,9 @@
-# Oasis 自己的 dsh 组合。镜像构建时从 dsh 自带的 sdk 模板复制出 oasis profile，再叠上这一层。
-# 目标、内部规划、后台作业和代理树沿用原生实现；Oasis 只负责隔离、计费与生命周期衔接。
-# 模型一律走 Oasis 的 model-gateway（经沙箱入口代理），凭每次运行专用的临时 Key 计费。
-# 路由凭证由环境注入；完整目录与任务授权经 /workspace/in/.oasis-*.json 注入。
+# Oasis 自己的 dsh 组合：云端沙箱和用户电脑上是同一份，地方不同的路径都从环境变量来
+# （沙箱里的默认值见下面每处的 ??）。镜像构建时从 dsh 自带的 sdk 模板复制出 oasis profile，
+# harness 每轮再把这一层和同目录的两个插件（node-goal.mjs、approval.mjs）现放进来。
+# 目标、内部规划、后台作业和代理树沿用原生实现；Oasis 只负责隔离、计费、权限确认与生命周期衔接。
+# 模型一律走 Oasis 的 model-gateway（沙箱经入口代理，用户电脑经 gateway），凭每次运行专用的临时 Key 计费。
+# 路由凭证由环境注入；完整目录与任务授权经 $OASIS_IN/.oasis-*.json 注入（沙箱里是 /workspace/in）。
 
 # ---- 复用原生 OpenRouter 型号、推理及回传规则，地址与凭证替换为计费网关 ----
 - id: llm-pi-ai
@@ -14,9 +16,20 @@
         baseURL: !!js process.env.OASIS_MODEL_BASE_URL
         models: !!js >-
           (() => {
-            const require = process.getBuiltinModule('node:module').createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
-            const native = new Set(require('./node_modules/@earendil-works/pi-ai/dist/providers/all.js').getBuiltinModels('openrouter').map(m => m.id));
-            return JSON.parse(process.getBuiltinModule('node:fs').readFileSync('/workspace/in/.oasis-models.json', 'utf8')).map(m => {
+            const fs = process.getBuiltinModule('node:fs');
+            const path = process.getBuiltinModule('node:path');
+            const pkg = process.env.OASIS_DSH_PACKAGE ?? '/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json';
+            const require = process.getBuiltinModule('node:module').createRequire(pkg);
+            let dir = path.dirname(pkg), all;
+            for (;;) {
+              const file = path.join(dir, 'node_modules', '@earendil-works', 'pi-ai', 'dist', 'providers', 'all.js');
+              if (fs.existsSync(file)) { all = file; break; }
+              if (path.dirname(dir) === dir) throw new Error('找不到 dsh 自带的 pi-ai');
+              dir = path.dirname(dir);
+            }
+            const native = new Set(require(all).getBuiltinModels('openrouter').map(m => m.id));
+            const models = path.join(process.env.OASIS_IN ?? '/workspace/in', '.oasis-models.json');
+            return JSON.parse(fs.readFileSync(models, 'utf8')).map(m => {
               if (!native.has(m.id)) return m;
               const { maxTokens, reasoningEfforts, compat, ...capacity } = m;
               return { ...capacity, ...(reasoningEfforts === false ? { reasoningEfforts: false } : {}) };
@@ -34,7 +47,30 @@
 # attachment-local 只用此 home 定位附件，原生日志的目录保持不变。
 - id: attachment-local
   config:
-    dshHome: /home/node/.dsh/sessions
+    dshHome: !!js dshHomePath('sessions')
+
+# ---- 权限：只读 / 可改项目文件夹 / 完全访问（只在用户电脑上分档，云端沙箱用默认的完全访问），超出时
+# 问用户（ask）或不做（-strict）。每个会话按这一轮的设置（OASIS_PERMISSION）切过去（approval.mjs）；
+# 超出权限要用户确认时由 approval.mjs 问 Oasis，用户在聊天里的确认卡上答。----
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      read-only-strict:
+        sandbox: read-only
+        approval: never
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      workspace-write-strict:
+        sandbox: workspace-write
+        approval: never
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+    defaultPreset: !!js process.env.OASIS_PERMISSION ?? 'danger-full-access'
 
 # ---- 关掉：DeepSeek 自家账号、模型和网页搜索（模型和联网都走 Oasis） ----
 - id: deepseek-account
@@ -92,11 +128,8 @@
 - id: mcp-resources
   disabled: true
 
-# ---- 关掉：Windows PowerShell、切换工作目录（沙箱是 Linux，工作目录固定为 /workspace） ----
-- id: pwsh-sandbox
-  disabled: true
-- id: tool-pwsh
-  disabled: true
+# ---- 关掉：切换工作目录（工作目录固定：沙箱里是 /workspace，用户电脑上是选的项目文件夹）。
+# 命令行工具按平台由 dsh 自己挑：Linux 用 bash，Windows 用 PowerShell ----
 - id: tool-working-directory
   disabled: true
 
@@ -141,6 +174,9 @@
       config:
         enabled: true
         allowedModels: !!js >-
-          JSON.parse(process.getBuiltinModule('node:fs').readFileSync('/workspace/in/.oasis-models.json', 'utf8')).map(m => ({ provider: 'openrouter', model: m.id }))
+          JSON.parse(process.getBuiltinModule('node:fs').readFileSync(process.getBuiltinModule('node:path').join(process.env.OASIS_IN ?? '/workspace/in', '.oasis-models.json'), 'utf8')).map(m => ({ provider: 'openrouter', model: m.id }))
+    # Oasis 的两个插件和这份组合放在同一个目录（相对路径按组合目录解析，Windows、Linux 一样）
     - id: oasis-node-goal
-      name: /opt/oasis/node-goal.mjs
+      name: ./node-goal.mjs
+    - id: oasis-approval
+      name: ./approval.mjs

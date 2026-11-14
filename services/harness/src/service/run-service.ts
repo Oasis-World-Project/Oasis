@@ -6,17 +6,25 @@
 // 对象存储只存每轮的产出，不存会话。持久卷不在了就接不上（409 workspace_unavailable），由调用方开新会话。
 // 这里是对外接口和登记新运行；执行、搬文件、停止与接管、读产出分别在 run/ 下。
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { type RunBody, type StartRunBody, WORKSPACE_UNAVAILABLE } from '@oasis/contracts/harness';
 import { HttpError } from '@oasis/service-kit';
 import type { Run } from '../repo/runs-repo.ts';
 import { createControl } from './run/control.ts';
 import { createExecution } from './run/execute.ts';
 import { createOutputs } from './run/outputs.ts';
-import { createGate, newLiveRun, toRunBody, type RunContext, type RunDeps } from './run/shared.ts';
+import {
+  createGate,
+  newLiveRun,
+  requestOf,
+  toRunBody,
+  type RunContext,
+  type RunDeps,
+} from './run/shared.ts';
 import { createStorage } from './run/storage.ts';
 
 export function createRunService(deps: RunDeps) {
-  const { repo, executor, store, logger } = deps;
+  const { repo, store, logger } = deps;
   const state: RunContext['state'] = {
     live: new Map(),
     sessions: new Set(),
@@ -30,19 +38,29 @@ export function createRunService(deps: RunDeps) {
     if (!row) throw new HttpError(404, 'run_not_found', '没有这次运行');
     return row;
   }
+  const executorOf: RunContext['executorOf'] = ({ payerId, workplace }) => {
+    if (workplace?.kind !== 'device') return deps.executor;
+    if (!deps.devices) throw new HttpError(503, 'devices_unavailable', '这里不能在用户电脑上干活');
+    return deps.devices.executor(payerId, workplace);
+  };
   const ctx = {
     deps,
     state,
     owned,
+    executorOf,
+    // 会话在用户电脑上的：那台电脑这会儿可能没连上，先当它还在，下一轮开始时再问那台电脑
     bodyOf: async (row: Run) =>
-      toRunBody(row, await executor.workspaceExists(row.sessionId ?? row.id)),
+      toRunBody(
+        row,
+        Boolean(row.workplace) || (await deps.executor.workspaceExists(row.sessionId ?? row.id)),
+      ),
   } as RunContext;
   Object.assign(ctx, createStorage(ctx), createExecution(ctx));
   const control = createControl(ctx);
   ctx.recover = control.recover;
   const { live, sessions } = state;
 
-  /** 接着之前的运行：同一付费人、同一对话、已结束、持久工作目录还在、会话没有更新的运行 */
+  /** 接着之前的运行：同一付费人、同一对话、已结束、同一个地方、持久工作目录还在、会话没有更新的运行 */
   async function continuable(body: StartRunBody, runId: string): Promise<Run> {
     // 刚点了停止马上发下一句：那一轮还在收尾（停沙箱、存产出），等它真正停好再接着，
     // 不能当成「还没结束」拒掉（2026-11-08 回归测试发现过）
@@ -58,8 +76,12 @@ export function createRunService(deps: RunDeps) {
     )
       throw new HttpError(409, 'continue_unavailable', '要接着的那一轮不存在或还没结束');
     const session = previous.sessionId ?? previous.id;
+    // 换了地方（云端和电脑、换了电脑或文件夹）：会话在原来那边，接不上
+    const workplace = requestOf(body).workplace;
+    if (!isDeepStrictEqual(previous.workplace ?? { kind: 'cloud' }, workplace))
+      throw new HttpError(409, WORKSPACE_UNAVAILABLE, '换了干活的地方，接不上原会话');
     // 只有对象存储里的产出、没有会话，不能冒充接着原会话做
-    if (!(await executor.workspaceExists(session)))
+    if (!(await executorOf(previous).workspaceExists(session)))
       throw new HttpError(409, WORKSPACE_UNAVAILABLE, '原会话的工作目录已经不在了，接不上原会话');
     const history = await repo.listBySession(session);
     if (history.some((r) => r.id !== previous.id && r.createdAt > previous.createdAt))
@@ -69,7 +91,8 @@ export function createRunService(deps: RunDeps) {
 
   return {
     async start(body: StartRunBody & Required<Pick<StartRunBody, 'materials'>>): Promise<RunBody> {
-      const domesticOnly = body.domesticOnly ?? false;
+      const request = requestOf(body);
+      const { workplace } = request;
       if (state.closing)
         throw new HttpError(503, 'harness_closing', '执行服务正在重启，请稍后重交');
       if (body.runId) {
@@ -80,8 +103,12 @@ export function createRunService(deps: RunDeps) {
           return ctx.bodyOf(existing);
         }
       }
-      // 目录未就绪属于准入等待，不登记失败运行
-      const catalog = await ctx.admit(body.model, domesticOnly);
+      // 目录未就绪、用户的电脑没连上属于准入等待，不登记失败运行
+      const catalog = await ctx.admit(
+        executorOf({ payerId: body.payerId, workplace }),
+        body.model,
+        request.domesticOnly,
+      );
       const previous = body.continueFrom ? await continuable(body, body.continueFrom) : undefined;
       const id = body.runId ?? randomUUID();
       const sessionId = previous ? (previous.sessionId ?? previous.id) : id;
@@ -100,6 +127,7 @@ export function createRunService(deps: RunDeps) {
             prompt: body.prompt,
             sessionId,
             continueFrom: previous?.id ?? null,
+            workplace: workplace.kind === 'device' ? workplace : null,
           },
           { body },
         );
@@ -114,12 +142,7 @@ export function createRunService(deps: RunDeps) {
         const run = newLiveRun(await repo.nextSequence(id), sessionId);
         live.set(id, run);
         run.done = ctx
-          .execute(
-            row,
-            { materials: body.materials, persona: body.persona ?? '', domesticOnly },
-            run,
-            catalog,
-          )
+          .execute(row, request, run, catalog)
           .catch((err: unknown) => logger.error({ err, runId: id }, '运行收尾失败'));
         // 刚登记、还没结束的运行谈不上「接着做」
         return toRunBody(row, false);
@@ -131,21 +154,28 @@ export function createRunService(deps: RunDeps) {
     get: async (id: string) => ctx.bodyOf(await owned(id)),
 
     environment: async () => {
-      if (!executor.environment)
+      if (!deps.executor.environment)
         throw new HttpError(503, 'environment_unavailable', '执行环境尚未提供探测结果');
-      return executor.environment();
+      return deps.executor.environment();
     },
 
     /**
      * 删对话、开新话题（用户删除就是真删除）：删掉这个对话已结束的运行的产出包、运行记录和持久工作目录。
-     * 还有没结束的运行时什么都不删，返回 false（调用方先停下那一轮再删）。
+     * 还有没结束的运行时什么都不删，返回 false（调用方先停下那一轮再删）。会话在用户电脑上而那台电脑
+     * 没连上的，留在那台电脑上（记一条日志），其余照删。
      */
     async purgeConversation(conversationId: string): Promise<boolean> {
       const rows = await repo.listByConversation(conversationId);
       if (rows.some((row) => ['queued', 'starting', 'running'].includes(row.status))) return false;
       for (const row of rows) if (row.outputKey) await store.delete(row.outputKey);
-      for (const sessionId of new Set(rows.map((r) => r.sessionId ?? r.id)))
-        await executor.purgeWorkspace(sessionId);
+      const bySession = new Map(rows.map((r) => [r.sessionId ?? r.id, r]));
+      for (const [sessionId, row] of bySession)
+        await executorOf(row)
+          .purgeWorkspace(sessionId)
+          .catch((err: unknown) => {
+            if (!row.workplace) throw err;
+            logger.warn({ err, conversationId, sessionId }, '用户电脑没连上，那边的会话没删');
+          });
       await repo.removeMany(rows.map((row) => row.id));
       if (rows.length)
         logger.info({ conversationId, runs: rows.length }, '对话的运行和工作目录已清理');

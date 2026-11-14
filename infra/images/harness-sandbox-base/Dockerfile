@@ -93,10 +93,10 @@ ENV DSH_HOME=/home/node/.dsh \
 # 从 dsh 自带的 sdk 模板复制出 oasis profile，再叠上 Oasis 的组合（关掉用不上的插件、模型指向 model-gateway）
 RUN dsh oasis --from-default-profile sdk --dump-config > /dev/null
 RUN mkdir -p /home/node/.dsh/sessions
-COPY --chown=node:node services/harness/src/adapter/profile/cordis.patch.yml /home/node/.dsh/profiles/oasis/cordis.patch.yml
+COPY --chown=node:node services/harness/src/adapter/profile/cordis.patch.yml services/harness/src/adapter/profile/node-goal.mjs services/harness/src/adapter/profile/approval.mjs /home/node/.dsh/profiles/oasis/
 # 沙箱里调用 Oasis 工具的命令：Node 直接运行 TypeScript
 COPY services/harness/sandbox/oasis-tool.ts /opt/oasis/oasis-tool.ts
-COPY services/harness/sandbox/batch.ts services/harness/sandbox/tool-files.ts /opt/oasis/
+COPY services/harness/sandbox/tool-api.ts services/harness/sandbox/batch.ts services/harness/sandbox/tool-files.ts /opt/oasis/
 COPY services/harness/sandbox/media.py /opt/oasis/media.py
 # 本地操作 oasis-op（拼视频、裁剪、抽帧……；参数定义与 model-gateway 共用 packages/contracts 里的同一份）。
 # 按仓库里的相对位置放，import 路径在仓库和镜像里一致。
@@ -108,6 +108,5 @@ RUN printf '#!/bin/sh\nexec node --no-warnings /opt/oasis/oasis-tool.ts "$@"\n' 
  && printf '#!/bin/sh\nexec node --no-warnings /opt/oasis/services/harness/sandbox/oasis-op.ts "$@"\n' > /usr/local/bin/oasis-op \
  && chmod 755 /usr/local/bin/oasis-tool /usr/local/bin/oasis-media /usr/local/bin/oasis-op
 USER node
-COPY --chown=node:node services/harness/src/adapter/profile/node-goal.mjs /opt/oasis/node-goal.mjs
 WORKDIR /workspace
 ENTRYPOINT ["dsh", "--profile", "oasis"]
