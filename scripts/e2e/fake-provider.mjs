@@ -19,6 +19,9 @@ export const setRun = (id) => {
 };
 export const marker = (scenario, say) => `[[e2e:${scenario}@${RUN}/${say}]]`;
 
+/** 一张图要做多久（毫秒） */
+export const IMAGE_MS = 1_500;
+
 /**
  * @param {{
  *   scenarios: Record<string, object>,
@@ -286,10 +289,15 @@ export function createFakeProvider(options) {
       record({ kind: 'image', model: body.model, prompt: body.prompt });
       // 像 Seedream 一样：要 PNG、声明 PNG，实际回 JPEG（2026-11-08 真实小样踩到）
       const image = body.model === JPEG_IMAGE_MODEL ? fixtures.jpg : fixtures.png;
-      return sendJson(res, 200, {
-        data: [{ b64_json: image.toString('base64'), media_type: 'image/png' }],
-        usage: { cost: 0.04 },
-      });
+      // 像真的供应商一样要做一会儿：几张一起交时看得出是不是同时做的
+      return setTimeout(
+        () =>
+          sendJson(res, 200, {
+            data: [{ b64_json: image.toString('base64'), media_type: 'image/png' }],
+            usage: { cost: 0.04 },
+          }),
+        IMAGE_MS,
+      );
     }
     if (url.pathname.startsWith('/api/v1/images/models/'))
       return sendJson(res, 200, {
