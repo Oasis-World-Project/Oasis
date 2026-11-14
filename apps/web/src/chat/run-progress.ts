@@ -13,6 +13,8 @@ export type TextMessage = Extract<MessageBody, { kind: 'text' }>;
 
 /** 进度页上单独成卡的长任务：生图、视频、音乐这类，和等它们的结果 */
 const LONG_TOOLS = new Set([...GENERATION_TOOLS, 'wait']);
+/** 通常不到这么多秒就做完的生成（如配音）不单独成卡：做出的文件在下面的文件里 */
+const QUICK_SECONDS = 20;
 
 export interface RunFile {
   path: string;
@@ -54,10 +56,10 @@ export interface RunProgress {
 const hidden = (path: string) => path.split('/').some((part) => part.startsWith('.'));
 
 /**
- * 长任务卡：生图这类一步做完的，一步一张；视频、音乐交上去没等到的（--wait false，或等到上限还没好），
- * 一个任务号一张，之后哪一步等到了（等的命令，或放到后台后看它输出的那一步）按任务号写回结局和文件。
- * 只说到这些任务号的步骤、等它们的那一步不另成卡；等的是这一轮看不到的任务时，等的那一步自己成卡。
- * 一轮结束时还没等到的，说没等到。
+ * 长任务卡：生图这类一步做完的，一步一张（通常几秒就好的配音这类不算）；视频、音乐交上去没等到的
+ * （--wait false，或等到上限还没好），一个任务号一张，之后哪一步等到了（等的命令，或放到后台后看它
+ * 输出的那一步）按任务号写回结局和文件。只说到这些任务号的步骤、等它们的那一步不另成卡；等的是这一轮
+ * 看不到的任务时，等的那一步自己成卡。一轮结束时还没等到的，说没等到。
  */
 function longTasksOf(steps: StepPart[], live: boolean): LongTask[] {
   const cards: LongTask[] = [];
@@ -74,6 +76,7 @@ function longTasksOf(steps: StepPart[], live: boolean): LongTask[] {
       if (job.state === 'failed') card.detail = step.detail ?? '没做出来';
     }
     if (!step.oasisTool || !LONG_TOOLS.has(step.oasisTool)) continue;
+    if (!jobs.length && (step.expectSeconds ?? Infinity) < QUICK_SECONDS) continue;
     const handed = jobs.filter(
       (j) => !byJob.has(j.id) && (j.state === 'submitted' || j.state === 'waiting'),
     );

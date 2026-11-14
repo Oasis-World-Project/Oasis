@@ -225,6 +225,20 @@ describe('dsh 事件翻译', () => {
       { id: b, state: 'done', files: ['out/音乐二.mp3'] },
     ]);
     expect(jobs('ls out')).toBeUndefined();
+
+    // oasis-tool 没做成：命令退出码不是 0（dsh 照样算调用成功），这一步算没做完，带上出错的那句
+    const result = (text: string) =>
+      translateNotification(
+        ...event('tool/result', {
+          message: { toolCallId: 'c', content: [{ type: 'text', text }] },
+        }),
+      )?.data;
+    expect(
+      result('[stderr]\noasis-tool 出错：模型服务返回了错误，请稍后再试\n[exit code: 1]'),
+    ).toMatchObject({ ok: false, error: '模型服务返回了错误，请稍后再试' });
+    // 别的命令退出码不是 0（如 grep 没找到）照旧算做完
+    expect(result('[exit code: 1]')).toMatchObject({ ok: true });
+    expect(result('[exit code: 1]')).not.toHaveProperty('error');
   });
 
   it('待办单独成一种事件（不算一步）', () => {

@@ -260,12 +260,19 @@ describe('一轮的进度页', () => {
     expect(within(result).getByRole('button', { name: '预览 外景.mp4' })).toBeTruthy();
   });
 
-  it('等的命令放到后台、AI 只看了输出的末几行：看输出的那一步按任务号写回，等的那一步不另成卡', async () => {
+  it('等的命令放到后台、AI 只看了输出的末几行：看输出的那一步按任务号写回，等的那一步不另成卡；几秒就好的配音也不成卡', async () => {
     fakeRun([
       message('text', { runId: RUN }, 'user', '做两段开业音乐'),
       segment([
         submit('a', '生成音乐：欢快', A, 'audio.music'),
         submit('b', '生成音乐：温暖', B, 'audio.music'),
+        step('s', '配音：欢迎光临', {
+          oasisTool: 'audio.speech',
+          expectSeconds: 9,
+          startedAt: ago(95),
+          finishedAt: ago(86),
+          files: ['out/旁白.mp3'],
+        }),
         step('w', '等长任务的结果（放到后台）', {
           oasisTool: 'wait',
           startedAt: ago(90),

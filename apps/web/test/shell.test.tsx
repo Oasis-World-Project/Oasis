@@ -45,6 +45,21 @@ describe('登录', () => {
     expect(api.requests).toContain('POST /identity/v1/auth/verify');
   });
 
+  it('用着用着会话过期（请求返回 401）：回到登录页，原地址连同查询参数都记住', async () => {
+    const api = installFakeApi({ signedIn: true });
+    const path = '/canvas?conversation=00000000-0000-4000-8000-0000000000c1';
+    const { App, router, queryClient } = createApp({
+      history: createMemoryHistory({ initialEntries: [path] }),
+    });
+    await act(() => router.load());
+    render(<App />);
+    await screen.findByRole('navigation', { name: '主导航' });
+    api.signedIn = false;
+    await act(() => queryClient.refetchQueries());
+    expect(await screen.findByRole('heading', { name: '登录 Oasis' })).toBeTruthy();
+    expect(router.state.location.search).toEqual({ redirect: path });
+  });
+
   it('登录页的跳转地址只接受站内路径，站外地址登录后回首页', async () => {
     installFakeApi({ signedIn: false });
     const router = await renderAt('/login?redirect=%2F%2Fevil.example.com');

@@ -10,10 +10,15 @@ export function createApp(options: { history?: RouterHistory } = {}) {
   const queryClient: QueryClient = new QueryClient({
     queryCache: new QueryCache({
       onError: (error) => {
-        const { pathname, hash } = router.state.location;
+        const { pathname, searchStr, hash } = router.state.location;
         if (error instanceof ApiError && error.status === 401 && pathname !== '/login') {
           queryClient.clear();
-          void router.navigate({ to: '/login', search: { redirect: pathname }, hash });
+          // 连同查询参数记住（如进度页的 ?conversation=），登录后回到同一页
+          void router.navigate({
+            to: '/login',
+            search: { redirect: `${pathname}${searchStr}` },
+            hash,
+          });
         }
       },
     }),

@@ -9,7 +9,14 @@ import { ApplicationSpec } from '@oasis/contracts/canvas';
 import { BrowserTestPlan } from '@oasis/contracts/ui-test';
 import { MODEL_PREVIEW_LIMITS, ModelPreviewSpec } from '@oasis/contracts/model-preview';
 import { createJsonRpcClient } from './jsonrpc.ts';
-import { jobFacts, OASIS_TOOL, savedFiles, stepFacts, TOOL_HELP } from './step-facts.ts';
+import {
+  jobFacts,
+  OASIS_TOOL,
+  savedFiles,
+  stepFacts,
+  TOOL_HELP,
+  toolFailure,
+} from './step-facts.ts';
 
 /** 沙箱镜像里的目录约定（与 infra/images/harness-sandbox-base/Dockerfile 一致） */
 export const SANDBOX_PATHS = {
@@ -339,13 +346,18 @@ export function translateNotification(method: string, params: unknown): AgentEve
       const output = textOf(message?.content);
       const files = savedFiles(output);
       const jobs = jobFacts(output);
+      const failed = toolFailure(output);
       return {
         kind: 'tool_result',
         data: {
           callId: message?.toolCallId,
-          ok: !message?.isError,
+          ok: !message?.isError && !failed,
           text: clip(output),
-          ...(error?.reason ? { error: clip(error.reason) } : {}),
+          ...(error?.reason
+            ? { error: clip(error.reason) }
+            : failed
+              ? { error: clip(failed) }
+              : {}),
           ...(files.length ? { files } : {}),
           ...(jobs.length ? { jobs } : {}),
         },

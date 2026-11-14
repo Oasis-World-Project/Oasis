@@ -51,6 +51,15 @@ export function savedFiles(output: string): string[] {
   });
 }
 
+/**
+ * oasis-tool 这次没做成：命令的退出码不是 0，输出里有「oasis-tool 出错：…」（dsh 照样算这次调用
+ * 成功，进度页要说没做出来）。返回出错的那句
+ */
+export function toolFailure(output: string): string | undefined {
+  if (!/exit code: [1-9]\d*\]/.test(output)) return undefined;
+  return /oasis-tool 出错：(.+)/.exec(output)?.[1]?.trim();
+}
+
 /** 一个长任务在这一步里的进展 */
 export interface JobFact {
   id: string;
