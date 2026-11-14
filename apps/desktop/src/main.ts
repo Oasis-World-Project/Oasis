@@ -1,10 +1,12 @@
 // Oasis 桌面端主进程：一个加载 Web 外壳的窗口。
 // 安全默认值：渲染进程隔离 + 沙箱 + 不开放 Node；外部链接交给系统浏览器；默认拒绝摄像头等权限申请。
-// 给页面开放的能力只有 preload 里的几个：把成果同步到用户选的文件夹、截取窗口里的一块画面用于批注。
+// 给页面开放的能力只有 preload 里的几个：把成果同步到用户选的文件夹、截取窗口里的一块画面用于批注、
+// 选 AI 干活的项目文件夹和看这台电脑连没连上（在你的电脑上干活，见 device.ts）。
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DESKTOP_CHANNELS } from '@oasis/contracts/desktop';
+import { SESSION_COOKIE } from '@oasis/contracts/identity';
 import {
   app,
   BrowserWindow,
@@ -15,6 +17,8 @@ import {
   type IpcMainInvokeEvent,
 } from 'electron';
 import { captureRect } from './capture-rect.ts';
+import { createDeviceClient, type DeviceClient } from './device.ts';
+import { createDshRuntime } from './dsh-runtime.ts';
 import { createSyncFolder, freePath, type SyncFolder } from './sync-folder.ts';
 
 const envFile = path.join(import.meta.dirname, '..', '.env');
@@ -100,6 +104,19 @@ function fromApp(event: IpcMainInvokeEvent): void {
     throw new Error('不接受这个页面的请求');
 }
 
+/** 弹出系统对话框选一个文件夹（挂在发起请求的窗口上）；取消时返回 undefined */
+async function pickFolder(event: IpcMainInvokeEvent, title: string): Promise<string | undefined> {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const options = {
+    title,
+    properties: ['openDirectory', 'createDirectory'] as ('openDirectory' | 'createDirectory')[],
+  };
+  const result = owner
+    ? await dialog.showOpenDialog(owner, options)
+    : await dialog.showOpenDialog(options);
+  return result.canceled ? undefined : result.filePaths[0];
+}
+
 /** 同步到电脑：选文件夹、看状态、写文件、打开文件夹 */
 function registerSync(sync: SyncFolder): void {
   ipcMain.handle(DESKTOP_CHANNELS.status, (event) => {
@@ -108,16 +125,8 @@ function registerSync(sync: SyncFolder): void {
   });
   ipcMain.handle(DESKTOP_CHANNELS.choose, async (event) => {
     fromApp(event);
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    const options = {
-      title: '选一个文件夹，任务的成果会自动存进去',
-      properties: ['openDirectory', 'createDirectory'] as ('openDirectory' | 'createDirectory')[],
-    };
-    const result = owner
-      ? await dialog.showOpenDialog(owner, options)
-      : await dialog.showOpenDialog(options);
-    const folder = result.filePaths[0];
-    if (result.canceled || !folder) return null;
+    const folder = await pickFolder(event, '选一个文件夹，任务的成果会自动存进去');
+    if (!folder) return null;
     await sync.setFolder(folder);
     return sync.folder();
   });
@@ -179,6 +188,42 @@ function registerCapture(): void {
   });
 }
 
+/** 在你的电脑上干活：选 AI 干活的项目文件夹、看这台电脑连没连上 Oasis */
+function registerDevice(device: DeviceClient): void {
+  ipcMain.handle(DESKTOP_CHANNELS.device, (event) => {
+    fromApp(event);
+    return device.status();
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.project, async (event) => {
+    fromApp(event);
+    const folder = await pickFolder(event, '选一个项目文件夹，AI 在这里面干活');
+    return folder ? device.allowFolder(folder) : null;
+  });
+}
+
+/** 连 Oasis 接活：带上窗口里登录的 Cookie；登出就断开，登录了就连 */
+function startDevice(): DeviceClient {
+  const device = createDeviceClient({
+    dataDir: app.getPath('userData'),
+    webOrigin: appOrigin,
+    cookie: async () => {
+      const [found] = await session.defaultSession.cookies.get({
+        url: webUrl,
+        name: SESSION_COOKIE,
+      });
+      return found ? `${found.name}=${found.value}` : undefined;
+    },
+    runtime: createDshRuntime(app.getPath('userData')),
+    log: (line) => process.stdout.write(`[在你的电脑上干活] ${line}\n`),
+  });
+  session.defaultSession.cookies.on('changed', (_event, cookie, cause, removed) => {
+    // 会话续期时旧的先被换掉（overwrite），不算登出
+    if (cookie.name === SESSION_COOKIE && cause !== 'overwrite') device.signedIn(!removed);
+  });
+  app.on('before-quit', () => device.close());
+  return device;
+}
+
 /** 点下载：存进系统的「下载」文件夹（重名加序号），存好后在文件管理器里选中它，不用再去找 */
 function handleDownloads(): void {
   session.defaultSession.on('will-download', (_event, item) => {
@@ -199,6 +244,9 @@ app.whenReady().then(
     await sync.recover();
     registerSync(sync);
     registerCapture();
+    const device = startDevice();
+    registerDevice(device);
+    await device.start();
     handleDownloads();
     await loadWithRetry(createWindow(), webUrl);
 

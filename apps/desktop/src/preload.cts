@@ -16,6 +16,8 @@ const api: OasisDesktop = {
   abortSyncedFile: (token) => ipcRenderer.invoke('oasis:sync-abort', token),
   openSyncFolder: () => ipcRenderer.invoke('oasis:sync-open'),
   capturePage: (rect) => ipcRenderer.invoke('oasis:capture-page', rect),
+  deviceStatus: () => ipcRenderer.invoke('oasis:device-status'),
+  chooseProjectFolder: () => ipcRenderer.invoke('oasis:project-choose'),
 };
 
 contextBridge.exposeInMainWorld('oasisDesktop', api);
