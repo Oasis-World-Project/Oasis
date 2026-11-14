@@ -57,7 +57,8 @@ export default defineConfig(({ mode }) => {
     host: '127.0.0.1',
     port: Number(env.WEB_PORT || 5173),
     strictPort: true,
-    proxy: env.GATEWAY_URL ? { '/api': { target: env.GATEWAY_URL } } : undefined,
+    // ws：桌面版连 harness 的 WebSocket（/api/harness/v1/devices）也经这里转
+    proxy: env.GATEWAY_URL ? { '/api': { target: env.GATEWAY_URL, ws: true } } : undefined,
   };
   return {
     plugins: [react(), tailwindcss(), modelViewerBundle(mode)],

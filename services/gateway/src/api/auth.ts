@@ -17,6 +17,8 @@ const PUBLIC_ROUTES = new Set([
   'POST /api/identity/v1/auth/logout',
 ]);
 const LOGOUT_ROUTE = 'POST /api/identity/v1/auth/logout';
+/** 用户电脑上的 dsh 调模型和工具：只认这一轮的临时 Key（model-gateway 校验），不看登录、不查来源 */
+export const RUN_PREFIX = '/api/run/v1';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const CACHE_LIMIT = 10_000;
 
@@ -52,10 +54,12 @@ export function registerAuth(
   app.decorateRequest('oasisUserId', null);
 
   app.addHook('onRequest', async (request) => {
-    if (!request.url.startsWith('/api/')) return;
+    if (!request.url.startsWith('/api/') || request.url.startsWith(`${RUN_PREFIX}/`)) return;
     const route = `${request.method} ${request.url.split('?')[0]}`;
 
-    if (!SAFE_METHODS.has(request.method)) {
+    // 改数据的请求和 WebSocket 升级都要查来源：别的网站也能让浏览器带着 Cookie 发起它们
+    const upgrade = request.headers.upgrade?.toLowerCase() === 'websocket';
+    if (!SAFE_METHODS.has(request.method) || upgrade) {
       const origin = request.headers.origin;
       if (!origin || !options.allowedOrigins.has(origin)) {
         throw new HttpError(403, 'forbidden_origin', '请求来源不被允许');

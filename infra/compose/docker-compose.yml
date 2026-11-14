@@ -141,7 +141,7 @@ services:
       retries: 20
 
   # 沙箱入口代理：沙箱容器在内部网络 oasis-sandbox 里，不通外网，只能访问它和出口代理；
-  # 它只放行 chat completions、Jev 决策和工具几条路径，转到 model-gateway 的 /run/v1/*。
+  # 它只放行 chat completions、Jev 决策、工具和确认卡几条路径，转到 model-gateway 的 /run/v1/*。
   # 本机开发时 model-gateway 跑在宿主机上，经 host.docker.internal 访问；pnpm stack:up 时改为容器里的 model-gateway。
   sandbox-ingress:
     image: oasis/sandbox-ingress:1.29.3
@@ -191,6 +191,9 @@ services:
       AGENT_URL: http://agent:4103
       CONVERSATION_URL: http://conversation:4104
       CANVAS_URL: http://canvas:4106
+      # 在用户电脑上干活：桌面版连 harness、电脑上的 dsh 调模型和工具
+      HARNESS_URL: http://harness:4107
+      MODEL_GATEWAY_URL: http://model-gateway:4108
       GATEWAY_ALLOWED_ORIGINS: http://127.0.0.1:5173,http://localhost:5173
     ports:
       - 127.0.0.1:${GATEWAY_HOST_PORT:-8080}:8080

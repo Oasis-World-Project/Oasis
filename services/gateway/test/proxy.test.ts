@@ -1,7 +1,10 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { ErrorBody } from '@oasis/contracts/common';
 import { createService, type Service } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { WebSocket, WebSocketServer } from 'ws';
 import { gatewayService } from '../src/app.ts';
 
 const USER_ID = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
@@ -27,18 +30,45 @@ upstream.all('/v1/echo', async (request) => ({
 upstream.post('/v1/auth/email-code', async (_request, reply) => reply.code(204).send());
 upstream.get('/health', async () => ({ status: 'ok' }));
 upstream.get('/internal/secret', async () => ({ secret: true }));
+/** 扮演 model-gateway 给用户电脑上的 dsh 开的入口：回显收到的 Key 和头 */
+upstream.all('/run/v1/*', async (request) => ({
+  url: request.url,
+  authorization: request.headers.authorization ?? null,
+  userId: request.headers['x-oasis-user-id'] ?? null,
+  cookie: request.headers.cookie ?? null,
+}));
+
+/** 假 harness：桌面版连上来时记下收到的地址和头，回一句 hello */
+const harness = createServer((_request, response) => response.writeHead(404).end());
+const devices = new WebSocketServer({ noServer: true });
+const upgrades: { url?: string; userId?: string | string[]; cookie?: string }[] = [];
+harness.on('upgrade', (request, socket, head) => {
+  upgrades.push({
+    url: request.url,
+    userId: request.headers['x-oasis-user-id'],
+    cookie: request.headers.cookie,
+  });
+  devices.handleUpgrade(request, socket, head, (ws) => ws.send('hello'));
+});
 
 let upstreamUrl = '';
+let harnessUrl = '';
 let unreachableUrl = '';
 let gateway: Service<typeof gatewayService.env> | undefined;
 
 beforeAll(async () => {
   upstreamUrl = await upstream.listen({ port: 0, host: '127.0.0.1' });
+  await new Promise<void>((resolve) => harness.listen(0, '127.0.0.1', resolve));
+  harnessUrl = `http://127.0.0.1:${(harness.address() as AddressInfo).port}`;
   const closed = Fastify();
   unreachableUrl = await closed.listen({ port: 0, host: '127.0.0.1' });
   await closed.close();
 });
-afterAll(() => upstream.close());
+afterAll(async () => {
+  await upstream.close();
+  devices.close();
+  harness.close();
+});
 afterEach(() => gateway?.stop());
 
 async function startGateway(overrides: Record<string, string> = {}) {
@@ -50,6 +80,8 @@ async function startGateway(overrides: Record<string, string> = {}) {
     AGENT_URL: unreachableUrl,
     CONVERSATION_URL: unreachableUrl,
     CANVAS_URL: unreachableUrl,
+    HARNESS_URL: harnessUrl,
+    MODEL_GATEWAY_URL: upstreamUrl,
     GATEWAY_ALLOWED_ORIGINS: ORIGIN,
     ...overrides,
   });
@@ -173,5 +205,47 @@ describe('路由', () => {
 
   it('上游地址缺失时拒绝启动', async () => {
     await expect(startGateway({ CANVAS_URL: '' })).rejects.toThrow(/CANVAS_URL/);
+  });
+});
+
+describe('在用户电脑上干活', () => {
+  it('电脑上的 dsh 调模型：不要登录、不查来源，带着这一轮的 Key 转给 model-gateway，不带 Cookie 和 x-oasis-* 头', async () => {
+    const app = await startGateway();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/run/v1/chat/completions',
+      headers: { ...signedIn, authorization: 'Bearer run-key', 'x-oasis-user-id': 'admin' },
+      payload: { model: 'x' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      url: '/run/v1/chat/completions',
+      authorization: 'Bearer run-key',
+      userId: null,
+      cookie: null,
+    });
+  });
+
+  it('桌面版连 harness：要登录、来源要对；转过去只带是谁，不带 Cookie', async () => {
+    await startGateway();
+    const address = (await gateway!.listen()).replace(/^http/, 'ws');
+    const open = (headers: Record<string, string>) =>
+      new Promise<string>((resolve, reject) => {
+        const ws = new WebSocket(`${address}/api/harness/v1/devices/connect?device=desk-0001`, {
+          headers,
+        });
+        ws.once('message', (data) => {
+          resolve(String(data));
+          ws.close();
+        });
+        ws.once('error', reject);
+      });
+    await expect(open({ origin: ORIGIN })).rejects.toThrow('401');
+    await expect(open({ ...signedIn, origin: 'https://evil.example' })).rejects.toThrow('403');
+    expect(upgrades).toEqual([]);
+    expect(await open({ ...signedIn, origin: ORIGIN })).toBe('hello');
+    expect(upgrades).toEqual([
+      { url: '/v1/devices/connect?device=desk-0001', userId: USER_ID, cookie: undefined },
+    ]);
   });
 });

@@ -19,6 +19,12 @@ export const gatewayEnv = {
   AGENT_URL: z.url(),
   CONVERSATION_URL: z.url(),
   CANVAS_URL: z.url(),
+  /**
+   * 在用户电脑上干活：桌面版经这里连 harness（/api/harness/v1/devices，WebSocket，照常认人）；
+   * 电脑上的 dsh 调模型和工具经这里到 model-gateway（/api/run/v1，只认这一轮的临时 Key）
+   */
+  HARNESS_URL: z.url(),
+  MODEL_GATEWAY_URL: z.url(),
   /** 允许发起改数据请求的页面来源（逗号分隔），用于防跨站请求伪造 */
   GATEWAY_ALLOWED_ORIGINS: z
     .string()
