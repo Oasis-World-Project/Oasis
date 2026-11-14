@@ -1,8 +1,7 @@
 // 一轮的进度页（任务卡上点「看进度」打开）：最上面是主 AI 卡——状态、正在做的一步、待办、用时、花费，
-// 在做时可以停下；生图、视频这类长任务一张张卡并排（已等多久、通常要多久、做出的图和声音）；下面按发生的
-// 顺序是说的话、做的步骤（折叠）和插话；最后是这一轮做出的文件（点开预览）和交出的成品。
-// 数据就是私聊的消息：有一轮在做时每秒刷新，和私聊页同一份。
-import type { StepPart } from '@oasis/contracts/conversation';
+// 在做时可以停下；生图、视频这类长任务一张张卡并排（已等多久、通常要多久、做出的图和声音；几段先交后
+// 一起等的按任务号一段一张）；下面按发生的顺序是说的话、做的步骤（折叠）和插话；最后是这一轮做出的
+// 文件（点开预览）和交出的成品。数据就是私聊的消息：有一轮在做时每秒刷新，和私聊页同一份。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ArrowLeft, Images, Info, LoaderCircle } from 'lucide-react';
@@ -19,6 +18,7 @@ import { Markdown } from '../chat/Markdown.tsx';
 import { StatusTag, type Speaker } from '../chat/parts.tsx';
 import {
   runProgress,
+  type LongTask,
   type RunFile,
   type RunProgress,
   type TextMessage,
@@ -122,19 +122,13 @@ function RunView({ runId, conversationId }: { runId: string; conversationId: str
           {progress.longTasks.length > 0 && (
             <section aria-label="长任务" className="flex flex-col gap-2.5">
               <h2 className={heading}>生图、视频这类长任务</h2>
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3">
-                {progress.longTasks.map((step) => (
-                  <LongTask
-                    key={step.id}
-                    step={step}
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] items-start gap-3">
+                {progress.longTasks.map((task) => (
+                  <LongTaskCard
+                    key={task.key}
+                    task={task}
                     now={now}
-                    files={
-                      step.status === 'running'
-                        ? []
-                        : (step.files ?? []).map((path) =>
-                            fileOf({ path, version: step.finishedAt ?? '' }),
-                          )
-                    }
+                    files={task.files.map(fileOf)}
                     onOpen={setPreview}
                   />
                 ))}
@@ -151,10 +145,16 @@ function RunView({ runId, conversationId }: { runId: string; conversationId: str
             </ol>
           </section>
 
-          {progress.files.length > 0 && (
+          {(progress.files.length > 0 || progress.gone > 0) && (
             <section aria-label="做出的文件" className="flex flex-col gap-2.5">
               <h2 className={heading}>这一轮做出的文件</h2>
-              <ul className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 p-0">
+              {progress.gone > 0 && (
+                <p className="m-0 text-[12.5px] text-ink-muted">
+                  这一轮结束后只留下 out/ 里的文件；另有 {progress.gone}{' '}
+                  个中间文件只在这一轮进行中能看。
+                </p>
+              )}
+              <ul className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(150px,1fr))] items-start gap-3 p-0">
                 {progress.files.map((file) => (
                   <Thumb key={file.path} file={fileOf(file)} onOpen={setPreview} />
                 ))}
@@ -248,31 +248,31 @@ function LeadCard({
 }
 
 /** 一个长任务：在做时已等多久、通常要多久（按调用记录）；做完后放出做出的图、视频、声音 */
-function LongTask({
-  step,
+function LongTaskCard({
+  task,
   now,
   files,
   onOpen,
 }: {
-  step: StepPart;
+  task: LongTask;
   now: number;
   files: PreviewFile[];
   onOpen: (file: PreviewFile) => void;
 }) {
-  const started = step.startedAt ? Date.parse(step.startedAt) : now;
-  const waited = (step.finishedAt ? Date.parse(step.finishedAt) : now) - started;
-  const running = step.status === 'running';
-  const expected = step.expectSeconds ? step.expectSeconds * 1000 : undefined;
+  const started = task.startedAt ? Date.parse(task.startedAt) : now;
+  const waited = (task.finishedAt ? Date.parse(task.finishedAt) : now) - started;
+  const running = task.status === 'running';
+  const expected = task.expectSeconds ? task.expectSeconds * 1000 : undefined;
   return (
     <article
-      aria-label={step.label}
+      aria-label={task.label}
       className="flex flex-col gap-2 rounded-card bg-glass-strong px-4 py-3 shadow-edge-strong"
     >
       <header className="flex items-start gap-2 text-[13.5px]">
         <span className="pt-1">
-          <StepIcon status={step.status} />
+          <StepIcon status={task.status} />
         </span>
-        <span className="min-w-0 flex-1 break-words font-medium">{step.label}</span>
+        <span className="min-w-0 flex-1 break-words font-medium">{task.label}</span>
       </header>
       <p className="m-0 text-[12.5px] text-ink-muted">
         {running ? '已等' : '用了'} {elapsedText(waited)}
@@ -291,8 +291,8 @@ function LongTask({
           />
         </div>
       )}
-      {step.detail && (
-        <p className="m-0 whitespace-pre-wrap break-words text-[12px] text-accent">{step.detail}</p>
+      {task.detail && (
+        <p className="m-0 whitespace-pre-wrap break-words text-[12px] text-accent">{task.detail}</p>
       )}
       {files.map((file) => {
         const kind = previewKindOf(file.path);

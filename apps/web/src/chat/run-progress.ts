@@ -20,6 +20,18 @@ export interface RunFile {
   version: string;
 }
 
+/** 一张长任务卡：一次生成（一步），或交上去后在供应商那边做、之后才等到的一个任务号 */
+export interface LongTask {
+  key: string;
+  label: string;
+  status: StepPart['status'];
+  startedAt?: string;
+  finishedAt?: string;
+  expectSeconds?: number;
+  detail?: string;
+  files: RunFile[];
+}
+
 export interface RunProgress {
   /** 这一轮的消息：用户的话（开头那句和插话）、AI 的话，按顺序 */
   messages: TextMessage[];
@@ -31,13 +43,74 @@ export interface RunProgress {
   /** 正在做的一步（一轮在做时） */
   current: StepPart | undefined;
   todos: TodoItem[];
-  longTasks: StepPart[];
-  /** 这一轮做出的文件（做完的步骤写的、存下的），最新的在前 */
+  longTasks: LongTask[];
+  /** 这一轮做出的文件（做完的步骤写的、存下的），最新的在前；一轮结束后只剩 out/ 里的 */
   files: RunFile[];
+  /** 一轮结束后看不到了的中间文件有几个（不在 out/ 里的不留） */
+  gone: number;
 }
 
 /** 隐藏的文件（如 oasis-tool 的恢复记录）不算做出的东西 */
 const hidden = (path: string) => path.split('/').some((part) => part.startsWith('.'));
+
+/**
+ * 长任务卡：生图这类一步做完的，一步一张；视频、音乐交上去没等到的（--wait false，或等到上限还没好），
+ * 一个任务号一张，之后等到的那一步按任务号写回它的结局和文件；等的那一步只在等的是这一轮看不到的
+ * 任务时自己成卡。一轮结束时还没等到的，说没等到。
+ */
+function longTasksOf(steps: StepPart[], live: boolean): LongTask[] {
+  const cards: LongTask[] = [];
+  const byJob = new Map<string, LongTask>();
+  const fileOf = (step: StepPart) => (path: string) => ({ path, version: step.finishedAt ?? '' });
+  for (const step of steps) {
+    if (!step.oasisTool || !LONG_TOOLS.has(step.oasisTool)) continue;
+    const handed = (step.jobs ?? []).filter(
+      (j) => j.state === 'submitted' || j.state === 'waiting',
+    );
+    const known = (step.jobs ?? []).filter((j) => byJob.has(j.id));
+    for (const job of known) {
+      const card = byJob.get(job.id)!;
+      if (job.state === 'done' || job.state === 'failed') {
+        card.status = job.state;
+        card.finishedAt = step.finishedAt;
+        card.files = (job.files ?? []).map(fileOf(step));
+        if (job.state === 'failed') card.detail = step.detail ?? '没做出来';
+      }
+    }
+    if (step.oasisTool === 'wait' && (known.length || (step.status === 'running' && byJob.size)))
+      continue;
+    if (step.oasisTool !== 'wait' && handed.length) {
+      for (const [index, job] of handed.entries()) {
+        const card: LongTask = {
+          key: job.id,
+          label: handed.length > 1 ? `${step.label}（${index + 1}/${handed.length}）` : step.label,
+          status: 'running',
+          ...(step.startedAt ? { startedAt: step.startedAt } : {}),
+          ...(step.expectSeconds ? { expectSeconds: step.expectSeconds } : {}),
+          files: [],
+        };
+        byJob.set(job.id, card);
+        cards.push(card);
+      }
+      continue;
+    }
+    cards.push({
+      key: step.id,
+      label: step.label,
+      status: step.status,
+      ...(step.startedAt ? { startedAt: step.startedAt } : {}),
+      ...(step.finishedAt ? { finishedAt: step.finishedAt } : {}),
+      ...(step.expectSeconds ? { expectSeconds: step.expectSeconds } : {}),
+      ...(step.detail ? { detail: step.detail } : {}),
+      files: step.status === 'running' ? [] : (step.files ?? []).map(fileOf(step)),
+    });
+  }
+  if (!live)
+    for (const card of byJob.values())
+      if (card.status === 'running')
+        Object.assign(card, { status: 'failed', detail: '这一轮结束时还没等到结果' });
+  return cards;
+}
 
 export function runProgress(list: MessageList | undefined, runId: string): RunProgress {
   const all = list?.messages ?? [];
@@ -69,6 +142,9 @@ export function runProgress(list: MessageList | undefined, runId: string): RunPr
       finished.set(path, step.finishedAt ?? '');
     }
   }
+  const made = [...finished].map(([path, version]) => ({ path, version })).reverse();
+  // 一轮结束后沙箱就没了，只留 out/ 里的
+  const kept = (file: RunFile) => status === 'running' || file.path.startsWith('out/');
   return {
     messages,
     card,
@@ -81,7 +157,11 @@ export function runProgress(list: MessageList | undefined, runId: string): RunPr
       card?.spentMicro ?? ai.findLast((m) => m.data.spentMicro !== undefined)?.data.spentMicro ?? 0,
     current: status === 'running' ? steps.findLast((s) => s.status === 'running') : undefined,
     todos: ai.findLast((m) => m.data.todos?.length)?.data.todos ?? [],
-    longTasks: steps.filter((s) => s.oasisTool && LONG_TOOLS.has(s.oasisTool)),
-    files: [...finished].map(([path, version]) => ({ path, version })).reverse(),
+    longTasks: longTasksOf(steps, status === 'running').map((task) => ({
+      ...task,
+      files: task.files.filter(kept),
+    })),
+    files: made.filter(kept),
+    gone: made.filter((file) => !kept(file)).length,
   };
 }

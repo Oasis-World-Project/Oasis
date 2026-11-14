@@ -2,7 +2,7 @@
 // 做出的东西）、经过（说的话、步骤、插话）、这一轮做出的文件（点开预览）、交出的成品。
 import type { MessageBody } from '@oasis/contracts/conversation';
 import { createMemoryHistory } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
 import { installFakeApi, json } from './fake-api.ts';
@@ -83,7 +83,7 @@ const messages = [
   }),
 ];
 
-function fakeRun() {
+function fakeRun(list = messages, live = true) {
   return installFakeApi({
     signedIn: true,
     dms: [
@@ -99,7 +99,10 @@ function fakeRun() {
     ],
     extra: (method, path) => {
       if (method === 'GET' && path === PATH)
-        return json(200, { messages, turn: { runId: RUN, startedAt: ago(300) } });
+        return json(200, {
+          messages: list,
+          turn: live ? { runId: RUN, startedAt: ago(300) } : null,
+        });
       if (method === 'POST' && path === `/conversation/v1/conversations/${CONV}/stop`)
         return new Response(null, { status: 204 });
       return undefined;
@@ -171,6 +174,71 @@ describe('一轮的进度页', () => {
     expect(within(dialog).getByRole('img', { hidden: true }).getAttribute('src')).toContain(
       `/runs/${RUN}/files/out/`,
     );
+  });
+
+  it('几段视频先交后一起等：按任务号一段一张卡，等到前「在做」，等到后放出各自的视频；等的那一步不另成卡', async () => {
+    const A = '00000000-0000-4000-8000-00000000a001';
+    const B = '00000000-0000-4000-8000-00000000b002';
+    const submit = (id: string, label: string, job: string) =>
+      step(id, label, {
+        oasisTool: 'video.generate',
+        expectSeconds: 150,
+        startedAt: ago(100),
+        finishedAt: ago(96),
+        jobs: [{ id: job, state: 'submitted' }],
+      });
+    const segment = (parts: object[]) => message('text', { runId: RUN, parts });
+    const waiting = step('w', '等长任务的结果', {
+      status: 'running',
+      oasisTool: 'wait',
+      startedAt: ago(90),
+    });
+    fakeRun([
+      message('text', { runId: RUN }, 'user', '做两段开业视频'),
+      segment([submit('a', '生成视频：门店外景', A), submit('b', '生成视频：剪彩', B), waiting]),
+    ]);
+    await openProgress();
+    const tasks = await screen.findByRole('region', { name: '长任务' });
+    expect(
+      within(tasks)
+        .getAllByRole('article')
+        .map((a) => a.getAttribute('aria-label')),
+    ).toEqual(['生成视频：门店外景', '生成视频：剪彩']);
+    const outside = within(tasks).getByRole('article', { name: '生成视频：门店外景' });
+    expect(outside.textContent).toMatch(/已等 1 分 \d+ 秒 · 通常约 2 分 30 秒/);
+    vi.unstubAllGlobals();
+    cleanup();
+
+    // 等到了：一段做好、一段没做出来；一轮结束后只剩 out/ 里的文件
+    const done = {
+      ...waiting,
+      status: 'failed',
+      detail: '有一段没做出来',
+      finishedAt: ago(10),
+      files: ['out/外景.mp4', 'work/草稿.png'],
+      jobs: [
+        { id: A, state: 'done', files: ['out/外景.mp4'] },
+        { id: B, state: 'failed' },
+      ],
+    };
+    fakeRun(
+      [
+        message('text', { runId: RUN }, 'user', '做两段开业视频'),
+        segment([submit('a', '生成视频：门店外景', A), submit('b', '生成视频：剪彩', B), done]),
+      ],
+      false,
+    );
+    await openProgress();
+    const after = await screen.findByRole('region', { name: '长任务' });
+    const shot = within(after).getByRole('article', { name: '生成视频：门店外景' });
+    expect(shot.textContent).toMatch(/用了 1 分 30 秒/);
+    expect(within(shot).getByLabelText('外景.mp4').getAttribute('src')).toContain('/files/out/');
+    expect(within(after).getByRole('article', { name: '生成视频：剪彩' }).textContent).toContain(
+      '有一段没做出来',
+    );
+    const files = screen.getByRole('region', { name: '做出的文件' });
+    expect(files.textContent).toContain('另有 1 个中间文件只在这一轮进行中能看');
+    expect(within(files).getAllByRole('button')).toHaveLength(1);
   });
 
   it('不知道是哪个私聊：说清楚从哪里打开', async () => {

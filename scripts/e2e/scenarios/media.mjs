@@ -149,11 +149,20 @@ export const video = {
         ['片段一.mp4', '片段二.mp4'].every((p) => card.data.files.some((f) => f.path === p)),
       `任务卡上应列着两段短片：${JSON.stringify(card?.data ?? null).slice(0, 300)}`,
     );
-    // 进度页：一起等的那一步带着起止时间和存下的两段
-    const waited = stepsOf(messages, run?.id).find((s) => s.oasisTool === 'wait');
+    // 进度页：交的那一步带着两个交上去没等的任务号；一起等的那一步带着起止时间和存下的两段，
+    // 并按任务号写回各自做好了、存下了哪段（进度页据此一段一张卡）
+    const steps = stepsOf(messages, run?.id);
+    const handed = steps
+      .filter((s) => s.oasisTool === 'video.generate')
+      .flatMap((s) => (s.jobs ?? []).filter((j) => j.state === 'submitted').map((j) => j.id));
+    const waited = steps.find((s) => s.oasisTool === 'wait');
+    t.check(handed.length === 2, `交的那一步应带着两个任务号：${JSON.stringify(handed)}`);
     t.check(
-      timedWith(waited, ['out/片段一.mp4', 'out/片段二.mp4']),
-      `一起等的那一步应带着起止时间和两段短片：${JSON.stringify(waited ?? null).slice(0, 300)}`,
+      timedWith(waited, ['out/片段一.mp4', 'out/片段二.mp4']) &&
+        handed.every((id) =>
+          waited.jobs?.some((j) => j.id === id && j.state === 'done' && j.files?.length === 1),
+        ),
+      `一起等的那一步应带着起止时间、两段短片和按任务号的结局：${JSON.stringify(waited ?? null).slice(0, 400)}`,
     );
   },
 };
