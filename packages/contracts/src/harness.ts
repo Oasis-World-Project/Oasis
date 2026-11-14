@@ -24,6 +24,40 @@ export const RunStatus = z.enum([
 ]);
 export type RunStatus = z.infer<typeof RunStatus>;
 
+/**
+ * 一轮在哪干活：云端沙箱（默认），或用户自己的电脑——桌面版连着 Oasis，在用户选的项目文件夹里跑。
+ * 换地方就接不上原来的会话（AI 的记忆在原来那边），所以私聊换地方时从新话题开始。
+ */
+export const Workplace = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('cloud') }),
+  z.object({
+    kind: z.literal('device'),
+    /** 桌面版的设备号（第一次打开时生成，存在那台电脑上） */
+    deviceId: z.string().regex(/^[\w-]{8,64}$/),
+    /** 项目文件夹在那台电脑上的完整路径 */
+    folder: z.string().min(1).max(1000),
+  }),
+]);
+export type Workplace = z.infer<typeof Workplace>;
+
+/**
+ * 权限。access 和 beyond 只在用户电脑上分档（云端沙箱本来就隔离，总是完全访问）：
+ * access 只读 / 可改项目文件夹 / 完全访问；beyond AI 要做超出权限的事时问我 / 直接允许 / 不做。
+ * paidTools 用生图、视频、配音、音乐、3D 这些花钱的工具前问不问（云端和电脑都算）。
+ */
+export const Permissions = z.object({
+  access: z.enum(['read', 'project', 'full']),
+  beyond: z.enum(['ask', 'allow', 'deny']),
+  paidTools: z.enum(['ask', 'allow']),
+});
+export type Permissions = z.infer<typeof Permissions>;
+
+/** 默认：云端完全访问；电脑上可改项目文件夹、超出时问我。花钱的工具都不问。 */
+export const defaultPermissions = (workplace: Workplace): Permissions =>
+  workplace.kind === 'device'
+    ? { access: 'project', beyond: 'ask', paidTools: 'allow' }
+    : { access: 'full', beyond: 'deny', paidTools: 'allow' };
+
 /** 交给 AI 的文件放在沙箱的哪里：只能在 materials/ 下，不能有 .. */
 const MaterialPath = z
   .string()
@@ -64,8 +98,15 @@ export const StartRunBody = z.object({
    * 只能接同一付费人、已结束、工作目录还在的运行；工作目录不在了返回 409 {@link WORKSPACE_UNAVAILABLE}。
    */
   continueFrom: z.uuid().optional(),
+  /** 在哪干活：不给就是云端沙箱 */
+  workplace: Workplace.default({ kind: 'cloud' }),
+  /** 这一轮的权限：不给按在哪干活的默认（{@link defaultPermissions}） */
+  permissions: Permissions.optional(),
 });
 export type StartRunBody = z.input<typeof StartRunBody>;
+
+/** 这一轮要在用户电脑上跑，但那台电脑的桌面版现在没连上 Oasis */
+export const DEVICE_OFFLINE = 'device_offline';
 
 /** 接着的那一轮的持久工作目录已经不在了（被清掉）：接不上原会话，调用方改成开新会话。 */
 export const WORKSPACE_UNAVAILABLE = 'workspace_unavailable';

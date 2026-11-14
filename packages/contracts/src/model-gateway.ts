@@ -94,6 +94,8 @@ export const CreateRunKeyBody = z.object({
   conversationId: z.uuid().optional(),
   /** 用户打开了「只用国内模型」：这一轮的工具只给国内厂商的型号 */
   domesticOnly: z.boolean().default(false),
+  /** 用户设了花钱的工具「问我」：这一轮用生图、视频这类工具前先登记一张确认卡，等用户点 */
+  askPaid: z.boolean().default(false),
   /** 有效期，默认 6 小时，最长 7 天 */
   ttlSeconds: z
     .number()
@@ -111,6 +113,33 @@ export const RunKeyCreated = z.object({
   expiresAt: z.iso.datetime(),
 });
 export type RunKeyCreated = z.infer<typeof RunKeyCreated>;
+
+// ---- 确认卡：一轮里要用户点的确认。AI 要做超出权限的事（command，dsh 插件登记），或要用花钱的工具
+// （tool，用户设了「问我」时调工具登记）。用户在聊天里点允许一次 / 以后都允许 / 拒绝 ----
+
+export const Confirmation = z.object({
+  id: z.uuid(),
+  kind: z.enum(['command', 'tool']),
+  /** 给人看的：要做什么、为什么（命令的理由，或工具、型号和最多花多少） */
+  text: z.string(),
+  /** command：要放开的那一步的工具调用编号（进度里能对上是哪条命令） */
+  callId: z.string().nullable(),
+  /** used：花钱的工具确认允许后已经拿去调了（一张只能用一次） */
+  status: z.enum(['pending', 'allowed', 'denied', 'cancelled', 'used']),
+  createdAt: z.iso.datetime(),
+});
+export type Confirmation = z.infer<typeof Confirmation>;
+
+/** 运行内登记（dsh 插件，凭这一轮的 Key）：AI 要做超出权限的事 */
+export const AskConfirmationBody = z.object({
+  text: z.string().trim().min(1).max(4000),
+  callId: z.string().max(200).optional(),
+});
+
+/** 用户的回答：允许一次 / 以后都允许（这一轮里同类的不再问，私聊的设置也跟着改）/ 拒绝 */
+export const ConfirmDecision = z.enum(['once', 'always', 'deny']);
+export type ConfirmDecision = z.infer<typeof ConfirmDecision>;
+export const DecideConfirmationBody = z.object({ runId: z.uuid(), decision: ConfirmDecision });
 
 // ---- 算力：harness 开沙箱前冻结、结束后按实际时长结算，和模型、工具走同一套计量 ----
 
@@ -244,6 +273,8 @@ export const ToolCallBody = z.object({
   args: z.record(z.string(), z.unknown()),
   idempotency_key: z.uuid().optional(),
   max_cost_micro: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  /** 用户点了允许的确认卡（花钱的工具设了「问我」时，第一次调用拿到它，等允许后带上重交） */
+  confirmation_id: z.uuid().optional(),
 });
 
 /** 工具交回的文件（图片、音频……） */
@@ -271,18 +302,21 @@ export const ToolResult = z.object({
   costMicro: z.number().int().nonnegative(),
   /** 长任务（视频）：已提交，结果要用 GET …/tools/jobs/:id 去取 */
   job: z.object({ id: z.uuid() }).optional(),
+  /** 还没调：要先等用户点这张确认卡（GET …/confirmations/:id），允许后带 confirmation_id 重交 */
+  confirmation: z.object({ id: z.uuid() }).optional(),
 });
 export type ToolResult = z.infer<typeof ToolResult>;
 
 /**
- * 对话里一轮的花费：这一轮里调模型、用工具和沙箱算力的钱（微美元；还在做的长任务按冻结的算），
- * 以及这一轮用过哪些工具
+ * 对话里一轮在 model-gateway 这边的情况：花了多少（调模型、用工具和沙箱算力，微美元；还在做的长任务
+ * 按冻结的算）、用过哪些工具、还在等用户点的确认卡
  */
-export const RunSpend = z.object({
+export const RunActivity = z.object({
   spentMicro: z.number().int().nonnegative(),
   tools: z.array(z.string()),
+  confirmations: z.array(Confirmation).default([]),
 });
-export type RunSpend = z.infer<typeof RunSpend>;
+export type RunActivity = z.infer<typeof RunActivity>;
 
 /** 长任务的进度：还在做 / 做好了（带结果）/ 失败了（带原因） */
 export const ToolJobBody = z.object({

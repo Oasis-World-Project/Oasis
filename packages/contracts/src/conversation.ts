@@ -2,11 +2,15 @@
 // （harness 的一次运行），一轮进行中再说的话是插话；AI 说的话和做的每一步写进 AI 的消息里。
 import { z } from 'zod';
 import { ArtifactCategory, UploadBody } from './canvas.ts';
+import { Permissions, Workplace } from './harness.ts';
+import { Confirmation, ConfirmDecision } from './model-gateway.ts';
 
 /** 正在进行的一轮 */
 export const TurnState = z.object({
   runId: z.uuid(),
   startedAt: z.iso.datetime(),
+  /** 这一轮在等用户点的确认卡（AI 要做超出权限的事、要用花钱的工具） */
+  confirmations: z.array(Confirmation).default([]),
 });
 export type TurnState = z.infer<typeof TurnState>;
 
@@ -19,8 +23,18 @@ export const ConversationBody = z.object({
   lastMessageAt: z.iso.datetime().nullable(),
   /** 正在进行的一轮；没有为 null */
   turn: TurnState.nullable(),
+  /** 这个私聊在哪干活、权限（下一轮起用） */
+  workplace: Workplace,
+  permissions: Permissions,
 });
 export type ConversationBody = z.infer<typeof ConversationBody>;
+
+/** 改在哪干活和权限：换地方从新话题开始（AI 的记忆在原来那边）；一轮进行中不能换地方 */
+export const SetupBody = z.object({ workplace: Workplace, permissions: Permissions });
+export type SetupBody = z.infer<typeof SetupBody>;
+
+/** 用户点确认卡 */
+export const ConfirmBody = z.object({ decision: ConfirmDecision });
 
 export const ConversationList = z.object({ conversations: z.array(ConversationBody) });
 
@@ -192,6 +206,13 @@ export const SendResult = z.object({
   turn: TurnState.nullable(),
 });
 export type SendResult = z.infer<typeof SendResult>;
+
+/** 改了在哪干活和权限：改好的私聊；换了地方时还有一条新话题的分隔消息 */
+export const SetupResult = z.object({
+  conversation: ConversationBody,
+  message: MessageBody.nullable(),
+});
+export type SetupResult = z.infer<typeof SetupResult>;
 
 // ---- AI 回复里的卡片：AI 用代码块写，前端画成卡片；用户的回答是一条普通消息 ----
 
