@@ -2,7 +2,7 @@
   "name": "@oasis/agent",
   "version": "0.0.0",
   "private": true,
-  "description": "模型目录（8 类）、每个用户的 AI 人设、自带 Key（加密存储）",
+  "description": "模型目录（每个 AI 几档型号）、开一轮的型号路由、用户给 AI 们的设置（只用国内模型、每个 AI 用哪一档）",
   "type": "module",
   "files": [
     "dist",

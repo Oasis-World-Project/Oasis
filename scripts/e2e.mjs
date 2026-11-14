@@ -136,11 +136,11 @@ try {
       `真模型回归：${names.join('、')}，每个场景花费上限 ${usd(REAL_BUDGET_MICRO)}${raised.length ? `（${raised.join('、')}）` : ''}`,
     );
   } else {
-    // 假供应商认得私聊里每个 AI 的上游型号（agent 的模型表）
+    // 假供应商认得私聊里每个 AI 每一档的上游型号（agent 的模型表）
     const providerModels = query(
       'agent',
-      'select distinct provider_model from models where provider_model is not null',
-    ).map((row) => row.provider_model);
+      "select distinct option ->> 'model' as model from models, jsonb_array_elements(options) as option",
+    ).map((row) => row.model);
     provider = createFakeProvider({
       scenarios: SCENARIOS,
       fixtures,

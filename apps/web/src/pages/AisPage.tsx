@@ -1,4 +1,5 @@
-// AI 们：14 个对话 AI 可以私聊；「只用国内模型」开关；图像、视频等工具模型在后续版本列出（只能查看）。
+// AI 们：14 个对话 AI 可以私聊、换档位（默认快速档）；「只用国内模型」开关；
+// 图像、视频等工具模型在后续版本列出（只能查看）。
 import type { ModelEntry } from '@oasis/contracts/agent';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
@@ -9,6 +10,7 @@ import { AiAvatar } from '../ui/Avatar.tsx';
 import { ModelScopeToggle } from '../ui/ModelScopeToggle.tsx';
 import { PageHeader } from '../ui/PageHeader.tsx';
 import { EmptyHint, Panel } from '../ui/Panel.tsx';
+import { TierPicker } from '../ui/TierPicker.tsx';
 
 function ModelCard({
   model,
@@ -40,6 +42,7 @@ function ModelCard({
           </li>
         ))}
       </ul>
+      <TierPicker model={model} />
       <button
         type="button"
         onClick={onChat}
@@ -70,7 +73,7 @@ export function AisPage() {
     <>
       <PageHeader
         title="AI 们"
-        description="对话 AI 可以私聊、拉进群、单独设置；图像、视频等工具模型只能查看，由对话 AI 在干活时调用。"
+        description="对话 AI 可以私聊，每个 AI 都能换档位：默认快速，更强的更贵，从下一轮起换。图像、视频等工具模型只能查看，由对话 AI 在干活时调用。"
       />
       <ModelScopeToggle />
       <Panel title={`大语言模型${llms.length ? ` · ${llms.length}` : ''}`}>

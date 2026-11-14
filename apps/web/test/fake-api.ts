@@ -8,7 +8,7 @@ const USER = {
   createdAt: NOW,
 };
 
-const MODELS = [
+export const MODELS = [
   {
     key: 'claude',
     name: 'Claude',
@@ -17,6 +17,11 @@ const MODELS = [
     tags: ['写作'],
     mono: 'Cl',
     glow: 'var(--oasis-glow-1)',
+    options: [
+      { tier: 'fast', label: 'Claude Haiku 5.5', inputPrice: 0.1, outputPrice: 0.5 },
+      { tier: 'strong', label: 'Claude Opus 5.5', inputPrice: 4, outputPrice: 20, note: '慢一些' },
+    ],
+    tier: 'fast',
     versionLabel: 'Claude Haiku 5.5',
     available: true,
   },
@@ -28,6 +33,8 @@ const MODELS = [
     tags: ['中文'],
     mono: '文',
     glow: 'var(--oasis-glow-2)',
+    options: [],
+    tier: null,
     versionLabel: null,
     available: false,
   },

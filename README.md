@@ -74,7 +74,7 @@ pnpm browser:smoke
 | gateway | 8080 | 唯一对外入口：`/api/<服务>/v1/*` → `<服务>/v1/*` | ✅ |
 | identity | 4101 | 账号与登录（邮箱验证码） | 经 gateway |
 | billing | 4102 | 额度钱包：注册送 $30、预扣与结算、用量 | 经 gateway |
-| agent | 4103 | AI 目录、人设和型号路由、用户的设置（只用国内模型） | 经 gateway |
+| agent | 4103 | AI 目录（每个 AI 几档型号）、人设和型号路由、用户的设置（只用国内模型、每个 AI 用哪一档） | 经 gateway |
 | conversation | 4104 | 私聊（一轮：开、跟进、插话、停止、收尾）、群聊 | 经 gateway |
 | canvas | 4106 | 成果、批注、文件 | 经 gateway |
 | harness | 4107 | 私聊 AI 的运行时：每一轮在沙箱里跑 dsh（唯一接触 DeepSeek Harness） | 仅内部 |
