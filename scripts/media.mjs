@@ -242,12 +242,13 @@ try {
   assert.equal(range.status, 206);
   assert(Buffer.from(await range.arrayBuffer()).equals(Buffer.alloc(1000, 37)));
   checked('鉴权 Range 下载');
+  const runId = randomUUID();
   await artifacts.registerRun({
     ownerId,
     conversationId: randomUUID(),
     sessionId,
-    runId: randomUUID(),
-    topic: '媒体基础验收',
+    runId,
+    task: '媒体基础验收',
     models: ['offline-test'],
     outputs: [{ path: 'source.bin', size: bytes, sha256: expected.sha256 }],
   });
@@ -255,7 +256,7 @@ try {
   assert.equal(artifact.size, bytes);
   assert.equal(artifact.sha256, expected.sha256);
   checked('最终成果跨 HTTP 流式复制与摘要核对');
-  const zipResponse = await fetch(`${address}/v1/topics/${sessionId}/archive`, {
+  const zipResponse = await fetch(`${address}/v1/runs/${runId}/archive`, {
     headers: { 'x-oasis-user-id': ownerId },
   });
   assert.equal(zipResponse.status, 200);

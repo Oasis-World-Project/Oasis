@@ -189,7 +189,7 @@ async function add(name, bytes, contentType = 'application/octet-stream') {
     conversationId,
     sessionId,
     runId,
-    topic: '3D 本地验证',
+    task: '3D 本地验证',
     path: name,
     name,
     size: bytes.length,

@@ -19,7 +19,7 @@ const ids = (rows, key = 'id') => rows.map((r) => literal(r[key])).join(',') || 
 
 const [conversation] = query(
   'conversation',
-  `select id, title, model_key, topic, last_run_id, turn from conversations where id = ${literal(conversationId)}`,
+  `select id, title, model_key, last_run_id, turn from conversations where id = ${literal(conversationId)}`,
 );
 if (!conversation) {
   console.error(`没有这个对话：${conversationId}（删掉的对话查不到，删除是真删除）`);
@@ -105,7 +105,7 @@ function describeCalls(list) {
 }
 
 console.log(
-  `私聊 ${conversation.id}「${conversation.title}」  AI ${conversation.model_key ?? '—'}  话题「${conversation.topic ?? '—'}」`,
+  `私聊 ${conversation.id}「${conversation.title}」  AI ${conversation.model_key ?? '—'}  在做的任务「${conversation.turn?.title ?? '—'}」`,
 );
 console.log(
   `正在进行的一轮：${conversation.turn ? conversation.turn.runId : '没有'}  下一轮接着：${conversation.last_run_id ?? '新会话'}`,
