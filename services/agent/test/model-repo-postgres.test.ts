@@ -1,4 +1,4 @@
-// 真实数据库：每个 AI 的可选型号（第一个是默认）、用户给各个 AI 选的档位，收缩迁移的回退。
+// 真实数据库：每个 AI 的可选型号（第一个是默认）和实测说明、用户给各个 AI 选的档位，迁移的回退。
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createModelRepo } from '../src/repo/model-repo.ts';
 
 const CONTRACT = '20261114210100_contract_model_options.sql';
+const NOTES = '20261114220000_model_option_notes.sql';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('可选型号和选的档位（真实数据库）', () => {
   const schema = 'agent_test_' + randomUUID().replaceAll('-', '');
@@ -53,6 +54,26 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('可选型号和选的档位（�
       'DeepSeek V4.1 Flash',
       'DeepSeek V4 Pro',
     ]);
+  });
+
+  it('量过的型号写着实测结果，不会用工具的标「做任务较弱」；回退只去掉实测的说明', async () => {
+    const notes = async () =>
+      Object.fromEntries(
+        (await repo.list()).flatMap((m) => m.options.map((o) => [o.model, o.note ?? null])),
+      );
+    const measured = await notes();
+    expect(measured['deepseek/deepseek-v4-pro']).toMatch(/^实测：小网页 .*自己看不了图$/);
+    expect(measured['meta-llama/llama-4-maverick']).toMatch(/^做任务较弱：/);
+    // 开发机所在地区用不了的没量；原来的提醒不动
+    expect(measured['anthropic/claude-haiku-5.5']).toBeNull();
+    expect(measured['openai/gpt-6-astra-pro']).toBe('慢');
+    expect(Object.values(measured).filter((n) => n?.startsWith('实测：')).length).toBe(16);
+
+    await pool.query(await part(NOTES, 'down'));
+    const before = await notes();
+    expect(Object.values(before).filter((n) => n !== null)).toEqual(['慢']);
+    await pool.query(await part(NOTES, 'up'));
+    expect(await notes()).toEqual(measured);
   });
 
   it('选档位只改这一个 AI，不动别的 AI 和「只用国内模型」', async () => {
