@@ -135,6 +135,14 @@ describe('dsh 事件翻译', () => {
     ).toEqual({ oasisTool: 'image.generate', oasisModel: 'x/seedream', path: undefined });
     expect(facts('bash', { command: 'oasis-tool wait 1 2' })).toMatchObject({ oasisTool: 'wait' });
     expect(facts('bash', { command: 'ls out' })).toMatchObject({ oasisTool: undefined });
+    // 查用法不算调用工具
+    const help = { command: 'oasis-tool video.generate --help 2>&1 | head -40' };
+    expect(facts('bash', help)).toMatchObject({ oasisTool: undefined });
+    expect(
+      translateNotification(
+        ...event('tool/call', { callId: 'c', name: 'bash', arguments: JSON.stringify(help) }),
+      )?.data.label,
+    ).toBe('看用法：生成视频');
     expect(facts('write', { file_path: '/workspace/out/分镜.md', content: 'x' })).toMatchObject({
       path: 'out/分镜.md',
     });
@@ -159,6 +167,42 @@ describe('dsh 事件翻译', () => {
       ),
     ).toEqual(['out/帧-1.png', 'out/帧-2.png', 'out/尾.png']);
     expect(saved('已保存：/tmp/x.png\n已保存：../x.png')).toBeUndefined();
+
+    // 长任务的进展按任务号：交了没等的、做好了的（连同它的文件）、还在做的、没做出来的
+    const [a, b, c, d] = ['a', 'b', 'c', 'd'].map(
+      (x) => `${x.repeat(8)}-0000-4000-8000-000000000000`,
+    );
+    const jobs = (text: string) =>
+      translateNotification(
+        ...event('tool/result', {
+          message: { toolCallId: 'c', content: [{ type: 'text', text }] },
+        }),
+      )?.data.jobs;
+    expect(
+      jobs(
+        `生成视频已提交，要等几分钟；任务号 ${a}。\n已提交，没等结果（任务号 ${a}）。几个都交完后一起等：oasis-tool wait ${a} <别的任务号…>`,
+      ),
+    ).toEqual([{ id: a, state: 'submitted' }]);
+    expect(
+      jobs(
+        [
+          `做好了（任务号 ${a}）`,
+          '视频生成好了',
+          '已保存：out/片段一.mp4',
+          '花费：$0.2125',
+          `做好了（任务号 ${b}）`,
+          '已保存：/workspace/out/片段二.mp4',
+          `还没做好（任务号 ${c}）。先做别的，过一会儿运行：oasis-tool wait ${c}`,
+          `oasis-tool 出错：内容不合规（任务号 ${d}，供应商没做出来，没有收费；要再试就加 --new true 重新提交）`,
+        ].join('\n'),
+      ),
+    ).toEqual([
+      { id: a, state: 'done', files: ['out/片段一.mp4'] },
+      { id: b, state: 'done', files: ['out/片段二.mp4'] },
+      { id: c, state: 'waiting' },
+      { id: d, state: 'failed' },
+    ]);
+    expect(jobs('ls out')).toBeUndefined();
   });
 
   it('待办单独成一种事件（不算一步）', () => {

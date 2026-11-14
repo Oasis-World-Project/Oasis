@@ -9,7 +9,7 @@ import { ApplicationSpec } from '@oasis/contracts/canvas';
 import { BrowserTestPlan } from '@oasis/contracts/ui-test';
 import { MODEL_PREVIEW_LIMITS, ModelPreviewSpec } from '@oasis/contracts/model-preview';
 import { createJsonRpcClient } from './jsonrpc.ts';
-import { OASIS_TOOL, savedFiles, stepFacts } from './step-facts.ts';
+import { jobFacts, OASIS_TOOL, savedFiles, stepFacts, TOOL_HELP } from './step-facts.ts';
 
 /** 沙箱镜像里的目录约定（与 infra/images/harness-sandbox-base/Dockerfile 一致） */
 export const SANDBOX_PATHS = {
@@ -215,6 +215,7 @@ function oasisTool(command: string): string | undefined {
   );
   const detail = what ? (what[1] ?? what[2] ?? what[3] ?? '') : '';
   const name = TOOL_LABELS[tool] ?? `用工具 ${tool}`;
+  if (TOOL_HELP.test(command)) return `看用法：${name}`;
   return detail ? `${name}：${brief(detail, 40)}` : name;
 }
 
@@ -333,6 +334,7 @@ export function translateNotification(method: string, params: unknown): AgentEve
       const error = data.error as { reason?: string } | undefined;
       const output = textOf(message?.content);
       const files = savedFiles(output);
+      const jobs = jobFacts(output);
       return {
         kind: 'tool_result',
         data: {
@@ -341,6 +343,7 @@ export function translateNotification(method: string, params: unknown): AgentEve
           text: clip(output),
           ...(error?.reason ? { error: clip(error.reason) } : {}),
           ...(files.length ? { files } : {}),
+          ...(jobs.length ? { jobs } : {}),
         },
       };
     }

@@ -112,6 +112,10 @@ describe('AI 消息怎么写', () => {
           ok: false,
           error: '有一段没做出来',
           files: ['out/镜头一.mp4'],
+          jobs: [
+            { id: 'j1', state: 'done', files: ['out/镜头一.mp4'] },
+            { id: 'j2', state: 'failed' },
+          ],
         }),
         timed(7, 'tool_call', {
           callId: 's',
@@ -145,6 +149,10 @@ describe('AI 消息怎么写', () => {
         oasisTool: 'video.generate',
         expectSeconds: 180,
         files: ['out/镜头一.mp4'],
+        jobs: [
+          { id: 'j1', state: 'done', files: ['out/镜头一.mp4'] },
+          { id: 'j2', state: 'failed' },
+        ],
       },
       {
         ...step,
@@ -174,6 +182,12 @@ describe('AI 消息怎么写', () => {
         oasisTool: 'web.search',
       },
     ]);
+    // 看不懂的进展不记
+    const odd = applyEvents({ parts: [] }, [
+      timed(0, 'tool_call', { callId: 'o', name: 'bash', label: '等', oasisTool: 'wait' }),
+      timed(1, 'tool_result', { callId: 'o', ok: true, jobs: [{ id: 'x', state: '在路上' }] }),
+    ]);
+    expect(odd.parts[0]).not.toHaveProperty('jobs');
   });
 });
 

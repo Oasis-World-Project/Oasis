@@ -1,6 +1,7 @@
 // 把 harness 的运行事件写进 AI 的消息：AI 说的话、做的步骤、待办、系统提示。
 // AI 看到用户的插话时分段：之后的写进一条新的 AI 消息，插话排在前一段后面。
 import {
+  StepJob,
   TodoItem,
   type MessagePart,
   type StepPart,
@@ -90,6 +91,8 @@ export function applyEvents(
       const files = [...new Set([...(ok ? (step.files ?? []) : []), ...asTexts(data.files)])];
       if (files.length) step.files = files;
       else delete step.files;
+      const jobs = z.array(StepJob).safeParse(data.jobs);
+      if (jobs.success && jobs.data.length) step.jobs = jobs.data;
     } else if (kind === 'todos') {
       const items = z.array(TodoItem).safeParse(data.items);
       if (items.success) segment.todos = items.data;

@@ -1,9 +1,9 @@
 // oasis-tool 里和文件打交道的部分：结果存到哪、图片和音频按实际格式改后缀、读本地图片、
-// 3d.render 的场景和资产、app.check 带上的应用文件。
+// 3d.render 的场景和资产、app.check 带上的应用文件、web.fetch 抓回的全文。
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { lstat, open, readdir, readFile, realpath, stat } from 'node:fs/promises';
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /**
  * 文件要存到哪：给了 --out 就用它（多个文件时加 -1、-2），否则放进 out/ 用工具给的名字。
@@ -88,6 +88,16 @@ export async function startOf(path: string): Promise<Buffer> {
     return whole.subarray(0, (await file.read(whole, 0, whole.length, 0)).bytesRead);
   } finally {
     await file.close();
+  }
+}
+
+/** web.fetch 抓回的全文存进 --out 目录（文件名只认「序号-摘要.md」） */
+export async function saveFetched(files: { name: string; base64: string }[], out: string) {
+  for (const f of files) {
+    if (basename(f.name) !== f.name || !/^\d+-[a-f0-9]{12}\.md$/.test(f.name))
+      throw new Error('工具返回了不安全的文件名');
+    await mkdir(out, { recursive: true });
+    await writeFile(join(out, f.name), Buffer.from(f.base64, 'base64'));
   }
 }
 

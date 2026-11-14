@@ -49,6 +49,14 @@ export const MessageArtifact = z.object({
 });
 export type MessageArtifact = z.infer<typeof MessageArtifact>;
 
+/** 一步里一个长任务的进展（见 StepPart.jobs） */
+export const StepJob = z.object({
+  id: z.string(),
+  state: z.enum(['submitted', 'waiting', 'done', 'failed']),
+  files: z.array(z.string()).optional(),
+});
+export type StepJob = z.infer<typeof StepJob>;
+
 /** AI 在一轮里做的一步：调了什么工具（读写文件、跑命令、生图……），给人看的一句话和结果 */
 export const StepPart = z.object({
   type: z.literal('step'),
@@ -72,6 +80,12 @@ export const StepPart = z.object({
    * 做完才算数；oasis-tool 说已保存的都算
    */
   files: z.array(z.string()).optional(),
+  /**
+   * 这一步里长任务（视频、音乐……）的进展，按任务号：submitted 交上去没等、waiting 等到上限还没好、
+   * done 做好了（连同存下的文件）、failed 没做出来。几段先交后一起等时，进度页按任务号把交的那一步
+   * 和等到的结果连成一张卡。
+   */
+  jobs: z.array(StepJob).optional(),
 });
 export type StepPart = z.infer<typeof StepPart>;
 

@@ -142,7 +142,23 @@ describe('oasis-tool 长任务', () => {
           : [],
     };
   });
-  fake.get('/v1/tools', async () => ({ tools: [] }));
+  fake.get('/v1/tools', async () => ({
+    tools: [
+      {
+        key: 'video.generate',
+        name: '生成视频',
+        description: '按文字生成短视频',
+        usage: 'oasis-tool video.generate --prompt "…" --out out/视频.mp4',
+        unit: '秒',
+        available: true,
+        rates: [{ model: 'alibaba/wan-3.0', costMicro: 50_000, seconds: 153 }],
+        args: [
+          { name: 'prompt', description: '画面描述' },
+          { name: 'resolution', description: '清晰度', choices: ['480p', '720p'] },
+        ],
+      },
+    ],
+  }));
   const videoRequests: { args: Record<string, unknown>; idempotency_key: string }[] = [];
   // 「第一段」「第二段」各有自己的任务号（几段一起交、一起等）；别的都是 job-done
   const videoJobs: Record<string, string> = { 第一段: 'job-one', 第二段: 'job-two' };
@@ -306,8 +322,20 @@ describe('oasis-tool 长任务', () => {
     await main(['wait', 'job-one', 'job-two', 'job-slow']);
     expect(await readFile(one, 'utf8')).toBe('mp4 job-one');
     expect(await readFile(two, 'utf8')).toBe('mp4 job-two');
+    // 先说哪个任务号做好了，接着是它存下的文件（进度页按任务号对上）
+    expect(printed.join('')).toContain(`做好了（任务号 job-one）\n视频生成好了\n已保存：${one}`);
     expect(printed.join('')).toContain('还没做好（任务号 job-slow）');
     await expect(main(['wait', 'job-one', 'job-two', '--out', one])).rejects.toThrow('不写 --out');
+  });
+
+  it('oasis-tool <工具> --help 只看这一个：说明、用法、单价和每个参数', async () => {
+    printed.length = 0;
+    await main(['video.generate', '--help']);
+    const text = printed.join('');
+    expect(text).toContain('video.generate（生成视频）：按文字生成短视频');
+    expect(text).toContain('alibaba/wan-3.0 每秒约 $0.050、一次约 153 秒');
+    expect(text).toContain('--resolution：清晰度（480p、720p）');
+    await expect(main(['nope.tool', '-h'])).rejects.toThrow('没有能用的工具 nope.tool');
   });
 
   it('工具目录同时展示本次沙箱实际安装的软件清单', async () => {

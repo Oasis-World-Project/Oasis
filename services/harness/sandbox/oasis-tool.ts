@@ -2,10 +2,8 @@
 // 沙箱的 /opt/oasis（镜像里那份给离线验收用），改了不用重建镜像。
 // 经入口代理连 model-gateway，带本次运行的临时 Key；生成的文件（图片、音频……）写到指定位置。
 //
-//   oasis-tool list                                   看有哪些工具、怎么用
+//   oasis-tool list                                   看有哪些工具、怎么用（<工具> --help 只看一个）
 //   oasis-tool image.generate --prompt "…" --out out/图.png
-//   oasis-tool web.search --query "…"
-//   oasis-tool audio.transcribe --file in/录音.mp3
 //   oasis-tool video.generate --prompt "…" --out out/视频.mp4   长任务：提交后自己等，等不到就给任务号
 //   oasis-tool video.generate … --wait false                    只提交、马上给任务号（几段一起交）
 //   oasis-tool wait <任务号> [<任务号> …]                        一起等，各存到交的时候写的 --out
@@ -23,6 +21,7 @@ import {
   localMedia,
   matchExt,
   renderScene,
+  saveFetched,
   startOf,
   targetsFor,
 } from './tool-files.ts';
@@ -63,6 +62,7 @@ interface ToolEntry {
   available: boolean;
   /** 每个型号的典型单价和用时（旧版网关没有） */
   rates?: { model: string; costMicro: number; seconds: number | null }[];
+  args?: { name: string; description: string; choices?: string[] }[];
 }
 
 /** 解析 --名字 值；同时返回 --out 和 --file */
@@ -131,10 +131,13 @@ async function request(path: string, init: RequestInit = {}): Promise<unknown> {
   return (await openRequest(path, init)).json();
 }
 
-async function list(): Promise<void> {
+/** 列出工具、用法和单价；only：只看这一个，连同每个参数（oasis-tool <工具> --help） */
+async function list(only?: string): Promise<void> {
   const { tools } = (await request('/tools')) as { tools: ToolEntry[] };
   const usd = (micro: number) => `$${(micro / 1_000_000).toFixed(micro < 10_000 ? 4 : 3)}`;
-  for (const tool of tools.filter((t) => t.available)) {
+  const shown = tools.filter((t) => t.available && (!only || t.key === only));
+  if (only && !shown.length) throw new Error(`没有能用的工具 ${only}，oasis-tool list 看有哪些`);
+  for (const tool of shown) {
     // 每个型号的单价和用时：AI 用 --model 选，默认第一个
     const rates = (tool.rates ?? [])
       .map(
@@ -142,17 +145,21 @@ async function list(): Promise<void> {
           `${r.model} 每${tool.unit}约 ${usd(r.costMicro)}${r.seconds ? `、一次约 ${r.seconds} 秒` : ''}`,
       )
       .join('；');
+    const args = (only ? (tool.args ?? []) : []).map(
+      (a) => `\n    --${a.name}：${a.description}${a.choices ? `（${a.choices.join('、')}）` : ''}`,
+    );
     say(
-      `${tool.key}（${tool.name}）：${tool.description}\n  用法：${tool.usage}${rates ? `\n  型号与单价（--model 指定，默认第一个）：${rates}` : ''}\n`,
+      `${tool.key}（${tool.name}）：${tool.description}\n  用法：${tool.usage}${rates ? `\n  型号与单价（--model 指定，默认第一个）：${rates}` : ''}${args.length ? `\n  参数：${args.join('')}` : ''}\n`,
     );
   }
   const manifest = process.env.OASIS_SOFTWARE_MANIFEST;
-  if (manifest)
+  if (manifest && !only)
     say(`沙箱已安装的软件（安装时生成的实际版本）：\n${await readFile(manifest, 'utf8')}`);
 }
 
-async function save(result: ToolResult, out: string | undefined): Promise<void> {
-  say(result.text);
+/** 存下工具交回的文件；lead：先说的一句（如哪个任务号做好了） */
+async function save(result: ToolResult, out: string | undefined, lead?: string): Promise<void> {
+  say(lead ? `${lead}\n${result.text}` : result.text);
   const targets = targetsFor(result.files, out);
   for (const [i, f] of result.files.entries()) {
     if (basename(f.name) !== f.name || f.name.includes('\\')) throw new Error('工具文件名不安全');
@@ -244,7 +251,8 @@ async function waitOne(id: string, out: string | undefined, deadline: number): P
     const job = (await request(`/tools/jobs/${encodeURIComponent(id)}`)) as ToolJob;
     if (job.status === 'completed' && job.result) {
       const result = job.result;
-      await inTurn(() => save(result, out));
+      // 先说是哪个任务号做好了，接着的「已保存」都是它的（进度页按任务号对上）
+      await inTurn(() => save(result, out, `做好了（任务号 ${id}）`));
       return true;
     }
     // 供应商明确没做出来的不收费，可以重新提交；结果没确认的可能已经收费，不能重新提交
@@ -424,16 +432,7 @@ async function run(key: string, argv: string[]): Promise<void> {
     }
   }
   if (key === 'web.fetch' && out) {
-    for (const f of result.files) {
-      if (
-        basename(f.name) !== f.name ||
-        f.name.includes('\\') ||
-        !/^\d+-[a-f0-9]{12}\.md$/.test(f.name)
-      )
-        throw new Error('工具返回了不安全的文件名');
-      await mkdir(out, { recursive: true });
-      await writeFile(join(out, f.name), Buffer.from(f.base64, 'base64'));
-    }
+    await saveFetched(result.files, out);
     say(result.text);
     say(
       `已保存 ${result.files.length} 份全文到 ${out}；花费：$${(result.costMicro / 1_000_000).toFixed(4)}`,
@@ -454,6 +453,7 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   if (command === 'list') return list();
+  if (rest.includes('--help') || rest.includes('-h')) return list(command);
   if (command === 'cancel') {
     const [id] = rest;
     if (!id || !/^[a-f0-9-]{36}$/.test(id)) throw new Error('cancel 后面需要任务号');
