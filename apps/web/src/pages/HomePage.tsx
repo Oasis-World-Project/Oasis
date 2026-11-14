@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { dmsQuery, walletQuery } from '../api/queries.ts';
-import { useModelMap } from '../api/use-model-map.ts';
+import { aiName, useModelMap } from '../api/use-model-map.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatUsd } from '../ui/format.ts';
 import { PageHeader } from '../ui/PageHeader.tsx';
@@ -42,7 +42,7 @@ function MyAisPanel() {
           >
             {model && <AiAvatar mono={model.mono} glow={model.glow} size={36} glowing />}
             <span className="flex flex-col">
-              <span className="text-sm font-medium">{dm.title}</span>
+              <span className="text-sm font-medium">{aiName(models, dm)}</span>
               <span className="text-xs text-ink-muted">{model?.versionLabel ?? ''}</span>
             </span>
           </Link>

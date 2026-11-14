@@ -8,7 +8,7 @@ import { ArrowLeft, Images, LoaderCircle } from 'lucide-react';
 import { useState } from 'react';
 import { ApiError } from '../api/client.ts';
 import { dmsQuery, messagesQuery, stopTurn } from '../api/queries.ts';
-import { useModelMap } from '../api/use-model-map.ts';
+import { aiName, useModelMap } from '../api/use-model-map.ts';
 import { Todos } from '../chat/AiMessage.tsx';
 import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
 import { FilePreview } from '../chat/FilePreview.tsx';
@@ -77,7 +77,7 @@ function RunView({ runId, conversationId }: { runId: string; conversationId: str
             {progress.found ? progress.title : '这一轮的进度'}
           </h1>
           <span className="truncate text-xs text-ink-muted">
-            {dm?.title ?? '私聊'}
+            {dm ? aiName(models, dm) : '私聊'}
             {progress.startedAt &&
               ` · ${new Date(progress.startedAt).toLocaleString('zh-CN', {
                 month: 'numeric',

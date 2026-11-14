@@ -1,8 +1,10 @@
-// 画布上的一个任务框：框顶是任务名、状态、开始时间、用时、花费、做它的 AI，可以看过程（在做时是看进度）、
-// 回到私聊、打包下载；框里分「成品」「素材」两排，素材小一号。
+// 一个任务的页面里的任务框（画布上点开一个任务）：框顶是任务名、状态、开始时间、用时、花费、做它的 AI，
+// 可以看过程（在做时是看进度）、回到私聊、打包下载；框里分「成品」「素材」两排，素材小一号。
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { Activity, Download, MessageCircle } from 'lucide-react';
-import { taskArchiveUrl } from '../api/queries.ts';
+import { dmsQuery, taskArchiveUrl } from '../api/queries.ts';
+import { aiName, useModelMap } from '../api/use-model-map.ts';
 import { StatusTag } from '../chat/parts.tsx';
 import { elapsedText, TASK_STATUS } from '../chat/TaskCard.tsx';
 import { AiAvatar } from '../ui/Avatar.tsx';
@@ -17,11 +19,24 @@ export interface Maker {
   name: string;
 }
 
+/** 做任务的 AI：任务所在私聊的 AI（名字用用户给它起的） */
+export function useMakerOf(): (conversationId: string) => Maker | undefined {
+  const { data: dms = [] } = useQuery(dmsQuery);
+  const models = useModelMap();
+  return (conversationId) => {
+    const dm = dms.find((d) => d.id === conversationId);
+    const model = dm?.modelKey ? models.get(dm.modelKey) : undefined;
+    return dm && model
+      ? { mono: model.mono, glow: model.glow, name: aiName(models, dm) }
+      : undefined;
+  };
+}
+
 const button =
   'inline-flex h-9 items-center gap-1.5 rounded-full bg-glass-active px-3.5 text-[13px] text-ink no-underline shadow-edge-strong';
 const label = 'm-0 text-[12.5px] font-medium text-ink-muted';
 
-const when = (at: number) =>
+export const when = (at: number) =>
   new Date(at).toLocaleString('zh-CN', {
     month: 'numeric',
     day: 'numeric',

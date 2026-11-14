@@ -23,7 +23,8 @@ function Paper({ label }: { label: string }) {
   );
 }
 
-function Thumb({ artifact }: { artifact: ArtifactBody }) {
+/** 成果的缩略图（画布上任务卡的封面也用它） */
+export function Thumb({ artifact }: { artifact: ArtifactBody }) {
   const [posterFailed, setPosterFailed] = useState(false);
   if (artifact.modelPreview?.posterId && !posterFailed)
     return (

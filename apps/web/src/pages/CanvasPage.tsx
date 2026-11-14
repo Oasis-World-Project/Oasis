@@ -1,16 +1,16 @@
-// 画布（照原型 ⑧）：AI 们做的成果，按任务分框（任务是私聊里用了生图、视频这类工具或交了文件的那一轮）。
-// 框顶是任务名、状态、用时、花费、做它的 AI，可以看过程、回到私聊、打包下载；框里分成品和素材。最近的任务
-// 在前；有任务在做时定时刷新，做好一个就出现。可以按类别筛选、搜索，也可以只看某个私聊的（?conversation=，
-// 任务卡上的「在画布里看」）。桌面端在这里设置同步到电脑的文件夹（按任务分文件夹）。
+// 画布（照原型 ⑧）：AI 们做的成果，按任务放（任务是私聊里用了生图、视频这类工具或交了文件的那一轮）。
+// 一个任务一个小窗口：封面是几个成果的缩略图，写着任务名、状态、用时、花费、做它的 AI；点开进这个任务的页面
+// 看全部成品和素材。最近的任务在前；有任务在做时定时刷新，做好一个就出现。可以按类别筛选、搜索，也可以只看
+// 某个私聊的（?conversation=，任务卡上的「在画布里看」）。桌面端在这里设置同步到电脑的文件夹（按任务分文件夹）。
 import type { ArtifactCategory } from '@oasis/contracts/canvas';
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { Search, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { artifactsQuery, dmsQuery, tasksQuery } from '../api/queries.ts';
-import { useModelMap } from '../api/use-model-map.ts';
 import { groupTasks } from '../canvas/task-groups.ts';
-import { TaskPanel, type Maker } from '../canvas/TaskPanel.tsx';
+import { useMakerOf } from '../canvas/TaskPanel.tsx';
+import { TaskTile } from '../canvas/TaskTile.tsx';
 import { useNow } from '../chat/TaskCard.tsx';
 import { DesktopSyncBar } from '../desktop/DesktopSync.tsx';
 import { EmptyHint } from '../ui/Panel.tsx';
@@ -40,17 +40,10 @@ export function CanvasPage() {
     refetchInterval: running ? 3_000 : false,
   });
   const { data: dms = [] } = useQuery(dmsQuery);
-  const models = useModelMap();
+  const makerOf = useMakerOf();
   const now = useNow(running);
   const [category, setCategory] = useState<ArtifactCategory | 'all'>('all');
   const [search, setSearch] = useState('');
-
-  /** 做这个任务的 AI：这个私聊的 AI */
-  const makerOf = (conversationId: string): Maker | undefined => {
-    const dm = dms.find((d) => d.id === conversationId);
-    const model = dm?.modelKey ? models.get(dm.modelKey) : undefined;
-    return dm && model ? { mono: model.mono, glow: model.glow, name: dm.title } : undefined;
-  };
 
   const keyword = search.trim().toLowerCase();
   const { groups, matching } = useMemo(
@@ -130,14 +123,16 @@ export function CanvasPage() {
               : '这一类里还没有成果。'}
         </EmptyHint>
       )}
-      {groups.map((group) => (
-        <TaskPanel
-          key={group.runId}
-          group={group}
-          maker={makerOf(group.conversationId)}
-          now={now}
-        />
-      ))}
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
+        {groups.map((group) => (
+          <TaskTile
+            key={group.runId}
+            group={group}
+            maker={makerOf(group.conversationId)}
+            now={now}
+          />
+        ))}
+      </div>
     </>
   );
 }

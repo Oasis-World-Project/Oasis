@@ -1,5 +1,5 @@
 // 各页面用到的查询和操作。查询的 key 集中在这里，便于在操作后刷新对应数据。
-import { AiSettings, ModelEntry, ModelList, type ModelTier } from '@oasis/contracts/agent';
+import { AiSettings, ModelEntry, ModelList, type SaveAiBody } from '@oasis/contracts/agent';
 import { GroupList, GroupSnapshot, GroupInvite, GroupInvitePreview } from '@oasis/contracts/group';
 import { WalletBody } from '@oasis/contracts/billing';
 import { ArtifactBody, ArtifactList, type Annotation } from '@oasis/contracts/canvas';
@@ -41,9 +41,12 @@ export const modelsQuery = queryOptions({
   staleTime: 10 * 60_000,
 });
 
-/** 给一个 AI 换档位，返回换好后的这个 AI；下一轮起用新型号 */
-export const chooseTier = (key: string, tier: ModelTier) =>
-  api(`/agent/v1/models/${key}/tier`, ModelEntry, { method: 'PUT', body: { tier } });
+/** 设置页保存一个 AI 的档位和设定，返回存好后的这个 AI；下一轮起生效 */
+export const saveAi = (key: string, body: SaveAiBody) =>
+  api(`/agent/v1/models/${encodeURIComponent(key)}/settings`, ModelEntry, {
+    method: 'PUT',
+    body,
+  });
 
 /** 给 AI 们的设置（「只用国内模型」） */
 export const aiSettingsQuery = queryOptions({

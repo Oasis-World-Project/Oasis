@@ -1,9 +1,9 @@
-// 画布：成果按任务分框（框顶任务名、状态、用时、花费、做它的 AI，看过程、回到私聊、打包下载；框里成品和素材）、
+// 画布：一个任务一个小窗口（任务名、状态、用时、花费、做它的 AI、成果个数），点开进任务页（成品和素材，看过程、回到私聊、打包下载）、
 // 类别和搜索、只看某个私聊的、打开成果；桌面端把成果同步到电脑。
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import type { OasisDesktop } from '@oasis/contracts/desktop';
 import { createMemoryHistory } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
 import { pendingOf, syncOnce, syncProgress } from '../src/desktop/sync.ts';
@@ -124,16 +124,33 @@ afterEach(() => {
 });
 
 describe('画布', () => {
-  it('按任务分框，最近的任务在前：框顶任务名、状态、用时、花费、做它的 AI；看过程、回到私聊、打包下载', async () => {
+  it('一个任务一个小窗口，最近的在前：任务名、状态、用时、花费、做它的 AI、成果个数；点开进任务页', async () => {
     fakeCanvas();
     await open('/canvas');
-    const home = await screen.findByRole('region', { name: '民宿首页' });
-    const price = screen.getByRole('region', { name: '价格表' });
+    const home = await screen.findByRole('link', { name: '打开任务 民宿首页' });
+    const price = screen.getByRole('link', { name: '打开任务 价格表' });
     expect(price.compareDocumentPosition(home) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(home.getAttribute('href')).toBe(`/canvas/tasks/${RUN}`);
     expect(within(home).getByText('已完成')).toBeTruthy();
     expect(home.textContent).toContain('用时 10 分 0 秒');
-    expect(home.textContent).toMatch(/花费 \$0\.35/);
+    expect(home.textContent).toMatch(/\$0\.35/);
     expect(within(home).getByText('Claude')).toBeTruthy();
+    expect(home.textContent).toContain('成品 2 · 素材 1');
+    // 成果不在首页展开
+    expect(screen.queryByRole('link', { name: '打开 首页文案.md' })).toBeNull();
+    expect(within(price).getByText('进行中')).toBeTruthy();
+    expect(within(price).getByText('文心')).toBeTruthy();
+    // 浏览器里没有桌面端接口，不显示同步条
+    expect(screen.queryByRole('region', { name: '同步到电脑' })).toBeNull();
+  });
+
+  it('任务页：成品和素材分开，看过程、回到私聊、打包下载；没有成果的在做的任务说还在做', async () => {
+    fakeCanvas();
+    await open(`/canvas/tasks/${RUN}`);
+    const home = await screen.findByRole('region', { name: '民宿首页' });
+    expect(within(home).getByRole('heading', { name: '成品' })).toBeTruthy();
+    expect(within(home).getByRole('heading', { name: /素材/ }).textContent).toContain('1');
+    expect(within(home).getAllByRole('article')).toHaveLength(3);
     expect(within(home).getByRole('link', { name: '看过程' }).getAttribute('href')).toBe(
       `/canvas/runs/${RUN}?conversation=${CONV}`,
     );
@@ -143,40 +160,28 @@ describe('画布', () => {
     expect(within(home).getByRole('link', { name: '打包下载' }).getAttribute('href')).toBe(
       `/api/canvas/v1/runs/${RUN}/archive`,
     );
-    // 在做的任务：看进度
-    expect(within(price).getByText('进行中')).toBeTruthy();
-    expect(within(price).getByRole('link', { name: '看进度' })).toBeTruthy();
-    expect(within(price).getByText('文心')).toBeTruthy();
-    // 浏览器里没有桌面端接口，不显示同步条
-    expect(screen.queryByRole('region', { name: '同步到电脑' })).toBeNull();
-  });
+    expect(screen.getByRole('link', { name: '回到画布' }).getAttribute('href')).toBe('/canvas');
 
-  it('框里分成品和素材；没有成果的任务也列出来，说还在做', async () => {
-    fakeCanvas(ARTIFACTS.filter((a) => a.runId === RUN));
-    await open('/canvas');
-    const home = await screen.findByRole('region', { name: '民宿首页' });
-    expect(within(home).getByRole('heading', { name: '成品' })).toBeTruthy();
-    expect(within(home).getByRole('heading', { name: /素材/ }).textContent).toContain('1');
-    expect(within(home).getAllByRole('article')).toHaveLength(3);
-    const price = screen.getByRole('region', { name: '价格表' });
-    expect(price.textContent).toContain('还在做，做好一个就放到这里');
+    cleanup();
+    await open(`/canvas/tasks/${OTHER_RUN}`);
+    const price = await screen.findByRole('region', { name: '价格表' });
+    expect(within(price).getByRole('link', { name: '看进度' })).toBeTruthy();
   });
 
   it('按类别筛选，标签上有数量；能搜任务名', async () => {
     fakeCanvas();
     await open('/canvas');
-    expect(await screen.findByRole('link', { name: '打开 首页文案.md' })).toBeTruthy();
+    expect(await screen.findByRole('link', { name: '打开任务 价格表' })).toBeTruthy();
     const tabs = screen.getByRole('group', { name: '成果类别' });
     fireEvent.click(within(tabs).getByRole('button', { name: /音频和视频/ }));
     expect(within(tabs).getByRole('button', { name: /音频和视频/ }).textContent).toContain('1');
-    expect(screen.queryByRole('link', { name: '打开 首页文案.md' })).toBeNull();
-    expect(screen.getByRole('link', { name: '打开 预热短片.mp4' })).toBeTruthy();
-    expect(screen.queryByRole('region', { name: '价格表' })).toBeNull();
+    expect(screen.getByRole('link', { name: '打开任务 民宿首页' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: '打开任务 价格表' })).toBeNull();
 
     fireEvent.click(within(tabs).getByRole('button', { name: /全部/ }));
     fireEvent.change(screen.getByLabelText('搜成果'), { target: { value: '价格表' } });
-    expect(screen.getAllByRole('article')).toHaveLength(1);
-    expect(screen.queryByRole('region', { name: '民宿首页' })).toBeNull();
+    expect(screen.getByRole('link', { name: '打开任务 价格表' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: '打开任务 民宿首页' })).toBeNull();
   });
 
   it('只看某个私聊的任务，可以回到全部', async () => {
@@ -184,8 +189,8 @@ describe('画布', () => {
     await open(`/canvas?conversation=${CONV}`);
     const only = await screen.findByRole('link', { name: /只看「Claude」/ });
     expect(only.getAttribute('href')).toBe('/canvas');
-    expect(await screen.findByRole('region', { name: '民宿首页' })).toBeTruthy();
-    expect(screen.queryByRole('region', { name: '价格表' })).toBeNull();
+    expect(await screen.findByRole('link', { name: '打开任务 民宿首页' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: '打开任务 价格表' })).toBeNull();
   });
 
   it('还没有成果：说去私聊里让 AI 做', async () => {

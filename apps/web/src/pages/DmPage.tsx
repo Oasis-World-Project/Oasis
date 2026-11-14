@@ -8,7 +8,7 @@ import { MessageSquarePlus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { ApiError } from '../api/client.ts';
 import { deleteDm, dmsQuery, messagesQuery, newTopic } from '../api/queries.ts';
-import { useModelMap } from '../api/use-model-map.ts';
+import { aiName, useModelMap } from '../api/use-model-map.ts';
 import { Composer } from '../chat/Composer.tsx';
 import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
 import { DmSetup } from '../chat/DmSetup.tsx';
@@ -92,7 +92,9 @@ export function DmPage() {
         <header className="flex items-center gap-3 border-b border-hairline px-6 py-4">
           <AiAvatar mono={speaker.mono} glow={speaker.glow} size={40} glowing={turnActive} />
           <div className="flex flex-col">
-            <h1 className="m-0 text-[17px] font-medium">{conversation?.title ?? '私聊'}</h1>
+            <h1 className="m-0 text-[17px] font-medium">
+              {conversation ? aiName(models, conversation) : '私聊'}
+            </h1>
             <span className="text-xs text-ink-muted">
               {turnActive ? '正在做…' : (model?.versionLabel ?? '系统默认设定')}
             </span>

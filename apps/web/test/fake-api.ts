@@ -38,6 +38,20 @@ export const MODELS = [
     versionLabel: null,
     available: false,
   },
+  {
+    key: 'bytedance-seed/seedream-5-0-pro',
+    name: 'Seedream 5.0 Pro',
+    vendor: '字节跳动',
+    category: 'image',
+    tags: ['生图'],
+    mono: 'Se',
+    glow: 'var(--oasis-glow-2)',
+    options: [],
+    tier: null,
+    versionLabel: null,
+    available: false,
+    usage: '生图时先用它',
+  },
 ];
 
 export function json(status: number, body: unknown): Response {

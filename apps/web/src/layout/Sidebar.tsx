@@ -16,7 +16,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { dmsQuery, groupsQuery, meQuery, walletQuery } from '../api/queries.ts';
-import { useModelMap } from '../api/use-model-map.ts';
+import { aiName, useModelMap } from '../api/use-model-map.ts';
 import { AiAvatar, PersonAvatar } from '../ui/Avatar.tsx';
 import { formatUsd, usedPercent } from '../ui/format.ts';
 import { useSidebarState } from './use-sidebar-state.ts';
@@ -159,14 +159,15 @@ function ChatList({ open, kind }: { open: boolean; kind: 'dm' | 'group' }) {
     <>
       {entries.slice(0, SIDEBAR_CONVERSATION_LIMIT).map((dm) => {
         const model = dm.modelKey ? models.get(dm.modelKey) : undefined;
+        const name = aiName(models, dm);
         return (
           <Link
             key={dm.id}
             {...(kind === 'dm'
               ? { to: '/dms/$conversationId' as const, params: { conversationId: dm.id } }
               : { to: '/groups/$groupId' as const, params: { groupId: dm.id } })}
-            aria-label={open ? undefined : dm.title}
-            title={open ? undefined : dm.title}
+            aria-label={open ? undefined : name}
+            title={open ? undefined : name}
             className={
               open ? `${ITEM_BASE} gap-2.5 px-2.5` : `${ITEM_BASE} w-[44px] justify-center`
             }
@@ -174,9 +175,9 @@ function ChatList({ open, kind }: { open: boolean; kind: 'dm' | 'group' }) {
             {model ? (
               <AiAvatar mono={model.mono} glow={model.glow} size={26} />
             ) : (
-              <PersonAvatar label={dm.title} size={26} />
+              <PersonAvatar label={name} size={26} />
             )}
-            {open && <span className="min-w-0 flex-1 truncate">{dm.title}</span>}
+            {open && <span className="min-w-0 flex-1 truncate">{name}</span>}
           </Link>
         );
       })}

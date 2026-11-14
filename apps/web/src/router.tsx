@@ -14,6 +14,7 @@ import {
 import { ApiError, isConnectionError } from './api/client.ts';
 import { meQuery } from './api/queries.ts';
 import { AppShell } from './layout/AppShell.tsx';
+import { AiSettingsPage } from './pages/AiSettingsPage.tsx';
 import { AisPage } from './pages/AisPage.tsx';
 import { ArtifactPage } from './pages/ArtifactPage.tsx';
 import { CanvasPage } from './pages/CanvasPage.tsx';
@@ -27,6 +28,7 @@ import { MePage } from './pages/MePage.tsx';
 import { NotFoundPage } from './pages/NotFoundPage.tsx';
 import { PlazaPage } from './pages/PlazaPage.tsx';
 import { RunPage } from './pages/RunPage.tsx';
+import { TaskPage } from './pages/TaskPage.tsx';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -134,6 +136,12 @@ const aisRoute = createRoute({
   path: '/ais',
   component: AisPage,
 });
+/** 一个 AI 的设置页：档位、名字、人格…… */
+const aiSettingsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/ais/$key',
+  component: AiSettingsPage,
+});
 const canvasRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/canvas',
@@ -142,6 +150,12 @@ const canvasRoute = createRoute({
     conversation: typeof search.conversation === 'string' ? search.conversation : undefined,
   }),
   component: CanvasPage,
+});
+/** 画布上点开一个任务：它的成品和素材 */
+const taskRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/canvas/tasks/$runId',
+  component: TaskPage,
 });
 /** 在画布里打开一个成果 */
 const artifactRoute = createRoute({
@@ -191,7 +205,9 @@ const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([
     homeRoute,
     aisRoute,
+    aiSettingsRoute,
     canvasRoute,
+    taskRoute,
     artifactRoute,
     runRoute,
     groupsRoute,

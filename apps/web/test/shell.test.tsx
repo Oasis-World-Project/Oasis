@@ -108,14 +108,25 @@ describe('侧栏', () => {
 });
 
 describe('页面', () => {
-  it('AI 们：可用的模型能私聊，没接入的显示即将接入', async () => {
+  it('AI 们：可用的模型能私聊、能进设置，没接入的显示即将接入；别的类只能看', async () => {
     installFakeApi({ signedIn: true });
     await renderAt('/ais');
     expect(await screen.findByRole('button', { name: '和 Claude 私聊' })).toHaveProperty(
       'disabled',
       false,
     );
-    expect(screen.getByRole('button', { name: '即将接入' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('link', { name: 'Claude 的设置' }).getAttribute('href')).toBe(
+      '/ais/claude',
+    );
+    expect(screen.getByRole('button', { name: '和 文心 私聊' })).toHaveProperty('disabled', true);
+    expect(screen.getByText('即将接入')).toBeTruthy();
+    expect(screen.queryByText('Seedream 5.0 Pro')).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: /图像生成/ }));
+    const panel = screen.getByRole('tabpanel', { name: '图像生成' });
+    expect(within(panel).getByText('Seedream 5.0 Pro')).toBeTruthy();
+    expect(within(panel).getByText('生图时先用它')).toBeTruthy();
+    expect(within(panel).queryByRole('button')).toBeNull();
   });
 
   it('广场是沉浸式页面，不带侧栏，可以离开回首页', async () => {

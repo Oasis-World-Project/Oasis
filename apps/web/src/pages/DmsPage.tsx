@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { dmsQuery } from '../api/queries.ts';
-import { useModelMap } from '../api/use-model-map.ts';
+import { aiName, useModelMap } from '../api/use-model-map.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { PageHeader } from '../ui/PageHeader.tsx';
 import { EmptyHint, Panel } from '../ui/Panel.tsx';
@@ -35,7 +35,7 @@ export function DmsPage() {
                 >
                   {model && <AiAvatar mono={model.mono} glow={model.glow} size={36} />}
                   <span className="flex flex-col">
-                    <span className="text-[15px] font-medium">{dm.title}</span>
+                    <span className="text-[15px] font-medium">{aiName(models, dm)}</span>
                     <span className="text-xs text-ink-muted">{model?.versionLabel ?? ''}</span>
                   </span>
                 </Link>
