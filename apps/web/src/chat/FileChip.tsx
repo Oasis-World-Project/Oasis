@@ -22,7 +22,9 @@ export function FileChip({ file, onOpen }: { file: PreviewFile; onOpen: () => vo
         </span>
         <span className="flex min-w-0 flex-col">
           <span className="truncate text-[13.5px] font-medium">{name}</span>
-          <span className="text-[11.5px] text-ink-muted">{formatBytes(file.size)}</span>
+          {file.size !== undefined && (
+            <span className="text-[11.5px] text-ink-muted">{formatBytes(file.size)}</span>
+          )}
         </span>
       </button>
       <a

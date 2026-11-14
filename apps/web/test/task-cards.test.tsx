@@ -295,6 +295,11 @@ describe('任务卡', () => {
         .getByRole('link', { name: /在画布里看/ })
         .getAttribute('href'),
     ).toBe(`/canvas?conversation=${CONV}`);
+    expect(
+      within(region)
+        .getByRole('link', { name: /看进度/ })
+        .getAttribute('href'),
+    ).toBe(`/canvas/runs/${RUN}?conversation=${CONV}`);
     expect(within(region).queryByRole('button', { name: '停下' })).toBeNull();
   });
 });

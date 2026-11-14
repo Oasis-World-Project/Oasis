@@ -1,7 +1,8 @@
 // 成果文件按扩展名分成几类，决定怎么预览、文件图标上写什么。
 export interface PreviewFile {
   path: string;
-  size: number;
+  /** 大小；不知道（进度页里这一轮做出的中间产物）时不写 */
+  size?: number;
   url: string;
   downloadUrl: string;
   pdfUrl?: string;
@@ -46,6 +47,7 @@ const KINDS: Record<string, PreviewKind> = {
   wav: 'audio',
   m4a: 'audio',
   ogg: 'audio',
+  flac: 'audio',
   pdf: 'pdf',
   md: 'text',
   txt: 'text',

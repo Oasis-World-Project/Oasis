@@ -205,7 +205,9 @@ export function FilePreview({ file, onClose }: { file: PreviewFile; onClose: () 
         <header className="flex items-center gap-3 border-b border-hairline px-6 py-3.5">
           <div className="flex min-w-0 flex-1 flex-col">
             <h2 className="m-0 truncate text-[15px] font-medium">{name}</h2>
-            <span className="text-xs text-ink-muted">{formatBytes(file.size)}</span>
+            {file.size !== undefined && (
+              <span className="text-xs text-ink-muted">{formatBytes(file.size)}</span>
+            )}
           </div>
           <a
             href={file.downloadUrl}

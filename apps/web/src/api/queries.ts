@@ -125,6 +125,16 @@ export const sendMessage = (
 export const stopTurn = (conversationId: string) =>
   apiVoid(`${conversationPath(conversationId)}/stop`, { method: 'POST', body: {} });
 
+/**
+ * 某一轮工作目录里的一个文件（进度页预览这一轮做出的东西）：一轮还在做时从沙箱读，结束后只剩 out/ 里的。
+ * version（那一步结束的时间）让同一路径重新生成后不用旧的缓存。
+ */
+export const runFileUrl = (conversationId: string, runId: string, path: string, version = '') =>
+  `/api${conversationPath(conversationId)}/runs/${runId}/files/${path
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')}${version ? `?v=${encodeURIComponent(version)}` : ''}`;
+
 /** 开新话题：AI 从这里起不记得之前的事，返回分隔消息 */
 export const newTopic = (conversationId: string) =>
   api(`${conversationPath(conversationId)}/topics`, z.object({ message: MessageBody }), {

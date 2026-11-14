@@ -20,7 +20,7 @@ type Group =
   | { kind: 'notice'; text: string }
   | { kind: 'steps'; steps: StepPart[] };
 
-function groupParts(parts: MessagePart[]): Group[] {
+export function groupParts(parts: MessagePart[]): Group[] {
   const groups: Group[] = [];
   for (const part of parts) {
     const last = groups.at(-1);
@@ -32,7 +32,7 @@ function groupParts(parts: MessagePart[]): Group[] {
   return groups;
 }
 
-function StepIcon({ status }: { status: StepPart['status'] }) {
+export function StepIcon({ status }: { status: StepPart['status'] }) {
   if (status === 'running')
     return <LoaderCircle size={13} aria-hidden="true" className="animate-spin text-accent" />;
   if (status === 'failed') return <X size={13} aria-hidden="true" className="text-accent" />;
@@ -46,7 +46,7 @@ const STATUS_TEXT: Record<StepPart['status'], string> = {
 };
 
 /** 一组步骤：折叠时显示正在做的那一步，或一共做了几步 */
-function Steps({ steps }: { steps: StepPart[] }) {
+export function Steps({ steps }: { steps: StepPart[] }) {
   const running = steps.findLast((s) => s.status === 'running');
   const failed = steps.filter((s) => s.status === 'failed').length;
   return (
@@ -84,7 +84,7 @@ function Steps({ steps }: { steps: StepPart[] }) {
 }
 
 /** AI 列的待办：一轮进行中展开；结束后没做完的变灰 */
-function Todos({ items, live }: { items: TodoItem[]; live: boolean }) {
+export function Todos({ items, live }: { items: TodoItem[]; live: boolean }) {
   const done = items.filter((t) => t.status === 'done').length;
   return (
     <details open={live} className="rounded-item bg-glass-strong/60 px-3 py-2 text-[13px]">

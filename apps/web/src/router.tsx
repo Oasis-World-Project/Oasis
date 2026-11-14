@@ -26,6 +26,7 @@ import { LoginPage } from './pages/LoginPage.tsx';
 import { MePage } from './pages/MePage.tsx';
 import { NotFoundPage } from './pages/NotFoundPage.tsx';
 import { PlazaPage } from './pages/PlazaPage.tsx';
+import { RunPage } from './pages/RunPage.tsx';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -148,6 +149,15 @@ const artifactRoute = createRoute({
   path: '/canvas/artifacts/$artifactId',
   component: ArtifactPage,
 });
+/** 一轮的进度（任务卡上的「看进度」）：?conversation= 是这一轮所在的私聊 */
+const runRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/canvas/runs/$runId',
+  validateSearch: (search: Record<string, unknown>): { conversation?: string | undefined } => ({
+    conversation: typeof search.conversation === 'string' ? search.conversation : undefined,
+  }),
+  component: RunPage,
+});
 const groupsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/groups',
@@ -183,6 +193,7 @@ const routeTree = rootRoute.addChildren([
     aisRoute,
     canvasRoute,
     artifactRoute,
+    runRoute,
     groupsRoute,
     groupRoute,
     dmsRoute,
