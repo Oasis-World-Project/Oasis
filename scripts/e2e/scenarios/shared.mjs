@@ -1,10 +1,11 @@
-// 回归场景共用的小工具：方案里的干活节点、把方案写成规划员交的格式、任务做完的判断、模拟持久卷被清掉。
+// 回归场景共用的小工具：开私聊说第一句话、等一轮做完（出错了说「继续」）、按一轮找消息、
+// harness 里的每一轮、模拟持久卷被清掉。
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { literal, query } from '../db.mjs';
 import { marker } from '../fake-provider.mjs';
 
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
-export const DEFAULT_MODEL = 'deepseek/deepseek-v4-pro-0813';
 
 /** 模拟持久卷被清掉（docker volume prune、换了机器）：删掉这个会话的工作目录和 dsh 会话 */
 export function dropWorkspace(sessionId) {
@@ -14,49 +15,47 @@ export function dropWorkspace(sessionId) {
   }
 }
 
-/** 方案里的一个干活节点 */
-export function work(scenario, key, title, goal, extra) {
-  return {
-    key,
-    title,
-    kind: 'work',
-    goal: `${marker(scenario, key)} ${goal}`,
-    model: DEFAULT_MODEL,
-    expects: [],
-    ...extra,
-  };
+/** 这个会话的持久工作目录还在不在 */
+export const workspaceExists = (sessionId) =>
+  spawnSync('docker', ['volume', 'inspect', `oasis-workspace-${sessionId}`], { stdio: 'ignore' })
+    .status === 0;
+
+/** 这个对话在 harness 里的每一轮（按开始的先后） */
+export const runsOf = (conversationId) =>
+  query(
+    'harness',
+    `select id, status, session_id, continue_from, error from runs where conversation_id = ${literal(conversationId)} order by created_at`,
+  );
+
+/** 开一个私聊、说第一句话（带上场景标记），返回对话 ID（场景结束时删掉） */
+export async function start(t, scenario, text) {
+  const conversationId = await t.user.openDm();
+  t.track(conversationId);
+  await t.user.say(conversationId, `${text} ${marker(scenario, 1)}`);
+  return conversationId;
 }
 
-/**
- * 规划员交的方案按成果排。场景里按节点和连线写，这里换成成果：干活节点各是一样由 AI 做的成果，
- * 连到它的线是它的 needs；其余节点（工具、展开）同在一条生产线里。
- */
-export function outcomes({ nodes, edges = [], deliverables }) {
-  const lineNodes = nodes.filter((n) => n.kind !== 'work');
-  const inLine = new Set(lineNodes.map((n) => n.key));
-  return {
-    outcomes: [
-      ...nodes
-        .filter((n) => n.kind === 'work')
-        .map(({ kind: _kind, ...n }) => ({
-          ...n,
-          how: 'agent',
-          needs: edges.filter((e) => e.to === n.key).map((e) => e.from),
-        })),
-      ...(lineNodes.length
-        ? [
-            {
-              key: 'line',
-              title: '生产线',
-              how: 'line',
-              nodes: lineNodes,
-              edges: edges.filter((e) => inLine.has(e.to)),
-            },
-          ]
-        : []),
-    ],
-    deliverables,
-  };
+/** 等这一轮做完；出错了就像用户一样说「继续」（第 say 句话的脚本），再等一次。返回全部消息 */
+export async function settle(t, conversationId, label, scenario, say) {
+  let messages = await t.user.waitTurn(conversationId, label);
+  const last = aiOf(messages).at(-1);
+  if (last?.status === 'failed') {
+    t.log(`这一轮出错了（${last.error}），说「继续」`);
+    await t.user.say(conversationId, `继续 ${marker(scenario, say)}`);
+    messages = await t.user.waitTurn(conversationId, `${label}（继续）`);
+  }
+  return messages;
 }
 
-export const done = (task) => task.status === 'succeeded';
+/** AI 说的话（一轮插过话会分成几条）；给了 runId 只要这一轮的 */
+export const aiOf = (messages, runId) =>
+  messages.filter(
+    (m) =>
+      m.role === 'assistant' &&
+      m.kind === 'text' &&
+      (runId === undefined || m.data.runId === runId),
+  );
+
+/** 一轮的任务卡（用了生图这类工具或交了文件才有） */
+export const cardOf = (messages, runId) =>
+  messages.find((m) => m.kind === 'task' && m.data.runId === runId);

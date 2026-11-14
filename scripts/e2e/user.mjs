@@ -1,9 +1,8 @@
 // 回归测试里的「用户」：和桌面端一样只经 gateway 的 /api/* 说话（Cookie 登录、Origin 校验都照真的来）。
-// 登录用本地邮件服务（mailpit）收验证码；发任务走私聊接需求 → 确认任务单 → 等任务结束。
+// 登录用本地邮件服务（mailpit）收验证码；在私聊里说话，等 AI 这一轮做完，到画布里看成果。
 import { randomUUID } from 'node:crypto';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const FINAL = ['succeeded', 'failed', 'cancelled'];
 
 class ApiError extends Error {
   constructor(status, body, route) {
@@ -15,15 +14,15 @@ class ApiError extends Error {
   }
 }
 
-/** 任务现在的样子，失败时附在报错里 */
-function describeTask(task) {
-  const nodes = task.nodes
+/** 对话最后几条消息，等不到时附在报错里 */
+function describe(messages) {
+  return messages
+    .slice(-6)
     .map(
-      (n) =>
-        `  - ${n.key} ${n.status} attempts=${n.attempts} reworks=${n.reworks}${n.warning ? ` warning=${n.warning}` : ''}`,
+      (m) =>
+        `  - ${m.role}/${m.kind} ${m.status}${m.error ? ` 出错：${m.error}` : ''}：${m.content.slice(0, 160).replaceAll('\n', ' ')}`,
     )
     .join('\n');
-  return `任务 ${task.id} ${task.status}${task.attention ? ` attention=${JSON.stringify(task.attention)}` : ''}\n${nodes}`;
 }
 
 /**
@@ -88,41 +87,27 @@ export async function signIn(options) {
     }
   }
 
-  /** 私聊发消息：SSE 流，收集每条 done 消息 */
-  async function send(conversationId, content) {
-    const response = await request(
-      'POST',
-      `/conversation/v1/conversations/${conversationId}/messages`,
-      { content, asTask: true },
-      { raw: true, timeoutMs: 300_000 },
-    );
-    const text = await response.text();
-    const events = text
-      .split(/\r?\n\r?\n/)
-      .map((block) =>
-        block
-          .split(/\r?\n/)
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).trimStart())
-          .join('\n'),
-      )
-      .filter(Boolean)
-      .map((data) => JSON.parse(data));
-    const error = events.find((e) => e.type === 'error');
-    if (error) throw new Error(`发消息出错：${error.code} ${error.message}`);
-    return events.filter((e) => e.type === 'done').map((e) => e.message);
-  }
+  const dm = (id) => `/conversation/v1/conversations/${id}`;
+  const listOf = async (conversationId) =>
+    (await api.get(`/canvas/v1/artifacts?conversationId=${conversationId}`)).artifacts;
 
-  /** 画布在收到交付事件后才登记成果：轮询这个任务的成果，直到满足条件（返回最后读到的全部成果） */
-  async function waitList(taskId, ready, timeoutMs) {
+  /** 成果在一轮结束时登记进画布：轮询这个对话的成果，直到满足条件（返回最后读到的全部成果） */
+  async function waitList(conversationId, ready, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     let list = [];
     while (Date.now() < deadline) {
-      list = (await api.get(`/canvas/v1/artifacts?taskId=${taskId}`)).artifacts;
+      list = await listOf(conversationId);
       if (ready(list)) return list;
       await sleep(1_000);
     }
     return list;
+  }
+
+  async function content(artifactId) {
+    const response = await request('GET', `/canvas/v1/artifacts/${artifactId}/content`, undefined, {
+      raw: true,
+    });
+    return Buffer.from(await response.arrayBuffer());
   }
 
   return {
@@ -131,123 +116,67 @@ export async function signIn(options) {
     cookie: () => cookie,
     api,
 
-    /** 和桌面端一样发一个任务：新开私聊 → 「发任务」→ 任务单 → 按标准档确认。返回 taskId */
-    async createTask(content) {
+    /** 和桌面端一样开一个私聊，返回对话 ID */
+    async openDm() {
       const { models } = await api.get('/agent/v1/models');
       // 和用户平时一样用 DeepSeek 私聊：开发机所在地区有些模型用不了（真模型回归时会报地区不可用）
       const model =
         models.find((m) => m.available && /deepseek/i.test(m.key)) ??
         models.find((m) => m.available);
       if (!model) throw new Error('没有可用的私聊模型');
-      const dm = await api.post('/conversation/v1/dms', { modelKey: model.key });
-      let messages = await send(dm.id, content);
-      for (let round = 0; round < 3 && !messages.some((m) => m.kind === 'sheet'); round++) {
-        const questions = messages.find((m) => m.kind === 'questions');
-        if (!questions) break;
-        ({ messages } = await api.post(
-          `/conversation/v1/conversations/${dm.id}/intake/answers`,
-          { messageId: questions.id, answers: {}, skip: true },
-          { timeoutMs: 300_000 },
-        ));
-      }
-      const sheet = messages.find((m) => m.kind === 'sheet');
-      if (!sheet) throw new Error(`没收到任务单：${JSON.stringify(messages).slice(0, 500)}`);
-      const confirmed = await api.post(
-        `/conversation/v1/conversations/${dm.id}/intake/confirm`,
-        {},
-        { timeoutMs: 120_000 },
-      );
-      const card = confirmed.messages.find(
-        (m) => m.kind === 'task' || (m.kind === 'sheet' && m.data.taskId),
-      );
-      const taskId = card?.data.taskId;
-      if (!taskId)
-        throw new Error(`确认任务单后没拿到任务：${JSON.stringify(confirmed).slice(0, 500)}`);
-      return { taskId, conversationId: dm.id };
+      return (await api.post('/conversation/v1/dms', { modelKey: model.key })).id;
     },
-
-    task: (taskId) => api.get(`/task/v1/tasks/${taskId}`),
-
-    /** 等任务到某个状态；任务提前失败或取消时带上现状报错 */
-    async waitTask(taskId, until, label, timeoutMs = 600_000) {
+    /** 说一句话：开一轮，或插话进正在进行的一轮；extra 可以带 artifacts（让 AI 改的画布成果） */
+    say: (conversationId, content, extra = {}) =>
+      api.post(`${dm(conversationId)}/messages`, { content, ...extra }),
+    messages: (conversationId) => api.get(`${dm(conversationId)}/messages`),
+    /** 等这一轮（和收尾时留下的话接着开的一轮）做完，返回全部消息 */
+    async waitTurn(conversationId, label, timeoutMs = 600_000) {
       const deadline = Date.now() + timeoutMs;
-      let task;
+      let list;
       while (Date.now() < deadline) {
-        task = await api.get(`/task/v1/tasks/${taskId}`);
-        if (until(task)) return task;
-        // 结束了、或停下来等用户处理（不是在等的那种）：不用再等
-        if (FINAL.includes(task.status) || task.status === 'needs_attention')
-          throw new Error(
-            `等「${label}」时任务${task.status === 'needs_attention' ? '需要处理' : '已经结束'}：\n${describeTask(task)}`,
-          );
+        list = await api.get(`${dm(conversationId)}/messages`);
+        if (!list.turn && !list.messages.some((m) => m.status === 'streaming'))
+          return list.messages;
         await sleep(1_000);
       }
-      throw new Error(`等「${label}」超时：\n${task ? describeTask(task) : '没读到任务'}`);
+      throw new Error(`等「${label}」超时：\n${list ? describe(list.messages) : '没读到消息'}`);
     },
-
-    messages: async (conversationId) =>
-      (await api.get(`/conversation/v1/conversations/${conversationId}/messages`)).messages,
-    artifacts: async (taskId) => (await api.get(`/canvas/v1/artifacts?taskId=${taskId}`)).artifacts,
+    stop: (conversationId) => api.post(`${dm(conversationId)}/stop`),
+    newTopic: (conversationId) => api.post(`${dm(conversationId)}/topics`),
+    /** 删除这个用户的私聊（真删除：进行中的一轮先取消，成果、会话记录、工作目录一起删）；返回删了几个 */
+    async removeDms(ids) {
+      const { conversations } = await api.get('/conversation/v1/dms');
+      const targets = conversations.filter((c) => !ids || ids.includes(c.id));
+      for (const c of targets) await api.del(dm(c.id));
+      return targets.length;
+    },
+    artifacts: listOf,
     /** 等到这些文件都在（返回全部成果） */
-    waitArtifacts: (taskId, paths, timeoutMs = 60_000) =>
-      waitList(taskId, (list) => paths.every((p) => list.some((a) => a.path === p)), timeoutMs),
-    /** 应用描述在这次交付的文件全部登记完之后才写：等到画布里有这种可运行的应用（返回全部成果） */
-    waitApplication: (taskId, kind = 'static', timeoutMs = 60_000) =>
-      waitList(taskId, (list) => list.some((a) => a.application?.kind === kind), timeoutMs),
-    /** 修改后画布原地更新成果：等到某个文件的内容符合预期（返回最后读到的内容） */
-    async waitContent(taskId, file, expected, timeoutMs = 60_000) {
+    waitArtifacts: (conversationId, paths, timeoutMs = 60_000) =>
+      waitList(
+        conversationId,
+        (list) => paths.every((p) => list.some((a) => a.path === p)),
+        timeoutMs,
+      ),
+    /** 应用描述在这一轮的文件全部登记完之后才写：等到画布里有这种可运行的应用（返回全部成果） */
+    waitApplication: (conversationId, kind = 'static', timeoutMs = 60_000) =>
+      waitList(conversationId, (list) => list.some((a) => a.application?.kind === kind), timeoutMs),
+    /** 改过的成果在画布里原地换新：等到某个文件的内容符合预期（返回最后读到的内容） */
+    async waitContent(conversationId, file, expected, timeoutMs = 60_000) {
       const deadline = Date.now() + timeoutMs;
       let text = '';
       while (Date.now() < deadline) {
-        const found = (await api.get(`/canvas/v1/artifacts?taskId=${taskId}`)).artifacts.find(
-          (a) => a.path === file,
-        );
-        if (found) {
-          const response = await request(
-            'GET',
-            `/canvas/v1/artifacts/${found.id}/content`,
-            undefined,
-            { raw: true },
-          );
-          text = Buffer.from(await response.arrayBuffer()).toString();
+        const found = (await listOf(conversationId)).filter((a) => a.path === file);
+        for (const artifact of found) {
+          text = (await content(artifact.id)).toString();
           if (expected(text)) return text;
         }
         await sleep(1_000);
       }
       return text;
     },
-    /** 取消并删除这个用户的任务（真删除）；返回删了几个 */
-    async removeTasks(ids) {
-      const { tasks } = await api.get('/task/v1/tasks');
-      const targets = tasks.filter((t) => !ids || ids.includes(t.id));
-      for (const t of targets) {
-        if (!FINAL.includes(t.status)) await api.post(`/task/v1/tasks/${t.id}/cancel`);
-        for (let i = 0; i < 120; i++) {
-          if (FINAL.includes((await api.get(`/task/v1/tasks/${t.id}`)).status)) break;
-          await sleep(1_000);
-        }
-        await api.del(`/task/v1/tasks/${t.id}`);
-      }
-      return targets.length;
-    },
-    async content(artifactId) {
-      const response = await request(
-        'GET',
-        `/canvas/v1/artifacts/${artifactId}/content`,
-        undefined,
-        {
-          raw: true,
-        },
-      );
-      return Buffer.from(await response.arrayBuffer());
-    },
-    nodeRuns: async (taskId, nodeId) =>
-      (await api.get(`/task/v1/tasks/${taskId}/nodes/${nodeId}/runs`)).runs,
-    revise: (taskId, body) => api.post(`/task/v1/tasks/${taskId}/revisions`, body),
-    decide: (taskId, choice) => api.post(`/task/v1/tasks/${taskId}/decision`, { choice }),
-    stop: (taskId) => api.post(`/task/v1/tasks/${taskId}/stop`),
-    run: (taskId) => api.post(`/task/v1/tasks/${taskId}/run`),
-    remove: (taskId) => api.del(`/task/v1/tasks/${taskId}`),
+    content,
     wallet: () => api.get('/billing/v1/wallet'),
   };
 }

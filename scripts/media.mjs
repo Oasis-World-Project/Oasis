@@ -65,7 +65,7 @@ if (process.argv[2] === 'recover') {
       if (!/^media-smoke-[a-f0-9-]{36}\.json$/.test(name)) continue;
       const file = path.join(directory, name);
       const record = JSON.parse(await readFile(file, 'utf8'));
-      assert(/^[a-f0-9-]{36}$/.test(record.taskId) && /^[a-f0-9-]{36}$/.test(record.ownerId));
+      assert(/^[a-f0-9-]{36}$/.test(record.sessionId) && /^[a-f0-9-]{36}$/.test(record.ownerId));
       let alive = false;
       try {
         process.kill(record.pid, 0);
@@ -78,24 +78,24 @@ if (process.argv[2] === 'recover') {
         assert(
           [
             `uploads/${record.ownerId}/`,
-            `artifacts/${record.taskId}/`,
-            `media-test/${record.taskId}/`,
+            `artifacts/${record.sessionId}/`,
+            `media-test/${record.sessionId}/`,
           ].some((prefix) => key.startsWith(prefix)),
         );
         await objects.store.delete(key);
       }
       await createDockerApi(defaultDockerSocket()).removeContainer(
-        `oasis-media-check-${record.taskId}`,
+        `oasis-media-check-${record.sessionId}`,
       );
       assert.equal(path.dirname(path.resolve(record.temp)), path.resolve(os.tmpdir()));
       assert(path.basename(record.temp).startsWith('oasis-media-'));
       assert.equal(
-        await readFile(path.join(record.temp, '.oasis-media-task'), 'utf8'),
-        record.taskId,
+        await readFile(path.join(record.temp, '.oasis-media-session'), 'utf8'),
+        record.sessionId,
       );
       await rm(record.temp, { recursive: true, force: true });
       await rm(file);
-      console.log(`已回收中断验收 ${record.taskId}`);
+      console.log(`已回收中断验收 ${record.sessionId}`);
     }
   } finally {
     await objects.resource.close();
@@ -124,8 +124,7 @@ const store = {
   },
 };
 const ownerId = randomUUID();
-const taskId = randomUUID();
-const nodeId = randomUUID();
+const sessionId = randomUUID();
 const uploadRepo = memoryUploads();
 const artifactRepo = memoryArtifacts();
 const uploads = createUploadService({ repo: uploadRepo, store });
@@ -133,16 +132,11 @@ let address;
 let uploaded;
 const artifacts = createArtifactService({
   repo: artifactRepo,
+  uploads: uploadRepo,
   store,
-  logger: { info() {} },
-  task: {
-    async json() {
-      return {
-        nodes: [{ id: nodeId, model: 'offline-test' }],
-        deliverables: [],
-        deliveryFiles: [{ nodeId, path: 'source.bin', deliverable: '压力样例' }],
-      };
-    },
+  logger: { info() {}, warn() {} },
+  // 一轮的产出文件本来在 harness；这里用刚上传的文件代替
+  harness: {
     async stream() {
       return fetch(`${address}/v1/uploads/${uploaded.id}`, {
         headers: { 'x-oasis-user-id': ownerId },
@@ -164,10 +158,10 @@ const service = await createService(
   { PORT: '0', HOST: '127.0.0.1', LOG_LEVEL: 'silent', SHUTDOWN_DRAIN_MS: '0' },
 );
 const temp = await mkdtemp(path.join(os.tmpdir(), 'oasis-media-'));
-await writeFile(path.join(temp, '.oasis-media-task'), taskId);
+await writeFile(path.join(temp, '.oasis-media-session'), sessionId);
 await mkdir(path.join(root, '.tmp'), { recursive: true });
-journalPath = path.join(root, '.tmp', `media-smoke-${taskId}.json`);
-journal = { taskId, ownerId, temp, pid: process.pid };
+journalPath = path.join(root, '.tmp', `media-smoke-${sessionId}.json`);
+journal = { sessionId, ownerId, temp, pid: process.pid };
 persist();
 const docker = createDockerApi(defaultDockerSocket());
 let container;
@@ -248,18 +242,20 @@ try {
   assert.equal(range.status, 206);
   assert(Buffer.from(await range.arrayBuffer()).equals(Buffer.alloc(1000, 37)));
   checked('鉴权 Range 下载');
-  await artifacts.onTaskStatus({
-    status: 'succeeded',
-    taskId,
+  await artifacts.registerRun({
     ownerId,
-    title: '媒体基础验收',
-    conversationId: null,
+    conversationId: randomUUID(),
+    sessionId,
+    runId: randomUUID(),
+    topic: '媒体基础验收',
+    models: ['offline-test'],
+    outputs: [{ path: 'source.bin', size: bytes, sha256: expected.sha256 }],
   });
   const artifact = artifactRepo.rows[0];
   assert.equal(artifact.size, bytes);
   assert.equal(artifact.sha256, expected.sha256);
   checked('最终成果跨 HTTP 流式复制与摘要核对');
-  const zipResponse = await fetch(`${address}/v1/tasks/${taskId}/archive`, {
+  const zipResponse = await fetch(`${address}/v1/topics/${sessionId}/archive`, {
     headers: { 'x-oasis-user-id': ownerId },
   });
   assert.equal(zipResponse.status, 200);
@@ -301,7 +297,7 @@ try {
     expected,
   );
   checked('桌面分块写入、摘要核对与原子完成');
-  const failedKey = `media-test/${taskId}/incomplete`;
+  const failedKey = `media-test/${sessionId}/incomplete`;
   await assert.rejects(
     store.putStream(failedKey, Readable.from([Buffer.from('short')]), 'application/octet-stream', {
       maxBytes: 100,
@@ -311,7 +307,7 @@ try {
   await assert.rejects(store.get(failedKey));
   checked('截断分段上传中止，不产生完整对象');
   const staleId = randomUUID();
-  const staleKey = `media-test/${taskId}/stale`;
+  const staleKey = `media-test/${sessionId}/stale`;
   await store.put(staleKey, Buffer.from('unfinished'), 'application/octet-stream');
   const stale = await uploadRepo.insert({
     id: staleId,
@@ -330,7 +326,7 @@ try {
   assert.equal(await uploadRepo.find(staleId), undefined);
   await assert.rejects(store.get(staleKey));
   checked('未完成上传记录重启恢复清理');
-  const created = await docker.createContainer(`oasis-media-check-${taskId}`, {
+  const created = await docker.createContainer(`oasis-media-check-${sessionId}`, {
     Image: process.env.SANDBOX_IMAGE ?? 'oasis/harness-sandbox-base:0.2.1-rc.5',
     Entrypoint: ['node', '-e', 'setInterval(()=>{},1000)'],
     Labels: { 'oasis.component': 'media-check' },
@@ -386,7 +382,7 @@ try {
     "require('node:fs').writeFileSync('/workspace/out/broken.mp3','not audio')",
   ]);
   const snapshot = await docker.getArchive(container, '/workspace/out');
-  const snapshotKey = `media-test/${taskId}/audio-snapshot.tar`;
+  const snapshotKey = `media-test/${sessionId}/audio-snapshot.tar`;
   await store.putStream(snapshotKey, snapshot, 'application/x-tar', { maxBytes: 32 * 1024 * 1024 });
   // 和 inspector 一样：存下的产出包交给独立的检查容器解码
   const { report: audio } = await runMediaCheck(
@@ -426,7 +422,7 @@ try {
   await objects.resource.close();
   assert.equal(path.dirname(temp), path.resolve(os.tmpdir()));
   assert(path.basename(temp).startsWith('oasis-media-'));
-  assert.equal(await readFile(path.join(temp, '.oasis-media-task'), 'utf8'), taskId);
+  assert.equal(await readFile(path.join(temp, '.oasis-media-session'), 'utf8'), sessionId);
   await rm(temp, { recursive: true, force: true });
   await rm(journalPath, { force: true });
 }

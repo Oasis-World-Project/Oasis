@@ -1,4 +1,4 @@
-// 只读查询本机开发数据库（经 postgres 容器里的 psql，用超级用户跨库查）：任务追踪和回归断言共用。
+// 只读查询本机开发数据库（经 postgres 容器里的 psql，用超级用户跨库查）：对话追踪和回归断言共用。
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { readEnv, ROOT } from './stack.mjs';

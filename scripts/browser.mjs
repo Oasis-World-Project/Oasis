@@ -2,7 +2,7 @@
 // inspector 的检查浏览器：构建镜像、本机烟测；顺带放着 Android 云真机的免费烟测。
 // 镜像严格按 oasis/<组件>:<标签> 命名。
 //   pnpm browser:build                     构建 oasis/inspector-browser
-//   pnpm browser:smoke                     静态网页、Node 应用按交付关卡的路子各查一遍（通过、不通过），
+//   pnpm browser:smoke                     静态网页、Node 应用按检查一轮产出的路子各查一遍（通过、不通过），
 //                                          外站测一次 example.com（不花钱）
 //   node scripts/browser.mjs android-smoke  BrowserStack 免费计划跑一次官方演示 APK
 import { spawnSync } from 'node:child_process';
@@ -109,7 +109,7 @@ if (process.argv[2] === 'smoke') {
     appPort: 3180,
   });
   await executor.check();
-  // 和交付关卡同一条路：从产出包组装（静态网页套上画布的隔离框外壳）、开检查浏览器、按测试计划操作、看画面
+  // 和检查一轮产出同一条路：从产出包组装（静态网页套上画布的隔离框外壳）、开检查浏览器、按测试计划操作、看画面
   let outputs = [];
   const checks = createBrowserChecks({
     executor,

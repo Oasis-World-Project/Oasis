@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // 全链路回归（docs/engineering/回归测试.md）：本机起全部服务，模型换成按脚本回复的假供应商，
-// 沙箱容器、浏览器检查、对象存储、画布都是真的。从「用户在私聊里发任务」一直跑到「画布里打开成果」。
+// 沙箱容器、浏览器检查、对象存储、画布都是真的。从「用户在私聊里说一句话」一直跑到「画布里打开成果」。
 // 用法：pnpm e2e [场景名…] [--keep]   （先停掉 pnpm dev；--keep 跑完不停服务，方便排查）
-//      pnpm e2e --real [场景名…]      真模型、真工具，每个场景花费上限 $1（视频等场景在 e2e/real.mjs
+//      pnpm e2e --real [场景名…]      真模型、真工具，每个场景花费上限 $1（做游戏这类场景在 e2e/real.mjs
 //                                    里单独放宽；要花真钱，按需跑）
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
@@ -45,7 +45,7 @@ if (unknown.length) {
 }
 const names = picked.length ? picked : Object.keys(catalogue);
 const usd = (micro) => `$${(Number(micro) / 1_000_000).toFixed(4)}`;
-/** 这个测试用户一共被扣了多少（接需求、聊天、任务里的模型和工具调用都算） */
+/** 这个测试用户一共被扣了多少（私聊里每一轮的模型和工具调用都算） */
 const charged = (userId) =>
   Number(
     query(
@@ -60,7 +60,7 @@ const started = Date.now();
 const log = (line) =>
   console.log(`[${((Date.now() - started) / 1000).toFixed(0).padStart(4)}s] ${line}`);
 if (cacheFreed) log(`清掉 7 天前的构建缓存 ${(cacheFreed / 1048576).toFixed(0)} MB`);
-// 这一轮的编号写进每个场景的标记：上一轮没收尾的任务不会混进来
+// 这一轮的编号写进每个场景的标记：上一轮没收尾的对话不会混进来
 setRun(randomUUID().slice(0, 6));
 
 function run(command, options = {}) {
@@ -119,8 +119,7 @@ const env = {
     MAX_CONCURRENT_RUNS: '4',
     RECOVERY_INTERVAL_MS: '5000',
   },
-  task: { RECONCILE_INTERVAL_MS: '10000', MEDIA_CHECK_CPUS: '1', BROWSER_CHECK_CPUS: '1' },
-  // 节点自查 app.check 开的检查浏览器
+  // AI 自查 app.check 开的检查浏览器
   'model-gateway': { BROWSER_CHECK_CPUS: '1' },
 };
 const stack = createStack({ logDir: path.join(outDir, 'logs'), env, log });
@@ -137,18 +136,18 @@ try {
       `真模型回归：${names.join('、')}，每个场景花费上限 ${usd(REAL_BUDGET_MICRO)}${raised.length ? `（${raised.join('、')}）` : ''}`,
     );
   } else {
-    const catalog = await (
-      await fetch(`http://127.0.0.1:${portOf('agent')}/internal/models/catalog`)
-    ).json();
+    // 假供应商认得私聊里每个 AI 的上游型号（agent 的模型表）
+    const providerModels = query(
+      'agent',
+      'select distinct provider_model from models where provider_model is not null',
+    ).map((row) => row.provider_model);
     provider = createFakeProvider({
       scenarios: SCENARIOS,
       fixtures,
       // 边跑边记：卡住时也能看到假供应商收到了什么
       onRecord: (call) =>
         appendFileSync(path.join(outDir, 'calls.jsonl'), `${JSON.stringify(call)}\n`),
-      models: [
-        ...new Set([...catalog.models.map((m) => m.providerModel), 'deepseek/deepseek-v4.1-flash']),
-      ],
+      models: [...new Set([...providerModels, 'deepseek/deepseek-v4.1-flash'])],
     });
     const providerUrl = await provider.listen();
     log(`假供应商 ${providerUrl}`);
@@ -165,7 +164,7 @@ try {
     'http://127.0.0.1:5173';
   const mailpit = `http://127.0.0.1:${readEnv(path.join(ROOT, '.env')).MAILPIT_UI_HOST_PORT ?? 8025}`;
 
-  // 上一轮回归中断时留下的任务：用当时的测试账号登录，取消并删除（和用户删任务同一条路）
+  // 上一轮回归中断时留下的私聊：用当时的测试账号登录，删掉（和用户删私聊同一条路，进行中的一轮先取消）
   const testers = query(
     'identity',
     `select id, email from users where email like 'e2e-%@example.test'`,
@@ -173,14 +172,14 @@ try {
   const owners = testers.length
     ? new Set(
         query(
-          'task',
-          `select distinct owner_id from tasks where owner_id in (${testers.map((u) => literal(u.id)).join(',')})`,
+          'conversation',
+          `select distinct owner_id from conversations where kind = 'dm' and owner_id in (${testers.map((u) => literal(u.id)).join(',')})`,
         ).map((r) => r.owner_id),
       )
     : new Set();
   for (const tester of testers.filter((u) => owners.has(u.id))) {
     const old = await signIn({ gateway: gatewayUrl, mailpit, origin, email: tester.email });
-    log(`清理上一轮留下的任务：${await old.removeTasks()} 个（${tester.email}）`);
+    log(`清理上一轮留下的私聊：${await old.removeDms()} 个（${tester.email}）`);
   }
 
   // ---------- 跑场景：会重启服务的场景单独排在后面一个个跑 ----------
@@ -189,7 +188,7 @@ try {
     const t = {
       name,
       failures: [],
-      tasks: [],
+      conversations: [],
       provider,
       stack,
       fixtures,
@@ -201,28 +200,26 @@ try {
           this.log(`✗ ${message}`);
         }
       },
-      track(taskId) {
-        this.tasks.push(taskId);
-        this.log(`任务 ${taskId}`);
+      track(conversationId) {
+        this.conversations.push(conversationId);
+        this.log(`私聊 ${conversationId}`);
       },
-      canvas: (taskId, artifact, plan) =>
-        checkCanvas({ t, webUrl, outDir, taskId, artifact, plan }),
+      canvas: (artifact, plan) => checkCanvas({ t, webUrl, outDir, artifact, plan }),
     };
     const begin = Date.now();
     let watchdog;
     try {
       t.user = await signIn({ gateway: gatewayUrl, mailpit, origin });
       if (real) {
-        // 花费看门狗：超过上限就取消这个用户的任务，场景判失败（模型绕圈也烧不了多少钱）
+        // 花费看门狗：超过上限就停下这个用户正在进行的一轮，场景判失败（模型绕圈也烧不了多少钱）
         const budget = scenario.budgetMicro ?? REAL_BUDGET_MICRO;
         let over = false;
         watchdog = setInterval(() => {
           const micro = charged(t.user.userId);
           if (micro <= budget || over) return;
           over = true;
-          t.check(false, `花费 ${usd(micro)} 超过上限 ${usd(budget)}，已取消任务`);
-          for (const taskId of t.tasks)
-            t.user.api.post(`/task/v1/tasks/${taskId}/cancel`).catch(() => {});
+          t.check(false, `花费 ${usd(micro)} 超过上限 ${usd(budget)}，已停下`);
+          for (const id of t.conversations) t.user.stop(id).catch(() => {});
         }, 10_000);
       }
       await scenario.run(t);
@@ -234,21 +231,21 @@ try {
     }
     const spent = real && t.user ? charged(t.user.userId) : undefined;
     if (spent !== undefined) t.log(`一共花费 ${usd(spent)}`);
-    // 收尾也是用户路径：删掉任务（真删除），画布按删除事件清掉成果（--keep 时留着排查）
-    if (t.user && t.tasks.length && !keep) {
+    // 收尾也是用户路径：删掉私聊（真删除），成果、会话记录、工作目录一起删（--keep 时留着排查）
+    if (t.user && t.conversations.length && !keep) {
       try {
-        await t.user.removeTasks(t.tasks);
-        for (const taskId of t.tasks) {
+        await t.user.removeDms(t.conversations);
+        for (const id of t.conversations) {
           let left = [];
           for (let i = 0; i < 30; i++) {
-            left = await t.user.artifacts(taskId);
+            left = await t.user.artifacts(id);
             if (!left.length) break;
             await new Promise((resolve) => setTimeout(resolve, 1_000));
           }
-          t.check(left.length === 0, `删除任务 30 秒后画布里还剩 ${left.length} 个成果`);
+          t.check(left.length === 0, `删除私聊 30 秒后画布里还剩 ${left.length} 个成果`);
         }
       } catch (err) {
-        t.check(false, `删除任务失败：${err instanceof Error ? err.message : err}`);
+        t.check(false, `删除私聊失败：${err instanceof Error ? err.message : err}`);
       }
     }
     const seconds = Math.round((Date.now() - begin) / 1000);
@@ -257,7 +254,7 @@ try {
       passed: t.failures.length === 0,
       seconds,
       failures: t.failures,
-      tasks: t.tasks,
+      conversations: t.conversations,
       spent,
     });
     log(`${t.failures.length ? '✗ 未通过' : '✓ 通过'} ${name}（${seconds}s）`);

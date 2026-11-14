@@ -1,4 +1,4 @@
-// 在本机起 10 个服务和 Web，代码改了也不跟着重启：回归测试（pnpm e2e）和验收模式（pnpm accept）共用。
+// 在本机起 9 个服务和 Web，代码改了也不跟着重启：回归测试（pnpm e2e）和验收模式（pnpm accept）共用。
 // 每个服务直接用 node 跑 src/main.ts（和 pnpm dev 同一份代码、同一份 .env），日志写到文件里；
 // 回归测试可以单独杀掉、重启某个服务，模拟崩溃和重启。
 import { spawn, spawnSync } from 'node:child_process';
@@ -17,7 +17,6 @@ export const SECOND = [
   'model-gateway',
   'harness',
   'canvas',
-  'task',
   'conversation',
   'gateway',
 ];
@@ -28,7 +27,6 @@ const DEFAULT_PORTS = {
   billing: 4102,
   agent: 4103,
   conversation: 4104,
-  task: 4105,
   canvas: 4106,
   harness: 4107,
   'model-gateway': 4108,

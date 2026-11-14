@@ -57,11 +57,13 @@ await new Promise((resolve, reject) => {
 });
 const webRequire = createRequire(new URL('../apps/web/package.json', import.meta.url));
 const canvasRequire = createRequire(new URL('../services/canvas/package.json', import.meta.url));
-const harnessRequire = createRequire(new URL('../services/harness/package.json', import.meta.url));
+const inspectorRequire = createRequire(
+  new URL('../services/inspector/package.json', import.meta.url),
+);
 const { createServer } = await import(pathToFileURL(webRequire.resolve('vite')).href);
 const Fastify = canvasRequire('fastify'),
   { pino } = canvasRequire('pino');
-const sharp = harnessRequire('sharp');
+const sharp = inspectorRequire('sharp');
 const { createServiceClient } = await import('../packages/service-kit/dist/index.js');
 const { memoryArtifacts, memoryUploads, memoryStore } =
   await import('../services/canvas/test/memory.ts');
@@ -69,16 +71,24 @@ const { createArtifactService } =
   await import('../services/canvas/dist/service/artifact-service.js');
 const { createUploadService } = await import('../services/canvas/dist/service/upload-service.js');
 const { registerRoutes: canvasRoutes } = await import('../services/canvas/dist/api/routes.js');
-const { registerRoutes: harnessRoutes } = await import('../services/harness/dist/api/routes.js');
+const { registerRoutes: inspectorRoutes } =
+  await import('../services/inspector/dist/api/routes.js');
+const { createModelPosterInspector, createModelPreviewInspector } =
+  await import('../services/inspector/dist/service/file-inspection.js');
 const logger = pino({ level: 'silent' });
-const harness = Fastify({ loggerInstance: logger });
-harnessRoutes(harness, {});
-const harnessUrl = await harness.listen({ host: '127.0.0.1', port: 0 });
+// 模型能不能直接显示由 inspector 判断：只挂模型预览用到的两项
+const inspector = Fastify({ loggerInstance: logger });
+inspectorRoutes(inspector, {
+  inspectModel: createModelPreviewInspector(),
+  inspectPoster: createModelPosterInspector(),
+});
+const inspectorUrl = await inspector.listen({ host: '127.0.0.1', port: 0 });
 const repo = memoryArtifacts(),
   store = memoryStore(),
   owner = randomUUID(),
-  taskId = randomUUID(),
-  nodeId = randomUUID();
+  conversationId = randomUUID(),
+  sessionId = randomUUID(),
+  runId = randomUUID();
 const png = await sharp({
   create: { width: 32, height: 32, channels: 3, background: { r: 242, g: 160, b: 103 } },
 })
@@ -176,8 +186,10 @@ async function add(name, bytes, contentType = 'application/octet-stream') {
   const row = {
     id,
     ownerId: owner,
-    taskId,
-    nodeId,
+    conversationId,
+    sessionId,
+    runId,
+    topic: '3D 本地验证',
     path: name,
     name,
     size: bytes.length,
@@ -185,12 +197,11 @@ async function add(name, bytes, contentType = 'application/octet-stream') {
     objectKey,
     contentType,
     category: 'threed',
-    deliverable: '模型验证',
-    taskTitle: '3D 本地验证',
-    conversationId: null,
     appSpec: null,
+    avatarSpec: null,
     models: [],
     syncPath: `模型/${name}`,
+    replacesSha256: null,
   };
   await repo.insert(row);
   return row;
@@ -218,16 +229,15 @@ await add(
   ),
   'application/json',
 );
-const task = {
-  json: async () => {
-    throw new Error('Fixture task API unused');
-  },
+const uploadRows = memoryUploads();
+// 成果都是直接放进来的，用不到 harness
+const harness = {
   stream: async () => {
-    throw new Error('Fixture task API unused');
+    throw new Error('Fixture harness API unused');
   },
 };
-const artifacts = createArtifactService({ repo, store, task, logger }),
-  uploads = createUploadService({ repo: memoryUploads(), store, logger });
+const artifacts = createArtifactService({ repo, uploads: uploadRows, store, harness, logger }),
+  uploads = createUploadService({ repo: uploadRows, store, logger });
 const canvas = Fastify({ loggerInstance: logger });
 canvasRoutes(
   canvas,
@@ -235,8 +245,7 @@ canvasRoutes(
     artifacts,
     uploads,
     store,
-    task,
-    harness: createServiceClient('harness', harnessUrl, { timeoutMs: 20000 }),
+    inspector: createServiceClient('inspector', inspectorUrl, { timeoutMs: 20000 }),
   },
   { maxBytes: 32 * 1024 ** 2 },
 );
@@ -321,7 +330,7 @@ await writeFile(
 async function stop() {
   await vite.close();
   await canvas.close();
-  await harness.close();
+  await inspector.close();
 }
 process.once('SIGINT', () => void stop().then(() => process.exit()));
 process.once('SIGTERM', () => void stop().then(() => process.exit()));

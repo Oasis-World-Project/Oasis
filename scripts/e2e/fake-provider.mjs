@@ -1,33 +1,23 @@
 // 回归测试用的假 OpenRouter（docs/engineering/回归测试.md）：按场景脚本回复，记下每次调用供断言。
 // 覆盖 model-gateway 用到的全部上游接口：价格表、chat completions（流式/非流式）、Jev 决策、生图、
-// 生视频长任务、按生成 ID 查实际花费。规划员和节点里的 dsh 由脚本驱动，含持续目标（get_goal → update_goal）。
+// 生视频长任务、按生成 ID 查实际花费。私聊里干活的 AI（沙箱里的 dsh）按用户每句话的脚本做。
 // 不联网、不花钱；行为照真实供应商：输出上限超过型号能力时拒单（2026-11-06 的 93 万 token 事故）。
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import {
-  GOAL_TOOLS,
-  MODEL_MAX_TOKENS,
-  parseJson,
-  planContext,
-  segmentsOf,
-  textOf,
-  writeFiles,
-} from './fake-dsh.mjs';
+import { MODEL_MAX_TOKENS, parseJson, segmentsOf, textOf } from './fake-dsh.mjs';
 import { JPEG_IMAGE_MODEL, pickAnswer, VIDEO_MODELS } from './fake-media.mjs';
 
 export { writeFiles } from './fake-dsh.mjs';
 
 /**
- * 场景标记：用户原话里写 [[e2e:场景@本轮编号]]，假规划员把 [[e2e:场景@本轮编号/节点]] 写进每个节点的目标。
- * 本轮编号区分每次回归：上一轮没收尾的任务被重试时，不会混进这一轮的场景里。
+ * 场景标记：用户每句话里写 [[e2e:场景@本轮编号/第几句]]，假模型按这句话的脚本做。
+ * 本轮编号区分每次回归：上一轮没收尾的对话被接着做时，不会混进这一轮的场景里。
  */
 let RUN = 'local';
 export const setRun = (id) => {
   RUN = id;
 };
-export const marker = (scenario, node) => `[[e2e:${scenario}@${RUN}${node ? `/${node}` : ''}]]`;
-const TASK_MARK = /\[\[e2e:([\w-]+)@(\w+)\]\]/;
-const NODE_MARK = /\[\[e2e:([\w-]+)@(\w+)\/([\w-]+)\]\]/;
+export const marker = (scenario, say) => `[[e2e:${scenario}@${RUN}/${say}]]`;
 
 /**
  * @param {{
@@ -45,7 +35,7 @@ export function createFakeProvider(options) {
   const violations = [];
   const generations = new Map();
   const videos = new Map();
-  /** 故障和挂起只发生一次（按 场景/节点/段/步 记） */
+  /** 故障和挂起只发生一次（按 场景/句/段/步 记） */
   const fired = new Set();
   /** 挂起中的请求：重启 model-gateway 的场景要等它出现 */
   const hanging = new Set();
@@ -140,47 +130,51 @@ export function createFakeProvider(options) {
     return true;
   }
 
-  /** 上一轮回归留下的任务：直接拒单，让它尽快失败，不混进这一轮的记录 */
+  /** 上一轮回归留下的对话：直接拒单，让它尽快失败，不混进这一轮的记录 */
   function stale(res, kind) {
     record({ kind: 'stale', of: kind });
-    return sendJson(res, 400, { error: { message: '上一轮回归留下的任务（假供应商拒绝）' } });
+    return sendJson(res, 400, { error: { message: '上一轮回归留下的对话（假供应商拒绝）' } });
   }
 
-  /** 节点里的 dsh：按段执行场景脚本，脚本做完再走持续目标的完成流程 */
-  function nodeTurn(res, body, segments) {
-    const head = segments.find((s) => s.kind === 'work') ?? segments[0];
-    const found = head.text.match(NODE_MARK);
-    if (!found) {
-      if (/\[\[e2e:/.test(head.text)) return stale(res, 'node');
-      violations.push(`节点提示里没有 [[e2e:场景@轮/节点]] 标记：${head.text.slice(0, 80)}`);
+  /**
+   * 私聊里干活的 AI（沙箱里的 dsh）：按最近一句带标记的用户的话的脚本一步步做，做完说一句话。
+   * 接管后的恢复提示接着那句话的脚本做，做过的步骤照算；被打断的那一步像真模型一样重做，最多三次。
+   */
+  function agentTurn(res, body, segments) {
+    const at = segments.findLastIndex((s) => s.kind === 'say');
+    if (at < 0) {
+      const first = textOf(body.messages.find((m) => m.role === 'user')?.content);
+      if (/\[\[e2e:/.test(first)) return stale(res, 'agent');
+      violations.push(`dsh 请求里没有带 [[e2e:场景@轮/句]] 标记的用户的话：${first.slice(0, 120)}`);
       return answer(res, body, { text: '没有场景脚本。' });
     }
-    const [, scenarioName, run, nodeKey] = found;
-    if (run !== RUN) return stale(res, 'node');
-    const script = scenarios[scenarioName]?.nodes?.[nodeKey];
+    const [, scenarioName, run, say] = segments[at].mark;
+    if (run !== RUN) return stale(res, 'agent');
+    const script = scenarios[scenarioName]?.says?.[say];
     const seg = segments.at(-1);
     // 上一步工具的输出也记下：排查时能看到命令实际跑出了什么
     const previous = seg.calls.at(-1);
     const entry = {
-      kind: 'node',
+      kind: 'agent',
       scenario: scenarioName,
-      node: nodeKey,
+      say,
       segment: seg.kind,
       model: body.model,
-      segments: segments.length,
+      // 会话里攒着几句用户的话：大于 1 说明是接着原会话做的
+      says: segments.filter((s) => s.kind === 'say').length,
       ...(previous
         ? { previous: `${previous.name}: ${(previous.result ?? '（没有结果）').slice(0, 600)}` }
         : {}),
-      // 这一段里平台/dsh 插进来的其他消息（持续目标续跑、截断后的提醒……）开头
+      // 这一段里平台/dsh 插进来的其他消息（截断后的提醒……）开头
       ...(seg.notices.length ? { notices: seg.notices.map((n) => n.slice(0, 160)) } : {}),
     };
     if (!script) {
-      violations.push(`场景 ${scenarioName} 没有节点 ${nodeKey} 的脚本`);
+      violations.push(`场景 ${scenarioName} 没有第 ${say} 句话的脚本`);
       return answer(res, body, { text: '没有脚本。' });
     }
-    const steps = script[seg.kind] ?? (seg.kind === 'recover' ? script.resume : undefined) ?? [];
-    const done = seg.calls.filter((c) => !GOAL_TOOLS.has(c.name));
-    // 做成功了才算这一步过去：被打断（harness 接管后 dsh 报 unknown job）的那一步像真模型一样重做，最多三次
+    const steps = script.steps ?? [];
+    const done = segments.slice(at).flatMap((s) => s.calls);
+    // 做成功了才算这一步过去：被打断（harness 接管后 dsh 报 unknown job）的那一步重做，最多三次
     let index = 0;
     let tries = 0;
     for (const call of done) {
@@ -194,7 +188,7 @@ export function createFakeProvider(options) {
       const raw = steps[index];
       const step =
         typeof raw === 'function' ? raw({ seg, segments, done, last: done.at(-1)?.result }) : raw;
-      const key = `${scenarioName}/${nodeKey}/${seg.kind}/${segments.length}/${index}`;
+      const key = `${scenarioName}/${say}/${segments.length}/${seg.kind}/${index}`;
       if (inject(res, body, step, key, entry)) return;
       if (step.text !== undefined) {
         record({ ...entry, action: `text:${index}` });
@@ -209,130 +203,8 @@ export function createFakeProvider(options) {
       record({ ...entry, action: `${call.name}:${index}`, command: call.args.command });
       return answer(res, body, { call });
     }
-    // 修复（关卡没过）是单轮的，不用持续目标；其余运行都要 update_goal complete 才算完
-    if (seg.kind === 'rework') {
-      record({ ...entry, action: 'done' });
-      return answer(res, body, { text: script.summary ?? '已修好。' });
-    }
-    const goals = seg.calls.filter((c) => c.name === 'get_goal' || c.name === 'update_goal');
-    const last = goals.at(-1);
-    if (last?.name === 'update_goal' && parseJson(last.result)?.goal?.phase === 'complete') {
-      record({ ...entry, action: 'done' });
-      return answer(res, body, { text: script.summary ?? '已交付。' });
-    }
-    if (last?.name === 'get_goal') {
-      const goal = parseJson(last.result)?.goal;
-      if (goal && goal.phase !== 'complete') {
-        record({ ...entry, action: 'update_goal' });
-        return answer(res, body, {
-          call: {
-            name: 'update_goal',
-            args: { goal_id: goal.id, revision: goal.revision, action: 'complete' },
-          },
-        });
-      }
-      if (!goal) violations.push(`${scenarioName}/${nodeKey}：持续目标运行里 get_goal 没有目标`);
-      record({ ...entry, action: 'done' });
-      return answer(res, body, { text: script.summary ?? '已交付。' });
-    }
-    if (goals.filter((c) => c.name === 'update_goal').length >= 3) {
-      violations.push(
-        `${scenarioName}/${nodeKey}：update_goal 连续失败：${last?.result?.slice(0, 200)}`,
-      );
-      return answer(res, body, { text: '目标没能标成完成。' });
-    }
-    record({ ...entry, action: 'get_goal' });
-    return answer(res, body, { call: { name: 'get_goal', args: {} } });
-  }
-
-  /**
-   * 规划员（第一次规划、规划门退回后修改、修改成果时的规划）：写 out/plan.json，再说一句话；
-   * 答复中途调整时写 out/adjust.json
-   */
-  function plannerTurn(res, body, segments) {
-    const first = segments[0];
-    const seg = segments.at(-1);
-    const [, scenarioName, run] = first.text.match(TASK_MARK) ?? [];
-    if ((run && run !== RUN) || (!run && first.text.includes('[[e2e:')))
-      return stale(res, 'planner');
-    const scenario = scenarios[scenarioName];
-    const entry = {
-      kind:
-        first.kind === 'replan' ? 'replanner' : first.kind === 'adjust' ? 'adjuster' : 'planner',
-      scenario: scenarioName,
-      segment: seg.kind,
-      model: body.model,
-    };
-    if (!scenario) {
-      violations.push(`规划员提示里没有场景标记：${first.text.slice(0, 80)}`);
-      return answer(res, body, { text: '没有场景。' });
-    }
-    if (seg.calls.length) {
-      record({ ...entry, action: 'done' });
-      return answer(res, body, { text: '方案写好了。' });
-    }
-    const ctx = planContext(first.text);
-    const pick = (preferred) =>
-      ctx.models.includes(preferred) ? preferred : (ctx.models[0] ?? preferred);
-    const fix = seg.kind === 'planfix' ? seg.text : undefined;
-    const [file, plan] =
-      first.kind === 'adjust'
-        ? ['out/adjust.json', scenario.adjust({ ...ctx, pick, text: first.text })]
-        : [
-            'out/plan.json',
-            first.kind === 'replan'
-              ? scenario.revisionPlan({ ...ctx, pick, fix })
-              : scenario.plan({ ...ctx, pick, fix }),
-          ];
-    record({ ...entry, action: 'write-plan', plan });
-    answer(res, body, {
-      call: {
-        name: 'bash',
-        args: {
-          description: '写方案',
-          command: writeFiles({ [file]: JSON.stringify(plan, null, 2) }),
-        },
-      },
-    });
-  }
-
-  /** 私聊里的 AI 接需求：直接按场景给出任务单 */
-  function intakeTurn(res, body) {
-    const content = textOf(body.messages.find((m) => m.role === 'user')?.content);
-    const request =
-      content
-        .split('【用户的需求】\n')[1]
-        ?.split(/\n\n【/)[0]
-        ?.trim() ?? '';
-    const [, name, run] = request.match(TASK_MARK) ?? [];
-    if ((run && run !== RUN) || (!run && request.includes('[[e2e:'))) return stale(res, 'intake');
-    const scenario = scenarios[name];
-    record({ kind: 'intake', scenario: name, model: body.model });
-    if (!scenario) violations.push(`接需求的原话里没有场景标记：${request.slice(0, 80)}`);
-    const sheet = {
-      title: scenario?.title ?? '回归测试任务',
-      deliverables: scenario?.deliverables ?? [{ name: '成果', form: 'Markdown' }],
-      criteria: scenario?.criteria ?? ['按要求交付'],
-      style: [],
-      assumptions: [],
-      requirements: [
-        {
-          id: 'r1',
-          text: request.slice(0, 1000) || '按原话做',
-          sources: [{ kind: 'request', quote: request.slice(0, 40) || '按原话做' }],
-        },
-      ],
-    };
-    answer(res, body, {
-      text: JSON.stringify({
-        type: 'sheet',
-        intro: '好的，任务单如下。',
-        questions: null,
-        sheet,
-        materialIds: null,
-      }),
-      cost: 0.0001,
-    });
+    record({ ...entry, action: 'done' });
+    return answer(res, body, { text: script.reply ?? '做好了。' });
   }
 
   async function chat(res, body) {
@@ -342,7 +214,6 @@ export function createFakeProvider(options) {
       return sendJson(res, 400, { error: { message: `max_tokens ${max} exceeds model limit` } });
     }
     const messages = body.messages ?? [];
-    if (body.response_format?.json_schema?.name === 'oasis_intake') return intakeTurn(res, body);
     const firstUser = textOf(messages.find((m) => m.role === 'user')?.content);
     if (body.response_format?.json_schema?.name === 'evidence_decisions') {
       const keys = Object.keys(
@@ -365,16 +236,7 @@ export function createFakeProvider(options) {
       record({ kind: 'inspect', model: body.model, choice, images });
       return answer(res, body, { text: JSON.stringify({ choice, reason }), cost: 0.002 });
     }
-    if (body.tools?.length) {
-      const segments = segmentsOf(messages);
-      if (!segments.length) {
-        violations.push(`dsh 请求里认不出平台提示：${firstUser.slice(0, 120)}`);
-        return answer(res, body, { text: '看不懂。' });
-      }
-      if (['plan', 'replan', 'adjust'].includes(segments[0].kind))
-        return plannerTurn(res, body, segments);
-      return nodeTurn(res, body, segments);
-    }
+    if (body.tools?.length) return agentTurn(res, body, segmentsOf(messages));
     record({ kind: 'chat', model: body.model });
     return answer(res, body, { text: '好的。', cost: 0.0001 });
   }
@@ -488,8 +350,8 @@ export function createFakeProvider(options) {
       }
       throw new Error(`等不到：${label}`);
     },
-    /** 某个场景的调用（可再按节点筛） */
-    of: (scenario, node) =>
-      calls.filter((c) => c.scenario === scenario && (node === undefined || c.node === node)),
+    /** 某个场景的调用（可再按第几句话筛） */
+    of: (scenario, say) =>
+      calls.filter((c) => c.scenario === scenario && (say === undefined || c.say === String(say))),
   };
 }

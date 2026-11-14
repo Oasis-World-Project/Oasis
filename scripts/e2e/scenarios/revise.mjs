@@ -1,336 +1,210 @@
-// 回归场景（docs/engineering/回归测试.md）：修改、中途调整、停止和继续、持久工作目录。
+// 回归场景（docs/engineering/回归测试.md）：让 AI 改、插话、停下后继续、开新话题、持久工作目录丢了。
 import { marker, writeFiles } from '../fake-provider.mjs';
-import { DEFAULT_MODEL, done, dropWorkspace, outcomes, work } from './shared.mjs';
+import { aiOf, cardOf, dropWorkspace, runsOf, start, workspaceExists } from './shared.mjs';
 
-// ---------- 3. 修改：意见指到一样成果 → 做它的 AI 接着原会话改；
-// 没指到 → 规划员排方案 → 用户确认 → 沿用 / 重新做 ----------
-const reviseNodes = (pick) => [
-  work('revise', 'copy', '写文案', '写活动文案，交出 out/文案.md', {
-    model: pick(DEFAULT_MODEL),
-    expects: ['文案.md'],
-    deliver: ['文案.md'],
-  }),
-  work('revise', 'sheet', '写海报说明', '按 in/copy/文案.md 写海报说明，交出 out/海报说明.md', {
-    model: pick(DEFAULT_MODEL),
-    expects: ['海报说明.md'],
-    deliver: ['海报说明.md'],
-  }),
-];
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * 要改的成果是之前的话题做的：已经连同它用到的文件拷进工作目录（conversation 的 hand-over.ts）。
+ * 话题文件夹取自第一句话，可能带括号（如「写一份笔记（之后……）」），一直匹配到 /笔记.md
+ */
+const COPIED = /materials\/canvas\/[^\n]+?\/笔记\.md/;
+/** 从拷进来的那份改：加一句结尾交出来 */
+const fromCopy =
+  (ending) =>
+  ({ seg }) =>
+    COPIED.test(seg.text)
+      ? {
+          bash: `mkdir -p out && cp materials/canvas/*/笔记.md out/笔记.md && printf '%s\\n' '${ending}' >> out/笔记.md`,
+          description: '拷过来改',
+        }
+      : { text: `没说之前的成果拷到了哪：${seg.text.slice(0, 200)}` };
+const NOTE = { steps: [{ bash: writeFiles({ 'out/笔记.md': '# 笔记\n第一版。\n' }) }] };
+
+// ---------- 4. 让 AI 改：在画布里挑一样成果让 AI 改；它还在这个会话的工作目录里，
+// AI 接着原会话直接改，画布里原地换新（ID 不变、不多出一份） ----------
 export const revise = {
-  title: '活动文案和海报说明',
-  deliverables: [
-    { name: '活动文案', form: 'Markdown' },
-    { name: '海报说明', form: 'Markdown' },
-  ],
-  criteria: ['文案和海报说明标题一致'],
-  get request() {
-    return `写一段活动文案，再按文案写一份海报说明 ${marker('revise')}`;
-  },
-  plan: ({ pick }) =>
-    outcomes({
-      nodes: reviseNodes(pick),
-      edges: [{ from: 'copy', to: 'sheet' }],
-      deliverables: { 活动文案: 'copy', 海报说明: 'sheet' },
-    }),
-  // 没指到成果的修改交给规划员：文案沿用，海报说明重新做（上一版在 in/_previous/）
-  revisionPlan: ({ pick }) => {
-    const [, sheet] = outcomes({
-      nodes: reviseNodes(pick),
-      edges: [{ from: 'copy', to: 'sheet' }],
-    }).outcomes;
-    return {
-      summary: '文案沿用，海报说明重新做，加一句副标题。',
-      outcomes: [
-        { key: 'copy', reuse: true },
+  says: {
+    1: {
+      steps: [
         {
-          ...sheet,
-          goal: `${sheet.goal}；基于 in/_previous/海报说明.md 加一句副标题`,
-          mode: 'fresh',
+          bash: writeFiles({
+            'out/文案.md': '# 秋日市集\n周末一起逛市集。\n',
+            'out/海报说明.md': '# 秋日市集\n海报用暖色。\n',
+          }),
+          description: '写文案和海报说明',
         },
       ],
-      deliverables: { 活动文案: 'copy', 海报说明: 'sheet' },
-    };
-  },
-  nodes: {
-    copy: { work: [{ bash: writeFiles({ 'out/文案.md': '# 秋日市集\n周末一起逛市集。\n' }) }] },
-    sheet: {
-      work: [
+      reply: '文案和海报说明写好了。',
+    },
+    2: {
+      steps: [
         ({ seg }) =>
-          seg.text.includes('【上一版】')
+          seg.text.includes('直接改：out/海报说明.md')
             ? {
-                // 重新做：上一版的文件在 in/_previous/，在它的基础上加副标题
-                bash: `test -f in/_previous/海报说明.md && test -f in/copy/文案.md && mkdir -p out && cp in/_previous/海报说明.md out/海报说明.md && printf '%s\\n' '副标题：一起过周末' >> out/海报说明.md`,
+                bash: `sed -i 's/秋日市集/冬日市集/' out/海报说明.md && cat out/海报说明.md`,
+                description: '改标题',
               }
-            : {
-                bash: `test -f in/copy/文案.md && ${writeFiles({ 'out/海报说明.md': '# 秋日市集\n海报用暖色。\n' })}`,
-              },
+            : { text: `没说要改的成果在哪：${seg.text.slice(0, 200)}` },
       ],
-      // 接着原会话改：工作目录里还是上一版，直接改标题
-      revision: [{ bash: `sed -i 's/秋日市集/冬日市集/' out/海报说明.md && cat out/海报说明.md` }],
+      reply: '标题改成冬日市集了。',
     },
   },
   async run(t) {
-    const { taskId } = await t.user.createTask(this.request);
-    t.track(taskId);
-    let task = await t.user.waitTask(taskId, done, '第一版交付');
-    const sheetNode = task.nodes.find((n) => n.key === 'sheet');
-    const copyCalls = () => t.provider.of('revise', 'copy').length;
-    const before = copyCalls();
-
-    // 第一次修改：批注指到海报说明 → 不经过规划员，做它的 AI 接着原会话改，马上开跑
-    const planners = () =>
-      t.provider.calls.filter((c) => c.kind === 'replanner' && c.scenario === 'revise').length;
-    task = await t.user.revise(taskId, {
-      request: '把标题改成「冬日市集」',
-      nodeIds: [sheetNode.id],
+    const id = await start(t, 'revise', '写一段活动文案，再按文案写一份海报说明');
+    await t.user.waitTurn(id, '第一版');
+    const first = await t.user.waitArtifacts(id, ['文案.md', '海报说明.md']);
+    const sheet = first.find((a) => a.path === '海报说明.md');
+    if (!sheet) {
+      t.check(false, `画布里没有海报说明（有：${first.map((a) => a.path).join('、')}）`);
+      return;
+    }
+    await t.user.say(id, `把标题改成「冬日市集」 ${marker('revise', 2)}`, {
+      artifacts: [sheet.id],
     });
+    const messages = await t.user.waitTurn(id, '改好');
+    const runs = runsOf(id);
     t.check(
-      task.status === 'running' && task.version === 2 && !task.revision,
-      `意见指到一样成果应直接开跑：${task.status} 第 ${task.version} 版 ${JSON.stringify(task.revision)}`,
+      runs.length === 2 &&
+        runs[1].continue_from === runs[0].id &&
+        runs[1].session_id === runs[0].session_id,
+      `让 AI 改应接着原会话：${JSON.stringify(runs)}`,
     );
-    task = await t.user.waitTask(
-      taskId,
-      (x) => done(x) && x.version === 2 && !x.revising,
-      '第二版交付',
-    );
-    t.check(copyCalls() === before, '沿用的「写文案」不应再调模型');
-    t.check(planners() === 0, '意见指到一样成果时不应该找规划员');
-    const continued = t.provider.of('revise', 'sheet').filter((c) => c.segment === 'revision');
+    const edits = t.provider.of('revise', 2);
     t.check(
-      continued.length > 0 && continued.every((c) => c.segments > 1),
-      '接着改的成果没有接上原会话',
+      edits.some((c) => c.action === 'bash:0') && edits.every((c) => c.says === 2),
+      `AI 应接着原会话直接改工作目录里的文件：${edits.map((c) => `${c.action}/${c.says}`).join(' ')}`,
     );
+    const asked = messages.find((m) => m.role === 'user' && m.content.includes('冬日市集'));
     t.check(
-      task.versions.some((v) => v.version === 1),
-      '第一版工作流应冻结可查',
+      asked?.data.artifacts?.some((a) => a.id === sheet.id),
+      `用户的话上应带着要改的成果：${JSON.stringify(asked?.data ?? null)}`,
     );
-    const winter = await t.user.waitContent(taskId, '海报说明.md', (text) =>
-      text.includes('冬日市集'),
-    );
+    const winter = await t.user.waitContent(id, '海报说明.md', (text) => text.includes('冬日市集'));
     t.check(winter.includes('冬日市集'), `画布里的海报说明没改成冬日市集：${winter}`);
+    const after = await t.user.artifacts(id);
     t.check(
-      (await t.user.artifacts(taskId)).length === 2,
-      '修改后画布里应还是 2 个成果（原地更新，不多出一份）',
+      after.length === 2 && after.some((a) => a.id === sheet.id && a.path === '海报说明.md'),
+      `改过的成果应原地换新（还是 2 个、ID 不变）：${after.map((a) => `${a.path}:${a.id.slice(0, 8)}`).join('、')}`,
     );
-
-    // 第二次修改：没指到哪样成果 → 规划员排方案 → 等确认 → 文案沿用、海报说明重新做
-    await t.user.revise(taskId, { request: '加一句副标题' });
-    task = await t.user.waitTask(
-      taskId,
-      (x) => x.revision?.stage === 'confirm',
-      '第二次修改方案待确认',
-    );
+    const card = cardOf(messages, runs[1]?.id);
     t.check(
-      task.attention?.reason === 'revision_plan',
-      `应等用户确认修改方案：${JSON.stringify(task.attention)}`,
+      card?.data.files.length === 1 && card.data.files[0].artifactId === sheet.id,
+      `第二轮的任务卡上应只列改过的海报说明：${JSON.stringify(card?.data.files ?? null)}`,
     );
-    const change = Object.fromEntries(task.revision.changes.map((c) => [c.key, c.change]));
-    t.check(
-      change.copy === 'reuse' && change.sheet === 'fresh',
-      `修改方案不对：${JSON.stringify(change)}`,
-    );
-    await t.user.decide(taskId, 'continue');
-    await t.user.waitTask(taskId, (x) => done(x) && x.version === 3 && !x.revising, '第三版交付');
-    t.check(copyCalls() === before, '沿用的「写文案」不应再调模型');
-    const third = await t.user.waitContent(taskId, '海报说明.md', (text) =>
-      text.includes('副标题'),
-    );
-    t.check(third.includes('冬日市集') && third.includes('副标题'), `第三版海报说明不对：${third}`);
   },
 };
 
-// ---------- 3b. 中途调整：做文案的 AI 提一次，规划员答一次——加一样成果、
-// 给还没开始的成果补说明、停掉一样成果；改动马上生效，不问用户 ----------
-const adjustNodes = (pick) => [
-  work('adjust', 'copy', '写文案', '写活动文案和备用标题，交出 out/文案.md', {
-    model: pick(DEFAULT_MODEL),
-    expects: ['文案.md'],
-    deliver: ['文案.md'],
-  }),
-  work('adjust', 'sheet', '写海报说明', '按 in/copy/文案.md 写海报说明，交出 out/海报说明.md', {
-    model: pick(DEFAULT_MODEL),
-    expects: ['海报说明.md'],
-    deliver: ['海报说明.md'],
-  }),
-  work('adjust', 'titles', '想备用标题', '想三个备用标题，交出 out/备用标题.md', {
-    model: pick(DEFAULT_MODEL),
-    expects: ['备用标题.md'],
-    deliver: ['备用标题.md'],
-  }),
-];
-export const adjust = {
-  title: '活动文案、海报说明和备用标题',
-  deliverables: [
-    { name: '活动文案', form: 'Markdown' },
-    { name: '海报说明', form: 'Markdown' },
-    { name: '备用标题', form: 'Markdown' },
-  ],
-  criteria: ['文案和海报说明标题一致'],
-  get request() {
-    return `写一段活动文案、一份海报说明，再想几个备用标题 ${marker('adjust')}`;
-  },
-  plan: ({ pick }) =>
-    outcomes({
-      nodes: adjustNodes(pick),
-      edges: [{ from: 'copy', to: 'sheet' }],
-      deliverables: { 活动文案: 'copy', 海报说明: 'sheet', 备用标题: 'titles' },
-    }),
-  // 规划员对调整的答复：三种改动各一个
-  adjust: ({ pick }) => ({
-    reply: '同意：加一份常见问题；海报说明不写价格；备用标题不单做了，文案里带着。',
-    add: outcomes({
-      nodes: [
-        work('adjust', 'faq', '写常见问题', '按 in/copy/文案.md 写常见问题，交出 out/常见问题.md', {
-          model: pick(DEFAULT_MODEL),
-          expects: ['常见问题.md'],
-        }),
-      ],
-      edges: [{ from: 'copy', to: 'faq' }],
-    }).outcomes,
-    deliverables: { 备用标题: 'copy' },
-    instruct: [{ key: 'sheet', text: '不要写价格' }],
-    stop: ['titles'],
-  }),
-  nodes: {
-    copy: {
-      work: [
+// ---------- 5. 插话：AI 跑一条慢命令时用户插一句，AI 做完那条命令就看到、按新要求做；还是同一轮，
+// AI 看到之后说的话接在插话后面 ----------
+export const interject = {
+  says: {
+    1: {
+      steps: [
         {
-          bash: writeFiles({ 'out/文案.md': '# 秋日市集\n周末一起逛市集。\n备用标题：周末市集\n' }),
-        },
-        // 提出调整：假规划员答得快，这条命令自己就等到了答复；把答复记进交付的文件里
-        {
-          bash: `oasis-tool workflow.adjust --want '加一份常见问题；海报说明别写价格；备用标题不用单做了' --why '文案里已经带了备用标题' > 答复.txt && cat 答复.txt && printf '\\n规划员的答复：%s\\n' "$(cat 答复.txt)" >> out/文案.md`,
+          bash: `mkdir -p out && sleep 15 && ${writeFiles({ 'out/标语.md': '秋日市集\n' })}`,
+          description: '慢慢写标语',
         },
       ],
+      reply: '标语写好了。',
     },
-    sheet: {
-      work: [
-        ({ seg }) => ({
-          // 补的说明要带进这样成果开跑时的说明里
-          bash: seg.text.includes('（规划员中途调整）不要写价格')
-            ? `test -f in/copy/文案.md && ${writeFiles({ 'out/海报说明.md': '# 秋日市集\n海报用暖色，不写价格。\n' })}`
-            : 'echo "没有收到规划员补的说明" >&2; exit 1',
-        }),
+    2: {
+      steps: [
+        { bash: `sed -i 's/秋日/冬日/' out/标语.md && cat out/标语.md`, description: '按插话改' },
       ],
-    },
-    // 做得慢：规划员答复时它还在做，会被停掉
-    titles: { work: [{ bash: 'sleep 600' }] },
-    faq: {
-      work: [
-        {
-          bash: `test -f in/copy/文案.md && ${writeFiles({ 'out/常见问题.md': '# 常见问题\n几点开始？上午十点。\n' })}`,
-        },
-      ],
+      reply: '按你说的改成冬日了。',
     },
   },
   async run(t) {
-    const { taskId } = await t.user.createTask(this.request);
-    t.track(taskId);
-    const task = await t.user.waitTask(taskId, done, '调整后交付');
-    const status = Object.fromEntries(task.nodes.map((n) => [n.key, n.status]));
+    const id = await start(t, 'interject', '写一句活动标语');
+    await t.provider.waitFor(
+      (c) => c.scenario === 'interject' && c.action === 'bash:0',
+      'AI 开始跑命令',
+    );
+    await sleep(2_000);
+    const sent = await t.user.say(id, `改成冬日的 ${marker('interject', 2)}`);
+    const said = sent.messages.find((m) => m.role === 'user');
     t.check(
-      status.copy === 'succeeded' &&
-        status.sheet === 'succeeded' &&
-        status.faq === 'succeeded' &&
-        status.titles === 'cancelled',
-      `调整后的工作流不对：${JSON.stringify(status)}`,
+      said?.data.interjection === true,
+      `一轮进行中说的话应是插话：${JSON.stringify(said?.data ?? null)}`,
+    );
+    const messages = await t.user.waitTurn(id, '插话后做完');
+    const runs = runsOf(id);
+    t.check(
+      runs.length === 1 && runs[0].status === 'succeeded',
+      `插话应在同一轮里做完：${JSON.stringify(runs)}`,
     );
     t.check(
-      task.version === 2 && task.versions.some((v) => v.version === 1),
-      `加了、停了成果，改之前的工作流应冻结成第 1 版：第 ${task.version} 版`,
+      t.provider.of('interject', 2).some((c) => c.action === 'bash:0'),
+      'AI 应在下一步看到插话、按它改',
     );
-    const answered = t.provider.calls.filter(
-      (c) => c.kind === 'adjuster' && c.scenario === 'adjust' && c.action === 'write-plan',
-    );
-    t.check(answered.length === 1, `规划员应只答复一次：${answered.length}`);
-    const note = (key) => task.nodes.find((n) => n.key === key)?.adjust?.note ?? '';
+    const order = messages
+      .filter((m) => m.kind === 'text')
+      .map((m) => (m.role === 'assistant' ? 'AI' : m.data.interjection ? '插话' : '用户'));
     t.check(
-      note('faq').includes('中途新加的') &&
-        note('sheet').includes('不要写价格') &&
-        note('titles').includes('停掉了') &&
-        task.nodes.find((n) => n.key === 'copy')?.adjust?.asking === false,
-      `节点上应记着调整了什么：${JSON.stringify(task.nodes.map((n) => [n.key, n.adjust]))}`,
+      order.join('、') === '用户、AI、插话、AI',
+      `插话后 AI 的话应接在后面：${order.join('、')}`,
     );
-    const copy = task.nodes.find((n) => n.key === 'copy');
-    const runs = await t.user.nodeRuns(taskId, copy.id);
+    // AI 看到插话前跑完的慢命令留在插话前面那条，按插话改的那步在后面那条，都标成做完
+    const [before, after] = aiOf(messages, runs[0]?.id).map((m) =>
+      (m.data.parts ?? []).filter((p) => p.type === 'step'),
+    );
     t.check(
-      runs.map((r) => `${r.purpose}/${r.status}`).join(' → ') ===
-        'work/succeeded → adjust/succeeded',
-      `提出调整的成果应有一次干活、一次规划员答复的运行：${runs.map((r) => `${r.purpose}/${r.status}`).join(' → ')}`,
+      before?.length === 1 &&
+        after?.length === 1 &&
+        [...before, ...after].every((s) => s.status === 'done'),
+      `插话前后各一步、都做完：${[before, after].map((steps) => (steps ?? []).map((s) => `${s.label}/${s.status}`).join('、')).join(' | ')}`,
     );
-    // 提出调整的 AI 拿到了答复；补的说明带进了海报说明；备用标题改由文案交付
-    const text = await t.user.waitContent(taskId, '文案.md', (x) => x.includes('已生效'));
-    t.check(
-      text.includes('新加了「写常见问题」') && text.includes('停掉了「想备用标题」'),
-      `做文案的 AI 没拿到规划员的答复：${text}`,
-    );
-    const sheet = await t.user.waitContent(taskId, '海报说明.md', (x) => x.includes('不写价格'));
-    t.check(sheet.includes('不写价格'), `海报说明没按补的说明做：${sheet}`);
-    t.check(
-      task.deliverables.find((d) => d.name === '备用标题')?.nodeId === copy.id,
-      '备用标题应改由文案交付',
-    );
+    const text = await t.user.waitContent(id, '标语.md', (x) => x.includes('冬日'));
+    t.check(text.includes('冬日市集'), `标语应按插话改成冬日：${text}`);
   },
 };
 
-// ---------- 4. 停止后继续：节点在跑命令时被用户停下，继续后接着原会话做完 ----------
+// ---------- 6. 停下后继续：AI 跑命令时用户停下，说「继续」后接着原会话做完 ----------
 export const stop = {
-  title: '慢慢做的报告',
-  deliverables: [{ name: '报告', form: 'Markdown' }],
-  criteria: ['交出报告'],
-  get request() {
-    return `写一份报告，中途我可能会停下 ${marker('stop')}`;
-  },
-  plan: ({ pick }) =>
-    outcomes({
-      nodes: [
-        work('stop', 'slow', '写报告', '写报告，交出 out/报告.md', {
-          model: pick(DEFAULT_MODEL),
-          expects: ['报告.md'],
-          deliver: ['报告.md'],
-        }),
-      ],
-      edges: [],
-      deliverables: { 报告: 'slow' },
-    }),
-  nodes: {
-    slow: {
-      work: [
+  says: {
+    1: {
+      steps: [
         { bash: 'mkdir -p out && echo 开始 > out/进度.txt && sleep 600', description: '慢慢做' },
       ],
-      resume: [
+    },
+    2: {
+      steps: [
         {
           bash: `test -f out/进度.txt && ${writeFiles({ 'out/报告.md': '# 报告\n停下后接着做完。\n' })}`,
+          description: '接着写',
         },
       ],
+      reply: '报告写好了。',
     },
   },
   async run(t) {
-    const { taskId } = await t.user.createTask(this.request);
-    t.track(taskId);
+    const id = await start(t, 'stop', '写一份报告，中途我可能会停下');
     await t.provider.waitFor(
-      (c) => c.scenario === 'stop' && c.node === 'slow' && c.action === 'bash:0',
-      '节点开始跑命令',
+      (c) => c.scenario === 'stop' && c.action === 'bash:0',
+      'AI 开始跑命令',
     );
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
-    await t.user.stop(taskId);
-    let task = await t.user.waitTask(taskId, (x) => x.status === 'stopped', '任务停下');
-    t.check(task.nodes[0].status === 'stopped', `节点应是已停止：${task.nodes[0].status}`);
-    await t.user.run(taskId);
-    task = await t.user.waitTask(taskId, done, '继续后交付');
-    const runs = await t.user.nodeRuns(taskId, task.nodes[0].id);
-    t.check(runs.length === 2, `应有两次运行（停下的和继续的），实际 ${runs.length} 次`);
+    await sleep(3_000);
+    await t.user.stop(id);
+    const halted = aiOf(await t.user.waitTurn(id, '停下')).at(-1);
     t.check(
-      runs.some((r) => r.status === 'stopped'),
-      '第一次运行应是已停止',
+      halted?.status === 'complete' && halted.data.stopped === true,
+      `停下后 AI 的话应标着停下了：${halted?.status} ${halted?.data.stopped}`,
     );
+    const step = halted?.data.parts?.find((p) => p.type === 'step');
+    t.check(step?.status === 'failed', `停下时没做完的那步应标成没做完：${step?.status}`);
+    await t.user.say(id, `继续 ${marker('stop', 2)}`);
+    await t.user.waitTurn(id, '继续后做完');
+    const runs = runsOf(id);
     t.check(
-      runs.some((r) => r.continued && r.status === 'succeeded'),
-      '继续的那次应接着原会话并成功',
+      runs.length === 2 &&
+        runs[0].status === 'stopped' &&
+        runs[1].status === 'succeeded' &&
+        runs[1].continue_from === runs[0].id,
+      `应有停下的和接着做完的两轮：${JSON.stringify(runs)}`,
     );
-    const resumed = t.provider.of('stop', 'slow').filter((c) => c.segment === 'resume');
-    t.check(resumed.length > 0 && resumed.every((c) => c.segments === 2), '继续后没有接上原会话');
-    const artifacts = await t.user.waitArtifacts(taskId, ['报告.md']);
+    const resumed = t.provider.of('stop', 2);
+    t.check(resumed.length > 0 && resumed.every((c) => c.says === 2), '继续后没有接上原会话');
+    const artifacts = await t.user.waitArtifacts(id, ['报告.md']);
     t.check(
       artifacts.some((a) => a.path === '报告.md'),
       '画布里没有报告',
@@ -338,72 +212,92 @@ export const stop = {
   },
 };
 
-// ---------- 4b. 持久工作目录丢了：修改时接不上原会话，重新开会话做、带上上一版产出 ----------
-const noteNode = (pick) =>
-  work('workspace', 'note', '写笔记', '写笔记，交出 out/笔记.md', {
-    model: pick(DEFAULT_MODEL),
-    expects: ['笔记.md'],
-    deliver: ['笔记.md'],
-  });
-export const workspace = {
-  title: '工作目录丢失测试',
-  deliverables: [{ name: '笔记', form: 'Markdown' }],
-  criteria: ['交出笔记'],
-  get request() {
-    return `写一份笔记（之后它的工作目录会被清掉）${marker('workspace')}`;
-  },
-  plan: ({ pick }) =>
-    outcomes({
-      nodes: [noteNode(pick)],
-      edges: [],
-      deliverables: { 笔记: 'note' },
-    }),
-  nodes: {
-    note: {
-      work: [
-        ({ seg }) =>
-          seg.text.includes('【重新做】')
-            ? {
-                bash: `test -f in/_previous/笔记.md && mkdir -p out && cp in/_previous/笔记.md out/笔记.md && printf '%s\\n' '结尾：新会话补上的' >> out/笔记.md`,
-              }
-            : { bash: writeFiles({ 'out/笔记.md': '# 笔记\n第一版。\n' }) },
-      ],
-      // 工作目录没了，不应该再接着原会话改
-      revision: [{ bash: `printf '%s\\n' '结尾：接着原会话' >> out/笔记.md` }],
-    },
-  },
+// ---------- 7. 开新话题后改之前的成果：AI 不记得之前的事（新会话），要改的成果连同用到的文件
+// 拷进工作目录，改好的在新话题里另登记一份，原来那份不动 ----------
+export const topic = {
+  says: { 1: NOTE, 2: { steps: [fromCopy('结尾：新话题里改的')], reply: '加好结尾了。' } },
   async run(t) {
-    const { taskId } = await t.user.createTask(this.request);
-    t.track(taskId);
-    let task = await t.user.waitTask(taskId, done, '第一版交付');
-    const node = task.nodes[0];
-    const [first] = await t.user.nodeRuns(taskId, node.id);
-    dropWorkspace(first.id);
-    // 意见直接交给做笔记的 AI 接着原会话改；原会话的工作目录已经没了，task 应改成重新做
-    await t.user.revise(taskId, { request: '加一句结尾', nodeIds: [node.id] });
-    task = await t.user.waitTask(
-      taskId,
-      (x) => done(x) && x.version === 2 && !x.revising,
-      '第二版交付',
+    const id = await start(t, 'topic', '写一份笔记');
+    await t.user.waitTurn(id, '第一版');
+    const note = (await t.user.waitArtifacts(id, ['笔记.md'])).find((a) => a.path === '笔记.md');
+    if (!note) {
+      t.check(false, '画布里没有笔记');
+      return;
+    }
+    const old = runsOf(id)[0]?.session_id;
+    await t.user.newTopic(id);
+    // AI 不记得之前的事：之前话题的运行记录和工作目录真删除（成果还在画布里）
+    t.check(old && !workspaceExists(old), '开新话题后之前话题的工作目录应删掉');
+    await t.user.say(id, `给这份笔记加一句结尾 ${marker('topic', 2)}`, { artifacts: [note.id] });
+    const messages = await t.user.waitTurn(id, '新话题里改好');
+    t.check(
+      messages.some((m) => m.kind === 'topic'),
+      '对话里应有开新话题的分隔',
     );
-    const runs = await t.user.nodeRuns(taskId, node.id);
-    t.log(
-      `运行：${runs.map((r) => `${r.purpose}/${r.status}${r.continued ? '(接着)' : ''}`).join(' → ')}`,
+    const runs = runsOf(id);
+    t.check(
+      runs.length === 1 &&
+        runs[0].status === 'succeeded' &&
+        !runs[0].continue_from &&
+        runs[0].session_id !== old,
+      `开新话题后只剩新话题这一轮、是新会话：${JSON.stringify(runs)}`,
+    );
+    const calls = t.provider.of('topic', 2);
+    t.check(
+      calls.some((c) => c.action === 'bash:0') && calls.every((c) => c.says === 1),
+      `新话题里 AI 不记得之前的事，从拷进来的那份改：${calls.map((c) => `${c.action}/${c.says}`).join(' ')}`,
+    );
+    const notes = (await t.user.artifacts(id)).filter((a) => a.path === '笔记.md');
+    const texts = await Promise.all(
+      notes.map(async (a) => (await t.user.content(a.id)).toString()),
     );
     t.check(
-      runs.some((r) => r.continued && r.status === 'failed' && /工作目录/.test(r.error ?? '')),
-      '接不上原会话的那次运行应记成失败、写明原因',
+      notes.length === 2 &&
+        texts.some((x) => x.includes('第一版') && x.includes('结尾：新话题里改的')) &&
+        texts.some((x) => !x.includes('结尾')),
+      `改好的另登记一份、原来那份不动：${texts.join(' | ')}`,
     );
-    t.check(runs.at(-1)?.status === 'succeeded' && !runs.at(-1)?.continued, '应重新开会话做成功');
-    t.check(!task.nodes[0].warning, `不应留下提醒：${task.nodes[0].warning}`);
+  },
+};
+
+// ---------- 8. 持久工作目录丢了：让 AI 改时接不上原会话，这一轮开新会话（告诉用户），
+// 要改的成果拷进来接着改 ----------
+export const workspace = {
+  says: { 1: NOTE, 2: { steps: [fromCopy('结尾：新会话补上的')], reply: '加好结尾了。' } },
+  async run(t) {
+    const id = await start(t, 'workspace', '写一份笔记（之后它的工作目录会被清掉）');
+    await t.user.waitTurn(id, '第一版');
+    const note = (await t.user.waitArtifacts(id, ['笔记.md'])).find((a) => a.path === '笔记.md');
+    if (!note) {
+      t.check(false, '画布里没有笔记');
+      return;
+    }
+    dropWorkspace(runsOf(id)[0].session_id);
+    await t.user.say(id, `给这份笔记加一句结尾 ${marker('workspace', 2)}`, {
+      artifacts: [note.id],
+    });
+    const messages = await t.user.waitTurn(id, '新会话里改好');
+    const runs = runsOf(id);
     t.check(
-      !t.provider.of('workspace', 'note').some((c) => c.segment === 'revision'),
-      '工作目录没了还在接着原会话改',
+      runs.length === 2 && runs[1].status === 'succeeded' && !runs[1].continue_from,
+      `接不上原会话时这一轮应开新会话：${JSON.stringify(runs)}`,
     );
-    const text = await t.user.waitContent(taskId, '笔记.md', (x) => x.includes('结尾'));
+    const notice = aiOf(messages, runs[1]?.id)
+      .flatMap((m) => m.data.parts ?? [])
+      .find((p) => p.type === 'notice');
+    t.check(
+      notice?.text.includes('工作目录已经不在了'),
+      `应告诉用户原来的工作目录不在了：${notice?.text ?? '没有提示'}`,
+    );
+    const calls = t.provider.of('workspace', 2);
+    t.check(
+      calls.some((c) => c.action === 'bash:0') && calls.every((c) => c.says === 1),
+      `工作目录没了，应在新会话里从拷进来的那份改：${calls.map((c) => `${c.action}/${c.says}`).join(' ')}`,
+    );
+    const text = await t.user.waitContent(id, '笔记.md', (x) => x.includes('结尾'));
     t.check(
       text.includes('第一版') && text.includes('结尾：新会话补上的'),
-      `笔记应在上一版的基础上重新做：${text}`,
+      `笔记应在上一版的基础上改：${text}`,
     );
   },
 };

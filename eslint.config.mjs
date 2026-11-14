@@ -9,12 +9,7 @@ import tseslint from 'typescript-eslint';
 /** 2026-11-08 已经超过 500 行的文件和当时的行数 */
 const LONG_FILES = {
   'apps/web/src/canvas/ModelPreview.tsx': 614,
-  'apps/web/test/task-cards.test.tsx': 684,
   'services/canvas/test/artifacts.test.ts': 659,
-  'services/conversation/src/service/dm-service.ts': 790,
-  'services/conversation/src/service/intake-service.ts': 831,
-  'services/conversation/test/dm-service.test.ts': 1834,
-  'services/conversation/test/groups-postgres.test.ts': 501,
 };
 
 export default defineConfig(

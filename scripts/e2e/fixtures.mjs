@@ -1,5 +1,5 @@
 // 回归测试的假素材：假供应商「生成」的图片和视频。PNG 在这里直接编码；JPEG 和视频用沙箱镜像里的 ffmpeg
-// 做一次，缓存在 .tmp/e2e/fixtures（文件是真的能解码的，关卡的解码检查照常跑）。
+// 做一次，缓存在 .tmp/e2e/fixtures（文件是真的能解码的）。
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

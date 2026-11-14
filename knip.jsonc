@@ -24,7 +24,6 @@
         "src/main.ts",
         "sandbox/oasis-tool.ts",
         "sandbox/oasis-op.ts",
-        "sandbox/oasis-steps.ts",
         "src/adapter/profile/node-goal.mjs",
         "src/adapter/test/native-provider.mjs",
       ],

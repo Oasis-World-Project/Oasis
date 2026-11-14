@@ -8,36 +8,36 @@
 ## A. 项目速览
 
 - 产品：人 + 多家 AI 共处的社交娱乐空间。当前阶段是 MVP（任务闭环）；不做任何付费，新用户注册送 $30 额度，所有模型和工具调用都从额度里扣。
-- 架构的单一事实源：`docs/engineering/项目工程方向.md`；现在是怎么做的：`docs/design/`（架构、任务与工作流、工具与沙箱、检查与交付、账号与计费、前端），做法变了就改那里；为什么这么定在提交说明和 git 历史里。
+- 架构的单一事实源：`docs/engineering/项目工程方向.md`；现在是怎么做的：`docs/design/`（架构、私聊与一轮、工具与沙箱、检查与交付、账号与计费、前端），做法变了就改那里；为什么这么定在提交说明和 git 历史里。
 - 云服务器（开发期数字人入口、怎么连、哪些不能动）：`docs/ops/云服务器.md`。
-- 目录：`apps/`（web、desktop）· `services/`（10 个微服务）· `packages/`（契约、基础设施库、设计令牌、tsconfig）· `infra/`（本地编排）· `scripts/`（检查与清理）· `docs/`。
+- 目录：`apps/`（web、desktop）· `services/`（9 个微服务）· `packages/`（契约、基础设施库、设计令牌、tsconfig）· `infra/`（本地编排）· `scripts/`（检查与清理）· `docs/`。
 
 | 命令 | 作用 |
 |---|---|
 | `pnpm env:init` | 生成根目录和每个服务的本地 `.env`（随机密码） |
 | `pnpm infra:up` / `infra:down` / `infra:ps` | 启动中间件 / 停止全部容器 / 查看 |
-| `pnpm dev` | 10 个服务 + Web（Vite，http://127.0.0.1:5173）在本机运行，改代码自动重启 / 热更新 |
+| `pnpm dev` | 9 个服务 + Web（Vite，http://127.0.0.1:5173）在本机运行，改代码自动重启 / 热更新 |
 | `pnpm desktop` | 打开 Electron 桌面窗口（加载上面的 Web 地址，需先 `pnpm dev`） |
-| `pnpm stack:up` / `stack:logs` | 中间件 + 10 个服务全部在容器里跑（集成验证）/ 看日志 |
-| `pnpm sandbox:build` · `sandbox:check:ops` | 构建 agent 沙箱镜像 `oasis/harness-sandbox-base:<dsh 版本>`；离线验收镜像里的本地操作 `oasis-op` 和工具节点的步骤执行器 |
-| `pnpm browser:build` · `browser:smoke` | 构建 inspector 的检查浏览器镜像 `oasis/inspector-browser:<Playwright 版本>`；本机烟测（静态网页、Node 应用按交付关卡的路子各查一遍，外站测一次） |
+| `pnpm stack:up` / `stack:logs` | 中间件 + 9 个服务全部在容器里跑（集成验证）/ 看日志 |
+| `pnpm sandbox:build` · `sandbox:check:ops` | 构建 agent 沙箱镜像 `oasis/harness-sandbox-base:<dsh 版本>`；离线验收镜像里的本地操作 `oasis-op` |
+| `pnpm browser:build` · `browser:smoke` | 构建 inspector 的检查浏览器镜像 `oasis/inspector-browser:<Playwright 版本>`；本机烟测（静态网页、Node 应用按检查一轮产出的路子各查一遍，外站测一次） |
 | `pnpm lint` · `pnpm typecheck` · `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、服务调用无环、依赖方向、死代码、重复率、迁移检查 |
-| `pnpm e2e` | 全链路回归：假模型、真容器、真画布，从私聊发任务跑到桌面端画布里打开成果（先停 `pnpm dev`；`--keep` 跑完不停服务；`--real` 真模型、每场景 ≤ $1，生视频的 `real-tool` ≤ $2、小游戏 `real-game` ≤ $3、6 镜头短片 `real-shots` ≤ $3.9）。见 `docs/engineering/回归测试.md` |
-| `pnpm trace <任务 ID>` | 一个任务的运行、调用、费用来源和画布成果，标出异常（按估算扣费、卡住的调用、没退回的冻结、遗留容器） |
+| `pnpm e2e` | 全链路回归：假模型、真容器、真画布，从私聊里说一句话跑到桌面端画布里打开成果（先停 `pnpm dev`；`--keep` 跑完不停服务；`--real` 真模型、每场景 ≤ $1，小游戏 `real-game` ≤ $3）。见 `docs/engineering/回归测试.md` |
+| `pnpm trace <对话 ID>` | 一个私聊每一轮的运行、调用、费用来源和画布成果，标出异常（按估算扣费、卡住的调用、没退回的冻结、遗留容器、花费对不上） |
 | `pnpm accept` | 验收模式：服务从当前代码起、不随改动重启，Web 用构建版（先停 `pnpm dev`） |
 | `pnpm cleanup` | 任务收尾清理并报告释放空间：删 `.tmp`、日志、根目录的 `out/` 和 7 天前的构建缓存（`--dry-run` 只列出不删；`--build`、`--docker` 可选） |
 
-- **回归规矩（2026-11-08）**：改了 task、harness、model-gateway、inspector、canvas、conversation 的行为，提交前跑一次 `pnpm e2e`，全绿再提交；验收失败先写成回归场景（`scripts/e2e/scenarios/` 下按类分的文件，在 `scripts/e2e/scenarios.mjs` 登记）再修。
+- **回归规矩（2026-11-08）**：改了 harness、model-gateway、inspector、canvas、conversation 的行为，提交前跑一次 `pnpm e2e`，全绿再提交；验收失败先写成回归场景（`scripts/e2e/scenarios/` 下按类分的文件，在 `scripts/e2e/scenarios.mjs` 登记）再修。
 
 ## B. 架构约定
 
 1. **微服务边界**：每个服务独占数据库（同一个 PostgreSQL 实例里的独立 database + 独立账号，其他账号连不上）。服务之间只走 HTTP API 或 NATS 事件；跨服务 import 由 dependency-cruiser 拦截。
-   - **同步调用只往一个方向走**：task → harness、model-gateway、inspector；harness → model-gateway；model-gateway → inspector。判断成果的检查（文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览、素材解析）只在 inspector，它不调任何服务、不存东西，检查的内容由调用方给临时下载链接或放在请求里；开容器的检查由付钱的调用方定核数，算力在 model-gateway 冻结、按报回的用量结算。`pnpm check:engineering` 的「服务调用无环」按 `createServiceClient('<对方>')` 画调用图拦截新的环；画布的 canvas → task、canvas → model-gateway 两条边是已知例外，画布重整时再拆。
+   - **同步调用只往一个方向走**：conversation → agent、harness、canvas、model-gateway；harness → model-gateway、canvas；model-gateway → inspector、canvas、billing；canvas → inspector。判断成果的检查（文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览）只在 inspector，它不调任何服务、不存东西，检查的内容由调用方给临时下载链接或放在请求里；开容器的检查由付钱的调用方定核数，算力在 model-gateway 冻结、按报回的用量结算。`pnpm check:engineering` 的「服务调用无环」按 `createServiceClient('<对方>')` 画调用图拦截新的环；画布的 canvas → harness（取一轮交出的文件）、canvas → model-gateway（开数字人会话）两条边是已知例外，画布重整时再拆。
 2. **共享包**：`packages/*` 只放契约（contracts）、基础设施库（service-kit）、画布运行网页的组装规则（live-page，画布和检查共用）、设计令牌和 tsconfig，不放业务逻辑。
 3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness（含 `profile/` 下 Oasis 自己的 dsh 组合）；dsh 版本精确锁定在沙箱镜像里。沙箱只能经入口代理访问 model-gateway 的 `/run/v1/*`，以及经出口代理访问明确放行的软件包仓库；不得直连外网、宿主机或内部服务，不得开放其他网络通路。
 4. **模型调用**：所有模型调用（聊天、Jev、dsh 里的 agent）都经过 `services/model-gateway`，由它计量并上报 billing。
-5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。全仓库的 TS/JS 文件（含测试和脚本）不超过 500 行，ESLint `max-lines` 拦截（2026-11-08 从四个服务扩到全仓库）；当时已经超长的文件在 `eslint.config.mjs` 的 `LONG_FILES` 里按当时的行数封顶、只许变短，要往里加东西先拆开，拆到 500 行以内就从表里删掉；task 的每种节点是一个插件（`src/service/kinds/`），引擎不认识具体种类，加新种类不改引擎。工具节点（`kind: tool`）不用 AI：harness 起工具运行（`model: oasis/tool` + `steps`），沙箱里跑步骤执行器 `oasis-steps` 而不是 dsh；工具参数的定义只有 `packages/contracts/src/tool-args.ts`、`ops.ts` 一份，网关目录、规划门、沙箱里的 `oasis-op` 共用。展开节点（`kind: foreach`）和做几版挑一版（`variants`）开子节点：节点表的 `parent_id`、`slot`；组节点自己不跑、不占名额，引擎在 `engine/groups.ts`、`expand.ts`；并发分两个池（`schedule.ts` 的 `poolUse`）：AI 和工作流图里的节点 ≤ `MAX_PARALLEL_NODES`（3），工具子节点和看图挑选 ≤ `MAX_PARALLEL_TOOL_CHILDREN`（6）。
+5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。全仓库的 TS/JS 文件（含测试和脚本）不超过 500 行，ESLint `max-lines` 拦截（2026-11-08 从四个服务扩到全仓库）；当时已经超长的文件在 `eslint.config.mjs` 的 `LONG_FILES` 里按当时的行数封顶、只许变短，要往里加东西先拆开，拆到 500 行以内就从表里删掉。工具参数的定义只有 `packages/contracts/src/tool-args.ts`、`ops.ts` 一份，网关的工具目录、沙箱里的 `oasis-tool` 和 `oasis-op` 共用。
 6. **配置外置**：配置全部来自环境变量，每个服务提供 `.env.example`；禁止硬编码地址、端口、密钥；禁止 `if (env === 'local')` 一类分支。
 7. **运行时**：结构化 JSON 日志输出到 stdout；每个服务暴露 `/health` 和 `/ready`；收到 SIGTERM 后处理完在途请求再退出。
 8. **数据库迁移**：dbmate 纯 SQL。文件头写 `-- phase: expand|migrate|contract`，必须有 `-- migrate:down`；expand 迁移必须写 `-- contract-plan:`。`pnpm check:engineering` 会检查这几项。
@@ -65,7 +65,7 @@
     - 跨服务的事件一律走 outbox（`startOutboxRelay`）+ 持久消费者（`startEventConsumer`）。消费者必须幂等，事件类型写在 `packages/contracts/src/events.ts`。
     - 密钥（`*_PASSWORD`、`*_SECRET_KEY`、`*_ACCESS_KEY`、`*_PEPPER`、`OPENROUTER_API_KEY`）只放在本地 `.env`，不进 git，不写进日志，也不要贴到聊天里。
 14. **用户删除即真删除**（用户 2026-11-05 确定）：
-    - 用户在产品里删除的任何东西（任务、成果、聊天消息、附件，以及以后新增的任何可删除对象），数据库记录、对象存储里的文件、缓存、运行存档、派生数据（截图、预览、中间文件、聊天里的引用卡片）必须一起真删除。不做软删除、回收站、「已删除」标记或可恢复机制。用户自己下载到电脑上的文件不管。
+    - 用户在产品里删除的任何东西（私聊、群聊、成果、附件，开新话题时之前话题的会话和工作目录，以及以后新增的任何可删除对象），数据库记录、对象存储里的文件、缓存、运行存档、派生数据（截图、预览、中间文件、聊天里的引用卡片）必须一起真删除。不做软删除、回收站、「已删除」标记或可恢复机制。用户自己下载到电脑上的文件不管。
     - 跨服务的数据靠删除事件（outbox + 持久消费者）或删除接口清掉；清理失败要能重试，不能留下孤儿数据。
     - 上传了但从没被用上的文件要有清扫（canvas `uploads.claimed_at`，24 小时）；发件箱已投递的行保留 1 天，NATS stream 保留 7 天，到期自动删除。
     - 唯一例外：billing 账本和 model-gateway 的调用/费用记录（只有金额、模型、ID，没有用户内容），它们是钱的凭证。

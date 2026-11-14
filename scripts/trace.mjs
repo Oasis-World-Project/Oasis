@@ -1,55 +1,43 @@
 #!/usr/bin/env node
-// 任务追踪（docs/engineering/回归测试.md）：一条命令看清一个任务的每次运行、模型和工具调用、算力、关卡提醒、
-// 费用来源和画布成果，并标出异常——按估算扣的钱、卡住的调用、没退回的冻结、运行结束了还在的容器、花费对不上。
-// 用法：pnpm trace <任务 ID>   （只读本机开发数据库和 Docker，不改任何东西）
+// 对话追踪（docs/engineering/回归测试.md）：一条命令看清一个私聊里的每一轮（harness 的一次运行）、
+// 模型和工具调用、算力、费用来源和画布成果，并标出异常——按估算扣的钱、卡住的调用、没退回的冻结、
+// 运行结束了还在的容器、消息上记的花费和调用合计对不上。
+// 用法：pnpm trace <对话 ID>   （只读本机开发数据库和 Docker，不改任何东西）
 import { execFileSync } from 'node:child_process';
 import { literal, query } from './e2e/db.mjs';
 
-const taskId = process.argv[2];
-if (!/^[0-9a-f-]{36}$/.test(taskId ?? '')) {
-  console.error('用法：pnpm trace <任务 ID>');
+const conversationId = process.argv[2];
+if (!/^[0-9a-f-]{36}$/.test(conversationId ?? '')) {
+  console.error('用法：pnpm trace <对话 ID>');
   process.exit(2);
 }
 const usd = (micro) => `$${((micro ?? 0) / 1_000_000).toFixed(4)}`;
-const time = (value) =>
-  value ? new Date(value).toLocaleTimeString('zh-CN', { hour12: false }) : '—';
+const time = (value) => (value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—');
 const span = (from, to) =>
   from && to ? `${Math.max(0, Math.round((new Date(to) - new Date(from)) / 1000))}s` : '';
 const ids = (rows, key = 'id') => rows.map((r) => literal(r[key])).join(',') || "''";
 
-const [task] = query(
-  'task',
-  `select id, title, status, attention, version, spent_micro, planner_run_id, plan_attempts, created_at, finished_at, revision from tasks where id = ${literal(taskId)}`,
+const [conversation] = query(
+  'conversation',
+  `select id, title, model_key, topic, last_run_id, turn from conversations where id = ${literal(conversationId)}`,
 );
-if (!task) {
-  console.error(`没有这个任务：${taskId}（已删除的任务查不到，删除是真删除）`);
+if (!conversation) {
+  console.error(`没有这个对话：${conversationId}（删掉的对话查不到，删除是真删除）`);
   process.exit(1);
 }
-const nodes = query(
-  'task',
-  `select id, key, title, kind, model, status, attempts, reworks, warning, spent_micro, retired_version from nodes where task_id = ${literal(taskId)} order by created_at`,
+const runs = query(
+  'harness',
+  `select id, session_id, model, status, error, container_id, jsonb_array_length(outputs) as outputs, continue_from, created_at, started_at, finished_at,
+     (select count(*) from run_events e where e.run_id = runs.id and e.kind = 'tool_call') as tool_calls,
+     (select string_agg(distinct e.data->>'status', ',') from run_events e where e.run_id = runs.id and e.kind = 'status') as statuses
+   from runs where conversation_id = ${literal(conversationId)} order by created_at`,
 );
-const nodeRuns = query(
-  'task',
-  `select id, node_id, attempt, purpose, status, error, created_at, finished_at, request->>'continueFrom' as continue_from from node_runs where task_id = ${literal(taskId)} order by created_at`,
-);
-const runIds = [
-  ...nodeRuns.map((r) => r.id),
-  ...(task.planner_run_id ? [task.planner_run_id] : []),
-];
-const harnessRuns = runIds.length
+const calls = runs.length
   ? query(
-      'harness',
-      `select id, status, error, container_id, jsonb_array_length(outputs) as outputs, continue_from, created_at, started_at, finished_at,
-         (select count(*) from run_events e where e.run_id = runs.id and e.kind = 'tool_call') as tool_calls,
-         (select string_agg(distinct e.data->>'status', ',') from run_events e where e.run_id = runs.id and e.kind = 'status') as statuses
-       from runs where id in (${runIds.map(literal).join(',')})`,
+      'model_gateway',
+      `select id, kind, model, status, cost_source, charged_micro, run_id, hold_id, error, created_at, finished_at from calls where run_id in (${ids(runs)}) order by created_at`,
     )
   : [];
-const calls = query(
-  'model_gateway',
-  `select id, kind, model, status, cost_source, charged_micro, run_id, node_id, hold_id, error, created_at, finished_at from calls where task_id = ${literal(taskId)} order by created_at`,
-);
 const holds = calls.some((c) => c.hold_id)
   ? query(
       'billing',
@@ -61,7 +49,12 @@ const holds = calls.some((c) => c.hold_id)
   : [];
 const artifacts = query(
   'canvas',
-  `select path, node_id, size from artifacts where task_id = ${literal(taskId)} order by path`,
+  `select path, run_id, size from artifacts where conversation_id = ${literal(conversationId)} order by path`,
+);
+// 每一轮结束时写在最后一段 AI 消息上的花费
+const recorded = query(
+  'conversation',
+  `select data->>'runId' as run_id, (data->>'spentMicro')::bigint as spent from messages where conversation_id = ${literal(conversationId)} and data ? 'spentMicro'`,
 );
 let containers = [];
 try {
@@ -74,10 +67,7 @@ try {
       '--format',
       '{{.ID}} {{.Label "oasis.run-id"}}',
     ],
-    {
-      encoding: 'utf8',
-      windowsHide: true,
-    },
+    { encoding: 'utf8', windowsHide: true },
   )
     .split('\n')
     .filter(Boolean)
@@ -91,6 +81,7 @@ try {
 
 const anomalies = [];
 const byRun = (runId) => calls.filter((c) => c.run_id === runId);
+const chargedOf = (list) => list.reduce((sum, c) => sum + Number(c.charged_micro ?? 0), 0);
 function describeCalls(list) {
   if (!list.length) return '没有模型/工具调用';
   const kinds = {};
@@ -100,11 +91,10 @@ function describeCalls(list) {
     const source = c.cost_source ?? (c.status === 'running' ? '进行中' : '没扣费');
     sources[source] = (sources[source] ?? 0) + 1;
   }
-  const total = list.reduce((sum, c) => sum + (c.charged_micro ?? 0), 0);
   const lines = [
     `${Object.entries(kinds)
       .map(([k, n]) => `${k}×${n}`)
-      .join(' ')}，花费 ${usd(total)}（来源 ${Object.entries(sources)
+      .join(' ')}，花费 ${usd(chargedOf(list))}（来源 ${Object.entries(sources)
       .map(([k, n]) => `${k}×${n}`)
       .join(' ')}）`,
   ];
@@ -113,40 +103,21 @@ function describeCalls(list) {
   if (errors.length > 3) lines.push(`      ……还有 ${errors.length - 3} 种失败`);
   return lines.join('\n');
 }
-function runLine(runId, label) {
-  const h = harnessRuns.find((r) => r.id === runId);
-  const lines = [
-    `${label} ${runId.slice(0, 8)} ${h ? `${h.status}  ${time(h.started_at ?? h.created_at)} → ${time(h.finished_at)} ${span(h.started_at ?? h.created_at, h.finished_at)}  产出 ${h.outputs} 个  工具调用 ${h.tool_calls} 次` : '（harness 里没有这次运行）'}`,
-    `      ${describeCalls(byRun(runId))}`,
-  ];
-  if (h?.statuses?.includes('recovering')) lines.push('      经历过 harness 接管（recovering）');
-  if (h?.error) lines.push(`      错误：${h.error}`);
-  return lines.join('\n');
-}
 
 console.log(
-  `任务 ${task.id}「${task.title}」 ${task.status}  第 ${task.version} 版  花费 ${usd(task.spent_micro)}`,
+  `私聊 ${conversation.id}「${conversation.title}」  AI ${conversation.model_key ?? '—'}  话题「${conversation.topic ?? '—'}」`,
 );
 console.log(
-  `创建 ${new Date(task.created_at).toLocaleString('zh-CN', { hour12: false })}  结束 ${task.finished_at ? new Date(task.finished_at).toLocaleString('zh-CN', { hour12: false }) : '—'}`,
+  `正在进行的一轮：${conversation.turn ? conversation.turn.runId : '没有'}  下一轮接着：${conversation.last_run_id ?? '新会话'}`,
 );
-if (task.attention) console.log(`需要处理：${task.attention.reason} ${task.attention.message}`);
-if (task.revision)
+console.log(`\n每一轮（${runs.length}）：`);
+for (const run of runs) {
   console.log(
-    `进行中的修改：第 ${task.revision.version} 版，${task.revision.plan ? '方案待确认' : '规划中'}：${task.revision.request}`,
+    `  ● ${time(run.started_at ?? run.created_at)} ${run.id.slice(0, 8)} ${run.status} ${span(run.started_at ?? run.created_at, run.finished_at)}  ${run.model}  会话 ${String(run.session_id ?? run.id).slice(0, 8)}${run.continue_from ? '（接着上一轮）' : '（新会话）'}  产出 ${run.outputs} 个  工具调用 ${run.tool_calls} 次`,
   );
-if (task.planner_run_id)
-  console.log(runLine(task.planner_run_id, `规划员（第 ${task.plan_attempts} 次）`));
-console.log('\n节点：');
-for (const node of nodes) {
-  console.log(
-    `  ● ${node.key}「${node.title}」 ${node.status}${node.retired_version ? `（第 ${node.retired_version} 版起已删除）` : ''}  ${node.model}  运行 ${node.attempts} 次  关卡退回 ${node.reworks} 次  花费 ${usd(node.spent_micro)}`,
-  );
-  if (node.warning) console.log(`      提醒：${node.warning}`);
-  for (const run of nodeRuns.filter((r) => r.node_id === node.id))
-    console.log(
-      `    ${runLine(run.id, `运行 #${run.attempt} ${run.purpose}${run.continue_from ? '（接着上次）' : ''}`)}`,
-    );
+  console.log(`      ${describeCalls(byRun(run.id))}`);
+  if (run.statuses?.includes('recovering')) console.log('      经历过 harness 接管（recovering）');
+  if (run.error) console.log(`      错误：${run.error}`);
 }
 console.log(
   `\n画布成果 ${artifacts.length} 个：${artifacts.map((a) => a.path).join('、') || '（没有）'}`,
@@ -157,7 +128,7 @@ console.log(
 const estimated = calls.filter((c) => c.cost_source === 'estimate' && c.kind !== 'compute');
 if (estimated.length)
   anomalies.push(
-    `${estimated.length} 次调用按估算扣费（共 ${usd(estimated.reduce((s, c) => s + (c.charged_micro ?? 0), 0))}）：${estimated.map((c) => `${c.kind} ${c.id.slice(0, 8)}${c.error ? `（${c.error}）` : ''}`).join('、')}`,
+    `${estimated.length} 次调用按估算扣费（共 ${usd(chargedOf(estimated))}）：${estimated.map((c) => `${c.kind} ${c.id.slice(0, 8)}${c.error ? `（${c.error}）` : ''}`).join('、')}`,
   );
 const stuck = calls.filter(
   (c) => c.status === 'running' && Date.now() - new Date(c.created_at) > 5 * 60_000,
@@ -173,29 +144,21 @@ if (openHolds.length)
   anomalies.push(
     `${openHolds.length} 笔冻结在调用结束后没退回：${openHolds.map((h) => h.id.slice(0, 8)).join('、')}`,
   );
-const finished = new Set(
-  harnessRuns
-    .filter((r) => ['succeeded', 'failed', 'cancelled', 'stopped'].includes(r.status))
-    .map((r) => r.id),
+const ended = runs.filter((r) =>
+  ['succeeded', 'failed', 'cancelled', 'stopped'].includes(r.status),
 );
-const leftover = containers.filter((c) => finished.has(c.run));
+const leftover = containers.filter((c) => ended.some((r) => r.id === c.run));
 if (leftover.length)
   anomalies.push(
-    `运行已结束但容器还在：${leftover.map((c) => `${c.id}（运行 ${c.run.slice(0, 8)}）`).join('、')}`,
+    `一轮已结束但容器还在：${leftover.map((c) => `${c.id}（运行 ${c.run.slice(0, 8)}）`).join('、')}`,
   );
-const charged = calls.reduce((s, c) => s + (c.charged_micro ?? 0), 0);
-if (
-  ['succeeded', 'failed', 'cancelled'].includes(task.status) &&
-  Math.abs(charged - task.spent_micro) > 1
-)
-  anomalies.push(`任务记的花费 ${usd(task.spent_micro)} 和调用合计 ${usd(charged)} 对不上`);
-const orphanRuns = nodeRuns.filter(
-  (r) => !harnessRuns.some((h) => h.id === r.id) && r.status !== 'pending',
-);
-if (orphanRuns.length)
-  anomalies.push(
-    `task 记着、harness 里却没有的运行：${orphanRuns.map((r) => r.id.slice(0, 8)).join('、')}`,
-  );
+for (const row of recorded) {
+  const charged = chargedOf(byRun(row.run_id));
+  if (Math.abs(charged - Number(row.spent)) > 1)
+    anomalies.push(
+      `一轮 ${String(row.run_id).slice(0, 8)} 消息上记的花费 ${usd(row.spent)} 和调用合计 ${usd(charged)} 对不上`,
+    );
+}
 
 console.log(
   anomalies.length

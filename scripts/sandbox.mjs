@@ -111,7 +111,7 @@ if (command === 'build' || command === 'build-3d') {
     spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore', timeout: 10_000 });
   }
 } else if (command === 'check-ops') {
-  // 本地操作 oasis-op 和工具步骤执行器：离线、用 ffmpeg 现做素材，跑完删掉容器
+  // 本地操作 oasis-op：离线、用 ffmpeg 现做素材，跑完删掉容器
   const name = `oasis-ops-check-${randomUUID()}`;
   try {
     result = spawnSync(

@@ -19,11 +19,12 @@ const DOCKER_BUILD = /docker\s+(?:buildx\s+)?build\b[^\n]*/g;
 const RAW_COLOR = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch)\(/;
 const TOKEN_CHECKED = /^apps\/web\/src\/.+\.(tsx?|css)$/;
 // 服务之间的同步调用（createServiceClient('<对方>', …)，对方名字写成字面量）不能成环；
-// inspector 不调任何服务，检查要的内容由调用方给。已知的环都经过画布（画布读任务的成果和详情、
-// 开数字人会话），留到画布重整时再拆：先放行这两条边，别处再出现环就拦下。
+// inspector 不调任何服务，检查要的内容由调用方给。已知的环都经过画布：画布从 harness 取一轮的产出
+// 文件、向 model-gateway 开数字人会话，而 harness 开跑时向画布取用户的文件和要改的成果、
+// model-gateway 的工具向画布取文件。先放行画布出去的这两条边，别处再出现环就拦下。
 const SERVICE_CLIENT = /createServiceClient\(\s*['"]([a-z][a-z-]*)['"]/g;
 const LEAF_SERVICES = ['inspector'];
-const KNOWN_CYCLE_EDGES = new Set(['canvas -> task', 'canvas -> model-gateway']);
+const KNOWN_CYCLE_EDGES = new Set(['canvas -> harness', 'canvas -> model-gateway']);
 
 function run(cmd, args, { capture = false } = {}) {
   const options = {

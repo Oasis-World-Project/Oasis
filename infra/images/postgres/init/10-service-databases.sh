@@ -3,7 +3,7 @@
 # 以后新增服务：先把服务名加进 SERVICES，再用 `pnpm infra:down -v` 和 `pnpm infra:up` 重建镜像和本地卷（会清空本地数据）。
 set -euo pipefail
 
-SERVICES=(identity billing agent conversation task canvas harness model_gateway)
+SERVICES=(identity billing agent conversation canvas harness model_gateway)
 
 for svc in "${SERVICES[@]}"; do
   var="${svc^^}_DB_PASSWORD"
