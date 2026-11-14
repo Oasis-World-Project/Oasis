@@ -49,6 +49,13 @@ export function json(status: number, body: unknown): Response {
 
 const unauthorized = () => json(401, { error: { code: 'unauthorized', message: '请先登录' } });
 
+/** 私聊没写在哪干活、权限的，按没设过算：云端沙箱、云端的默认权限 */
+const withSetup = (dm: unknown) => ({
+  workplace: { kind: 'cloud' },
+  permissions: { access: 'full', beyond: 'deny', paidTools: 'allow' },
+  ...(dm as object),
+});
+
 /** 测试自己加的接口：返回 undefined 表示不管，交给默认应答 */
 export type ExtraRoute = (
   method: string,
@@ -94,7 +101,7 @@ export function installFakeApi(options: {
       case '/agent/v1/models':
         return json(200, { models: MODELS });
       case '/conversation/v1/dms':
-        return json(200, { conversations: options.dms ?? [] });
+        return json(200, { conversations: (options.dms ?? []).map(withSetup) });
       case '/conversation/v1/groups':
         return json(200, { groups: [] });
       // 「AI 们」页读「只用国内模型」开关：默认关着

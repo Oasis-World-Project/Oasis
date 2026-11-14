@@ -11,7 +11,7 @@ const NOW = '2026-11-14T08:00:00.000Z';
 const CONV = '00000000-0000-4000-8000-0000000000c1';
 const RUN = '00000000-0000-4000-8000-0000000000b1';
 const PATH = `/conversation/v1/conversations/${CONV}/messages`;
-const TURN: TurnState = { runId: RUN, startedAt: NOW };
+const TURN: TurnState = { runId: RUN, startedAt: NOW, confirmations: [] };
 
 const DM = {
   id: CONV,

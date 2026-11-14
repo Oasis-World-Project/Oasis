@@ -142,7 +142,10 @@ export function MessageItem({
       return (
         <div role="separator" className="flex items-center gap-3 py-1 text-[12px] text-ink-muted">
           <span className="h-px flex-1 bg-hairline" />
-          开了新话题 · AI 从这里起不记得之前的事
+          {/* 「开了新话题」或「换到你的电脑（…）干活，开了新话题」 */}
+          <span className="max-w-[70%] text-center">
+            {message.content} · AI 从这里起不记得之前的事
+          </span>
           <span className="h-px flex-1 bg-hairline" />
         </div>
       );

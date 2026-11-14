@@ -1,5 +1,5 @@
 // 一轮的进度页（任务卡上点「看进度」打开）：最上面是主 AI 卡——状态、正在做的一步、待办、用时、花费，
-// 在做时可以停下；生图、视频这类长任务一张张卡并排（已等多久、通常要多久、做出的图和声音；几段先交后
+// 在做时可以停下、点要你确认的卡；生图、视频这类长任务一张张卡并排（已等多久、通常要多久、做出的图和声音；几段先交后
 // 一起等的按任务号一段一张）；下面按发生的顺序是说的话、做的步骤（折叠）和插话；最后在做时是这一轮
 // 做出的文件（点开预览），做完后是交出的成品。数据就是私聊的消息：有一轮在做时每秒刷新，和私聊页同一份。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -11,6 +11,7 @@ import { dmsQuery, messagesQuery, runFileUrl, stopTurn } from '../api/queries.ts
 import { useModelMap } from '../api/use-model-map.ts';
 import { groupParts, StepIcon, Steps, Todos } from '../chat/AiMessage.tsx';
 import { splitBlocks } from '../chat/blocks.ts';
+import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
 import { FileChip } from '../chat/FileChip.tsx';
 import { FilePreview } from '../chat/FilePreview.tsx';
 import { badgeOf, baseName, previewKindOf, type PreviewFile } from '../chat/files.ts';
@@ -117,6 +118,13 @@ function RunView({ runId, conversationId }: { runId: string; conversationId: str
             <p role="alert" className="m-0 text-[13px] text-accent">
               {stop.error instanceof ApiError ? stop.error.message : '没停下来，请重试'}
             </p>
+          )}
+          {messages.data?.turn?.runId === runId && (
+            <ConfirmationCards
+              conversationId={conversationId}
+              cards={messages.data.turn.confirmations}
+              messages={messages.data.messages}
+            />
           )}
 
           {progress.longTasks.length > 0 && (

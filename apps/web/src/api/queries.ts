@@ -9,8 +9,11 @@ import {
   MessageBody,
   MessageList,
   SendResult,
+  SetupResult,
+  type SetupBody,
 } from '@oasis/contracts/conversation';
 import { MeBody, VerifyCodeResult } from '@oasis/contracts/identity';
+import { Confirmation, type ConfirmDecision } from '@oasis/contracts/model-gateway';
 import { queryOptions } from '@tanstack/react-query';
 import { z } from 'zod';
 import { api, ApiError, apiVoid, isConnectionError } from './client.ts';
@@ -144,6 +147,21 @@ export const newTopic = (conversationId: string) =>
   api(`${conversationPath(conversationId)}/topics`, z.object({ message: MessageBody }), {
     method: 'POST',
     body: {},
+  });
+
+/** 改在哪干活和权限（下一轮起生效）；换了地方从新话题开始，返回分隔消息 */
+export const saveSetup = (conversationId: string, body: SetupBody) =>
+  api(`${conversationPath(conversationId)}/setup`, SetupResult, { method: 'PUT', body });
+
+/** 点确认卡：允许一次 / 以后都允许 / 拒绝 */
+export const confirmTurn = (
+  conversationId: string,
+  confirmationId: string,
+  decision: ConfirmDecision,
+) =>
+  api(`${conversationPath(conversationId)}/confirmations/${confirmationId}`, Confirmation, {
+    method: 'POST',
+    body: { decision },
   });
 
 // ---- 画布----

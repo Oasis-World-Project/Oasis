@@ -1,5 +1,6 @@
 // 和一个 AI 私聊：它就是干活的那个 AI。说一句话开一轮，AI 说的话和做的步骤一段段写进消息（有一轮在进行时
-// 每秒刷新）；一轮进行中再发的话是插话，随时可以停下；做东西的那一轮出一张任务卡。可以开新话题、删除私聊。
+// 每秒刷新）；一轮进行中再发的话是插话，随时可以停下；做东西的那一轮出一张任务卡；要你点的确认卡出在输入框上面。
+// 右上角可以选在哪干活（云端或你的电脑）和权限、开新话题、删除私聊。
 import type { MessageList } from '@oasis/contracts/conversation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
@@ -9,6 +10,8 @@ import { ApiError } from '../api/client.ts';
 import { deleteDm, dmsQuery, messagesQuery, newTopic } from '../api/queries.ts';
 import { useModelMap } from '../api/use-model-map.ts';
 import { Composer } from '../chat/Composer.tsx';
+import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
+import { DmSetup } from '../chat/DmSetup.tsx';
 import { MessageItem } from '../chat/MessageItem.tsx';
 import { useAttachments } from '../chat/use-attachments.ts';
 import { ChatActionsContext, useChatActionsValue } from '../chat/use-chat-actions.ts';
@@ -95,6 +98,7 @@ export function DmPage() {
             </span>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
+            {conversation && <DmSetup conversation={conversation} turnActive={turnActive} />}
             <NewTopic conversationId={conversationId} disabled={turnActive || list.length === 0} />
             <DeleteDm conversationId={conversationId} />
           </div>
@@ -147,6 +151,11 @@ export function DmPage() {
         </div>
 
         <footer className="flex flex-col gap-2 px-6 pb-5 pt-2">
+          <ConfirmationCards
+            conversationId={conversationId}
+            cards={messages.data?.turn?.confirmations ?? []}
+            messages={list}
+          />
           {actions.error && (
             <p role="alert" className="m-0 text-[13px] text-accent">
               {actions.error}
