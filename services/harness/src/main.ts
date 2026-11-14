@@ -16,12 +16,12 @@ import { registerRoutes } from './api/routes.ts';
 import { harnessEnv } from './config.ts';
 import { createDockerExecutor, type Executor } from './executor/executor.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
-import { loadGuide, loadToolScripts } from './service/guide.ts';
+import { loadGuide, loadSandboxFiles } from './service/guide.ts';
 import { createRunService, type RunService } from './service/run-service.ts';
 
 /** 给主 AI 的平台说明和技能（每轮现读） */
 const GUIDE_DIR = fileURLToPath(new URL('../guide', import.meta.url));
-/** 仓库根目录：沙箱里的 oasis-tool 这些命令每轮从这里现读 */
+/** 仓库根目录：沙箱里的 oasis-tool 这些命令和 dsh 组合每轮从这里现读 */
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
 let executor: Executor;
@@ -88,7 +88,7 @@ await startService({
         pipIndexUrl: config.SANDBOX_PIP_INDEX_URL,
       },
       guide: () => loadGuide(GUIDE_DIR),
-      toolScripts: () => loadToolScripts(REPO_ROOT),
+      sandboxFiles: () => loadSandboxFiles(REPO_ROOT),
       maxConcurrent: config.MAX_CONCURRENT_RUNS,
       batchEnv: Object.fromEntries(
         Object.entries(config)

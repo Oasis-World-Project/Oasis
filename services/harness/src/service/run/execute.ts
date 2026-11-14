@@ -228,9 +228,14 @@ export function createExecution(
               dir: SANDBOX_PATHS.dshHome,
               tar: await packFiles(guideFiles(await deps.guide(), request.persona)),
             },
-            // oasis-tool 这些命令也每轮现放：改了工具，下一轮就用上，不用重建镜像
-            ...(deps.toolScripts
-              ? [{ dir: SANDBOX_PATHS.tools, tar: await packFiles(await deps.toolScripts()) }]
+            // oasis-tool 这些命令和 dsh 组合也每轮现放：改了，下一轮就用上，不用重建镜像
+            ...(deps.sandboxFiles
+              ? await Promise.all(
+                  (await deps.sandboxFiles()).map(async ({ dir, files }) => ({
+                    dir,
+                    tar: await packFiles(files),
+                  })),
+                )
               : []),
             ...(recovering
               ? []

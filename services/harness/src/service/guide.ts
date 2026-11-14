@@ -1,10 +1,10 @@
 // 给沙箱里主 AI 的说明和命令：guide/AGENTS.md 是平台规则（在 Oasis 里怎么干活），guide/playbooks/ 下
-// 每个 .md 是一份场景经验，作为技能交给 AI，需要时它自己读；oasis-tool 这些命令也从仓库里拿。
+// 每个 .md 是一份场景经验，作为技能交给 AI，需要时它自己读；oasis-tool 这些命令和 dsh 组合也从仓库里拿。
 // 每轮开沙箱时现读，改了不用重启 harness。
 // 经验格式：第一行「# 名称」，接着一行「> 适用：……」，其余是正文。
 import { readdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { AgentGuide } from '../adapter/dsh.ts';
+import { SANDBOX_PATHS, type AgentGuide } from '../adapter/dsh.ts';
 
 export interface Playbook {
   /** 文件名，如 images */
@@ -39,26 +39,39 @@ async function loadPlaybooks(dir: string): Promise<Playbook[]> {
   );
 }
 
+/** 放进沙箱某个目录的一组文件（path 相对 dir） */
+export interface SandboxFiles {
+  dir: string;
+  files: { path: string; content: Buffer }[];
+}
+
 /**
- * 沙箱里 Oasis 自己的命令：oasis-tool、oasis-op 和它们用到的两个契约文件，按镜像里的位置
- * （相对 /opt/oasis，见 infra/images/harness-sandbox-base/Dockerfile）每轮现放进沙箱，
- * 改了工具不用重建镜像（3D 镜像重建要重下 Blender）。root 是仓库根目录。
+ * 沙箱里 Oasis 自己的文件，按镜像里的位置（见 infra/images/harness-sandbox-base/Dockerfile）每轮
+ * 现放进沙箱，改了不用重建镜像（3D 镜像重建要重下 Blender）；镜像里那份留给离线验收。root 是仓库根目录。
+ * - /opt/oasis：oasis-tool、oasis-op 和它们用到的两个契约文件，dsh 插件 node-goal；
+ * - dsh 用户目录：Oasis 的 dsh 组合 profiles/oasis/cordis.patch.yml（模型指向 model-gateway、关掉用不上的插件……）。
  */
-export async function loadToolScripts(root: string): Promise<{ path: string; content: Buffer }[]> {
-  const files = [
-    ['services/harness/sandbox/oasis-tool.ts', 'oasis-tool.ts'],
-    ['services/harness/sandbox/batch.ts', 'batch.ts'],
-    ['services/harness/sandbox/tool-files.ts', 'tool-files.ts'],
-    ['services/harness/sandbox/oasis-op.ts', 'services/harness/sandbox/oasis-op.ts'],
-    ['packages/contracts/src/ops.ts', 'packages/contracts/src/ops.ts'],
-    ['packages/contracts/src/tool-args.ts', 'packages/contracts/src/tool-args.ts'],
-  ];
-  return Promise.all(
-    files.map(async ([from, path]) => ({
-      path: path!,
-      content: await readFile(join(root, from!)),
-    })),
-  );
+export async function loadSandboxFiles(root: string): Promise<SandboxFiles[]> {
+  const group = async (dir: string, files: [from: string, path: string][]) => ({
+    dir,
+    files: await Promise.all(
+      files.map(async ([from, path]) => ({ path, content: await readFile(join(root, from)) })),
+    ),
+  });
+  return Promise.all([
+    group(SANDBOX_PATHS.tools, [
+      ['services/harness/sandbox/oasis-tool.ts', 'oasis-tool.ts'],
+      ['services/harness/sandbox/batch.ts', 'batch.ts'],
+      ['services/harness/sandbox/tool-files.ts', 'tool-files.ts'],
+      ['services/harness/sandbox/oasis-op.ts', 'services/harness/sandbox/oasis-op.ts'],
+      ['packages/contracts/src/ops.ts', 'packages/contracts/src/ops.ts'],
+      ['packages/contracts/src/tool-args.ts', 'packages/contracts/src/tool-args.ts'],
+      ['services/harness/src/adapter/profile/node-goal.mjs', 'node-goal.mjs'],
+    ]),
+    group(SANDBOX_PATHS.dshHome, [
+      ['services/harness/src/adapter/profile/cordis.patch.yml', 'profiles/oasis/cordis.patch.yml'],
+    ]),
+  ]);
 }
 
 /** 读平台规则和全部经验 */

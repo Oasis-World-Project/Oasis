@@ -22,7 +22,9 @@
               return { ...capacity, ...(reasoningEfforts === false ? { reasoningEfforts: false } : {}) };
             });
           })()
-        reasoning: high
+        # 不设整条路由的默认思考档：思考档由 node-goal 按每个型号原生的最高一档选，不会思考的型号不带。
+        # 设了（原来的 reasoning: high）会套到每个型号上，不会思考的型号（如 Llama 4 Maverick）每一轮都被
+        # dsh 拒绝：does not support reasoning effort "high"（2026-11-14 第 4 阶段量型号时发现）。
 - id: agent-default-model
   config:
     provider: openrouter

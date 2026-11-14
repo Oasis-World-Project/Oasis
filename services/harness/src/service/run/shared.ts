@@ -12,6 +12,7 @@ import type { Logger, ObjectStore, ServiceClient, StreamFile } from '@oasis/serv
 import type { AgentConnection, AgentGuide, SandboxPackages } from '../../adapter/dsh.ts';
 import type { Executor, Sandbox } from '../../executor/executor.ts';
 import type { Run, RunOutcome, RunsRepo } from '../../repo/runs-repo.ts';
+import type { SandboxFiles } from '../guide.ts';
 
 export interface RunDeps {
   repo: RunsRepo;
@@ -27,8 +28,8 @@ export interface RunDeps {
   packages: SandboxPackages;
   /** 读给沙箱里 AI 的平台说明和技能（每轮现读，放进 dsh 的用户目录） */
   guide: () => Promise<AgentGuide>;
-  /** 读沙箱里的 oasis-tool 这些命令（每轮现读，放进 /opt/oasis）；没给就用镜像里的 */
-  toolScripts?: () => Promise<{ path: string; content: Buffer }[]>;
+  /** 读沙箱里 Oasis 自己的命令和 dsh 组合（每轮现读，按镜像里的位置放）；没给就用镜像里的 */
+  sandboxFiles?: () => Promise<SandboxFiles[]>;
   batchEnv?: Record<string, string>;
   maxConcurrent: number;
   /** 显式验收超时；生产调用不设置。 */

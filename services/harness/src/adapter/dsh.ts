@@ -23,11 +23,11 @@ export const SANDBOX_PATHS = {
   workdir: '/workspace',
   inputs: '/workspace/in',
   outputs: '/workspace/out',
-  /** dsh 的用户目录：每轮开沙箱时放进平台说明（AGENTS.md）和技能（skills/<名>/SKILL.md） */
+  /** dsh 的用户目录：每轮开沙箱时放进平台说明（AGENTS.md）、技能（skills/）和 dsh 组合（profiles/oasis/） */
   dshHome: '/home/node/.dsh',
   /** dsh 的会话存储（含附件），和 /workspace 一起挂在这个会话的持久卷上：下一轮接着原会话 */
   sessions: '/home/node/.dsh/sessions',
-  /** Oasis 自己的命令（oasis-tool、oasis-op）：每轮开沙箱时放进当前版本，改了不用重建镜像 */
+  /** Oasis 自己的命令（oasis-tool、oasis-op）和 dsh 插件 node-goal：每轮开沙箱时放进当前版本，改了不用重建镜像 */
   tools: '/opt/oasis',
 } as const;
 

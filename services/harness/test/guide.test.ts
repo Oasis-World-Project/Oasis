@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { guideFiles } from '../src/adapter/dsh.ts';
-import { loadGuide, loadToolScripts, parsePlaybook } from '../src/service/guide.ts';
+import { loadGuide, loadSandboxFiles, parsePlaybook } from '../src/service/guide.ts';
 
 describe('给主 AI 的说明和技能', () => {
   it('仓库里的平台规则和每份经验都读得出来，经验变成技能', async () => {
@@ -23,8 +23,12 @@ describe('给主 AI 的说明和技能', () => {
     expect(guide.skills.find((s) => s.name === 'images')?.description).toMatch(/^图片类。适用：/);
   });
 
-  it('沙箱里的 oasis-tool 这些命令从仓库现读，按镜像里 /opt/oasis 下的位置放（import 路径不变）', async () => {
-    const files = await loadToolScripts(fileURLToPath(new URL('../../..', import.meta.url)));
+  it('沙箱里的 oasis-tool 这些命令和 dsh 组合从仓库现读，按镜像里的位置放（import 路径不变）', async () => {
+    const [tools, dsh] = await loadSandboxFiles(
+      fileURLToPath(new URL('../../..', import.meta.url)),
+    );
+    expect(tools!.dir).toBe('/opt/oasis');
+    const files = tools!.files;
     expect(files.map((f) => f.path)).toEqual([
       'oasis-tool.ts',
       'batch.ts',
@@ -32,10 +36,17 @@ describe('给主 AI 的说明和技能', () => {
       'services/harness/sandbox/oasis-op.ts',
       'packages/contracts/src/ops.ts',
       'packages/contracts/src/tool-args.ts',
+      'node-goal.mjs',
     ]);
     const tool = files[0]!.content.toString();
     expect(tool).toContain("from './tool-files.ts'");
     expect(files[3]!.content.toString()).toContain("'../../../packages/contracts/src/ops.ts'");
+    // dsh 组合放在 dsh 用户目录的 oasis 组合里；不给整条路由设默认思考档（不会思考的型号会被拒绝）
+    expect(dsh!.dir).toBe('/home/node/.dsh');
+    expect(dsh!.files.map((f) => f.path)).toEqual(['profiles/oasis/cordis.patch.yml']);
+    const profile = dsh!.files[0]!.content.toString();
+    expect(profile).toContain('/opt/oasis/node-goal.mjs');
+    expect(profile).not.toMatch(/^\s+reasoning:/m);
   });
 
   it('经验缺标题或「适用」行就报错', () => {
