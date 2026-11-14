@@ -1,6 +1,7 @@
 // 私聊：建对话、列消息、发消息（开一轮或插话，见 turns.ts）、停下这一轮、开新话题、删对话。
 // 私聊里的 AI 就是干活的主 AI；花的钱由对话的主人付。
 import { setTimeout as sleep } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { ModelRoute } from '@oasis/contracts/agent';
 import { ArtifactLookupResult, UploadLookupResult } from '@oasis/contracts/canvas';
 import type {
@@ -10,15 +11,30 @@ import type {
   MessageBody,
   MessageList,
   SendResult,
+  SetupBody,
+  SetupResult,
   TurnState,
 } from '@oasis/contracts/conversation';
-import { RunBody } from '@oasis/contracts/harness';
+import { defaultPermissions, RunBody, type Workplace } from '@oasis/contracts/harness';
+import { Confirmation, type ConfirmDecision } from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import type { Conversation, ConversationRepo, Message } from '../repo/conversation-repo.ts';
 import type { Turns } from './turns.ts';
 
 const turnState = (row: Conversation): TurnState | null =>
-  row.turn ? { runId: row.turn.runId, startedAt: row.turn.startedAt } : null;
+  row.turn
+    ? {
+        runId: row.turn.runId,
+        startedAt: row.turn.startedAt,
+        confirmations: row.turn.confirmations ?? [],
+      }
+    : null;
+
+/** 在哪干活和权限：没设过的是云端沙箱、按地方的默认权限 */
+function setupOf(row: Conversation): SetupBody {
+  const workplace: Workplace = row.workplace ?? { kind: 'cloud' };
+  return { workplace, permissions: row.permissions ?? defaultPermissions(workplace) };
+}
 
 function toConversationBody(row: Conversation): ConversationBody {
   return {
@@ -29,6 +45,7 @@ function toConversationBody(row: Conversation): ConversationBody {
     createdAt: row.createdAt.toISOString(),
     lastMessageAt: row.lastMessageAt?.toISOString() ?? null,
     turn: turnState(row),
+    ...setupOf(row),
   };
 }
 
@@ -101,6 +118,31 @@ export function createDmService(deps: {
       if (!run || !['queued', 'starting', 'running'].includes(run.status)) return;
     }
     throw new HttpError(409, 'turn_active', '这一轮还在收尾，请稍后再删');
+  }
+
+  /** 从新话题开始：AI 的会话记录和工作目录真删除（成品已经在画布里），聊天里插一条分隔 */
+  async function startTopic(
+    store: ConversationRepo,
+    conversation: Conversation,
+    content: string,
+    requestId: string,
+  ): Promise<MessageBody> {
+    await deps.harness.json('POST', `/internal/conversations/${conversation.id}/purge`, {
+      body: {},
+      requestId,
+    });
+    await store.newTopic(conversation.id);
+    const divider = await store.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'user',
+      authorId: conversation.ownerId,
+      content,
+      status: 'complete',
+      kind: 'topic',
+      data: {},
+    });
+    await store.touchConversation(conversation.id);
+    return toMessageBody(divider);
   }
 
   /** 核对随消息发的文件都在 canvas 里、都是这个人的，并记下它们被用上了（清扫不再删） */
@@ -270,31 +312,95 @@ export function createDmService(deps: {
     },
 
     /**
+     * 改在哪干活和权限，下一轮起生效。换了地方从新话题开始：AI 的会话记录在原来那边接不上，
+     * 原来的清掉、聊天里插一条分隔；一轮进行中不能换地方。
+     */
+    async setup(
+      ownerId: string,
+      conversationId: string,
+      body: SetupBody,
+      requestId: string,
+    ): Promise<SetupResult> {
+      const conversation = await owned(conversationId, ownerId);
+      if (conversation.kind !== 'dm') throw new HttpError(400, 'not_dm', '只有和 AI 的私聊能设');
+      return withMessageLock(conversation.id, async (store) => {
+        const latest = (await store.find(conversation.id))!;
+        let message: MessageBody | null = null;
+        if (!isDeepStrictEqual(setupOf(latest).workplace, body.workplace)) {
+          if (latest.turn)
+            throw new HttpError(409, 'turn_active', '这一轮还在做，先停下再换干活的地方');
+          const place =
+            body.workplace.kind === 'device' ? `你的电脑（${body.workplace.folder}）` : '云端沙箱';
+          message = await startTopic(store, latest, `换到${place}干活，开了新话题`, requestId);
+        }
+        await store.saveSetup(conversation.id, body);
+        deps.logger.info(
+          { conversationId: conversation.id, workplace: body.workplace.kind },
+          '改了在哪干活和权限',
+        );
+        return { conversation: toConversationBody((await store.find(conversation.id))!), message };
+      });
+    },
+
+    /**
+     * 点确认卡：允许一次 / 以后都允许 / 拒绝。「以后都允许」：这一轮里同类的自动允许（model-gateway
+     * 记在这一轮的 Key 上），这个私聊的权限也改掉，下一轮起不再问。
+     */
+    async confirm(input: {
+      ownerId: string;
+      conversationId: string;
+      confirmationId: string;
+      decision: ConfirmDecision;
+      requestId: string;
+    }): Promise<Confirmation> {
+      const conversation = await owned(input.conversationId, input.ownerId);
+      const turn = conversation.turn;
+      if (!turn) throw new HttpError(409, 'turn_not_active', '这一轮已经结束，不用再确认了');
+      const decided = await deps.modelGateway.json(
+        'POST',
+        `/internal/v1/confirmations/${input.confirmationId}/decide`,
+        {
+          body: { runId: turn.runId, decision: input.decision },
+          requestId: input.requestId,
+          schema: Confirmation,
+        },
+      );
+      const always = input.decision === 'always' && decided.status === 'allowed';
+      await withMessageLock(conversation.id, async (store) => {
+        const latest = await store.find(conversation.id);
+        if (!latest) return;
+        if (always) {
+          const { workplace, permissions } = setupOf(latest);
+          await store.saveSetup(latest.id, {
+            workplace,
+            permissions:
+              decided.kind === 'command'
+                ? { ...permissions, beyond: 'allow' }
+                : { ...permissions, paidTools: 'allow' },
+          });
+        }
+        // 点过的卡马上收起，不等下一次看进度
+        if (latest.turn?.runId !== turn.runId) return;
+        const left = (latest.turn.confirmations ?? []).filter(
+          (card) => card.id !== decided.id && !(always && card.kind === decided.kind),
+        );
+        await store.updateTurn(latest.id, turn.runId, { confirmations: left });
+      });
+      return decided;
+    },
+
+    /**
      * 开新话题：AI 从这里起不记得之前的事——它的会话记录和工作目录真删除（成品已经在画布里），
      * 聊天记录留着。一轮还在进行时先停下才能开。
      */
     async newTopic(ownerId: string, conversationId: string, requestId: string) {
       const conversation = await owned(conversationId, ownerId);
       return withMessageLock(conversation.id, async (store) => {
-        if ((await store.find(conversation.id))?.turn)
-          throw new HttpError(409, 'turn_active', '这一轮还在做，先停下再开新话题');
-        await deps.harness.json('POST', `/internal/conversations/${conversation.id}/purge`, {
-          body: {},
-          requestId,
-        });
-        await store.newTopic(conversation.id);
-        const divider = await store.insertMessage({
-          conversationId: conversation.id,
-          authorKind: 'user',
-          authorId: ownerId,
-          content: '开了新话题',
-          status: 'complete',
-          kind: 'topic',
-          data: {},
-        });
-        await store.touchConversation(conversation.id);
+        const latest = (await store.find(conversation.id))!;
+        if (latest.turn) throw new HttpError(409, 'turn_active', '这一轮还在做，先停下再开新话题');
+        const divider = await startTopic(store, latest, '开了新话题', requestId);
         deps.logger.info({ conversationId: conversation.id }, '开了新话题');
-        return toMessageBody(divider);
+        return divider;
       });
     },
 

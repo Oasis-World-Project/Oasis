@@ -9,7 +9,7 @@ import {
   event,
   fake,
   run,
-  spend,
+  activity,
   registered,
   scope,
   repo,
@@ -297,7 +297,7 @@ describe('开一轮、跟进到结束', () => {
         event(6, 'assistant_text', { text: '做好了' }),
         event(7, 'turn_end', { reason: 'completed' }),
       );
-    Object.assign(spend, { spentMicro: 12_345, tools: ['web.search'] });
+    Object.assign(activity, { spentMicro: 12_345, tools: ['web.search'] });
     fake.runs.set(
       runId,
       run(runId, {
@@ -352,7 +352,7 @@ describe('开一轮、跟进到结束', () => {
     expect(registered).toEqual([]);
 
     const task = (await send('画一只猫')).turn!.runId;
-    Object.assign(spend, { spentMicro: 40_000, tools: ['image.generate'] });
+    Object.assign(activity, { spentMicro: 40_000, tools: ['image.generate'] });
     const card = await until(() => repo.messages.find((m) => m.kind === 'task'));
     expect(card.data).toMatchObject({
       runId: task,

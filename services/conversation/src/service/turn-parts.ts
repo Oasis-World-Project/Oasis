@@ -34,6 +34,8 @@ const brief = (text: string, max: number) => (text.length > max ? `${text.slice(
 const NOTICES: Record<string, string> = {
   recovery_wait: '服务连接中断了，恢复后接着做',
   recovering: '服务恢复了，接着做',
+  // 在用户电脑上干活：桌面版报来的准备进展
+  installing_dsh: '第一次在这台电脑上干活，正在装 dsh（约 3 分钟）',
 };
 
 /** 生图、视频这类工具通常要多久（秒，按调用记录）：工具名和点名的型号（没点名用默认的）；不知道为 undefined */

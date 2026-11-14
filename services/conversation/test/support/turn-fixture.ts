@@ -2,6 +2,7 @@
 // 每个测试前换一个新的内存库、turns 和私聊服务。
 import { randomUUID } from 'node:crypto';
 import type { RunEventBody, RunBody } from '@oasis/contracts/harness';
+import type { Confirmation } from '@oasis/contracts/model-gateway';
 import { createServiceClient } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
@@ -112,7 +113,23 @@ harness.post('/internal/conversations/:id/purge', async (request, reply) => {
 
 /** 假 agent、model-gateway、canvas */
 export const others = Fastify();
-export const spend = { spentMicro: 0, tools: [] as string[] };
+/** model-gateway 看到的这一轮：花了多少、用过的工具、在等用户点的确认卡 */
+export const activity = {
+  spentMicro: 0,
+  tools: [] as string[],
+  confirmations: [] as Confirmation[],
+};
+/** 用户点过的确认卡（model-gateway 收到的） */
+export const decisions: { id: string; runId: string; decision: string }[] = [];
+export const confirmation = (patch: Partial<Confirmation> = {}): Confirmation => ({
+  id: randomUUID(),
+  kind: 'command',
+  text: '要用「完全访问」权限：写项目外的文件',
+  callId: 'call-1',
+  status: 'pending',
+  createdAt: new Date().toISOString(),
+  ...patch,
+});
 export const registered: Record<string, unknown>[] = [];
 export const deletedUploads: string[][] = [];
 /** 「只用国内模型」：测试里改 */
@@ -124,7 +141,16 @@ others.get('/internal/models/:key/route', async (request) => ({
   systemPrompt: '你是 DeepSeek',
   domesticOnly: scope.domesticOnly,
 }));
-others.get('/internal/v1/runs/:id/spend', async () => spend);
+others.get('/internal/v1/runs/:id', async () => activity);
+others.post('/internal/v1/confirmations/:id/decide', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const { runId, decision } = request.body as { runId: string; decision: string };
+  const card = activity.confirmations.find((c) => c.id === id);
+  if (!card) return reply.code(404).send(fail(404, 'confirmation_not_found', '没有这张确认卡'));
+  decisions.push({ id, runId, decision });
+  activity.confirmations = activity.confirmations.filter((c) => c.id !== id);
+  return { ...card, status: decision === 'deny' ? 'denied' : 'allowed' };
+});
 /** 工具目录：生图通常 30 秒（点名 x/slow 的 90 秒） */
 others.get('/internal/v1/tools', async () => ({
   tools: [
@@ -297,7 +323,8 @@ beforeEach(async () => {
     cancels: [],
     purged: [],
   });
-  Object.assign(spend, { spentMicro: 0, tools: [] });
+  Object.assign(activity, { spentMicro: 0, tools: [], confirmations: [] });
+  decisions.length = 0;
   registered.length = 0;
   deletedUploads.length = 0;
   uploadLookups.length = 0;

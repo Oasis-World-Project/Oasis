@@ -51,6 +51,8 @@ export interface ConversationRepo {
   activeTurns(): Promise<Conversation[]>;
   /** 开新话题：下一轮开新会话，话题名清掉 */
   newTopic(id: string): Promise<void>;
+  /** 改在哪干活和权限（下一轮起用） */
+  saveSetup(id: string, setup: Pick<Conversation, 'workplace' | 'permissions'>): Promise<void>;
 }
 
 /** 会话锁的租约：持有期间每 10 秒续一次；进程崩了，30 秒后别的实例就能接着处理这段对话 */
@@ -249,6 +251,10 @@ export function createConversationRepo(
         .update(conversations)
         .set({ lastRunId: null, topic: null })
         .where(eq(conversations.id, id));
+    },
+
+    async saveSetup(id, setup) {
+      await db.update(conversations).set(setup).where(eq(conversations.id, id));
     },
   };
   return repo;

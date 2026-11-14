@@ -1,4 +1,6 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
+import type { Permissions, Workplace } from '@oasis/contracts/harness';
+import type { Confirmation } from '@oasis/contracts/model-gateway';
 import { bigint, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
@@ -15,6 +17,8 @@ export interface Turn {
   unheard?: number;
   /** 任务卡消息：这一轮用了生图、视频这类工具或交了文件才有 */
   cardId?: string;
+  /** 这一轮在等用户点的确认卡（跟进时从 model-gateway 拿来） */
+  confirmations?: Confirmation[];
 }
 
 export const conversations = pgTable('conversations', {
@@ -32,6 +36,10 @@ export const conversations = pgTable('conversations', {
   lastRunId: uuid('last_run_id'),
   /** 当前话题的名字：成果在电脑上按它放文件夹 */
   topic: text('topic'),
+  /** 在哪干活：空是云端沙箱 */
+  workplace: jsonb('workplace').$type<Workplace>(),
+  /** 权限：空按在哪干活的默认 */
+  permissions: jsonb('permissions').$type<Permissions>(),
 });
 
 export const messages = pgTable('messages', {

@@ -7,7 +7,7 @@ import {
   event,
   fake,
   run,
-  spend,
+  activity,
   uploadLookups,
   PAGE,
   repo,
@@ -145,7 +145,7 @@ describe('插话、停止、出错', () => {
 
   it('停止：这一轮停下，AI 消息标成已停下、步骤算没做完；任务卡写「已停下」', async () => {
     const runId = (await send('生成三张图')).turn!.runId;
-    Object.assign(spend, { spentMicro: 5_000, tools: ['image.generate'] });
+    Object.assign(activity, { spentMicro: 5_000, tools: ['image.generate'] });
     fake.events.set(runId, [
       event(1, 'tool_call', { callId: 'c', name: 'bash', label: '生成图片：猫' }),
     ]);

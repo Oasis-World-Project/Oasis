@@ -1,11 +1,17 @@
 // 私聊的接口（群聊见 group-routes.ts）。发消息立即返回：AI 这一轮在后台做，前端刷新消息看进度。
 import { Readable } from 'node:stream';
-import { CreateDmBody, SendMessageBody } from '@oasis/contracts/conversation';
+import {
+  ConfirmBody,
+  CreateDmBody,
+  SendMessageBody,
+  SetupBody,
+} from '@oasis/contracts/conversation';
 import { parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { DmService } from '../service/dm-service.ts';
 
 const IdParams = z.object({ id: z.uuid() });
+const ConfirmationParams = z.object({ id: z.uuid(), confirmationId: z.uuid() });
 const RunFileParams = z.object({
   id: z.uuid(),
   runId: z.uuid(),
@@ -63,6 +69,26 @@ export function registerRoutes(app: ServiceApp, dms: DmService): void {
     const { id } = parseWith(IdParams, request.params);
     await dms.stop(requireUserId(request), id);
     return reply.code(204).send();
+  });
+
+  /** 改在哪干活和权限：换了地方从新话题开始，回改好的私聊和分隔消息 */
+  app.put('/v1/conversations/:id/setup', async (request) => {
+    const { id } = parseWith(IdParams, request.params);
+    const body = parseWith(SetupBody, request.body);
+    return dms.setup(requireUserId(request), id, body, request.id);
+  });
+
+  /** 点确认卡：允许一次 / 以后都允许 / 拒绝 */
+  app.post('/v1/conversations/:id/confirmations/:confirmationId', async (request) => {
+    const { id, confirmationId } = parseWith(ConfirmationParams, request.params);
+    const { decision } = parseWith(ConfirmBody, request.body);
+    return dms.confirm({
+      ownerId: requireUserId(request),
+      conversationId: id,
+      confirmationId,
+      decision,
+      requestId: request.id,
+    });
   });
 
   /** 开新话题：AI 从这里起不记得之前的事 */

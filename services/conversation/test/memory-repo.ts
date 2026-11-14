@@ -43,6 +43,8 @@ export function memoryRepo(): ConversationRepo & {
         turn: null,
         lastRunId: null,
         topic: null,
+        workplace: null,
+        permissions: null,
       };
       conversations.set(row.id, row);
       return row;
@@ -137,6 +139,10 @@ export function memoryRepo(): ConversationRepo & {
     async newTopic(id) {
       const row = conversations.get(id);
       if (row) Object.assign(row, { lastRunId: null, topic: null });
+    },
+    async saveSetup(id, setup) {
+      const row = conversations.get(id);
+      if (row) Object.assign(row, structuredClone(setup));
     },
   };
   return repo;

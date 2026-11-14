@@ -1,17 +1,24 @@
 // 一轮 = harness 的一次运行：用户说一句开一轮，一轮进行中再说的话是插话。
 // 开一轮、插话、停止在这里；开了以后跟进 harness 的事件，把 AI 说的话和做的步骤写进消息，
-// 进行中定时看花费（用了生图、视频这类工具就出任务卡），结束时把成品登记进画布、写上用时和花费，
-// 收尾时用户发来的话接着开下一轮。服务重启后接着跟进没结束的轮。
+// 进行中定时看 model-gateway 那边（在等用户点的确认卡放进这一轮；用了生图、视频这类工具就出任务卡），
+// 结束时把成品登记进画布、写上用时和花费，收尾时用户发来的话接着开下一轮。服务重启后接着跟进没结束的轮。
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { ModelRoute } from '@oasis/contracts/agent';
 import { ArtifactBody, ArtifactLookupResult } from '@oasis/contracts/canvas';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
 import type { TaskCard, TaskFile } from '@oasis/contracts/conversation';
-import { RunBody, RunEventList, type StartRunBody } from '@oasis/contracts/harness';
+import {
+  defaultPermissions,
+  RunBody,
+  RunEventList,
+  type StartRunBody,
+  type Workplace,
+} from '@oasis/contracts/harness';
 import {
   GENERATION_TOOLS,
-  RunSpend,
+  RunActivity,
   ToolList,
   type ToolEntry,
 } from '@oasis/contracts/model-gateway';
@@ -41,7 +48,7 @@ export interface TurnDeps {
   logger: Logger;
   /** 跟进的间隔 */
   pollMs?: number;
-  /** 进行中多久看一次花费 */
+  /** 进行中多久看一次 model-gateway 那边（确认卡、花费） */
   spendMs?: number;
 }
 
@@ -58,7 +65,8 @@ const RegisteredArtifacts = z.object({ artifacts: z.array(ArtifactBody) });
 export function createTurns(deps: TurnDeps) {
   const { harness, logger } = deps;
   const pollMs = deps.pollMs ?? 700;
-  const spendMs = deps.spendMs ?? 3000;
+  // 确认卡要尽快出现在网页上（AI 在等）
+  const spendMs = deps.spendMs ?? 1500;
   const following = new Map<string, Promise<void>>();
   const closing = new AbortController();
 
@@ -71,10 +79,11 @@ export function createTurns(deps: TurnDeps) {
     }
   }
 
-  const spendOf = (ownerId: string, runId: string) =>
-    deps.modelGateway.json('GET', `/internal/v1/runs/${runId}/spend`, {
+  /** 这一轮在 model-gateway 那边的情况：花费、用过的工具、在等用户点的确认卡 */
+  const activityOf = (ownerId: string, runId: string) =>
+    deps.modelGateway.json('GET', `/internal/v1/runs/${runId}`, {
       headers: { [OASIS_HEADERS.payerId]: ownerId },
-      schema: RunSpend,
+      schema: RunActivity,
     });
 
   /** 工具目录：几分钟拉一次；拉不到就用上次的（第一次拉不到就不写预计用时） */
@@ -119,9 +128,14 @@ export function createTurns(deps: TurnDeps) {
     turn.cardId = created.id;
   }
 
-  /** 进行中看一眼花费：用了做东西的工具就出任务卡，任务卡上的花费跟着涨 */
+  /**
+   * 进行中看一眼：在等用户点的确认卡放进这一轮（网页上出卡片）；用了做东西的工具就出任务卡，
+   * 任务卡上的花费跟着涨
+   */
   async function live(store: ConversationRepo, conversation: Conversation, turn: Turn) {
-    const spend = await spendOf(conversation.ownerId, turn.runId);
+    const spend = await activityOf(conversation.ownerId, turn.runId);
+    if (!isDeepStrictEqual(spend.confirmations, turn.confirmations ?? []))
+      await store.updateTurn(conversation.id, turn.runId, { confirmations: spend.confirmations });
     if (!turn.cardId && !spend.tools.some((tool) => GENERATION_TOOLS.includes(tool))) return;
     await saveTaskCard(store, conversation, turn, {
       runId: turn.runId,
@@ -178,7 +192,7 @@ export function createTurns(deps: TurnDeps) {
       }
     }
     const spend = run
-      ? await spendOf(conversation.ownerId, run.id).catch((err: unknown) => {
+      ? await activityOf(conversation.ownerId, run.id).catch((err: unknown) => {
           logger.warn({ err, runId: run.id }, '读这一轮的花费失败');
           return { spentMicro: 0, tools: [] };
         })
@@ -363,6 +377,7 @@ export function createTurns(deps: TurnDeps) {
       await store.deleteMessage(segment.id);
       throw new HttpError(409, 'turn_active', '这个对话还有一轮在进行');
     }
+    const workplace: Workplace = conversation.workplace ?? { kind: 'cloud' };
     const body: StartRunBody = {
       runId,
       payerId: conversation.ownerId,
@@ -372,6 +387,8 @@ export function createTurns(deps: TurnDeps) {
       domesticOnly: route.domesticOnly,
       prompt: withNote(text, handed.note),
       materials: handed.materials,
+      workplace,
+      permissions: conversation.permissions ?? defaultPermissions(workplace),
       ...(conversation.lastRunId ? { continueFrom: conversation.lastRunId } : {}),
     };
     try {
