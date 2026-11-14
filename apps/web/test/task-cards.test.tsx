@@ -128,8 +128,8 @@ describe('AI 在一轮里说的话和做的事', () => {
     expect(within(steps).getAllByRole('listitem', { hidden: true })).toHaveLength(2);
     expect(screen.getByText('服务恢复了，接着做')).toBeTruthy();
     expect(screen.getByText('待办 1/2')).toBeTruthy();
-    // 一轮在做：输入框照样能发（插话），旁边有停止按钮
-    expect(screen.getByPlaceholderText('AI 正在做，可以随时插话…')).toBeTruthy();
+    // 一轮在做：输入框照样能发（先排着），旁边有停止按钮
+    expect(screen.getByPlaceholderText('AI 正在做，发的话先排着，做完接着做…')).toBeTruthy();
     expect(screen.getByRole('button', { name: '停下这一轮' })).toBeTruthy();
   });
 
@@ -316,7 +316,7 @@ describe('任务卡', () => {
 });
 
 describe('用户的话', () => {
-  it('插话和没送进去的话有标记；要改的成果链到画布；很长的话只显示开头', async () => {
+  it('插话有标记；要改的成果链到画布；很长的话只显示开头', async () => {
     const ARTIFACT = '00000000-0000-4000-8000-0000000000d2';
     const text = '很长的修改意见。'.repeat(100) + '正文末尾';
     fakeChat([
@@ -325,14 +325,12 @@ describe('用户的话', () => {
       user('改成竖屏', { interjection: true }),
       ai([say('好，改成竖屏')], {}, 'streaming'),
       user('配上字幕', { interjection: true }),
-      user('再快一点', { pending: true }),
       user(text, { artifacts: [{ id: ARTIFACT, name: 'index.html', path: 'site/index.html' }] }),
     ]);
     await openChat();
     // AI 看到了的插话后面接着它的话；还没看到的（前面那段还在写）标明它做完手上这一步就看到
     expect(await screen.findByText('插话')).toBeTruthy();
     expect(screen.getByText('插话 · AI 做完手上这一步就会看到')).toBeTruthy();
-    expect(screen.getByText('这一轮在收尾，下一轮开头交给 AI')).toBeTruthy();
     expect(screen.getByRole('link', { name: /要改：index\.html/ }).getAttribute('href')).toBe(
       `/canvas/artifacts/${ARTIFACT}`,
     );
@@ -342,6 +340,54 @@ describe('用户的话', () => {
     expect(within(dialog).getByText(text)).toBeTruthy();
     // 没有编辑、重新生成、删除单条消息
     expect(screen.queryByRole('button', { name: /编辑消息|重新生成|删除消息/ })).toBeNull();
+  });
+
+  it('AI 干活时发的话排在输入框上面（照 Codex），不进聊天：可以引导（现在交给 AI）、改、删', async () => {
+    const queued = (content: string) => message('text', { pending: true }, 'user', content);
+    const [vertical, subtitles, typo] = [queued('改成竖屏'), queued('配上字幕'), queued('写错了')];
+    const { chat, api } = fakeChat(
+      [user('做个视频'), ai([say('先写分镜')], {}, 'streaming'), vertical, subtitles, typo],
+      {
+        turn: TURN,
+        extra: (method, path) => {
+          if (method === 'POST' && path === `${PATH}/${vertical.id}/steer`) {
+            const steered = {
+              ...vertical,
+              data: { runId: RUN, interjection: true },
+            } as MessageBody;
+            chat.messages = [...chat.messages.filter((m) => m.id !== vertical.id), steered];
+            return json(200, { messages: [steered], turn: TURN });
+          }
+          if (method === 'DELETE' && path.startsWith(`${PATH}/`)) {
+            chat.messages = chat.messages.filter((m) => path !== `${PATH}/${m.id}`);
+            return new Response(null, { status: 204 });
+          }
+          return undefined;
+        },
+      },
+    );
+    await openChat();
+    const bar = await screen.findByRole('region', { name: '排着队的话' });
+    expect(within(bar).getAllByRole('listitem')).toHaveLength(3);
+    // 排着的话只在输入框上面，不在聊天里
+    expect(screen.getAllByText('改成竖屏')).toHaveLength(1);
+    expect(screen.getByPlaceholderText('AI 正在做，发的话先排着，做完接着做…')).toBeTruthy();
+    // 引导：现在交给这一轮，进聊天、标成插话
+    fireEvent.click(within(bar).getByRole('button', { name: '引导：改成竖屏' }));
+    expect(await screen.findByText('插话 · AI 做完手上这一步就会看到')).toBeTruthy();
+    expect(api.requests).toContain(`POST ${PATH}/${vertical.id}/steer`);
+    await waitFor(() => expect(within(bar).getAllByRole('listitem')).toHaveLength(2));
+    // 删掉
+    fireEvent.click(within(bar).getByRole('button', { name: '删掉：写错了' }));
+    await waitFor(() => expect(screen.queryByText('写错了')).toBeNull());
+    expect(api.requests).toContain(`DELETE ${PATH}/${typo.id}`);
+    // 改：从队里拿回输入框
+    fireEvent.click(within(bar).getByRole('button', { name: '改：配上字幕' }));
+    await waitFor(() =>
+      expect((screen.getByLabelText('消息') as HTMLTextAreaElement).value).toBe('配上字幕'),
+    );
+    expect(api.requests).toContain(`DELETE ${PATH}/${subtitles.id}`);
+    await waitFor(() => expect(screen.queryByRole('region', { name: '排着队的话' })).toBeNull());
   });
 });
 

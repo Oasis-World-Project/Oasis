@@ -1,6 +1,7 @@
 // 私聊的输入框：可以添加文件（也可以粘贴进来，拖进对话区由页面处理）。AI 正在做时照样能发——
-// 发的话是插话；这时旁边多一个停止按钮。文件只能在一轮开始时交给 AI，所以一轮进行中不能带文件发送。
-// 有文件还在上传或上传失败时不能发送。
+// 发的话先排在输入框上面，这一轮做完接着做（点「引导」马上交给 AI）；这时旁边多一个停止按钮。
+// 文件只能在一轮开始时交给 AI，所以一轮进行中不能带文件发送。有文件还在上传或上传失败时不能发送。
+// 从队里拿回来改的话放回这里。
 import { ArrowUp, Paperclip, Square } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { PendingFiles } from './Attachments.tsx';
@@ -19,6 +20,7 @@ export function Composer({
   turnActive = false,
   onStop,
   stopping = false,
+  restore = null,
 }: {
   locked: boolean;
   sending: boolean;
@@ -30,12 +32,20 @@ export function Composer({
   onSend: (content: string) => Promise<boolean>;
   /** 群聊基础阶段只发文字，不显示文件入口。 */
   textOnly?: boolean;
-  /** AI 正在做这一轮：发的话是插话，不能带文件 */
+  /** AI 正在做这一轮：发的话先排队，不能带文件 */
   turnActive?: boolean;
   onStop?: (() => void) | undefined;
   stopping?: boolean;
+  /** 从队里拿回来改的话（每次是新的对象）：放回输入框，打了一半的接在后面 */
+  restore?: { text: string } | null;
 }) {
   const [draft, setDraft] = useState('');
+  const [restored, setRestored] = useState(restore);
+  if (restore !== restored) {
+    setRestored(restore);
+    if (restore)
+      setDraft((current) => (current.trim() ? `${restore.text}\n${current}` : restore.text));
+  }
   const picker = useRef<HTMLInputElement>(null);
   const hasFiles = attachments.files.length > 0;
   const blocked = attachments.uploading || attachments.failed || (turnActive && hasFiles);
@@ -59,7 +69,7 @@ export function Composer({
   const placeholder = sending
     ? '发送中…'
     : turnActive
-      ? 'AI 正在做，可以随时插话…'
+      ? 'AI 正在做，发的话先排着，做完接着做…'
       : (hint ?? (hasFiles ? '说说要拿这些文件做什么…' : '发消息…'));
 
   return (
@@ -134,7 +144,8 @@ export function Composer({
           type="button"
           onClick={() => void send()}
           disabled={!canSend}
-          aria-label={turnActive ? '插话' : '发送'}
+          aria-label={turnActive ? '排队' : '发送'}
+          title={turnActive ? '先排着，这一轮做完接着做' : undefined}
           className="flex size-11 shrink-0 items-center justify-center rounded-full border-0 bg-accent text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
         >
           <ArrowUp size={18} strokeWidth={2.2} aria-hidden="true" />
@@ -147,9 +158,11 @@ export function Composer({
             ? '有文件没传上去，移除后再发送'
             : turnActive && hasFiles
               ? '这一轮做完才能带文件发送，或者先停下这一轮'
-              : textOnly
-                ? 'Enter 发送 · Shift + Enter 换行'
-                : 'Enter 发送 · Shift + Enter 换行 · 文件可以拖进来或粘贴'}
+              : turnActive
+                ? 'Enter 排队 · Shift + Enter 换行 · 排着的话点「引导」马上交给 AI'
+                : textOnly
+                  ? 'Enter 发送 · Shift + Enter 换行'
+                  : 'Enter 发送 · Shift + Enter 换行 · 文件可以拖进来或粘贴'}
       </p>
     </>
   );

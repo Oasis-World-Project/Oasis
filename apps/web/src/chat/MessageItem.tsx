@@ -99,17 +99,13 @@ function UserMessage({
   /** 插话送进去了、AI 还没看到（它做完手上这一步才看） */
   waiting: boolean;
 }) {
-  const { attachments = [], artifacts = [], interjection, pending } = message.data;
+  const { attachments = [], artifacts = [], interjection } = message.data;
   return (
     <>
       <div className="flex flex-col items-end gap-1">
-        {(interjection || pending) && (
+        {interjection && (
           <span className="text-[11.5px] text-ink-muted">
-            {pending
-              ? '这一轮在收尾，下一轮开头交给 AI'
-              : waiting
-                ? '插话 · AI 做完手上这一步就会看到'
-                : '插话'}
+            {waiting ? '插话 · AI 做完手上这一步就会看到' : '插话'}
           </span>
         )}
         <div className={`${BUBBLE} m-0 bg-glass-active shadow-raised`}>

@@ -1,5 +1,6 @@
 // 和一个 AI 私聊：它就是干活的那个 AI。说一句话开一轮，AI 说的话和做的步骤一段段写进消息（有一轮在进行时
-// 每秒刷新）；一轮进行中再发的话是插话，随时可以停下；做东西的那一轮出一张任务卡；要你点的确认卡出在输入框上面。
+// 每秒刷新）；一轮进行中再发的话排在输入框上面（照 Codex：做完接着做，点「引导」马上交给 AI），随时可以停下；
+// 做东西的那一轮出一张任务卡；要你点的确认卡出在输入框上面。
 // 右上角可以选在哪干活（云端或你的电脑）和权限、开新话题、删除私聊。
 import type { MessageList } from '@oasis/contracts/conversation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -13,6 +14,7 @@ import { Composer } from '../chat/Composer.tsx';
 import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
 import { DmSetup } from '../chat/DmSetup.tsx';
 import { MessageItem } from '../chat/MessageItem.tsx';
+import { QueuedMessages } from '../chat/QueuedMessages.tsx';
 import { useAttachments } from '../chat/use-attachments.ts';
 import { ChatActionsContext, useChatActionsValue } from '../chat/use-chat-actions.ts';
 import { useStickToBottom } from '../chat/use-stick-to-bottom.ts';
@@ -31,6 +33,8 @@ export function DmPage() {
   const turnActive = Boolean(messages.data?.turn);
 
   const [hint, setHint] = useState<string | null>(null);
+  /** 从队里拿回来改的话：放回输入框 */
+  const [restore, setRestore] = useState<{ text: string } | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const scrollToBottom = useStickToBottom(scroller, content);
@@ -43,7 +47,8 @@ export function DmPage() {
     input.current?.focus();
   }, []);
   const actions = useChatActionsValue(conversationId, turnActive, focusComposer);
-  const sending = actions.busy !== null && actions.busy !== 'stop';
+  // 在发话（停下、引导、删掉排着的话不算，输入框照样能打字）
+  const sending = actions.busy !== null && !['stop', 'steer', 'unqueue'].includes(actions.busy);
 
   // 发完把焦点还回输入框，方便接着打字
   useEffect(() => {
@@ -77,7 +82,10 @@ export function DmPage() {
     },
   };
 
-  const list = messages.data?.messages ?? [];
+  // 排着队的话不在聊天里，在输入框上面；交给 AI 时才进聊天
+  const all = messages.data?.messages ?? [];
+  const list = all.filter((m) => !(m.kind === 'text' && m.data.pending));
+  const queued = all.filter((m) => m.kind === 'text' && m.data.pending);
 
   return (
     <ChatActionsContext.Provider value={actions}>
@@ -137,7 +145,7 @@ export function DmPage() {
               <p className="m-0 self-center pt-10 text-center text-sm text-ink-muted">
                 打个招呼，或者直接说要做什么：写文档、做图、做视频、做网页都行。
                 <br />
-                可以附上文件；它做的时候你随时可以插话、问进度、让它停下。
+                可以附上文件；它做的时候你说的话先排着，点「引导」它马上就看到，也可以随时让它停下。
               </p>
             )}
             {list.map((message, index) => (
@@ -163,7 +171,15 @@ export function DmPage() {
               {actions.error}
             </p>
           )}
+          <QueuedMessages
+            messages={queued}
+            onEdit={(text) => {
+              setRestore({ text });
+              input.current?.focus();
+            }}
+          />
           <Composer
+            restore={restore}
             locked={sending}
             sending={sending}
             hint={hint}

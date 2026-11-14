@@ -292,10 +292,10 @@ describe('停下、出错后的「继续」', () => {
           body: { content: '继续', attachments: [] },
         }),
       );
-      // 这一轮在做：「继续」不见了，可以插话，也可以停下
+      // 这一轮在做：「继续」不见了，发的话先排着，也可以停下
       const stop = await screen.findByRole('button', { name: '停下这一轮' });
       expect(screen.queryByRole('button', { name: '继续' })).toBeNull();
-      expect(screen.getByPlaceholderText('AI 正在做，可以随时插话…')).toBeTruthy();
+      expect(screen.getByPlaceholderText('AI 正在做，发的话先排着，做完接着做…')).toBeTruthy();
       fireEvent.click(stop);
       await waitFor(() =>
         expect(fake.requests).toContain(`POST /conversation/v1/conversations/${ID}/stop`),

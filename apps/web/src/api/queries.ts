@@ -103,7 +103,7 @@ export const verifyCode = (email: string, code: string) =>
 
 export const logout = () => apiVoid('/identity/v1/auth/logout', { method: 'POST', body: {} });
 
-// ---- 私聊：用户说一句开一轮，一轮进行中再说的话是插话 ----
+// ---- 私聊：用户说一句开一轮，一轮进行中再说的话先排队，点「引导」才插话进这一轮 ----
 export const createDm = (modelKey: string) =>
   api('/conversation/v1/dms', ConversationBody, { method: 'POST', body: { modelKey } });
 /** 删除私聊（真删除）：消息、成果、AI 的记忆和工作目录都删掉；再点开这个 AI 是全新的私聊 */
@@ -126,11 +126,22 @@ export const messagesQuery = (conversationId: string) =>
       query.state.data?.turn ? 1_000 : isConnectionError(query.state.error) ? 5_000 : false,
   });
 
-/** 发一条消息：没有一轮在进行就开一轮，有就是插话；可以带文件、带要改的画布成果 */
+/** 发一条消息：没有一轮在进行就开一轮，有就先排队（这一轮做完接着做）；可以带文件、带要改的画布成果 */
 export const sendMessage = (
   conversationId: string,
   body: { content: string; attachments?: string[]; artifacts?: string[] },
 ) => api(`${conversationPath(conversationId)}/messages`, SendResult, { method: 'POST', body });
+
+/** 「引导」：排着队的一句现在交给 AI（插话进正在进行的这一轮，它做完手上这一步就看到） */
+export const steerMessage = (conversationId: string, messageId: string) =>
+  api(`${conversationPath(conversationId)}/messages/${messageId}/steer`, SendResult, {
+    method: 'POST',
+    body: {},
+  });
+
+/** 从队里删掉一句（还没交给 AI 的） */
+export const unqueueMessage = (conversationId: string, messageId: string) =>
+  apiVoid(`${conversationPath(conversationId)}/messages/${messageId}`, { method: 'DELETE' });
 
 /** 停下正在进行的一轮：已经做出来的存下，下一轮接着做 */
 export const stopTurn = (conversationId: string) =>
