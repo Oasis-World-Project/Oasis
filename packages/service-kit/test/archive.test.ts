@@ -1,7 +1,14 @@
 import { Readable } from 'node:stream';
 import { pack } from 'tar-stream';
 import { describe, expect, it } from 'vitest';
-import { listFiles, packFiles, packStreams, readLimited, scanArchive } from '../src/archive.ts';
+import {
+  listFiles,
+  onlyFile,
+  packFiles,
+  packStreams,
+  readLimited,
+  scanArchive,
+} from '../src/archive.ts';
 
 describe('tar 小工具', () => {
   it('打包后能列出文件，并去掉 Docker 取出时带的顶层目录', async () => {
@@ -13,6 +20,20 @@ describe('tar 小工具', () => {
       { path: 'a.md', size: 2 },
       { path: 'sub/b.png', size: 10 },
     ]);
+  });
+
+  it('Docker 取单个文件的 tar：给出大小和内容；目录、链接和太大的文件不给', async () => {
+    const one = await packFiles([{ path: '帧-1.png', content: Buffer.from('png') }]);
+    const file = await onlyFile(Readable.from([one]), 10);
+    expect(file.size).toBe(3);
+    expect(Buffer.concat(await file.content.toArray()).toString()).toBe('png');
+    await expect(onlyFile(Readable.from([one]), 2)).rejects.toThrow('文件太大');
+    const folder = await packFiles([{ path: 'out/a.md', content: Buffer.from('a') }]);
+    await expect(onlyFile(Readable.from([folder]), 10)).rejects.toThrow('不是普通文件');
+    const linked = pack();
+    linked.entry({ name: 'a.png', type: 'symlink', linkname: '/etc/passwd' });
+    linked.finalize();
+    await expect(onlyFile(Readable.from(linked), 10)).rejects.toThrow('不是普通文件');
   });
 
   it('超过大小上限就报错', async () => {

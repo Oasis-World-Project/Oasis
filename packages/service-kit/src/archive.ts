@@ -116,6 +116,36 @@ export function archiveFile(source: Readable, target: string): Readable {
   );
 }
 
+/**
+ * Docker 取单个文件得到的 tar 里只有这一个文件：返回它的大小和内容。不是普通文件（目录、链接）
+ * 或超过 maxBytes 就报错，内容读完或中途丢下都会关掉来源。
+ */
+export async function onlyFile(
+  source: Readable,
+  maxBytes: number,
+): Promise<{ size: number; content: Readable }> {
+  const iterator = entries(source)[Symbol.asyncIterator]();
+  const first = await iterator.next();
+  const entry = first.done ? undefined : first.value;
+  const size = entry?.header.size ?? 0;
+  if (!entry || entry.header.type !== 'file' || size > maxBytes) {
+    await iterator.return?.();
+    throw new Error(!entry || entry.header.type !== 'file' ? '不是普通文件' : '文件太大');
+  }
+  return {
+    size,
+    content: Readable.from(
+      (async function* () {
+        try {
+          for await (const chunk of entry) yield chunk as Buffer;
+        } finally {
+          await iterator.return?.();
+        }
+      })(),
+    ),
+  };
+}
+
 /** 大素材只在真正写入 Docker 时打开。 */
 export function packStreams(files: StreamFile[]): Readable {
   const archive = pack();

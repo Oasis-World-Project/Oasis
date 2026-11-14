@@ -60,6 +60,18 @@ export const StepPart = z.object({
   status: z.enum(['running', 'done', 'failed']),
   /** 失败的原因（截断过） */
   detail: z.string().optional(),
+  /** 开始、结束的时间 */
+  startedAt: z.iso.datetime().optional(),
+  finishedAt: z.iso.datetime().optional(),
+  /** 跑的是 oasis-tool 的哪个工具（如 image.generate）：生图、视频这类在进度页上是长任务 */
+  oasisTool: z.string().optional(),
+  /** 生图、视频这类工具通常要多久（秒，按调用记录）；没有记录时没有 */
+  expectSeconds: z.number().int().positive().optional(),
+  /**
+   * 这一步写的、存下的文件（相对工作目录，如 out/海报.png）：写文件那一步还在做时是要写的文件，
+   * 做完才算数；oasis-tool 说已保存的都算
+   */
+  files: z.array(z.string()).optional(),
 });
 export type StepPart = z.infer<typeof StepPart>;
 

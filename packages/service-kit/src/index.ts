@@ -2,6 +2,7 @@ export {
   archiveFile,
   extractFiles,
   listFiles,
+  onlyFile,
   packFiles,
   packStreams,
   readLimited,
