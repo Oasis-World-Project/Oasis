@@ -66,6 +66,18 @@ export interface ProviderClient {
   generationCost(id: string): Promise<number | undefined>;
 }
 
+/**
+ * 聊天请求依次试的供应商范围。账号里放开了「会拿请求训练的付费供应商」，只为用 DeepSeek 官方（用户
+ * 11-14 定）：DeepSeek 的型号先只走官方，官方出错再换别家；别的型号、换的别家，只走不拿请求训练的。
+ */
+function routesOf(body: Record<string, unknown>): Record<string, unknown>[] {
+  const own = (body.provider ?? {}) as Record<string, unknown>;
+  const safe = { ...own, data_collection: 'deny' };
+  return String(body.model).startsWith('deepseek/')
+    ? [{ ...own, only: ['deepseek'], allow_fallbacks: false }, safe]
+    : [safe];
+}
+
 export function createOpenRouterClient(options: {
   baseUrl: string;
   /** Decisions API 不在 /api/v1 下，单独配置 */
@@ -192,8 +204,16 @@ export function createOpenRouterClient(options: {
       return prices;
     },
 
-    chatCompletions(body, signal) {
-      return post(`${base}/chat/completions`, body, signal);
+    async chatCompletions(body, signal) {
+      const [first, ...rest] = routesOf(body);
+      let response = await post(`${base}/chat/completions`, { ...body, provider: first }, signal);
+      // 前一个范围没接（出错、没有可用的供应商）就换下一个；还没开始返回内容，换了不会重复收费
+      for (const provider of rest) {
+        if (response.ok) break;
+        await response.body?.cancel();
+        response = await post(`${base}/chat/completions`, { ...body, provider }, signal);
+      }
+      return response;
     },
 
     decisions(body, signal) {

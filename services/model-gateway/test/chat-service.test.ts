@@ -255,6 +255,29 @@ describe('一次模型调用', () => {
     expect(fake.upstreamBodies[0]).toMatchObject({ session_id: 'sess-42' });
   });
 
+  it('供应商范围：DeepSeek 先只走官方，官方出错换不拿请求训练的别家；别的型号只走不拿请求训练的', async () => {
+    const send = async (model: string, requestId: string) => {
+      const call = await chat.prepare({
+        caller: { payerId: PAYER },
+        requestId,
+        body: { ...request, model },
+      });
+      await chat.pump(call, await chat.open(call, new AbortController().signal), () => {});
+    };
+    await send('vendor/model', 'route-1');
+    await send('deepseek/deepseek-v4.1-flash', 'route-2');
+    fake.officialStatus = 503;
+    await send('deepseek/deepseek-v4.1-flash', 'route-3');
+    const official = { only: ['deepseek'], allow_fallbacks: false };
+    expect(fake.upstreamBodies.map((body) => body.provider)).toEqual([
+      { data_collection: 'deny' },
+      official,
+      official,
+      { data_collection: 'deny' },
+    ]);
+    expect(finished.map((call) => call.status)).toEqual(['succeeded', 'succeeded', 'succeeded']);
+  });
+
   it('额度不够时返回 402，不会调用上游', async () => {
     fake.balanceEnough = false;
     await expect(

@@ -15,6 +15,8 @@ export const fake = {
   upstreamStatus: 200,
   upstreamMessage: 'boom',
   upstreamBodies: [] as Record<string, unknown>[],
+  /** 只走 DeepSeek 官方的请求（provider.only）回的状态 */
+  officialStatus: 200,
 };
 
 export const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
@@ -43,9 +45,12 @@ billing.post('/internal/holds/:id/release', async (_request, reply) => {
 
 const openrouter = Fastify({ bodyLimit: 4 * 1024 ** 2 });
 openrouter.post('/chat/completions', async (request, reply) => {
-  fake.upstreamBodies.push(request.body as Record<string, unknown>);
-  if (fake.upstreamStatus !== 200)
-    return reply.code(fake.upstreamStatus).send({ error: { message: fake.upstreamMessage } });
+  const body = request.body as { provider?: { only?: string[] } };
+  fake.upstreamBodies.push(body);
+  const status = body.provider?.only?.includes('deepseek')
+    ? fake.officialStatus
+    : fake.upstreamStatus;
+  if (status !== 200) return reply.code(status).send({ error: { message: fake.upstreamMessage } });
   reply.header('content-type', 'text/event-stream');
   return [
     ': OPENROUTER PROCESSING\n\n',
@@ -98,7 +103,11 @@ beforeAll(async () => {
       repo,
       logger: silent,
     }),
-    prices: () => new Map([['vendor/model', { prompt: 0.0000001, completion: 0.0000005 }]]),
+    prices: () =>
+      new Map([
+        ['vendor/model', { prompt: 0.0000001, completion: 0.0000005 }],
+        ['deepseek/deepseek-v4.1-flash', { prompt: 0.0000001, completion: 0.0000005 }],
+      ]),
     defaultMaxTokens: 1000,
     maxOutputTokens: 100_000,
     fallbackHoldMicro: 200_000,
@@ -118,6 +127,7 @@ beforeEach(() => {
   generationLookups.length = 0;
   fake.upstreamStatus = 200;
   fake.upstreamMessage = 'boom';
+  fake.officialStatus = 200;
   fake.balanceEnough = true;
 });
 
