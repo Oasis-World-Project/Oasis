@@ -4,6 +4,8 @@ import type { Turn } from './schema.ts';
 
 export type GroupRow = {
   id: string;
+  /** 群，或两个好友的私聊（消息和推送是同一套） */
+  kind: 'group' | 'direct';
   title: string;
   owner_id: string;
   created_at: Date;
@@ -46,10 +48,19 @@ export async function seatsOf(db: pg.Pool | pg.PoolClient, groupId: string, all 
   return all ? rows : rows.filter((seat) => !seat.options.removedAt);
 }
 
-/** 一条消息是谁说的：AI 用它的名字（names：key → 名字），人用发这句时的群内名 */
+/**
+ * 一条消息是谁说的。names：AI 的 key → 名字，还在群里的人的用户 ID → 现在在群里叫什么。
+ * 已经不在群里的人，用发这句时的名字。
+ */
 export const nameOf = (row: MessageRow, names: Map<string, string>) =>
-  row.author_kind === 'ai'
-    ? (names.get(row.author_id) ?? row.author_id)
+  names.get(row.author_id) ??
+  (row.author_kind === 'ai'
+    ? row.author_id
     : typeof row.data.displayName === 'string'
       ? row.data.displayName
-      : '成员';
+      : '成员');
+
+/** 成员在群里叫什么：设了群昵称用群昵称，没设用账号的名字 */
+export const MEMBER_NAME = 'coalesce(nickname,display_name)';
+/** 成员的先后：群主在前，其余按进群的先后（$2 是群主的用户 ID） */
+export const MEMBER_ORDER = '(user_id=$2) desc,joined_at,user_id';

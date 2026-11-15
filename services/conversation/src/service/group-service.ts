@@ -1,11 +1,10 @@
-// 群：建群、成员和邀请、群里的 AI、发消息。群里的 AI 怎么接话：一句话进群后，@ 了谁谁开一轮
+// 群：建群、成员（群主直接拉好友）、群里的 AI、发消息。两个好友的私聊读消息、发消息也走这里（它没有 AI）。群里的 AI 怎么接话：一句话进群后，@ 了谁谁开一轮
 // （@ 全体就是每个 AI 各开一轮）；被 @ 的 AI 正忙，这句话就排着，它这一轮做完接着开下一轮，
 // 也可以「现在告诉它」作为插话送进去。交给 AI 的是群里它没听过的话（group-hearing.ts）。
 // 群里 AI 花的钱都由群主付。
-import { createHash, randomBytes } from 'node:crypto';
 import { ModelRoute } from '@oasis/contracts/agent';
 import type { Mention } from '@oasis/contracts/conversation';
-import type { GroupOptions } from '@oasis/contracts/group';
+import type { GroupOptions, GroupSnapshot } from '@oasis/contracts/group';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import {
   withMessageLock,
@@ -15,10 +14,10 @@ import {
 import type { GroupRepo } from '../repo/group-repo.ts';
 import type { GroupSeats } from '../repo/group-seats.ts';
 import { calls, hearingText, seatBrief } from './group-hearing.ts';
+import type { Profiles } from './profiles.ts';
 import type { Purge } from './purge.ts';
 import type { Turns } from './turns.ts';
 
-const hash = (token: string) => createHash('sha256').update(token).digest('hex');
 /** 一次从群里取多少条没听过的话（交给 AI 的条数和字数另有上限） */
 const HEARING_LIMIT = 200;
 /** 只核对是不是群成员、看看群现在的样子时用的游标：不取消息 */
@@ -30,10 +29,24 @@ export function createGroupService(deps: {
   store: ConversationRepo;
   turns: Turns;
   agent: ServiceClient;
+  /** 账号的名字和头像（在 identity） */
+  profiles: Profiles;
   purge: Purge;
   logger: Logger;
 }) {
-  const { repo, seats, store, turns } = deps;
+  const { repo, seats, store, turns, profiles } = deps;
+
+  /** 给群现在的样子补上成员的头像（名字在库里记着，账号改名时 profiles 会让它跟着改） */
+  async function seen(snapshot: GroupSnapshot): Promise<GroupSnapshot> {
+    const people = await profiles.get(snapshot.members.map((member) => member.userId));
+    return {
+      ...snapshot,
+      members: snapshot.members.map((member) => ({
+        ...member,
+        avatarVersion: people.get(member.userId)?.avatarVersion ?? 0,
+      })),
+    };
+  }
 
   /** 这个 AI 现在的名字（群主给它起了名字就是那个）；不是能聊天的 AI 就 400 */
   async function aiName(ownerId: string, key: string, requestId: string): Promise<string> {
@@ -96,40 +109,60 @@ export function createGroupService(deps: {
 
   return {
     list: repo.list,
-    get: repo.get,
+    get: async (...args: Parameters<GroupRepo['get']>) => seen(await repo.get(...args)),
     remove: repo.remove,
-    revoke: repo.revoke,
-    setOptions: repo.setOptions,
-    setRole: repo.setRole,
-    preview: (token: string) => repo.preview(hash(token)),
-    redeem: (userId: string, token: string, displayName: string) =>
-      repo.redeem(userId, hash(token), displayName),
-    async invite(userId: string, id: string) {
-      const token = randomBytes(32).toString('hex'),
-        expiresAt = new Date(Date.now() + 24 * 3600000);
-      await repo.invite(userId, id, hash(token), expiresAt);
-      return { token, expiresAt: expiresAt.toISOString() };
-    },
+    setOptions: async (...args: Parameters<GroupRepo['setOptions']>) =>
+      seen(await repo.setOptions(...args)),
+    setRole: async (...args: Parameters<GroupRepo['setRole']>) => seen(await repo.setRole(...args)),
+    setNickname: async (...args: Parameters<GroupRepo['setNickname']>) =>
+      seen(await repo.setNickname(...args)),
 
-    /** 建群：建的人是群主，叫进来的 AI 各有一个席位（用群主给它们的名字和设定） */
+    /**
+     * 建群：建的人是群主，叫进来的 AI 各有一个席位（用群主给它们的名字和设定），
+     * members 里的好友一起拉进来（不用对方同意）。在群里都显示账号的名字。
+     */
     async create(
       userId: string,
-      body: { title: string; displayName: string; ais: string[] } & GroupOptions,
+      body: { title: string; ais: string[]; members: string[] } & GroupOptions,
       requestId: string,
     ) {
-      const ais = await Promise.all(
-        [...new Set(body.ais)].map(async (key) => ({
-          key,
-          name: await aiName(userId, key, requestId),
-        })),
-      );
+      const friends = [...new Set(body.members)].filter((id) => id !== userId);
+      const [ais, people] = await Promise.all([
+        Promise.all(
+          [...new Set(body.ais)].map(async (key) => ({
+            key,
+            name: await aiName(userId, key, requestId),
+          })),
+        ),
+        profiles.get([userId, ...friends], requestId),
+      ]);
+      const nameOf = (id: string) => {
+        const name = people.get(id)?.name;
+        if (!name) throw new HttpError(404, 'user_not_found', '没有这个人');
+        return name;
+      };
       const { light, speak, assign } = body;
-      return repo.create(userId, body.title, body.displayName, { light, speak, assign }, ais);
+      return seen(
+        await repo.create(
+          userId,
+          body.title,
+          nameOf(userId),
+          { light, speak, assign },
+          ais,
+          friends.map((id) => ({ userId: id, name: nameOf(id) })),
+        ),
+      );
+    },
+
+    /** 群主把一个好友直接拉进群 */
+    async addMember(userId: string, id: string, target: string, requestId: string) {
+      const { name } = await profiles.one(target, requestId);
+      return seen(await repo.addMember(userId, id, target, name));
     },
 
     /** 群主叫一个 AI 进群 */
     addAi: async (userId: string, id: string, key: string, requestId: string) =>
-      repo.addAi(userId, id, key, await aiName(userId, key, requestId)),
+      seen(await repo.addAi(userId, id, key, await aiName(userId, key, requestId))),
 
     /**
      * 群主把一个 AI 移出群：它不再接话，正在做的一轮取消；它在这个群的记忆和工作目录删掉，
@@ -157,9 +190,10 @@ export function createGroupService(deps: {
       mentions: Mention[],
     ) {
       const sent = await repo.send(userId, id, content, requestId, mentions);
-      if (sent.seq === undefined || !mentions.some((m) => m.kind !== 'user')) return sent.snapshot;
+      if (sent.seq === undefined || !mentions.some((m) => m.kind !== 'user'))
+        return seen(sent.snapshot);
       await dispatch(id, mentions, requestId);
-      return repo.get(userId, id, { after: sent.seq - 1 });
+      return seen(await repo.get(userId, id, { after: sent.seq - 1 }));
     },
 
     /**

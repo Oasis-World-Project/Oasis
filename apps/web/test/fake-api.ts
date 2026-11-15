@@ -2,11 +2,28 @@
 import { vi } from 'vitest';
 
 const NOW = '2026-10-22T08:00:00.000Z';
-const USER = {
+export const USER = {
   id: '00000000-0000-4000-8000-000000000001',
   email: 'kai@example.com',
   createdAt: NOW,
+  accountNo: '38602741',
+  name: '阿凯',
+  bio: '',
+  gender: '',
+  region: '',
+  avatarVersion: 0,
 };
+
+/** 一个人的公开资料（好友、申请、按账号 ID 查到的人） */
+export const profileOf = (id: string, name: string, accountNo = '20000002') => ({
+  id,
+  accountNo,
+  name,
+  bio: '',
+  gender: '',
+  region: '',
+  avatarVersion: 0,
+});
 
 export const MODELS = [
   {
@@ -82,6 +99,8 @@ export function installFakeApi(options: {
   dms?: unknown[];
   /** 私聊里的任务（画布按任务分框） */
   tasks?: unknown[];
+  /** 好友和申请（GET /conversation/v1/friends 的返回）；不给就是都没有 */
+  friends?: unknown;
   extra?: ExtraRoute;
 }) {
   const state = {
@@ -120,6 +139,8 @@ export function installFakeApi(options: {
         return json(200, { conversations: (options.dms ?? []).map(withSetup) });
       case '/conversation/v1/groups':
         return json(200, { groups: [] });
+      case '/conversation/v1/friends':
+        return json(200, options.friends ?? { friends: [], incoming: [], outgoing: [] });
       case '/conversation/v1/tasks':
         return json(200, { tasks: options.tasks ?? [] });
       // 「AI 们」页读「只用国内模型」开关：默认关着

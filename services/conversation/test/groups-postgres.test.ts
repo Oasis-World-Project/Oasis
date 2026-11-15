@@ -6,7 +6,7 @@ import { createHttpServer } from '@oasis/service-kit';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createConversationRepo } from '../src/repo/conversation-repo.ts';
 import { registerGroupRoutes } from '../src/api/group-routes.ts';
-import { humanGroups, NEW_GROUP } from './support/group-fixture.ts';
+import { befriend, humanGroups, NEW_GROUP } from './support/group-fixture.ts';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与事件连接', () => {
   const schema = 'groups_test_' + randomUUID().replaceAll('-', '');
@@ -64,8 +64,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
   const headers = (id: string) => ({ 'x-oasis-user-id': id });
   async function setup() {
     const group = await newGroup('测试群');
-    const ticket = await groups.invite(owner, group.id);
-    await groups.redeem(member, ticket.token, '成员');
+    await befriend(pool, owner, member);
+    await groups.addMember(owner, group.id, member, 'r');
     return group;
   }
   it('旧 DM 消息回填有序，迁移期间的新消息不冲突，群不能走私聊接口', async () => {
@@ -84,54 +84,23 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     await expect(groups.get(owner, dm)).rejects.toMatchObject({ statusCode: 404 });
     await expect(groups.get(member, dm)).rejects.toMatchObject({ statusCode: 404 });
   });
-  it('单次邀请并发兑换只有一人成功，明文令牌不入库，重新生成和撤销生效', async () => {
-    const group = await newGroup('邀请测试');
-    const invite = await groups.invite(owner, group.id);
-    const attempts = await Promise.allSettled([
-      groups.redeem(member, invite.token, '乙'),
-      groups.redeem(outsider, invite.token, '丙'),
-    ]);
-    expect(attempts.filter((item) => item.status === 'fulfilled')).toHaveLength(1);
-    const stored = (
-      await pool.query('select token_hash from group_invites where conversation_id=$1', [group.id])
-    ).rows[0].token_hash;
-    expect(stored).not.toBe(invite.token);
-    const older = await groups.invite(owner, group.id);
-    await groups.invite(owner, group.id);
-    await expect(groups.preview(older.token)).rejects.toMatchObject({ statusCode: 410 });
-    await groups.revoke(owner, group.id);
-    expect(
-      (
-        await pool.query('select count(*)::int n from group_invites where conversation_id=$1', [
-          group.id,
-        ])
-      ).rows[0].n,
-    ).toBe(0);
-  });
-  it('入群显式确认历史、到期拒绝，成员不能管理其他人或解散群', async () => {
+  it('成员不能管理其他人、不能拉人、不能解散群；拉人的接口要给用户 ID', async () => {
     const group = await setup();
-    const invite = await groups.invite(owner, group.id);
-    const response = await app.inject({
-      method: 'POST',
-      url: '/v1/groups/invites/redeem',
-      headers: headers(outsider),
-      payload: { token: invite.token, displayName: '丙' },
-    });
-    expect(response.statusCode).toBe(400);
     await expect(groups.remove(member, group.id, owner)).rejects.toMatchObject({ statusCode: 409 });
     await expect(groups.remove(member, group.id, outsider)).rejects.toMatchObject({
       statusCode: 403,
     });
-    await expect(groups.invite(member, group.id)).rejects.toMatchObject({ statusCode: 403 });
-    await expect(groups.destroy(member, group.id, 'r')).rejects.toMatchObject({ statusCode: 403 });
-    // 过期一小时：数据库和测试机的钟差一两秒也算过期
-    await pool.query(
-      "update group_invites set expires_at=now()-interval '1 hour' where conversation_id=$1",
-      [group.id],
-    );
-    await expect(groups.redeem(outsider, invite.token, '丙')).rejects.toMatchObject({
-      statusCode: 410,
+    await expect(groups.addMember(member, group.id, outsider, 'r')).rejects.toMatchObject({
+      statusCode: 403,
     });
+    await expect(groups.destroy(member, group.id, 'r')).rejects.toMatchObject({ statusCode: 403 });
+    const response = await app.inject({
+      method: 'POST',
+      url: `/v1/groups/${group.id}/members`,
+      headers: headers(owner),
+      payload: {},
+    });
+    expect(response.statusCode).toBe(400);
   });
   it('消息并发排序、请求去重、重复请求冲突、前后游标和历史可见', async () => {
     const group = await setup(),
@@ -159,25 +128,27 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
         (message) => message.seq < 5,
       ),
     ).toBe(true);
-    const invite = await groups.invite(owner, group.id);
-    expect((await groups.redeem(outsider, invite.token, '丙')).messages).toHaveLength(11);
+    // 新拉进来的人看得到之前的全部消息
+    await befriend(pool, owner, outsider);
+    await groups.addMember(owner, group.id, outsider, 'r');
+    expect((await groups.get(outsider, group.id)).messages).toHaveLength(11);
   });
-  it('群人数和消息速率有界，失败不会消费邀请', async () => {
+  it('群人数和消息速率有界', async () => {
     const group = await setup();
-    const invite = await groups.invite(owner, group.id);
-    await groups.redeem(outsider, invite.token, '丙');
-    const fourth = await groups.invite(owner, group.id);
-    await expect(groups.redeem(randomUUID(), fourth.token, '丁')).rejects.toMatchObject({
-      statusCode: 409,
+    const fourth = randomUUID();
+    await befriend(pool, owner, outsider);
+    await befriend(pool, owner, fourth);
+    await groups.addMember(owner, group.id, outsider, 'r');
+    await expect(groups.addMember(owner, group.id, fourth, 'r')).rejects.toMatchObject({
+      code: 'group_full',
     });
-    expect((await groups.preview(fourth.token)).title).toBe('测试群');
     const strict = humanGroups(pool, 1);
     await strict.send(owner, group.id, 'one', randomUUID(), []);
     await expect(strict.send(owner, group.id, 'two', randomUUID(), [])).rejects.toMatchObject({
       statusCode: 429,
     });
   });
-  it('移除后旧 SSE 收到撤权并关闭，新的读取/发送/旧邀请码均拒绝；删除级联清理', async () => {
+  it('移除后旧 SSE 收到撤权并关闭，新的读取/发送均拒绝，群主可以再拉回来；删除级联清理', async () => {
     const group = await setup();
     const response = await fetch(`${base}/v1/groups/${group.id}/events`, {
       headers: headers(member),
@@ -201,9 +172,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     });
     await expect(groups.get(outsider, group.id)).rejects.toMatchObject({ statusCode: 404 });
     await groups.send(owner, group.id, 'cleanup', randomUUID(), []);
-    await groups.invite(owner, group.id);
+    expect((await groups.addMember(owner, group.id, member, 'r')).memberCount).toBe(2);
     await groups.destroy(owner, group.id, 'r');
-    for (const table of ['messages', 'group_members', 'group_invites'])
+    for (const table of ['messages', 'group_members'])
       expect(
         (
           await pool.query(`select count(*)::int n from ${table} where conversation_id=$1`, [
@@ -472,6 +443,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       '20261102150000_expand_groups.sql',
       '20261102150100_backfill_message_seq.sql',
       '20261102150200_contract_message_seq.sql',
+      // 后来改过这几张表的迁移一起回滚、重建：邀请码表删了，成员多了群昵称
+      '20261116070000_friends.sql',
+      '20261116070100_drop_group_invites.sql',
     ];
     for (const file of [...files].reverse()) {
       const sql = await readFile(new URL(file, root), 'utf8');

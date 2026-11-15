@@ -258,6 +258,7 @@ services:
       PORT: 4104
       DATABASE_URL: postgres://svc_conversation:${CONVERSATION_DB_PASSWORD:?}@postgres:5432/conversation?sslmode=disable
       AGENT_URL: http://agent:4103
+      IDENTITY_URL: http://identity:4101
       MODEL_GATEWAY_URL: http://model-gateway:4108
       HARNESS_URL: http://harness:4107
       CANVAS_URL: http://canvas:4106

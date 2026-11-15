@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { logout, meQuery, walletQuery } from '../api/queries.ts';
+import { ProfileForm } from '../friends/ProfileForm.tsx';
 import { formatUsd } from '../ui/format.ts';
 import { PageHeader } from '../ui/PageHeader.tsx';
 import { EmptyHint, Panel } from '../ui/Panel.tsx';
@@ -36,7 +37,10 @@ export function MePage() {
 
   return (
     <>
-      <PageHeader title="我" description="账户与额度。调用任何 AI 或工具都从额度里扣。" />
+      <PageHeader title="我" description="资料、账户与额度。调用任何 AI 或工具都从额度里扣。" />
+      <Panel title="资料">
+        {me ? <ProfileForm key={me.id} me={me} /> : <EmptyHint>正在加载…</EmptyHint>}
+      </Panel>
       <Panel title="账户">
         <dl className="m-0 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
           <Stat label="邮箱" value={me?.email ?? '—'} text />

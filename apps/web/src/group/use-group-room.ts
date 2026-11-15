@@ -40,7 +40,8 @@ function reconcile(current: GroupSnapshot, fetched: GroupSnapshot): GroupSnapsho
   };
 }
 
-export function useGroupRoom(id: string) {
+/** gone：这个群（或这个私聊）不在了时写在页面上的话 */
+export function useGroupRoom(id: string, gone = '这个群已解散，或你已不在群里。') {
   const [group, setGroup] = useState<GroupSnapshot | null>(null);
   const [error, setError] = useState('');
   const [online, setOnline] = useState(false);
@@ -70,7 +71,7 @@ export function useGroupRoom(id: string) {
       revoked.current = true;
       setGroup(null);
       setOnline(false);
-      setError('这个群已解散，或你已不在群里。');
+      setError(gone);
       source?.close();
       void client.invalidateQueries({ queryKey: ['groups'] });
     };
@@ -141,7 +142,7 @@ export function useGroupRoom(id: string) {
       clearTimeout(retry);
       source?.close();
     };
-  }, [id, client]);
+  }, [id, client, gone]);
 
   /** 做一件事（改设置、加减 AI、移除成员……）：同一时间只做一件，出错写在页面上；返回做成了没有 */
   const act = useCallback(

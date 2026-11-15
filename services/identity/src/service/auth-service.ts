@@ -1,6 +1,7 @@
+import { randomInt } from 'node:crypto';
 // 邮箱验证码登录的业务规则：频率限制、尝试次数、注册事件、会话。
 import { UserRegistered } from '@oasis/contracts/events';
-import type { MeBody } from '@oasis/contracts/identity';
+import type { MeBody, PublicProfile } from '@oasis/contracts/identity';
 import { createEnvelope, HttpError } from '@oasis/service-kit';
 import type { IdentityRepo, User } from '../repo/identity-repo.ts';
 import {
@@ -24,9 +25,26 @@ export interface LoginCodeSender {
   send(email: string, code: string): Promise<void>;
 }
 
-function toMe(user: User): MeBody {
-  return { id: user.id, email: user.email, createdAt: user.createdAt.toISOString() };
+/** 别人能看到的资料 */
+export function toProfile(user: User): PublicProfile {
+  return {
+    id: user.id,
+    accountNo: user.accountNo,
+    name: user.name,
+    bio: user.bio,
+    gender: user.gender,
+    region: user.region,
+    // 没有头像就是 0：界面据此画名字的第一个字
+    avatarVersion: user.avatarType ? user.avatarVersion : 0,
+  };
 }
+
+export function toMe(user: User): MeBody {
+  return { ...toProfile(user), email: user.email, createdAt: user.createdAt.toISOString() };
+}
+
+/** 账号 ID：8 位数字，第一位不是 0 */
+const pickAccountNo = () => String(10_000_000 + randomInt(90_000_000));
 
 export function createAuthService(deps: {
   repo: IdentityRepo;
@@ -95,6 +113,7 @@ export function createAuthService(deps: {
             userId,
             registeredAt: registeredAt.toISOString(),
           }),
+        accountNo: pickAccountNo,
       });
       if (!signedIn) throw new HttpError(400, 'invalid_code', '验证码不对或已过期');
       return { token, user: toMe(signedIn.user), isNewUser: signedIn.isNewUser };

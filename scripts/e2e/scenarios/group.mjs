@@ -1,6 +1,7 @@
-// 回归场景（docs/engineering/回归测试.md）：群里的 AI。@ 谁谁回，回之前先听它没听过的群聊；@ 全体各回各的；
+// 回归场景（docs/engineering/回归测试.md）：好友和群里的 AI。按账号 ID 加好友、对方同意；好友之间私聊；
+// 群主建群时直接把好友拉进来。@ 谁谁回，回之前先听它没听过的群聊；@ 全体各回各的；
 // 它忙着时 @ 它的话先等着，「现在告诉它」作为插话送进正在做的一轮；群员叫的 AI 花群主的钱；
-// 解散群，席位的会话、工作目录、成果一起清掉。
+// 解散群，席位的会话、工作目录、成果一起清掉；删好友，两人的私聊一起删。
 import { randomUUID } from 'node:crypto';
 import { literal, query } from '../db.mjs';
 import { marker, writeFiles } from '../fake-provider.mjs';
@@ -75,10 +76,42 @@ export const group = {
     const second = usable.find((m) => m.key !== first)?.key;
     if (!first || !second) throw new Error('可用的对话 AI 不到两个，群聊场景跑不了');
 
+    // ---- 好友：各自起名字；群员按群主的账号 ID 查到人、发申请，群主同意 ----
+    const profile = { bio: '', gender: '', region: '' };
+    const boss = await owner.api.put('/identity/v1/me/profile', { name: '群主', ...profile });
+    await member.api.put('/identity/v1/me/profile', { name: '阿杰', ...profile });
+    const found = await member.api.get(`/identity/v1/users/lookup?accountNo=${boss.accountNo}`);
+    t.check(
+      found.id === owner.userId && found.name === '群主' && found.email === undefined,
+      `按账号 ID 应查到群主的公开资料（不带邮箱）：${JSON.stringify(found)}`,
+    );
+    await member.api.post('/conversation/v1/friends/requests', {
+      userId: found.id,
+      message: '我是阿杰',
+    });
+    const asked = (await owner.api.get('/conversation/v1/friends')).incoming;
+    t.check(
+      asked.length === 1 && asked[0].message === '我是阿杰' && asked[0].profile.name === '阿杰',
+      `群主应收到带验证消息的好友申请：${JSON.stringify(asked)}`,
+    );
+    await owner.api.post(`/conversation/v1/friends/requests/${asked[0].id}/accept`);
+    // ---- 好友之间的私聊：普通聊天，没有 AI ----
+    const chat = await owner.api.post(`/conversation/v1/friends/${member.userId}/chat`);
+    await say(owner, chat.id, '周五见');
+    const talk = await member.api.get(`${base}/${chat.id}`);
+    t.check(
+      talk.kind === 'direct' &&
+        talk.ais.length === 0 &&
+        talk.messages.at(-1)?.content === '周五见' &&
+        talk.messages.at(-1)?.displayName === '群主',
+      `好友应在私聊里看到这句话：${JSON.stringify(talk.messages.at(-1) ?? null)}`,
+    );
+
+    // ---- 建群：两个 AI，好友直接拉进来（不用对方同意）----
     const created = await owner.api.post(base, {
       title: '回归测试群',
-      displayName: '群主',
       ais: [first, second],
+      members: [member.userId],
     });
     const groupId = created.id;
     t.log(`群 ${groupId}（AI：${first}、${second}）`);
@@ -94,13 +127,11 @@ export const group = {
         created.ais.map((ai) => ai.key).join() === [first, second].join() && created.aiCount === 2,
         `建群时叫的两个 AI 应都在群里：${JSON.stringify(created.ais)}`,
       );
-      // 朋友进群（好友系统做好后改成群主直接拉好友）
-      const invite = await owner.api.post(`${base}/${groupId}/invites`);
-      await member.api.post(`${base}/invites/redeem`, {
-        token: invite.token,
-        displayName: '阿杰',
-        acceptHistory: true,
-      });
+      t.check(
+        created.members.map((m) => m.displayName).join() === '群主,阿杰' &&
+          (await member.api.get(base)).groups.some((g) => g.id === groupId),
+        `建群时拉的好友应直接在群里、显示账号的名字：${JSON.stringify(created.members)}`,
+      );
       const before = { owner: await owner.wallet(), member: await member.wallet() };
 
       // ---- 没 @ 谁：AI 不说话 ----
@@ -213,6 +244,18 @@ export const group = {
       );
       for (const sessionId of sessionIds)
         t.check(!workspaceExists(sessionId), `解散群后席位的工作目录应删掉：${sessionId}`);
+
+      // ---- 删好友：两人的私聊（连消息）一起删掉 ----
+      await member.api.del(`/conversation/v1/friends/${owner.userId}`);
+      const gone = await owner.api.get(`${base}/${chat.id}`).then(
+        () => 200,
+        (err) => err.status,
+      );
+      t.check(gone === 404, `删好友后两人的私聊应不在了：${gone}`);
+      t.check(
+        (await owner.api.get('/conversation/v1/friends')).friends.length === 0,
+        '删好友后好友列表里应没有他',
+      );
     } finally {
       if (!destroyed) await owner.api.del(`${base}/${groupId}`).catch(() => undefined);
     }

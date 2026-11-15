@@ -1,6 +1,6 @@
 // 群聊：人和 AI 在同一个群里。群里每个 AI 有一个席位（挂在群下面的一条会话，和私聊是同一种东西：
 // 自己的会话和工作目录、同一时间只有一轮）。群消息和私聊消息是同一个形状（MessageBody），
-// 多了序号、作者和 @ 了谁。
+// 多了序号、作者和 @ 了谁。两个好友的私聊（kind = 'direct'，见 social.ts）也是这个形状：两个人、没有 AI。
 import { z } from 'zod';
 import { Mention, MessageBody } from './conversation.ts';
 
@@ -28,19 +28,18 @@ export const MAX_GROUP_AIS = 8;
 
 export const CreateGroupBody = z.object({
   title: name,
-  displayName: name,
   /** 叫进群的 AI（对话 AI 的 key） */
   ais: z.array(AiKey).max(MAX_GROUP_AIS).default([]),
+  /** 一起拉进群的好友（用户 ID）；只能拉自己的好友，不用对方同意 */
+  members: z.array(z.uuid()).max(100).default([]),
   ...GroupOptions.shape,
 });
 /** 群主改群的设置：只改给的那几项 */
 export const GroupOptionsPatch = GroupOptions.partial();
-export const InviteToken = z.string().regex(/^[a-f0-9]{64}$/);
-export const RedeemGroupBody = z.object({
-  token: InviteToken,
-  displayName: name,
-  acceptHistory: z.literal(true),
-});
+/** 群主把一个好友拉进群 */
+export const AddGroupMemberBody = z.object({ userId: z.uuid() });
+/** 改自己在这个群里的昵称；空的就是不设（显示账号的名字） */
+export const GroupNicknameBody = z.object({ nickname: z.string().trim().max(40) });
 export const GroupSendBody = z.object({
   content: z.string().trim().min(1).max(4000),
   requestId: z.uuid(),
@@ -49,9 +48,15 @@ export const GroupSendBody = z.object({
 });
 export const GroupMember = z.object({
   userId: z.uuid(),
+  /** 在这个群里叫什么：设了群昵称是群昵称，没设是账号的名字 */
   displayName: name,
+  /** 群昵称，没设为空 */
+  nickname: z.string().default(''),
+  /** 头像换过几次，0 是没有头像（见 identity 的 PublicProfile） */
+  avatarVersion: z.number().int().nonnegative().default(0),
   joinedAt: z.iso.datetime(),
 });
+export type GroupMember = z.infer<typeof GroupMember>;
 /** 群里的一个 AI（席位） */
 export const GroupAi = z.object({
   key: AiKey,
@@ -93,6 +98,8 @@ export const GroupMessage = MessageBody.and(
 );
 export type GroupMessage = z.infer<typeof GroupMessage>;
 export const GroupSnapshot = GroupSummary.extend({
+  /** 群，或两个好友的私聊（没有 AI、没有群主能做的那些事） */
+  kind: z.enum(['group', 'direct']).default('group'),
   members: z.array(GroupMember),
   ais: z.array(GroupAi),
   options: GroupOptions,
@@ -105,11 +112,6 @@ export const GroupSnapshot = GroupSummary.extend({
   historyNotice: z.literal(GROUP_HISTORY_NOTICE),
 });
 export type GroupSnapshot = z.infer<typeof GroupSnapshot>;
-export const GroupInvite = z.object({ token: InviteToken, expiresAt: z.iso.datetime() });
-export const GroupInvitePreview = z.object({
-  title: name,
-  historyNotice: z.literal(GROUP_HISTORY_NOTICE),
-});
 export const GroupStreamEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('snapshot'), snapshot: GroupSnapshot }),
   z.object({ type: z.literal('removed') }),

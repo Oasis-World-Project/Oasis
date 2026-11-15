@@ -2,7 +2,7 @@
 import type { TaskFile } from '@oasis/contracts/conversation';
 import type { Permissions, Workplace } from '@oasis/contracts/harness';
 import type { Confirmation } from '@oasis/contracts/model-gateway';
-import { bigint, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
@@ -32,8 +32,11 @@ export interface Turn {
 
 export const conversations = pgTable('conversations', {
   id: uuid('id').primaryKey().defaultRandom(),
-  /** dm 私聊；group 群；seat 群里一个 AI 的席位（parentId 指向群，一轮和私聊的一样跑，消息写进群里） */
-  kind: text('kind', { enum: ['dm', 'group', 'seat'] }).notNull(),
+  /**
+   * dm 和 AI 的私聊；group 群；seat 群里一个 AI 的席位（parentId 指向群，一轮和私聊的一样跑，消息写进群里）；
+   * direct 两个好友的私聊（两人都是成员，消息和推送用群的那一套）
+   */
+  kind: text('kind', { enum: ['dm', 'group', 'seat', 'direct'] }).notNull(),
   ownerId: uuid('owner_id').notNull(),
   modelKey: text('model_key'),
   title: text('title').notNull(),
@@ -72,22 +75,5 @@ export const messages = pgTable('messages', {
   createdAt: at('created_at').notNull().defaultNow(),
 });
 
-export const groupMembers = pgTable(
-  'group_members',
-  {
-    conversationId: uuid('conversation_id').notNull(),
-    userId: uuid('user_id').notNull(),
-    displayName: text('display_name').notNull(),
-    joinedAt: at('joined_at').notNull().defaultNow(),
-    leftAt: at('left_at'),
-  },
-  (table) => [primaryKey({ columns: [table.conversationId, table.userId] })],
-);
-export const groupInvites = pgTable('group_invites', {
-  tokenHash: text('token_hash').primaryKey(),
-  conversationId: uuid('conversation_id').notNull(),
-  expiresAt: at('expires_at').notNull(),
-  usedBy: uuid('used_by'),
-  usedAt: at('used_at'),
-  createdAt: at('created_at').notNull().defaultNow(),
-});
+// 群成员（group_members）、好友申请和好友关系（friend_requests、friendships）只用手写 SQL 读写
+// （group-repo.ts、friend-repo.ts），表结构见 migrations。

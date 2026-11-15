@@ -9,8 +9,9 @@ import { CardFrame, CardHeading, StatusTag } from '../chat/parts.tsx';
 import { TASK_STATUS, TaskFacts } from '../chat/TaskCard.tsx';
 import { ChatActionsContext, type ChatActions } from '../chat/use-chat-actions.ts';
 import { useStickToBottom } from '../chat/use-stick-to-bottom.ts';
-import { AiAvatar, PersonAvatar } from '../ui/Avatar.tsx';
-import { aiLook, DIVIDER_GAP_MS, dividerText, toneOf } from './people.ts';
+import { AiAvatar } from '../ui/Avatar.tsx';
+import { MemberAvatar } from './Members.tsx';
+import { aiLook, DIVIDER_GAP_MS, dividerText } from './people.ts';
 import { mentionText, useRoom, type Room } from './room.ts';
 
 type TextMessage = Extract<GroupMessage, { kind: 'text' }>;
@@ -75,7 +76,15 @@ function UserMessage({ message }: { message: TextMessage }) {
     );
   return (
     <div className="flex items-end gap-2.5">
-      <PersonAvatar label={message.displayName} size={30} tone={toneOf(message.authorId, me)} />
+      <MemberAvatar
+        member={{
+          userId: message.authorId,
+          displayName: message.displayName,
+          avatarVersion:
+            group.members.find((member) => member.userId === message.authorId)?.avatarVersion ?? 0,
+        }}
+        size={30}
+      />
       <div className="flex min-w-0 flex-col items-start gap-[3px]">
         <span className="pl-1.5 text-xs text-ink-muted">{message.displayName}</span>
         <p className="bubble-in m-0 max-w-[440px] whitespace-pre-wrap break-words bg-bubble px-4 py-2.5 text-[14.5px] leading-[1.65] shadow-edge-strong">

@@ -11,6 +11,7 @@ import { createGroupSeats } from '../src/repo/group-seats.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
+import { befriend, fakeProfiles } from './support/group-fixture.ts';
 import { client, event, fake, harnessUrl, othersUrl, until } from './support/turn-fixture.ts';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', () => {
@@ -51,6 +52,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
       store,
       turns,
       agent,
+      profiles: fakeProfiles(
+        new Map([
+          [owner, '阿杰'],
+          [member, '林夏'],
+        ]),
+      ),
       purge: createPurge({ harness, modelGateway, canvas }),
       logger,
     });
@@ -67,16 +74,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
       owner,
       {
         title: '发布会',
-        displayName: '阿杰',
         ais: ['claude', 'glm'],
+        members: [],
         light: 'mint',
         speak: 'mention',
         assign: 'ai',
       },
       'r',
     );
-    const ticket = await groups.invite(owner, group.id);
-    await groups.redeem(member, ticket.token, '林夏');
+    await befriend(pool, owner, member);
+    await groups.addMember(owner, group.id, member, 'r');
     return group;
   }
   const say = (who: string, id: string, content: string, ...keys: string[]) =>

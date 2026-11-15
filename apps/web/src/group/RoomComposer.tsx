@@ -3,8 +3,9 @@
 import type { Mention } from '@oasis/contracts/conversation';
 import { ArrowUp, AtSign, Plus, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { AiAvatar, PersonAvatar } from '../ui/Avatar.tsx';
-import { aiLook, toneOf } from './people.ts';
+import { AiAvatar } from '../ui/Avatar.tsx';
+import { MemberAvatar } from './Members.tsx';
+import { aiLook } from './people.ts';
 import { Popover } from './RoomHeader.tsx';
 import { mentionText, useRoom } from './room.ts';
 
@@ -92,7 +93,7 @@ function MentionPicker({
               onClick={() => onPick({ kind: 'user', userId: member.userId })}
               className="flex h-[34px] cursor-pointer items-center gap-1.5 rounded-full border-0 bg-bubble py-0 pl-1 pr-3 text-[13px] text-ink"
             >
-              <PersonAvatar label={member.displayName} size={26} tone={toneOf(member.userId, me)} />
+              <MemberAvatar member={member} size={26} />
               {member.displayName}
             </button>
           ))}
@@ -223,24 +224,28 @@ export function RoomComposer({
           />
         </div>
         <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            disabled
-            aria-label="更多"
-            title="作为任务发布、上传文件：即将开放"
-            className={`${ROUND} bg-transparent`}
-          >
-            <Plus size={18} strokeWidth={1.9} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label="召唤某个 AI 或某人"
-            aria-expanded={picking}
-            onClick={() => setPicking(!picking)}
-            className={`${ROUND} ${picking ? 'bg-glass-active' : 'bg-transparent'}`}
-          >
-            <AtSign size={19} strokeWidth={1.8} aria-hidden="true" />
-          </button>
+          {group.kind !== 'direct' && (
+            <>
+              <button
+                type="button"
+                disabled
+                aria-label="更多"
+                title="作为任务发布、上传文件：即将开放"
+                className={`${ROUND} bg-transparent`}
+              >
+                <Plus size={18} strokeWidth={1.9} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                aria-label="召唤某个 AI 或某人"
+                aria-expanded={picking}
+                onClick={() => setPicking(!picking)}
+                className={`${ROUND} ${picking ? 'bg-glass-active' : 'bg-transparent'}`}
+              >
+                <AtSign size={19} strokeWidth={1.8} aria-hidden="true" />
+              </button>
+            </>
+          )}
           <span className="flex-1" />
           <button
             type="button"

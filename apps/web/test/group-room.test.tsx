@@ -1,10 +1,10 @@
-// 群页里的 AI：舞台、@ 谁谁回、AI 正在写的话原地换新、它忙着时「现在告诉它」、拉群时选光和 AI。
+// 群页里的 AI：舞台、@ 谁谁回、AI 正在写的话原地换新、它忙着时「现在告诉它」、拉群时选光、AI 和好友。
 import { createMemoryHistory } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GROUP_HISTORY_NOTICE } from '@oasis/contracts/group';
 import { createApp } from '../src/app.tsx';
-import { installFakeApi, json } from './fake-api.ts';
+import { installFakeApi, json, profileOf } from './fake-api.ts';
 import { Stream } from './group-stream.ts';
 
 const id = '00000000-0000-4000-8000-000000000061',
@@ -175,6 +175,11 @@ describe('群页里的 AI', () => {
   it('拉群：挑一种光、叫上 AI，建好就进群', async () => {
     const state = installFakeApi({
       signedIn: true,
+      friends: {
+        friends: [{ profile: profileOf(friend, '阿杰'), since: at, chatId: null }],
+        incoming: [],
+        outgoing: [],
+      },
       extra: (method, path) =>
         method === 'POST' && path === '/conversation/v1/groups' ? json(201, group()) : undefined,
     });
@@ -188,16 +193,17 @@ describe('群页里的 AI', () => {
     expect(within(dialog).queryByRole('checkbox', { name: '文心' })).toBeNull();
     expect(within(dialog).queryByRole('checkbox', { name: 'Seedream 5.0 Pro' })).toBeNull();
     fireEvent.click(claude);
-    fireEvent.change(within(dialog).getByLabelText('群名'), { target: { value: '发布会' } });
     const create = within(dialog).getByRole('button', { name: '建群' });
     expect((create as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(within(dialog).getByLabelText('你在群里的名字'), { target: { value: '我' } });
+    fireEvent.change(within(dialog).getByLabelText('群名'), { target: { value: '发布会' } });
+    // 好友一起拉进来（不用对方同意）
+    fireEvent.click(await within(dialog).findByRole('checkbox', { name: '阿杰' }));
     fireEvent.click(create);
     await waitFor(() =>
       expect(state.bodies.find((b) => b.path === '/conversation/v1/groups')?.body).toEqual({
         title: '发布会',
-        displayName: '我',
         ais: ['claude'],
+        members: [friend],
         light: 'honey',
       }),
     );

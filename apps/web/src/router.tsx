@@ -192,6 +192,12 @@ const dmRoute = createRoute({
   path: '/dms/$conversationId',
   component: DmPage,
 });
+/** 和一个好友的私聊：页面和群页是同一个（两个人、没有 AI） */
+const chatRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/chats/$chatId',
+  component: GroupPage,
+});
 const meRoute = createRoute({ getParentRoute: () => shellRoute, path: '/me', component: MePage });
 const plazaRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -214,6 +220,7 @@ const routeTree = rootRoute.addChildren([
     groupRoute,
     dmsRoute,
     dmRoute,
+    chatRoute,
     meRoute,
   ]),
   plazaRoute,

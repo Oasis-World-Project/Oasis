@@ -15,7 +15,14 @@ import {
   Search,
   type LucideIcon,
 } from 'lucide-react';
-import { dmsQuery, groupsQuery, meQuery, walletQuery } from '../api/queries.ts';
+import {
+  avatarUrl,
+  dmsQuery,
+  friendsQuery,
+  groupsQuery,
+  meQuery,
+  walletQuery,
+} from '../api/queries.ts';
 import { aiName, useModelMap } from '../api/use-model-map.ts';
 import { AiAvatar, PersonAvatar } from '../ui/Avatar.tsx';
 import { formatUsd, usedPercent } from '../ui/format.ts';
@@ -145,8 +152,28 @@ export function Sidebar() {
 function ChatList({ open, kind }: { open: boolean; kind: 'dm' | 'group' }) {
   const dms = useQuery({ ...dmsQuery, enabled: kind === 'dm' });
   const groups = useQuery({ ...groupsQuery, enabled: kind === 'group' });
-  const entries: { id: string; title: string; modelKey?: string | null; light?: string }[] =
-    (kind === 'dm' ? dms.data : groups.data) ?? [];
+  const friends = useQuery({ ...friendsQuery, enabled: kind === 'dm' });
+  // 私聊：和 AI 的在前，和好友的（聊过的）在后
+  const chats = (friends.data?.friends ?? []).flatMap((friend) =>
+    friend.chatId
+      ? [
+          {
+            id: friend.chatId,
+            title: friend.profile.name,
+            avatar: avatarUrl(friend.profile.id, friend.profile.avatarVersion),
+            friend: true,
+          },
+        ]
+      : [],
+  );
+  const entries: {
+    id: string;
+    title: string;
+    modelKey?: string | null;
+    light?: string;
+    avatar?: string | undefined;
+    friend?: boolean;
+  }[] = kind === 'dm' ? [...(dms.data ?? []), ...chats] : (groups.data ?? []);
   const models = useModelMap();
   if (entries.length === 0) {
     return open ? (
@@ -159,13 +186,15 @@ function ChatList({ open, kind }: { open: boolean; kind: 'dm' | 'group' }) {
     <>
       {entries.slice(0, SIDEBAR_CONVERSATION_LIMIT).map((dm) => {
         const model = dm.modelKey ? models.get(dm.modelKey) : undefined;
-        const name = aiName(models, dm);
+        const name = dm.friend ? dm.title : aiName(models, dm);
         return (
           <Link
             key={dm.id}
-            {...(kind === 'dm'
-              ? { to: '/dms/$conversationId' as const, params: { conversationId: dm.id } }
-              : { to: '/groups/$groupId' as const, params: { groupId: dm.id } })}
+            {...(dm.friend
+              ? { to: '/chats/$chatId' as const, params: { chatId: dm.id } }
+              : kind === 'dm'
+                ? { to: '/dms/$conversationId' as const, params: { conversationId: dm.id } }
+                : { to: '/groups/$groupId' as const, params: { groupId: dm.id } })}
             aria-label={open ? undefined : name}
             title={open ? undefined : name}
             className={
@@ -182,7 +211,7 @@ function ChatList({ open, kind }: { open: boolean; kind: 'dm' | 'group' }) {
                 className={`light-dot shrink-0 rounded-full ${open ? 'mx-[7px] size-3' : 'size-4'}`}
               />
             ) : (
-              <PersonAvatar label={name} size={26} />
+              <PersonAvatar label={name} size={26} src={dm.avatar} />
             )}
             {open && <span className="min-w-0 flex-1 truncate">{name}</span>}
           </Link>
@@ -195,7 +224,7 @@ function ChatList({ open, kind }: { open: boolean; kind: 'dm' | 'group' }) {
 function MeCard({ open }: { open: boolean }) {
   const { data: me } = useQuery(meQuery);
   const { data: wallet } = useQuery(walletQuery);
-  const label = me?.email ?? '我';
+  const label = me?.name ?? '我';
   const used = wallet ? usedPercent(wallet.availableMicro, wallet.grantedMicro) : 0;
   return (
     <Link
@@ -208,7 +237,7 @@ function MeCard({ open }: { open: boolean }) {
           : 'justify-center rounded-full'
       }`}
     >
-      <PersonAvatar label={label} />
+      <PersonAvatar label={label} src={me ? avatarUrl(me.id, me.avatarVersion) : undefined} />
       {open && (
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex items-baseline justify-between gap-2">

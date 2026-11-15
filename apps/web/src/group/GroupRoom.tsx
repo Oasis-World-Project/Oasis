@@ -1,4 +1,5 @@
 // 群页：整屏是这个群的光，左边聊天窗（群名、舞台、消息、输入框），右边工作台。照原型 ②。
+// 和一个好友的私聊也是这一页：没有舞台和工作台，页头是对方。
 import type { Mention } from '@oasis/contracts/conversation';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
@@ -54,8 +55,11 @@ function WorkbenchRail() {
   );
 }
 
-export function GroupRoom({ id }: { id: string }) {
-  const state = useGroupRoom(id);
+/** 好友不再是好友时，两人的私聊就不在了 */
+const CHAT_GONE = '这个聊天不在了：你们已经不是好友。';
+
+export function GroupRoom({ id, chat = false }: { id: string; chat?: boolean }) {
+  const state = useGroupRoom(id, chat ? CHAT_GONE : undefined);
   const { group, error } = state;
   const me = useQuery(meQuery);
   const models = useModelMap();
@@ -101,7 +105,7 @@ export function GroupRoom({ id }: { id: string }) {
                 void navigate({ to: '/groups' });
               }}
             >
-              <Stage />
+              {group?.kind !== 'direct' && <Stage />}
             </RoomHeader>
             {error && (
               <p role="alert" className="m-0 px-7 pb-1 text-[13px] text-accent">
@@ -111,7 +115,7 @@ export function GroupRoom({ id }: { id: string }) {
             <RoomMessages hasOlder={state.hasOlder} onOlder={() => void state.loadOlder()} />
             <RoomComposer mentions={mentions} onMentions={setMentions} />
           </section>
-          <WorkbenchRail />
+          {group?.kind !== 'direct' && <WorkbenchRail />}
         </RoomContext.Provider>
       ) : (
         <section

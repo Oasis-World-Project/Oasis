@@ -1,12 +1,6 @@
 // 各页面用到的查询和操作。查询的 key 集中在这里，便于在操作后刷新对应数据。
 import { AiSettings, ModelEntry, ModelList, type SaveAiBody } from '@oasis/contracts/agent';
-import {
-  GroupList,
-  GroupSnapshot,
-  GroupInvite,
-  GroupInvitePreview,
-  type GroupOptions,
-} from '@oasis/contracts/group';
+import { GroupList, GroupSnapshot, type GroupOptions } from '@oasis/contracts/group';
 import { WalletBody } from '@oasis/contracts/billing';
 import { ArtifactBody, ArtifactList, type Annotation } from '@oasis/contracts/canvas';
 import {
@@ -20,8 +14,14 @@ import {
   TaskList,
   type SetupBody,
 } from '@oasis/contracts/conversation';
-import { MeBody, VerifyCodeResult } from '@oasis/contracts/identity';
+import {
+  MeBody,
+  PublicProfile,
+  VerifyCodeResult,
+  type UpdateProfileBody,
+} from '@oasis/contracts/identity';
 import { Confirmation, type ConfirmDecision } from '@oasis/contracts/model-gateway';
+import { FriendChat, FriendRequestResult, FriendsBody } from '@oasis/contracts/social';
 import { queryOptions } from '@tanstack/react-query';
 import { z } from 'zod';
 import { api, ApiError, apiVoid, isConnectionError } from './client.ts';
@@ -32,6 +32,43 @@ export const meQuery = queryOptions({
   staleTime: 5 * 60_000,
   retry: false,
 });
+
+/** 改自己的资料：名字、签名、性别、地区 */
+export const updateProfile = (body: UpdateProfileBody) =>
+  api('/identity/v1/me/profile', MeBody, { method: 'PUT', body });
+/** 换头像（data 是图片内容的 base64）、去掉头像 */
+export const setAvatar = (type: string, data: string) =>
+  api('/identity/v1/me/avatar', MeBody, { method: 'PUT', body: { type, data } });
+export const clearAvatar = () => api('/identity/v1/me/avatar', MeBody, { method: 'DELETE' });
+/** 一个人的头像地址；没传过头像（version 为 0）就没有，界面用名字的第一个字 */
+export const avatarUrl = (userId: string, version: number) =>
+  version > 0 ? `/api/identity/v1/users/${userId}/avatar?v=${version}` : undefined;
+/** 按账号 ID 查人（加好友前先看到是谁） */
+export const lookupUser = (accountNo: string) =>
+  api(`/identity/v1/users/lookup?accountNo=${encodeURIComponent(accountNo)}`, PublicProfile);
+
+/** 好友、别人发给我的申请、我发出去还没回的申请 */
+export const friendsQuery = queryOptions({
+  queryKey: ['friends'],
+  queryFn: () => api('/conversation/v1/friends', FriendsBody),
+});
+export const requestFriend = (userId: string, message: string) =>
+  api('/conversation/v1/friends/requests', FriendRequestResult, {
+    method: 'POST',
+    body: { userId, message },
+  });
+export const acceptFriend = (requestId: string) =>
+  apiVoid(`/conversation/v1/friends/requests/${requestId}/accept`, { method: 'POST', body: {} });
+/** 拒绝别人的申请，或撤回自己发出去的 */
+export const dropFriendRequest = (requestId: string) =>
+  apiVoid(`/conversation/v1/friends/requests/${requestId}`, { method: 'DELETE' });
+/** 删好友：两人的私聊一起删掉 */
+export const removeFriend = (userId: string) =>
+  apiVoid(`/conversation/v1/friends/${userId}`, { method: 'DELETE' });
+/** 打开和一个好友的私聊（没有就建），返回它的 ID */
+export const openFriendChat = async (userId: string) =>
+  (await api(`/conversation/v1/friends/${userId}/chat`, FriendChat, { method: 'POST', body: {} }))
+    .id;
 
 export const walletQuery = queryOptions({
   queryKey: ['wallet'],
@@ -71,9 +108,9 @@ export const groupsQuery = queryOptions({
   queryKey: ['groups'],
   queryFn: async () => (await api('/conversation/v1/groups', GroupList)).groups,
 });
-/** 拉群：群名、自己在群里的名字、叫进来的 AI、群的光和发言方式 */
+/** 拉群：群名、叫进来的 AI、一起拉进来的好友、群的光和发言方式 */
 export const createGroup = (
-  body: { title: string; displayName: string; ais: string[] } & Partial<GroupOptions>,
+  body: { title: string; ais: string[]; members: string[] } & Partial<GroupOptions>,
 ) => api('/conversation/v1/groups', GroupSnapshot, { method: 'POST', body });
 const groupPath = (id: string) => `/conversation/v1/groups/${id}`;
 /** 群主改群的设置（光色、发言方式） */
@@ -95,25 +132,17 @@ export const stopGroupAi = (id: string, key: string) =>
 /** 「现在告诉它」：@ 了这个 AI、它还没看到的一句，现在送进它正在做的一轮 */
 export const steerGroupMessage = (id: string, messageId: string, key: string) =>
   apiVoid(`${groupPath(id)}/messages/${messageId}/steer`, { method: 'POST', body: { key } });
-export const previewGroupInvite = (token: string) =>
-  api('/conversation/v1/groups/invites/preview', GroupInvitePreview, {
-    method: 'POST',
-    body: { token },
-  });
-export const redeemGroupInvite = (token: string, displayName: string) =>
-  api('/conversation/v1/groups/invites/redeem', GroupSnapshot, {
-    method: 'POST',
-    body: { token, displayName, acceptHistory: true },
-  });
+/** 群主把一个好友直接拉进群 */
+export const addGroupMember = (id: string, userId: string) =>
+  api(`${groupPath(id)}/members`, GroupSnapshot, { method: 'POST', body: { userId } });
+/** 改自己在这个群里的昵称；空的就是不设 */
+export const setGroupNickname = (id: string, nickname: string) =>
+  api(`${groupPath(id)}/nickname`, GroupSnapshot, { method: 'PUT', body: { nickname } });
 export const groupSnapshot = (id: string, before?: number) =>
   api(
     `/conversation/v1/groups/${id}${before === undefined ? '' : `?before=${before}`}`,
     GroupSnapshot,
   );
-export const createGroupInvite = (id: string) =>
-  api(`/conversation/v1/groups/${id}/invites`, GroupInvite, { method: 'POST', body: {} });
-export const revokeGroupInvite = (id: string) =>
-  apiVoid(`/conversation/v1/groups/${id}/invites`, { method: 'DELETE' });
 export const removeGroupMember = (id: string, userId: string) =>
   apiVoid(`/conversation/v1/groups/${id}/members/${userId}`, { method: 'DELETE' });
 export const deleteGroup = (id: string) =>

@@ -1,17 +1,12 @@
 // 群页顶上：群名、几个人几个 AI、真人头像叠放（点开是成员）、「⋯」群设置。照原型 ②。
+// 和一个好友的私聊：页头是对方的头像和名字。
 import type { GroupSpeak } from '@oasis/contracts/group';
 import { Ellipsis } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
-import {
-  createGroupInvite,
-  deleteGroup,
-  removeGroupMember,
-  revokeGroupInvite,
-  setGroupOptions,
-} from '../api/queries.ts';
+import { deleteGroup, removeGroupMember, setGroupOptions } from '../api/queries.ts';
 import { ConfirmButton } from '../chat/parts.tsx';
-import { PersonAvatar } from '../ui/Avatar.tsx';
-import { headcount, toneOf } from './people.ts';
+import { MemberAvatar, MyNickname, PullFriends } from './Members.tsx';
+import { headcount } from './people.ts';
 import { useRoom } from './room.ts';
 
 /** 没人被 @ 的时候 AI 们怎么办；后两种还没做 */
@@ -137,7 +132,6 @@ function RoomMenu({ onClose, onLeft }: { onClose: () => void; onLeft: () => void
 
 function MembersPopover({ onClose }: { onClose: () => void }) {
   const { group, me, owner, busy, act } = useRoom();
-  const [invite, setInvite] = useState('');
   return (
     <Popover
       label={`成员 · ${group.memberCount}`}
@@ -148,7 +142,7 @@ function MembersPopover({ onClose }: { onClose: () => void }) {
       <ul className="m-0 flex max-h-[40vh] list-none flex-col gap-2 overflow-y-auto p-0">
         {group.members.map((member) => (
           <li key={member.userId} className="flex items-center gap-2.5 text-sm">
-            <PersonAvatar label={member.displayName} size={30} tone={toneOf(member.userId, me)} />
+            <MemberAvatar member={member} size={30} />
             <span className="min-w-0 flex-1 truncate">
               {member.displayName}
               <span className="text-xs text-ink-muted">
@@ -169,69 +163,36 @@ function MembersPopover({ onClose }: { onClose: () => void }) {
         ))}
       </ul>
       <p className="m-0 text-xs text-ink-muted">{group.historyNotice}</p>
-      {owner && (
-        <div className="flex flex-col gap-2 border-0 border-t border-solid border-hairline pt-3">
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              className="h-9 rounded-full border-0 bg-solid px-4 text-[13px] font-medium text-on-solid disabled:opacity-45"
-              onClick={() =>
-                void act(async () => {
-                  setInvite((await createGroupInvite(group.id)).token);
-                })
-              }
-            >
-              生成单次邀请
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              className="h-9 rounded-full border-0 bg-well px-4 text-[13px] text-ink disabled:opacity-45"
-              onClick={() =>
-                void act(async () => {
-                  await revokeGroupInvite(group.id);
-                  setInvite('');
-                })
-              }
-            >
-              撤销邀请
-            </button>
-          </div>
-          {invite && (
-            <>
-              <label className="flex flex-col gap-1 text-xs text-ink-muted">
-                邀请码
-                <input
-                  readOnly
-                  value={invite}
-                  className="h-9 min-w-0 rounded-full border-0 bg-glass-active px-3.5 text-ink shadow-edge-strong"
-                />
-              </label>
-              <button
-                type="button"
-                className="h-9 self-start rounded-full border-0 bg-well px-4 text-[13px] text-ink"
-                onClick={() =>
-                  void navigator.clipboard.writeText(
-                    `${window.location.origin}/groups#invite=${invite}`,
-                  )
-                }
-              >
-                复制邀请链接
-              </button>
-            </>
-          )}
-          <p className="m-0 text-xs text-ink-muted">
-            邀请 24 小时有效，只能用一次；重新生成会使旧邀请失效。
-          </p>
-        </div>
-      )}
+      <MyNickname />
+      {owner && <PullFriends />}
     </Popover>
   );
 }
 
-export function RoomHeader({ onLeft, children }: { onLeft: () => void; children: ReactNode }) {
+/** 和一个好友的私聊：页头是对方 */
+function DirectHeader() {
   const { group, me, online } = useRoom();
+  const peer = group.members.find((member) => member.userId !== me) ?? group.members[0];
+  return (
+    <header className="flex items-center gap-3.5 px-7 pb-3 pt-6">
+      {peer && <MemberAvatar member={peer} size={46} />}
+      <div className="min-w-0 flex-1">
+        <h1 className="m-0 truncate text-[26px] font-light leading-[1.2] tracking-[0.02em]">
+          {peer?.displayName ?? '好友'}
+        </h1>
+        <p className="mb-0 mt-0.5 text-[13px] text-ink-muted">好友{!online && ' · 连接中…'}</p>
+      </div>
+    </header>
+  );
+}
+
+export function RoomHeader(props: { onLeft: () => void; children: ReactNode }) {
+  const { group } = useRoom();
+  return group.kind === 'direct' ? <DirectHeader /> : <GroupHeader {...props} />;
+}
+
+function GroupHeader({ onLeft, children }: { onLeft: () => void; children: ReactNode }) {
+  const { group, online } = useRoom();
   const [open, setOpen] = useState<'menu' | 'members' | null>(null);
   const shown = group.members.slice(0, 5);
   return (
@@ -256,7 +217,7 @@ export function RoomHeader({ onLeft, children }: { onLeft: () => void; children:
         >
           {shown.map((member, index) => (
             <span key={member.userId} className="absolute top-0" style={{ left: index * 22 }}>
-              <PersonAvatar label={member.displayName} size={34} tone={toneOf(member.userId, me)} />
+              <MemberAvatar member={member} size={34} />
             </span>
           ))}
         </button>

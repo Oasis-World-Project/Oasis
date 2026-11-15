@@ -1,11 +1,11 @@
-// 拉群弹窗：群名、挑一种光（弹窗跟着变色）、叫哪些 AI（选中的站到弹窗的舞台上）、自己在群里的名字。照原型 ⑦。
+// 拉群弹窗：群名、挑一种光（弹窗跟着变色）、叫哪些 AI（选中的站到弹窗的舞台上）、拉哪些好友。照原型 ⑦。
 import { MAX_GROUP_AIS, type GroupLight } from '@oasis/contracts/group';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { createGroup, modelsQuery } from '../api/queries.ts';
-import { AiAvatar } from '../ui/Avatar.tsx';
+import { avatarUrl, createGroup, friendsQuery, modelsQuery } from '../api/queries.ts';
+import { AiAvatar, PersonAvatar } from '../ui/Avatar.tsx';
 
 const LIGHTS: { id: GroupLight; label: string }[] = [
   { id: 'coral', label: '珊瑚' },
@@ -13,8 +13,6 @@ const LIGHTS: { id: GroupLight; label: string }[] = [
   { id: 'sky', label: '晴空' },
   { id: 'honey', label: '蜂蜜' },
 ];
-/** 记住上次在群里用的名字，下次拉群不用再填 */
-const NAME_KEY = 'oasis.group-name';
 const FIELD =
   'h-[46px] min-w-0 rounded-full border-0 bg-glass-active px-[18px] text-[15px] text-ink shadow-[inset_0_0_0_1px_var(--oasis-track)]';
 const CHIP =
@@ -22,12 +20,14 @@ const CHIP =
 
 export function NewGroupDialog({ onClose }: { onClose: () => void }) {
   const { data: models } = useQuery(modelsQuery);
+  const { data: social } = useQuery(friendsQuery);
+  const friends = social?.friends ?? [];
   const client = useQueryClient();
   const navigate = useNavigate();
   const [title, setTitle] = useState('');
-  const [name, setName] = useState(() => localStorage.getItem(NAME_KEY) ?? '');
   const [light, setLight] = useState<GroupLight>('mint');
   const [picked, setPicked] = useState<string[]>([]);
+  const [pulled, setPulled] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const ais = (models ?? []).filter((model) => model.category === 'llm' && model.available);
@@ -39,9 +39,12 @@ export function NewGroupDialog({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setError('');
     try {
-      const displayName = name.trim();
-      const group = await createGroup({ title: title.trim(), displayName, ais: picked, light });
-      localStorage.setItem(NAME_KEY, displayName);
+      const group = await createGroup({
+        title: title.trim(),
+        ais: picked,
+        members: pulled,
+        light,
+      });
       await client.invalidateQueries({ queryKey: ['groups'] });
       // 进了新群，群列表页连同这个弹窗一起收起
       await navigate({ to: '/groups/$groupId', params: { groupId: group.id } });
@@ -159,17 +162,47 @@ export function NewGroupDialog({ onClose }: { onClose: () => void }) {
               })}
             </div>
           </div>
-          <label className="flex flex-col gap-1.5 text-[12.5px] text-ink-muted">
-            你在群里的名字
-            <input
-              className={`${FIELD} max-w-[320px]`}
-              value={name}
-              maxLength={40}
-              autoComplete="nickname"
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
-          <p className="m-0 text-[12.5px] text-ink-muted">朋友可以建好群以后在成员里邀请。</p>
+          <div className="flex flex-col gap-2.5">
+            <span className="text-[12.5px] text-ink-muted">
+              拉哪些好友（直接进群，不用对方同意；之后也能在成员里拉）
+            </span>
+            {friends.length === 0 ? (
+              <span className="text-[12.5px] text-ink-muted">
+                还没有好友：去「私聊」里按账号 ID 加。
+              </span>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {friends.map(({ profile }) => {
+                  const on = pulled.includes(profile.id);
+                  return (
+                    <button
+                      key={profile.id}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={on}
+                      onClick={() =>
+                        setPulled(
+                          on ? pulled.filter((id) => id !== profile.id) : [...pulled, profile.id],
+                        )
+                      }
+                      className={`${CHIP} ${
+                        on
+                          ? 'bg-glass-active font-medium shadow-[0_0_0_1.5px_var(--oasis-ink)]'
+                          : 'bg-glass shadow-[inset_0_0_0_1px_var(--oasis-well)]'
+                      }`}
+                    >
+                      <PersonAvatar
+                        label={profile.name}
+                        size={30}
+                        src={avatarUrl(profile.id, profile.avatarVersion)}
+                      />
+                      {profile.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
         {error && (
@@ -179,10 +212,12 @@ export function NewGroupDialog({ onClose }: { onClose: () => void }) {
         )}
         <div className="flex flex-wrap items-center gap-2.5">
           <span className="min-w-40 flex-1 text-[13.5px] text-ink-muted">
-            {picked.length ? `你和 ${picked.length} 个 AI` : '先只有你，AI 之后也能叫'}
+            {picked.length + pulled.length
+              ? `你${pulled.length ? `、${pulled.length} 个好友` : ''}${picked.length ? `和 ${picked.length} 个 AI` : ''}`
+              : '先只有你，好友和 AI 之后也能叫'}
           </span>
           <button
-            disabled={busy || !title.trim() || !name.trim()}
+            disabled={busy || !title.trim()}
             className="h-12 cursor-pointer rounded-full border-0 bg-solid px-[26px] text-[15px] font-medium text-on-solid disabled:cursor-not-allowed disabled:opacity-45"
           >
             建群

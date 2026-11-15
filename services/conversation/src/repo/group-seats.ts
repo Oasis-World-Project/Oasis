@@ -1,7 +1,15 @@
 // 群里的席位听到什么：轮到一个 AI 时，群里有谁、它没听过的话。
 import type pg from 'pg';
 import type { Mention } from '@oasis/contracts/conversation';
-import { MESSAGE_COLUMNS, nameOf, seatsOf, type GroupRow, type MessageRow } from './group-rows.ts';
+import {
+  MEMBER_NAME,
+  MEMBER_ORDER,
+  MESSAGE_COLUMNS,
+  nameOf,
+  seatsOf,
+  type GroupRow,
+  type MessageRow,
+} from './group-rows.ts';
 
 export function createGroupSeats(pool: pg.Pool) {
   return {
@@ -32,12 +40,15 @@ export function createGroupSeats(pool: pg.Pool) {
       if (!seat || !group) return undefined;
       const members = (
         await pool.query<{ userId: string; displayName: string }>(
-          'select user_id as "userId",display_name as "displayName" from group_members where conversation_id=$1 and left_at is null order by joined_at,user_id',
-          [group.id],
+          `select user_id as "userId",${MEMBER_NAME} as "displayName" from group_members where conversation_id=$1 and left_at is null order by ${MEMBER_ORDER}`,
+          [group.id, group.owner_id],
         )
       ).rows;
       const allSeats = await seatsOf(pool, group.id, true);
-      const names = new Map(allSeats.map((item) => [item.model_key, item.title]));
+      const names = new Map([
+        ...allSeats.map((item) => [item.model_key, item.title] as const),
+        ...members.map((member) => [member.userId, member.displayName] as const),
+      ]);
       const unheard = `conversation_id=$1 and seq>$2 and kind='text' and content<>'' and not (author_kind='ai' and author_id=$3)`;
       const args = [group.id, seat.heard_seq, seat.model_key];
       const rows = (

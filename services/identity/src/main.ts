@@ -1,4 +1,4 @@
-// identity：账号与登录（邮箱验证码）。新用户注册时经发件箱发出 identity.user.registered。
+// identity：账号与登录（邮箱验证码）、账号资料（账号 ID、名字、头像……）。新用户注册时经发件箱发出 identity.user.registered。
 import { fileURLToPath } from 'node:url';
 import { IDENTITY_STREAM } from '@oasis/contracts/events';
 import {
@@ -12,6 +12,7 @@ import { registerRoutes } from './api/routes.ts';
 import { identityEnv } from './config.ts';
 import { createIdentityRepo } from './repo/identity-repo.ts';
 import { createAuthService } from './service/auth-service.ts';
+import { createProfileService } from './service/profile-service.ts';
 
 await startService({
   name: 'identity',
@@ -27,16 +28,19 @@ await startService({
     });
     return { postgres, eventBus, outbox };
   },
-  routes: (app, { config, resources, name }) =>
+  routes: (app, { config, resources, name }) => {
+    const repo = createIdentityRepo(resources.postgres.pool);
     registerRoutes(
       app,
       createAuthService({
-        repo: createIdentityRepo(resources.postgres.pool),
+        repo,
         sender: createSmtpSender({ smtpUrl: config.SMTP_URL, from: config.MAIL_FROM }),
         pepper: config.AUTH_CODE_PEPPER,
         sessionTtlDays: config.SESSION_TTL_DAYS,
         serviceName: name,
       }),
+      createProfileService({ repo }),
       { secure: config.COOKIE_SECURE, ttlDays: config.SESSION_TTL_DAYS },
-    ),
+    );
+  },
 });

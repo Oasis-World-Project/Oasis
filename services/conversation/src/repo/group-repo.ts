@@ -1,5 +1,5 @@
-// 群的存储：成员、群里的 AI（席位：挂在群下面的一条会话）、群的设置、群消息。邀请在 group-invites.ts，
-// 席位听到什么在 group-seats.ts。
+// 群的存储：成员、群里的 AI（席位：挂在群下面的一条会话）、群的设置、群消息。席位听到什么在 group-seats.ts。
+// 两个好友的私聊（kind = 'direct'，见 friend-repo.ts）读消息、发消息、推送也走这里；只有群才有的操作它做不了。
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { Mention } from '@oasis/contracts/conversation';
@@ -10,16 +10,18 @@ import {
   type GroupSnapshot,
 } from '@oasis/contracts/group';
 import { HttpError } from '@oasis/service-kit';
-import { groupInvites } from './group-invites.ts';
+import { areFriends } from './friend-repo.ts';
 import {
   IN_FLUX,
+  MEMBER_NAME,
+  MEMBER_ORDER,
   MESSAGE_COLUMNS,
   nameOf,
   seatsOf,
   type GroupRow,
   type MessageRow,
 } from './group-rows.ts';
-import type { groupMembers } from './schema.ts';
+import { inTransaction } from './tx.ts';
 
 type Limits = { members: number; groups: number; messagesPerMinute: number; ais: number };
 type Cursor = { after?: number; before?: number };
@@ -27,24 +29,12 @@ const missing = () => new HttpError(404, 'group_not_found', '没有这个群，�
 const ownerOnly = (what: string) => new HttpError(403, 'owner_required', `只有群主可以${what}`);
 
 export function createGroupRepo(pool: pg.Pool, limits: Limits) {
-  async function transaction<T>(work: (db: pg.PoolClient) => Promise<T>): Promise<T> {
-    const db = await pool.connect();
-    try {
-      await db.query('begin');
-      const value = await work(db);
-      await db.query('commit');
-      return value;
-    } catch (error) {
-      await db.query('rollback');
-      throw error;
-    } finally {
-      db.release();
-    }
-  }
+  const transaction = <T>(work: (db: pg.PoolClient) => Promise<T>) => inTransaction(pool, work);
+  /** 核对是成员，拿到这个群（或两个好友的私聊） */
   async function owned(db: pg.PoolClient, id: string, userId: string) {
     const row = (
       await db.query<GroupRow>(
-        "select * from conversations where id=$1 and kind='group' for update",
+        "select * from conversations where id=$1 and kind in ('group','direct') for update",
         [id],
       )
     ).rows[0];
@@ -60,11 +50,27 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
       throw missing();
     return row;
   }
+  /** 只有群才有的操作：核对是成员、是群（两个好友的私聊做不了） */
+  async function ownedGroup(db: pg.PoolClient, id: string, userId: string) {
+    const row = await owned(db, id, userId);
+    if (row.kind !== 'group') throw missing();
+    return row;
+  }
   /** 群主才能做的事：先核对是成员，再核对是群主 */
   async function ownedByOwner(db: pg.PoolClient, id: string, userId: string, what: string) {
-    const row = await owned(db, id, userId);
+    const row = await ownedGroup(db, id, userId);
     if (row.owner_id !== userId) throw ownerOnly(what);
     return row;
+  }
+  /** 一个人进群：之前退出过的回来（群昵称不留） */
+  async function enter(db: pg.PoolClient, id: string, userId: string, name: string) {
+    await capacity(db, userId);
+    await db.query(
+      // 同一个事务里 now() 都一样：用 clock_timestamp() 让一起拉进来的人按拉的先后排
+      `insert into group_members(conversation_id,user_id,display_name,joined_at) values($1,$2,$3,clock_timestamp())
+       on conflict(conversation_id,user_id) do update set left_at=null, joined_at=excluded.joined_at, display_name=excluded.display_name, nickname=null`,
+      [id, userId, name],
+    );
   }
   async function capacity(db: pg.PoolClient, userId: string) {
     await db.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`groups:${userId}`]);
@@ -102,14 +108,17 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
     watch: string[] = [],
   ): Promise<GroupSnapshot> {
     const members = (
-      await db.query<Pick<typeof groupMembers.$inferSelect, 'userId' | 'displayName' | 'joinedAt'>>(
-        'select user_id as "userId",display_name as "displayName",joined_at as "joinedAt" from group_members where conversation_id=$1 and left_at is null order by joined_at,user_id',
-        [row.id],
+      await db.query<{ userId: string; displayName: string; nickname: string; joinedAt: Date }>(
+        `select user_id as "userId",${MEMBER_NAME} as "displayName",coalesce(nickname,'') as nickname,joined_at as "joinedAt" from group_members where conversation_id=$1 and left_at is null order by ${MEMBER_ORDER}`,
+        [row.id, row.owner_id],
       )
     ).rows;
     const allSeats = await seatsOf(db, row.id, true);
     const seats = allSeats.filter((seat) => !seat.options.removedAt);
-    const names = new Map(allSeats.map((seat) => [seat.model_key, seat.title]));
+    const names = new Map([
+      ...allSeats.map((seat) => [seat.model_key, seat.title] as const),
+      ...members.map((member) => [member.userId, member.displayName] as const),
+    ]);
     const after = cursor?.after,
       before = cursor?.before;
     const messages = (
@@ -128,6 +137,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
     const options = GroupOptions.parse(row.options);
     return {
       id: row.id,
+      kind: row.kind,
       title: row.title,
       ownerId: row.owner_id,
       createdAt: row.created_at.toISOString(),
@@ -139,6 +149,9 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
       members: members.map((member) => ({
         userId: member.userId,
         displayName: member.displayName,
+        nickname: member.nickname,
+        // 头像在 identity：由 group-service 补上
+        avatarVersion: 0,
         joinedAt: member.joinedAt.toISOString(),
       })),
       ais: seats.map((seat) => ({
@@ -177,15 +190,21 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
         light: GroupOptions.parse(row.options).light,
       }));
     },
-    /** 建群：建的人是群主；ais 是叫进群的 AI（key 和名字），各有一个席位 */
+    /**
+     * 建群：建的人是群主；ais 是叫进群的 AI（key 和名字），各有一个席位；friends 是一起拉进来的好友
+     * （只能拉自己的好友）。name 是群主账号的名字。
+     */
     create(
       userId: string,
       title: string,
-      displayName: string,
+      name: string,
       options: GroupOptions,
       ais: { key: string; name: string }[],
+      friends: { userId: string; name: string }[] = [],
     ) {
       return transaction(async (db) => {
+        if (friends.length + 1 > limits.members)
+          throw new HttpError(409, 'group_full', '群成员已达上限');
         await capacity(db, userId);
         const row = (
           await db.query<GroupRow>(
@@ -195,8 +214,13 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
         ).rows[0]!;
         await db.query(
           'insert into group_members(conversation_id,user_id,display_name) values($1,$2,$3)',
-          [row.id, userId, displayName],
+          [row.id, userId, name],
         );
+        for (const friend of friends) {
+          if (!(await areFriends(db, userId, friend.userId)))
+            throw new HttpError(403, 'not_friends', '只能拉自己的好友进群');
+          await enter(db, row.id, friend.userId, friend.name);
+        }
         for (const ai of ais)
           await db.query(
             // 同一个事务里 now() 都一样：用 clock_timestamp() 让席位按叫进群的先后排
@@ -209,17 +233,46 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
     get(userId: string, id: string, cursor?: Cursor, watch?: string[]) {
       return transaction(async (db) => snapshot(db, await owned(db, id, userId), cursor, watch));
     },
-    ...groupInvites({
-      pool,
-      maxMembers: limits.members,
-      transaction,
-      ownedByOwner,
-      capacity,
-      snapshot,
-    }),
+    /** 群主把一个好友直接拉进群（不用对方同意）；已经在群里就什么都不变 */
+    addMember(userId: string, id: string, target: string, name: string) {
+      return transaction(async (db) => {
+        const row = await ownedByOwner(db, id, userId, '拉人进群');
+        const members = (
+          await db.query<{ user_id: string }>(
+            'select user_id from group_members where conversation_id=$1 and left_at is null',
+            [id],
+          )
+        ).rows;
+        if (members.some((member) => member.user_id === target)) return snapshot(db, row);
+        if (!(await areFriends(db, userId, target)))
+          throw new HttpError(403, 'not_friends', '只能拉自己的好友进群');
+        if (members.length >= limits.members)
+          throw new HttpError(409, 'group_full', '群成员已达上限');
+        await enter(db, id, target, name);
+        return snapshot(db, row);
+      });
+    },
+    /** 改自己在这个群里的昵称；空的就是不设，显示账号的名字 */
+    setNickname(userId: string, id: string, nickname: string) {
+      return transaction(async (db) => {
+        const row = await ownedGroup(db, id, userId);
+        await db.query(
+          'update group_members set nickname=$3 where conversation_id=$1 and user_id=$2',
+          [id, userId, nickname || null],
+        );
+        return snapshot(db, row);
+      });
+    },
+    /** 账号改了名字：他在各个群、各个私聊里记着的名字跟着改 */
+    async syncName(userId: string, name: string) {
+      await pool.query(
+        'update group_members set display_name=$2 where user_id=$1 and display_name<>$2',
+        [userId, name],
+      );
+    },
     remove(userId: string, id: string, target: string) {
       return transaction(async (db) => {
-        const row = await owned(db, id, userId);
+        const row = await ownedGroup(db, id, userId);
         if (target === row.owner_id)
           throw new HttpError(409, 'owner_cannot_leave', '群主不能退出，请解散群');
         if (userId !== row.owner_id && target !== userId) throw ownerOnly('移除其他成员');
@@ -340,7 +393,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
             throw new HttpError(400, 'mention_not_found', '@ 的人或 AI 不在群里');
         const member = (
           await db.query<{ display_name: string }>(
-            'select display_name from group_members where conversation_id=$1 and user_id=$2',
+            `select ${MEMBER_NAME} as display_name from group_members where conversation_id=$1 and user_id=$2`,
             [id, userId],
           )
         ).rows[0]!;

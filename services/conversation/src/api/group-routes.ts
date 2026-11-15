@@ -1,15 +1,16 @@
-// 群的接口：建群、成员和邀请、群里的 AI、发消息、推送。非成员读取或操作一律 404。
+// 群的接口：建群、成员（群主拉好友）、群里的 AI、发消息、推送。非成员读取或操作一律 404。
+// 两个好友的私聊读消息、发消息、推送也用这里的接口（GET、messages、events）。
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import {
   AddGroupAiBody,
+  AddGroupMemberBody,
   CreateGroupBody,
   GroupAiRoleBody,
+  GroupNicknameBody,
   GroupOptionsPatch,
   GroupSendBody,
   GroupSteerBody,
-  InviteToken,
-  RedeemGroupBody,
   type GroupMessage,
 } from '@oasis/contracts/group';
 import { HttpError, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
@@ -40,14 +41,6 @@ export function registerGroupRoutes(app: ServiceApp, groups: GroupService, strea
   app.post('/v1/groups', async (request, reply) => {
     const body = parseWith(CreateGroupBody, request.body);
     return reply.code(201).send(await groups.create(requireUserId(request), body, request.id));
-  });
-  app.post('/v1/groups/invites/preview', async (request) => {
-    requireUserId(request);
-    return groups.preview(parseWith(z.object({ token: InviteToken }), request.body).token);
-  });
-  app.post('/v1/groups/invites/redeem', async (request) => {
-    const body = parseWith(RedeemGroupBody, request.body);
-    return groups.redeem(requireUserId(request), body.token, body.displayName);
   });
   app.get('/v1/groups/:id', async (request) =>
     groups.get(
@@ -91,13 +84,23 @@ export function registerGroupRoutes(app: ServiceApp, groups: GroupService, strea
     await groups.stopAi(requireUserId(request), id, key);
     return reply.code(204).send();
   });
-  app.post('/v1/groups/:id/invites', async (request) =>
-    groups.invite(requireUserId(request), parseWith(Id, request.params).id),
+  /** 群主把一个好友直接拉进群（不用对方同意） */
+  app.post('/v1/groups/:id/members', async (request) =>
+    groups.addMember(
+      requireUserId(request),
+      parseWith(Id, request.params).id,
+      parseWith(AddGroupMemberBody, request.body).userId,
+      request.id,
+    ),
   );
-  app.delete('/v1/groups/:id/invites', async (request, reply) => {
-    await groups.revoke(requireUserId(request), parseWith(Id, request.params).id);
-    return reply.code(204).send();
-  });
+  /** 改自己在这个群里的昵称 */
+  app.put('/v1/groups/:id/nickname', async (request) =>
+    groups.setNickname(
+      requireUserId(request),
+      parseWith(Id, request.params).id,
+      parseWith(GroupNicknameBody, request.body).nickname,
+    ),
+  );
   app.delete('/v1/groups/:id/members/:userId', async (request, reply) => {
     const params = parseWith(Id.extend({ userId: z.uuid() }), request.params);
     await groups.remove(requireUserId(request), params.id, params.userId);

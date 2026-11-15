@@ -1,8 +1,8 @@
 import { createMemoryHistory } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
-import { installFakeApi, json } from './fake-api.ts';
+import { installFakeApi, json, profileOf } from './fake-api.ts';
 import { GROUP_HISTORY_NOTICE } from '@oasis/contracts/group';
 import { Stream } from './group-stream.ts';
 
@@ -51,52 +51,63 @@ afterEach(() => {
   Stream.instances = [];
 });
 describe('群聊成员页面', () => {
-  it('未登录的邀请跨登录保留在 fragment，读取后清除，不进入请求地址', async () => {
-    const state = installFakeApi({ signedIn: false });
-    const token = 'a'.repeat(64);
-    const router = await open(`/groups#invite=${token}`);
-    fireEvent.change(await screen.findByLabelText('邮箱'), {
-      target: { value: 'join@example.test' },
-    });
-    expect(router.state.location.search).toEqual({ redirect: '/groups' });
-    expect(router.state.location.hash).toBe(`invite=${token}`);
-    fireEvent.click(screen.getByRole('button', { name: '获取验证码' }));
-    fireEvent.change(await screen.findByLabelText('验证码'), { target: { value: '123456' } });
-    fireEvent.click(screen.getByRole('button', { name: /^登录$/ }));
-    const field = await screen.findByLabelText('邀请码');
-    expect((field as HTMLInputElement).value).toBe(token);
-    await waitFor(() => expect(router.state.location.hash).toBe(''));
-    expect(state.requests.some((path) => path.includes(token))).toBe(false);
-  });
-  it('加入前必须主动确认历史共享；不出现任务和附件入口', async () => {
+  it('成员弹层：群主把还不在群里的好友直接拉进来，自己能改群昵称；不出现邀请码', async () => {
+    const pal = '00000000-0000-4000-8000-000000000009';
+    const mine = { ...snapshot, ownerId: user };
     const state = installFakeApi({
       signedIn: true,
-      extra: (_method, path) => {
-        if (path === '/conversation/v1/groups') return json(200, { groups: [] });
-        if (path.endsWith('/invites/preview'))
-          return json(200, { title: snapshot.title, historyNotice: GROUP_HISTORY_NOTICE });
-        if (path.endsWith('/invites/redeem')) return json(200, snapshot);
+      friends: {
+        friends: [
+          // 已经在群里的好友不列
+          { profile: profileOf(owner, '群主'), since: snapshot.createdAt, chatId: null },
+          { profile: profileOf(pal, '阿杰'), since: snapshot.createdAt, chatId: null },
+        ],
+        incoming: [],
+        outgoing: [],
       },
+      extra: (method, path) =>
+        (method === 'POST' && path.endsWith('/members')) ||
+        (method === 'PUT' && path.endsWith('/nickname'))
+          ? json(200, mine)
+          : undefined,
     });
     vi.stubGlobal('EventSource', Stream);
-    await open();
-    fireEvent.change(await screen.findByLabelText('你在群里的名字'), { target: { value: '小林' } });
-    fireEvent.change(screen.getByLabelText('邀请码'), { target: { value: 'a'.repeat(64) } });
-    fireEvent.click(screen.getByRole('button', { name: '查看邀请' }));
-    const join = await screen.findByRole('button', { name: '加入群' });
-    expect((join as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.click(join);
+    await open(`/groups/${id}`);
+    await waitFor(() => expect(Stream.instances).toHaveLength(1));
+    act(() => Stream.instances[0]!.emit({ type: 'snapshot', snapshot: mine }));
+    fireEvent.click(await screen.findByRole('button', { name: '成员 · 2' }));
+    const popover = screen.getByRole('dialog', { name: '成员 · 2' });
+    expect(within(popover).queryByRole('button', { name: '把 群主 拉进群' })).toBeNull();
+    fireEvent.click(await within(popover).findByRole('button', { name: '把 阿杰 拉进群' }));
     await waitFor(() =>
-      expect(
-        state.bodies.find((value) => value.path.endsWith('/invites/redeem'))?.body,
-      ).toMatchObject({ acceptHistory: true }),
+      expect(state.bodies.find((value) => value.path.endsWith('/members'))?.body).toEqual({
+        userId: pal,
+      }),
     );
+    fireEvent.change(within(popover).getByLabelText('我在本群的昵称'), {
+      target: { value: ' 小林子 ' },
+    });
+    fireEvent.click(within(popover).getByRole('button', { name: '保存' }));
+    await waitFor(() =>
+      expect(state.bodies.find((value) => value.path.endsWith('/nickname'))?.body).toEqual({
+        nickname: '小林子',
+      }),
+    );
+    expect(screen.queryByText(/邀请/)).toBeNull();
+  });
+  it('不是群主：成员弹层里没有拉好友；群列表页也没有「用邀请加入」', async () => {
+    installFakeApi({ signedIn: true });
+    vi.stubGlobal('EventSource', Stream);
+    const router = await open(`/groups/${id}`);
     await waitFor(() => expect(Stream.instances).toHaveLength(1));
     act(() => Stream.instances[0]!.emit({ type: 'snapshot', snapshot }));
-    expect(await screen.findByText('欢迎加入')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: '更多发送方式' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '生成单次邀请' })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: '成员 · 2' }));
+    const popover = screen.getByRole('dialog', { name: '成员 · 2' });
+    expect(within(popover).getByLabelText('我在本群的昵称')).toBeTruthy();
+    expect(within(popover).queryByText('拉好友进群')).toBeNull();
+    await act(() => router.navigate({ to: '/groups' }));
+    expect(await screen.findByRole('region', { name: '我的群' })).toBeTruthy();
+    expect(screen.queryByText(/邀请/)).toBeNull();
   });
   it('重复的连接重放不重复显示消息；撤权清除消息并关连接', async () => {
     installFakeApi({ signedIn: true });

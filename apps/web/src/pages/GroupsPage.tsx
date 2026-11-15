@@ -1,70 +1,27 @@
 import { PageHeader } from '../ui/PageHeader.tsx';
 import { EmptyHint, Panel } from '../ui/Panel.tsx';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useRouter } from '@tanstack/react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { groupsQuery, previewGroupInvite, redeemGroupInvite } from '../api/queries.ts';
+import { useQuery } from '@tanstack/react-query';
+import { groupsQuery } from '../api/queries.ts';
 import { NewGroupDialog } from '../group/NewGroupDialog.tsx';
-import { GROUP_HISTORY_NOTICE } from '@oasis/contracts/group';
 
-const input = 'rounded-item border-0 bg-glass-active px-3 py-2 text-ink shadow-edge-strong';
 const button = 'rounded-full border-0 bg-accent px-4 py-2 text-on-accent disabled:opacity-45';
 
 export function GroupsPage() {
   const query = useQuery(groupsQuery),
-    client = useQueryClient(),
     navigate = useNavigate();
   const { hash } = useLocation();
   const router = useRouter();
-  const [creating, setCreating] = useState(hash === 'create-group'),
-    [name, setName] = useState(''),
-    [token, setToken] = useState(() => new URLSearchParams(hash).get('invite') ?? '');
-  const [invite, setInvite] = useState<{ title: string } | null>(null),
-    [consent, setConsent] = useState(false);
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
-  useEffect(() => {
-    const unsubscribe = router.subscribe('onBeforeNavigate', ({ toLocation }) => {
-      // 侧栏的「拉群」带着这个记号过来：打开拉群弹窗
-      if (toLocation.hash === 'create-group') setCreating(true);
-      const value = new URLSearchParams(toLocation.hash).get('invite');
-      if (value) {
-        setToken(value);
-        setInvite(null);
-        setConsent(false);
-      }
-    });
-    if (new URLSearchParams(hash).has('invite'))
-      void navigate({ to: '/groups', hash: '', replace: true });
-    return unsubscribe;
-  }, [hash, navigate, router]);
-  async function enter(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const group = await redeemGroupInvite(token.trim(), name.trim());
-      await client.invalidateQueries({ queryKey: ['groups'] });
-      await navigate({ to: '/groups/$groupId', params: { groupId: group.id } });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '操作失败');
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function inspect() {
-    setBusy(true);
-    setError('');
-    setConsent(false);
-    try {
-      setInvite(await previewGroupInvite(token.trim()));
-    } catch (err) {
-      setInvite(null);
-      setError(err instanceof Error ? err.message : '邀请不可用');
-    } finally {
-      setBusy(false);
-    }
-  }
+  const [creating, setCreating] = useState(hash === 'create-group');
+  useEffect(
+    () =>
+      router.subscribe('onBeforeNavigate', ({ toLocation }) => {
+        // 侧栏的「拉群」带着这个记号过来：打开拉群弹窗
+        if (toLocation.hash === 'create-group') setCreating(true);
+      }),
+    [router],
+  );
   return (
     <>
       <PageHeader title="群聊" description="和朋友、和各家 AI 在同一个群里聊想法、做计划。" />
@@ -80,7 +37,7 @@ export function GroupsPage() {
         {query.isPending && <EmptyHint>正在加载…</EmptyHint>}
         {query.isError && <p role="alert">{query.error.message}</p>}
         {query.data?.length === 0 && (
-          <EmptyHint>还没有群。可以创建一个，或用朋友发来的邀请加入。</EmptyHint>
+          <EmptyHint>还没有群。可以拉一个，或者让朋友加你为好友后把你拉进他的群。</EmptyHint>
         )}
         <ul className="m-0 flex list-none flex-col gap-2 p-0">
           {query.data?.map((group) => (
@@ -97,65 +54,9 @@ export function GroupsPage() {
           ))}
         </ul>
       </Panel>
-      {error && (
-        <p role="alert" className="text-accent">
-          {error}
-        </p>
-      )}
       <button type="button" className={`${button} self-start`} onClick={() => setCreating(true)}>
         拉个新群
       </button>
-      <Panel title="用邀请加入">
-        <label className="flex flex-col gap-2 text-sm">
-          你在群里的名字
-          <input
-            className={input}
-            value={name}
-            maxLength={40}
-            onChange={(event) => setName(event.target.value)}
-            autoComplete="nickname"
-          />
-        </label>
-        <form onSubmit={(event) => void enter(event)} className="flex flex-col gap-3">
-          <label className="flex flex-col gap-2 text-sm">
-            邀请码
-            <input
-              className={input}
-              value={token}
-              onChange={(event) => {
-                setToken(event.target.value);
-                setInvite(null);
-                setConsent(false);
-              }}
-              autoComplete="off"
-            />
-          </label>
-          <button
-            type="button"
-            className={button}
-            disabled={busy || !token.trim()}
-            onClick={() => void inspect()}
-          >
-            查看邀请
-          </button>
-          {invite && (
-            <>
-              <p className="m-0">加入「{invite.title}」</p>
-              <label className="flex gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={consent}
-                  onChange={(event) => setConsent(event.target.checked)}
-                />
-                我已了解：{GROUP_HISTORY_NOTICE}
-              </label>
-              <button className={button} disabled={busy || !consent || !name.trim()}>
-                加入群
-              </button>
-            </>
-          )}
-        </form>
-      </Panel>
     </>
   );
 }

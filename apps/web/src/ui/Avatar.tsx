@@ -1,4 +1,5 @@
-// 头像：AI 是珍珠白立体形状 + 各自的光色描边（光色来自模型目录数据），在忙时身后发光；真人是柔色圆形 + 首字。
+// 头像：AI 是珍珠白立体形状 + 各自的光色描边（光色来自模型目录数据），在忙时身后发光；
+// 真人传了头像就是那张图，没传是柔色圆形 + 名字的第一个字。
 interface AiAvatarProps {
   mono: string;
   glow: string;
@@ -44,11 +45,24 @@ export function PersonAvatar({
   label,
   size = 36,
   tone = 0,
+  src,
 }: {
   label: string;
   size?: number;
   tone?: number;
+  /** 头像图片的地址；没有就画名字的第一个字 */
+  src?: string | undefined;
 }) {
+  if (src)
+    return (
+      <img
+        src={src}
+        alt=""
+        aria-hidden="true"
+        className="shrink-0 rounded-full object-cover shadow-avatar-ring"
+        style={{ width: size, height: size }}
+      />
+    );
   return (
     <span
       aria-hidden="true"
