@@ -1,15 +1,23 @@
+// 群的接口：建群、成员和邀请、群里的 AI、发消息、推送。非成员读取或操作一律 404。
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import {
+  AddGroupAiBody,
   CreateGroupBody,
+  GroupAiRoleBody,
+  GroupOptionsPatch,
   GroupSendBody,
+  GroupSteerBody,
   InviteToken,
   RedeemGroupBody,
+  type GroupMessage,
 } from '@oasis/contracts/group';
 import { HttpError, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import type { GroupService } from '../service/group-service.ts';
 
 const Id = z.object({ id: z.uuid() });
+const AiParams = Id.extend({ key: z.string().min(1).max(50) });
+const MessageParams = Id.extend({ messageId: z.uuid() });
 const Cursor = z
   .object({
     after: z.coerce.number().int().nonnegative().safe().optional(),
@@ -19,6 +27,10 @@ const Cursor = z
     (value) => value.after === undefined || value.before === undefined,
     '不能同时指定前后游标',
   );
+/** 还在变的消息（AI 正在写的话、进行中的任务卡）：下一次推送时再给一遍最新的样子 */
+const inFlux = (message: GroupMessage) =>
+  message.status === 'streaming' || (message.kind === 'task' && message.data.status === 'running');
+
 export function registerGroupRoutes(app: ServiceApp, groups: GroupService, streamLimit: number) {
   const streams = new Map<string, Set<AbortController>>();
   app.addHook('preClose', async () => {
@@ -27,9 +39,7 @@ export function registerGroupRoutes(app: ServiceApp, groups: GroupService, strea
   app.get('/v1/groups', async (request) => ({ groups: await groups.list(requireUserId(request)) }));
   app.post('/v1/groups', async (request, reply) => {
     const body = parseWith(CreateGroupBody, request.body);
-    return reply
-      .code(201)
-      .send(await groups.create(requireUserId(request), body.title, body.displayName));
+    return reply.code(201).send(await groups.create(requireUserId(request), body, request.id));
   });
   app.post('/v1/groups/invites/preview', async (request) => {
     requireUserId(request);
@@ -46,6 +56,41 @@ export function registerGroupRoutes(app: ServiceApp, groups: GroupService, strea
       parseWith(Cursor, request.query),
     ),
   );
+  /** 群主改群的设置：光色、发言方式、分工方式 */
+  app.put('/v1/groups/:id/options', async (request) =>
+    groups.setOptions(
+      requireUserId(request),
+      parseWith(Id, request.params).id,
+      parseWith(GroupOptionsPatch, request.body),
+    ),
+  );
+  /** 群主叫一个 AI 进群 */
+  app.post('/v1/groups/:id/ais', async (request) =>
+    groups.addAi(
+      requireUserId(request),
+      parseWith(Id, request.params).id,
+      parseWith(AddGroupAiBody, request.body).key,
+      request.id,
+    ),
+  );
+  /** 群主写这个 AI 在群里负责什么 */
+  app.put('/v1/groups/:id/ais/:key', async (request) => {
+    const { id, key } = parseWith(AiParams, request.params);
+    const { role } = parseWith(GroupAiRoleBody, request.body);
+    return groups.setRole(requireUserId(request), id, key, role);
+  });
+  /** 群主把一个 AI 移出群 */
+  app.delete('/v1/groups/:id/ais/:key', async (request, reply) => {
+    const { id, key } = parseWith(AiParams, request.params);
+    await groups.removeAi(requireUserId(request), id, key, request.id);
+    return reply.code(204).send();
+  });
+  /** 停下这个 AI 正在做的一轮 */
+  app.post('/v1/groups/:id/ais/:key/stop', async (request, reply) => {
+    const { id, key } = parseWith(AiParams, request.params);
+    await groups.stopAi(requireUserId(request), id, key);
+    return reply.code(204).send();
+  });
   app.post('/v1/groups/:id/invites', async (request) =>
     groups.invite(requireUserId(request), parseWith(Id, request.params).id),
   );
@@ -59,7 +104,7 @@ export function registerGroupRoutes(app: ServiceApp, groups: GroupService, strea
     return reply.code(204).send();
   });
   app.delete('/v1/groups/:id', async (request, reply) => {
-    await groups.destroy(requireUserId(request), parseWith(Id, request.params).id);
+    await groups.destroy(requireUserId(request), parseWith(Id, request.params).id, request.id);
     return reply.code(204).send();
   });
   app.post('/v1/groups/:id/messages', async (request) => {
@@ -69,7 +114,15 @@ export function registerGroupRoutes(app: ServiceApp, groups: GroupService, strea
       parseWith(Id, request.params).id,
       body.content,
       body.requestId,
+      body.mentions,
     );
+  });
+  /** 「现在告诉它」：@ 了这个 AI、它还没看到的一句，现在作为插话送进它正在做的一轮 */
+  app.post('/v1/groups/:id/messages/:messageId/steer', async (request, reply) => {
+    const { id, messageId } = parseWith(MessageParams, request.params);
+    const { key } = parseWith(GroupSteerBody, request.body);
+    await groups.steer(requireUserId(request), id, messageId, key);
+    return reply.code(204).send();
   });
   app.get('/v1/groups/:id/events', async (request, reply) => {
     const userId = requireUserId(request),
@@ -104,8 +157,10 @@ export function registerGroupRoutes(app: ServiceApp, groups: GroupService, strea
         reply.raw.write(
           `id: ${after}\ndata: ${JSON.stringify({ type: 'snapshot', snapshot })}\n\n`,
         );
+        // AI 的消息是原地更新的（序号不变）：还在变的下次连同最新的样子再给一遍，直到它不再变
+        const watch = snapshot.live.filter(inFlux).map((message) => message.id);
         await delay(1000, undefined, { signal: controller.signal });
-        snapshot = await groups.get(userId, id, { after });
+        snapshot = await groups.get(userId, id, { after }, watch);
       }
     } catch (error) {
       if (error instanceof HttpError && error.statusCode === 404 && !reply.raw.destroyed)

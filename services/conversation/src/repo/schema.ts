@@ -26,11 +26,14 @@ export interface Turn {
   delivering?: string[];
   /** 这一轮已经登记进画布的成果 */
   files?: TaskFile[];
+  /** 群里的一轮：是谁的话引来的（用户 ID）。他们和群主能停下这一轮 */
+  callers?: string[];
 }
 
 export const conversations = pgTable('conversations', {
   id: uuid('id').primaryKey().defaultRandom(),
-  kind: text('kind', { enum: ['dm', 'group'] }).notNull(),
+  /** dm 私聊；group 群；seat 群里一个 AI 的席位（parentId 指向群，一轮和私聊的一样跑，消息写进群里） */
+  kind: text('kind', { enum: ['dm', 'group', 'seat'] }).notNull(),
   ownerId: uuid('owner_id').notNull(),
   modelKey: text('model_key'),
   title: text('title').notNull(),
@@ -45,6 +48,12 @@ export const conversations = pgTable('conversations', {
   workplace: jsonb('workplace').$type<Workplace>(),
   /** 权限：空按在哪干活的默认 */
   permissions: jsonb('permissions').$type<Permissions>(),
+  /** 席位挂在哪个群 */
+  parentId: uuid('parent_id'),
+  /** 席位听到群里第几条消息了 */
+  heardSeq: bigint('heard_seq', { mode: 'number' }).notNull().default(0),
+  /** 群：光色、发言方式、分工方式；席位：在群里负责什么、什么时候被移出 */
+  options: jsonb('options').$type<Record<string, unknown>>().notNull().default({}),
 });
 
 export const messages = pgTable('messages', {

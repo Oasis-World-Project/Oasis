@@ -3,7 +3,7 @@
 import type { TaskCard as TaskData, TaskFile } from '@oasis/contracts/conversation';
 import { Link } from '@tanstack/react-router';
 import { Activity, Images } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { artifactContentUrl } from '../api/queries.ts';
 import { formatCost } from '../ui/format.ts';
 import { FileChip } from './FileChip.tsx';
@@ -62,12 +62,23 @@ export const previewOf = (file: TaskFile, files: TaskFile[]): PreviewFile => {
   };
 };
 
+/** 任务卡上的一行：用时（进行中每秒走）和花费，后面可以接别的（如素材几个） */
+export function TaskFacts({ card, children }: { card: TaskData; children?: ReactNode }) {
+  const now = useNow(card.status === 'running');
+  const ended = card.finishedAt ? Date.parse(card.finishedAt) : now;
+  return (
+    <p className="m-0 text-[13px] text-ink-muted">
+      用时 <span className="text-ink">{elapsedText(ended - Date.parse(card.startedAt))}</span> ·
+      花费 <span className="font-display text-ink">{formatCost(card.spentMicro)}</span>
+      {children}
+    </p>
+  );
+}
+
 export function TaskCard({ card, speaker }: { card: TaskData; speaker: Speaker }) {
   const actions = useChatActions();
   const running = card.status === 'running';
-  const now = useNow(running);
   const [preview, setPreview] = useState<PreviewFile | null>(null);
-  const ended = card.finishedAt ? Date.parse(card.finishedAt) : now;
   const status = TASK_STATUS[card.status];
   const finals = card.files.filter((file) => !file.path.startsWith(MATERIALS));
   const materials = card.files.length - finals.length;
@@ -79,11 +90,7 @@ export function TaskCard({ card, speaker }: { card: TaskData; speaker: Speaker }
         title={card.title}
         status={<StatusTag tone={status.tone}>{status.label}</StatusTag>}
       />
-      <p className="m-0 text-[13px] text-ink-muted">
-        用时 <span className="text-ink">{elapsedText(ended - Date.parse(card.startedAt))}</span> ·
-        花费 <span className="font-display text-ink">{formatCost(card.spentMicro)}</span>
-        {materials > 0 && ` · 素材 ${materials} 个`}
-      </p>
+      <TaskFacts card={card}>{materials > 0 && ` · 素材 ${materials} 个`}</TaskFacts>
       {finals.length > 0 && (
         <ul aria-label="交出的成品" className="m-0 flex list-none flex-col gap-1.5 p-0">
           {finals.map((file) => (

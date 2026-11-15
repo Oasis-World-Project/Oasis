@@ -15,8 +15,12 @@ export function useStickToBottom(
     const box = scroller.current;
     const inner = content.current;
     if (!box || !inner) return;
+    // 只有人往上翻才算离开底部：内容一下子长高很多（连着来几条）时离底部也会变远，那不是人翻走的
+    let top = box.scrollTop;
     const onScroll = () => {
-      stuck.current = box.scrollHeight - box.scrollTop - box.clientHeight < NEAR_BOTTOM;
+      if (box.scrollHeight - box.scrollTop - box.clientHeight < NEAR_BOTTOM) stuck.current = true;
+      else if (box.scrollTop < top) stuck.current = false;
+      top = box.scrollTop;
     };
     box.addEventListener('scroll', onScroll, { passive: true });
     // jsdom 没有 ResizeObserver；测试里不需要贴底

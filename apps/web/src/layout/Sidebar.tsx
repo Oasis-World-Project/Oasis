@@ -145,7 +145,7 @@ export function Sidebar() {
 function ChatList({ open, kind }: { open: boolean; kind: 'dm' | 'group' }) {
   const dms = useQuery({ ...dmsQuery, enabled: kind === 'dm' });
   const groups = useQuery({ ...groupsQuery, enabled: kind === 'group' });
-  const entries: { id: string; title: string; modelKey?: string | null }[] =
+  const entries: { id: string; title: string; modelKey?: string | null; light?: string }[] =
     (kind === 'dm' ? dms.data : groups.data) ?? [];
   const models = useModelMap();
   if (entries.length === 0) {
@@ -174,6 +174,13 @@ function ChatList({ open, kind }: { open: boolean; kind: 'dm' | 'group' }) {
           >
             {model ? (
               <AiAvatar mono={model.mono} glow={model.glow} size={26} />
+            ) : kind === 'group' ? (
+              // 群：一个发着这个群的光的圆点
+              <span
+                aria-hidden="true"
+                data-light={dm.light}
+                className={`light-dot shrink-0 rounded-full ${open ? 'mx-[7px] size-3' : 'size-4'}`}
+              />
             ) : (
               <PersonAvatar label={name} size={26} />
             )}

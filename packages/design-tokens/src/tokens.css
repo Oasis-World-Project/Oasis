@@ -47,7 +47,47 @@
   --oasis-font-sans: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --oasis-font-display: 'Unbounded Variable', 'Unbounded', var(--oasis-font-sans);
 
-  /* 真人头像：柔色圆形 + 首字，外圈一道白描边 */
+  /* 群页（原型 ②）：聊天窗和工作台是更透的玻璃、圆角更大；弹层是更实的玻璃 */
+  --oasis-glass-window: rgb(255 255 255 / 0.38);
+  --oasis-glass-pop: rgb(250 250 253 / 0.86);
+  --oasis-glass-pop-blur: 36px;
+  --oasis-glass-edge-bright: inset 0 0 0 1px rgb(255 255 255 / 0.95);
+  --oasis-shadow-pop: 0 24px 60px rgb(60 54 84 / 0.18);
+  --oasis-shadow-dialog: 0 40px 90px rgb(60 54 84 / 0.22);
+  --oasis-veil: rgb(214 212 226 / 0.45);
+  --oasis-radius-window: 36px;
+  --oasis-radius-pop: 28px;
+  --oasis-radius-dialog: 40px;
+
+  /* 气泡：别人的话是白玻璃，圆角 22、靠头像的一角 8；AI 的气泡带它的光色；我的话是墨色实底 */
+  --oasis-bubble: rgb(255 255 255 / 0.72);
+  --oasis-bubble-edge: inset 0 0 0 1px rgb(255 255 255 / 0.85);
+  --oasis-radius-bubble: 22px;
+  --oasis-radius-tail: 8px;
+
+  /* 输入框的投影、发送钮的投影 */
+  --oasis-shadow-composer: 0 10px 30px rgb(70 64 90 / 0.08);
+  --oasis-shadow-accent: 0 8px 22px rgb(238 93 67 / 0.38);
+
+  /* @：胶囊的底和字；墨色气泡里的 @ */
+  --oasis-accent-tint: rgb(238 93 67 / 0.12);
+  --oasis-accent-ink: #b5321c;
+  --oasis-accent-soft: #ff9a84;
+
+  /* 分段选择的底槽；舞台上有空的 AI 名字前的点 */
+  --oasis-well: rgb(38 39 52 / 0.06);
+  --oasis-dot-idle: rgb(38 39 52 / 0.25);
+
+  /* 群页的光（没选时是珊瑚）：主光在聊天窗上方，另两团在右下和左下 */
+  --oasis-room-ground: #dddce6;
+  --oasis-room-1: rgb(255 150 128 / 0.5);
+  --oasis-room-2: rgb(255 128 160 / 0.32);
+  --oasis-room-3: rgb(190 182 232 / 0.6);
+
+  /* 真人头像：柔色圆形 + 首字，外圈一道白描边；群里按人分几种柔色 */
+  --oasis-person-2: #c9d8ee;
+  --oasis-person-3: #f1d5c2;
+  --oasis-person-4: #d3e3cb;
   --oasis-person-me: #f2c6d4;
   --oasis-avatar-ring: 0 0 0 2px rgb(255 255 255 / 0.9);
 
@@ -60,18 +100,34 @@
 [data-light='coral'] {
   --oasis-light: #ff9680;
   --oasis-light-tint: rgb(255 150 128 / 0.22);
+  --oasis-room-ground: #dddce6;
+  --oasis-room-1: rgb(255 150 128 / 0.5);
+  --oasis-room-2: rgb(255 128 160 / 0.32);
+  --oasis-room-3: rgb(190 182 232 / 0.6);
 }
 [data-light='mint'] {
   --oasis-light: #78d6ba;
   --oasis-light-tint: rgb(120 214 186 / 0.22);
+  --oasis-room-ground: #dce1e2;
+  --oasis-room-1: rgb(120 214 186 / 0.48);
+  --oasis-room-2: rgb(150 200 230 / 0.38);
+  --oasis-room-3: rgb(200 214 190 / 0.6);
 }
 [data-light='sky'] {
   --oasis-light: #8cb6fa;
   --oasis-light-tint: rgb(140 182 250 / 0.22);
+  --oasis-room-ground: #dcdde8;
+  --oasis-room-1: rgb(140 182 250 / 0.48);
+  --oasis-room-2: rgb(255 186 150 / 0.34);
+  --oasis-room-3: rgb(186 190 240 / 0.58);
 }
 [data-light='honey'] {
   --oasis-light: #f6c878;
   --oasis-light-tint: rgb(246 200 120 / 0.24);
+  --oasis-room-ground: #e0dde4;
+  --oasis-room-1: rgb(246 200 120 / 0.48);
+  --oasis-room-2: rgb(222 150 190 / 0.34);
+  --oasis-room-3: rgb(206 192 226 / 0.58);
 }
 [data-light] {
   --oasis-glow-1: color-mix(in srgb, var(--oasis-light) 46%, transparent);

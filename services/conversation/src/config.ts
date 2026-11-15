@@ -6,6 +6,8 @@ export const conversationEnv = {
   GROUP_MAX_PER_USER: z.coerce.number().int().positive().max(100).default(20),
   GROUP_MESSAGES_PER_MINUTE: z.coerce.number().int().positive().max(120).default(30),
   GROUP_STREAMS_PER_USER: z.coerce.number().int().positive().max(10).default(3),
+  /** 一个群最多几个 AI（契约里的上限是 8） */
+  GROUP_MAX_AIS: z.coerce.number().int().positive().max(8).default(8),
   ...databaseEnv,
   /** 开一轮时拿这个 AI 的型号、人设和用户的设置 */
   AGENT_URL: z.url(),

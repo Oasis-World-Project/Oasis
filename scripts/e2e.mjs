@@ -162,7 +162,7 @@ try {
     'http://127.0.0.1:5173';
   const mailpit = `http://127.0.0.1:${readEnv(path.join(ROOT, '.env')).MAILPIT_UI_HOST_PORT ?? 8025}`;
 
-  // 上一轮回归中断时留下的私聊：用当时的测试账号登录，删掉（和用户删私聊同一条路，进行中的一轮先取消）
+  // 上一轮回归中断时留下的私聊和群：用当时的测试账号登录，删掉（和用户删私聊、解散群同一条路，进行中的一轮先取消）
   const testers = query(
     'identity',
     `select id, email from users where email like 'e2e-%@example.test'`,
@@ -171,13 +171,15 @@ try {
     ? new Set(
         query(
           'conversation',
-          `select distinct owner_id from conversations where kind = 'dm' and owner_id in (${testers.map((u) => literal(u.id)).join(',')})`,
+          `select distinct owner_id from conversations where kind in ('dm', 'group') and owner_id in (${testers.map((u) => literal(u.id)).join(',')})`,
         ).map((r) => r.owner_id),
       )
     : new Set();
   for (const tester of testers.filter((u) => owners.has(u.id))) {
     const old = await signIn({ gateway: gatewayUrl, mailpit, origin, email: tester.email });
-    log(`清理上一轮留下的私聊：${await old.removeDms()} 个（${tester.email}）`);
+    log(
+      `清理上一轮留下的：私聊 ${await old.removeDms()} 个、群 ${await old.removeGroups()} 个（${tester.email}）`,
+    );
   }
 
   // ---------- 跑场景：会重启服务的场景单独排在后面一个个跑 ----------
@@ -204,6 +206,8 @@ try {
         this.log(`私聊 ${conversationId}`);
       },
       canvas: (artifact, plan) => checkCanvas({ t, webUrl, outDir, artifact, plan }),
+      /** 再来一个用户（群聊场景里的群员） */
+      another: () => signIn({ gateway: gatewayUrl, mailpit, origin }),
     };
     const begin = Date.now();
     let watchdog;

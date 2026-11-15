@@ -1,5 +1,6 @@
 // 私聊的存储：对话、消息，以及正在进行的一轮（turn）。
 import { randomUUID } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { and, asc, desc, eq, isNotNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
@@ -8,6 +9,9 @@ import { conversations, messages, type Turn } from './schema.ts';
 
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
+/** 这个会话的消息写在哪：私聊是它自己；群里的席位写进它所在的群 */
+export const roomOf = (conversation: Pick<Conversation, 'id' | 'parentId'>) =>
+  conversation.parentId ?? conversation.id;
 type NewMessage = Pick<
   typeof messages.$inferInsert,
   'conversationId' | 'authorKind' | 'authorId' | 'content' | 'status' | 'kind' | 'data' | 'error'
@@ -58,6 +62,23 @@ export interface ConversationRepo {
   newTopic(id: string): Promise<void>;
   /** 改在哪干活和权限（下一轮起用） */
   saveSetup(id: string, setup: Pick<Conversation, 'workplace' | 'permissions'>): Promise<void>;
+}
+
+/** 拿 message 锁：AI 的进度正在写进消息时锁会被占一小会儿，等一等再拿（最多约 5 秒） */
+export async function withMessageLock<T>(
+  repo: ConversationRepo,
+  conversationId: string,
+  work: (store: ConversationRepo) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await repo.withLock('message', conversationId, work);
+    } catch (err) {
+      if (!(err instanceof HttpError && err.code === 'conversation_busy') || attempt >= 50)
+        throw err;
+      await sleep(100);
+    }
+  }
 }
 
 /** 会话锁的租约：持有期间每 10 秒续一次；进程崩了，30 秒后别的实例就能接着处理这段对话 */

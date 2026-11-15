@@ -19,6 +19,16 @@
   --color-glass-strong: var(--oasis-glass-strong);
   --color-glass-active: var(--oasis-glass-active);
   --color-person-me: var(--oasis-person-me);
+  --color-person-2: var(--oasis-person-2);
+  --color-person-3: var(--oasis-person-3);
+  --color-person-4: var(--oasis-person-4);
+  --color-bubble: var(--oasis-bubble);
+  --color-accent-tint: var(--oasis-accent-tint);
+  --color-accent-ink: var(--oasis-accent-ink);
+  --color-accent-soft: var(--oasis-accent-soft);
+  --color-well: var(--oasis-well);
+  --color-dot-idle: var(--oasis-dot-idle);
+  --color-veil: var(--oasis-veil);
   --color-plaza-night: var(--oasis-plaza-night);
   --color-plaza-gold: var(--oasis-plaza-gold);
   --color-plaza-parchment: var(--oasis-plaza-parchment);
@@ -30,6 +40,10 @@
   --radius-panel: var(--oasis-radius-panel);
   --radius-card: var(--oasis-radius-card);
   --radius-item: var(--oasis-radius-item);
+  --radius-window: var(--oasis-radius-window);
+  --radius-pop: var(--oasis-radius-pop);
+  --radius-dialog: var(--oasis-radius-dialog);
+  --radius-bubble: var(--oasis-radius-bubble);
 
   --shadow-panel: var(--oasis-shadow-panel);
   --shadow-raised: var(--oasis-shadow-raised);
@@ -38,6 +52,10 @@
   --shadow-avatar-ring: var(--oasis-avatar-ring);
   --shadow-plaza-edge: var(--oasis-plaza-gold-edge);
   --shadow-pearl: var(--oasis-pearl-ring);
+  --shadow-edge-bright: var(--oasis-glass-edge-bright);
+  --shadow-bubble-edge: var(--oasis-bubble-edge);
+  --shadow-accent: var(--oasis-shadow-accent);
+  --shadow-dialog: var(--oasis-glass-edge-strong), var(--oasis-shadow-dialog);
 }
 
 /* 应用底色：浅灰丁香 + 四团柔光；在 [data-light] 下随群换光 */
@@ -48,6 +66,65 @@
     radial-gradient(45% 50% at 60% 100%, var(--oasis-glow-3), transparent 70%),
     radial-gradient(40% 50% at 0% 90%, var(--oasis-glow-4), transparent 70%), var(--oasis-ground);
   color: var(--oasis-ink);
+}
+
+/* 群页的底：三团光，随 [data-light] 换色；主光在聊天窗上方 */
+@utility oasis-room {
+  background:
+    radial-gradient(42% 48% at 42% 30%, var(--oasis-room-1), transparent 72%),
+    radial-gradient(40% 50% at 96% 92%, var(--oasis-room-2), transparent 70%),
+    radial-gradient(50% 55% at 2% 98%, var(--oasis-room-3), transparent 70%),
+    var(--oasis-room-ground);
+}
+
+/* 群页的窗口（聊天窗、工作台）：比侧栏更透一点的磨砂玻璃 */
+@utility glass-window {
+  background: var(--oasis-glass-window);
+  backdrop-filter: blur(var(--oasis-glass-blur)) saturate(160%);
+  box-shadow: var(--oasis-glass-edge), var(--oasis-shadow-panel);
+}
+
+/* 弹层（菜单、卡片、召唤谁）：更实的磨砂玻璃 */
+@utility glass-pop {
+  background: var(--oasis-glass-pop);
+  backdrop-filter: blur(var(--oasis-glass-pop-blur)) saturate(160%);
+  box-shadow: var(--oasis-glass-edge-strong), var(--oasis-shadow-pop);
+}
+
+/* 输入框：白玻璃 + 一圈亮边 + 轻投影 */
+@utility glass-composer {
+  background: var(--oasis-bubble);
+  box-shadow: var(--oasis-glass-edge-bright), var(--oasis-shadow-composer);
+}
+
+/* 气泡的圆角：别人的话尾巴在左下（靠头像），我的话尾巴在右下 */
+@utility bubble-in {
+  border-radius: var(--oasis-radius-bubble) var(--oasis-radius-bubble) var(--oasis-radius-bubble)
+    var(--oasis-radius-tail);
+}
+@utility bubble-out {
+  border-radius: var(--oasis-radius-bubble) var(--oasis-radius-bubble) var(--oasis-radius-tail)
+    var(--oasis-radius-bubble);
+}
+
+/* 群的光：侧栏里的光点、拉群时挑光的色块（放在带 data-light 的元素上） */
+@utility light-dot {
+  background: var(--oasis-light);
+  box-shadow: 0 0 10px var(--oasis-light);
+}
+@utility light-swatch {
+  background: radial-gradient(circle at 35% 30%, var(--oasis-on-solid), var(--oasis-light) 75%);
+}
+
+/* 消息区顶上渐隐 */
+@utility fade-top {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
+}
+
+/* 不抢眼的滚动条：细、淡，没有轨道 */
+@utility scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: var(--oasis-hairline) transparent;
 }
 
 /* AI 头像的珍珠白材质 */

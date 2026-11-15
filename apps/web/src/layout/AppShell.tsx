@@ -18,7 +18,8 @@ export function AppShell() {
         .some((query) => query.isActive() && isConnectionError(query.state.error)),
   );
   return (
-    <div className="oasis-ground flex min-h-screen gap-[18px] p-[18px]">
+    // isolate：群页把自己的光铺在最底下（负的层级），要压在这层底色上面、别的内容下面
+    <div className="oasis-ground isolate flex min-h-screen gap-[18px] p-[18px]">
       <Sidebar />
       {/* 桌面端：后台把新成果同步到电脑（浏览器里什么也不做） */}
       <DesktopSync />

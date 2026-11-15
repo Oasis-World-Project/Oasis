@@ -2,6 +2,7 @@
 // + 用户怎么操作 + 断言。用户每句话里带标记 [[e2e:场景@本轮编号/第几句]]。各场景按类分在 scenarios/ 下。
 import { device } from './scenarios/device.mjs';
 import { fault, gateway, takeover } from './scenarios/faults.mjs';
+import { group } from './scenarios/group.mjs';
 import { media, video } from './scenarios/media.mjs';
 import { interject, revise, stop, topic, workspace } from './scenarios/revise.mjs';
 import { chat, solo, web } from './scenarios/web.mjs';
@@ -18,6 +19,7 @@ export const SCENARIOS = {
   stop,
   topic,
   workspace,
+  group,
   video,
   device,
   fault,

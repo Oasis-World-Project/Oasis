@@ -1,6 +1,5 @@
 // 私聊：建对话、列消息、发消息（开一轮或插话，见 turns.ts）、停下这一轮、开新话题、删对话。
 // 私聊里的 AI 就是干活的主 AI；花的钱由对话的主人付。
-import { setTimeout as sleep } from 'node:timers/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { ModelRoute } from '@oasis/contracts/agent';
 import { ArtifactLookupResult, UploadLookupResult } from '@oasis/contracts/canvas';
@@ -20,7 +19,13 @@ import type {
 import { defaultPermissions, RunBody, type Workplace } from '@oasis/contracts/harness';
 import { Confirmation, type ConfirmDecision } from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
-import type { Conversation, ConversationRepo, Message } from '../repo/conversation-repo.ts';
+import {
+  withMessageLock as lockMessages,
+  type Conversation,
+  type ConversationRepo,
+  type Message,
+} from '../repo/conversation-repo.ts';
+import type { Purge } from './purge.ts';
 import type { Turns } from './turns.ts';
 
 const turnState = (row: Conversation): TurnState | null =>
@@ -41,7 +46,8 @@ function setupOf(row: Conversation): SetupBody {
 function toConversationBody(row: Conversation): ConversationBody {
   return {
     id: row.id,
-    kind: row.kind,
+    // 这里只有私聊（群里的席位不经这个接口给出去）
+    kind: 'dm',
     title: row.title,
     modelKey: row.modelKey,
     createdAt: row.createdAt.toISOString(),
@@ -77,8 +83,6 @@ async function queuedMessage(
   return message;
 }
 
-/** 删对话前等被取消的那一轮收尾，最多等这么久 */
-const CANCEL_WAIT_MS = 60_000;
 /** 画布上最多列多少个任务 */
 const TASK_LIMIT = 500;
 
@@ -89,6 +93,7 @@ export function createDmService(deps: {
   canvas: ServiceClient;
   modelGateway: ServiceClient;
   turns: Turns;
+  purge: Purge;
   logger: Logger;
 }) {
   const { repo, turns } = deps;
@@ -99,42 +104,10 @@ export function createDmService(deps: {
     return conversation;
   }
 
-  /** 拿 message 锁：AI 的进度正在写进消息时锁会被占一小会儿，等一等再拿（最多约 5 秒） */
-  async function withMessageLock<T>(
+  const withMessageLock = <T>(
     conversationId: string,
     work: (store: ConversationRepo) => Promise<T>,
-  ): Promise<T> {
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        return await repo.withLock('message', conversationId, work);
-      } catch (err) {
-        if (!(err instanceof HttpError && err.code === 'conversation_busy') || attempt >= 50)
-          throw err;
-        await sleep(100);
-      }
-    }
-  }
-
-  /** 删对话前：取消正在进行的一轮，等它收尾（沙箱停掉、产出存好） */
-  async function cancelTurn(conversation: Conversation) {
-    if (!conversation.turn) return;
-    const { runId } = conversation.turn;
-    await deps.harness
-      .json('POST', `/internal/runs/${runId}/cancel`, { body: {} })
-      .catch((err: unknown) => {
-        if (!(err instanceof HttpError && err.statusCode === 404)) throw err;
-      });
-    for (const started = Date.now(); Date.now() - started < CANCEL_WAIT_MS; await sleep(500)) {
-      const run = await deps.harness
-        .json('GET', `/internal/runs/${runId}`, { schema: RunBody })
-        .catch((err: unknown) => {
-          if (err instanceof HttpError && err.statusCode === 404) return undefined;
-          throw err;
-        });
-      if (!run || !['queued', 'starting', 'running'].includes(run.status)) return;
-    }
-    throw new HttpError(409, 'turn_active', '这一轮还在收尾，请稍后再删');
-  }
+  ) => lockMessages(repo, conversationId, work);
 
   /** 从新话题开始：AI 的会话记录和工作目录真删除（成品已经在画布里），聊天里插一条分隔 */
   async function startTopic(
@@ -459,21 +432,10 @@ export function createDmService(deps: {
      */
     async deleteDm(ownerId: string, conversationId: string, requestId: string) {
       const conversation = await owned(conversationId, ownerId);
-      await cancelTurn(conversation);
+      await deps.purge.cancelTurn(conversation);
       await withMessageLock(conversation.id, async (store) => {
         const id = conversation.id;
-        await deps.harness.json('POST', `/internal/conversations/${id}/purge`, {
-          body: {},
-          requestId,
-        });
-        await deps.modelGateway.json('POST', `/internal/conversations/${id}/purge`, {
-          body: {},
-          requestId,
-        });
-        await deps.canvas.json('POST', `/internal/conversations/${id}/purge`, {
-          body: { ownerId },
-          requestId,
-        });
+        await deps.purge.remote(id, ownerId, requestId);
         // 先删文件再删对话：删文件失败时对话还在，用户重试即可（删除都是幂等的）
         const files = await store.attachmentIds(id);
         if (files.length)

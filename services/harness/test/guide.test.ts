@@ -109,5 +109,15 @@ describe('给主 AI 的说明和技能', () => {
     expect(device[0]!.content.toString()).toBe(
       '# 在 Oasis 里干活\n\n## 环境\n\n- 用户的电脑\n\n## 交付\n\n- out/\n',
     );
+    // 群里的一轮：只换开头（第一个二级标题之前），别的不动
+    const group = guideFiles(
+      { ...guide, group: '# 在 Oasis 的群里干活\n\n你在一个群里。\n' },
+      '',
+      { kind: 'cloud' },
+      'group',
+    );
+    expect(group[0]!.content.toString()).toBe(
+      '# 在 Oasis 的群里干活\n\n你在一个群里。\n\n## 环境\n\n- 沙箱\n\n## 交付\n\n- out/\n',
+    );
   });
 });

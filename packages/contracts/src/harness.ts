@@ -75,6 +75,11 @@ export const StartRunBody = z.object({
   model: z.string().min(1).max(200),
   /** 这个 AI 是谁（人设），写进沙箱里给 AI 的说明 */
   persona: z.string().max(20_000).default(''),
+  /**
+   * 这一轮在什么场合：私聊（一对一），还是群里（几个人和几个 AI；说明开头换成群里的那一节，
+   * 群里有谁、各自负责什么写在 persona 里）
+   */
+  scene: z.enum(['dm', 'group']).default('dm'),
   /** 用户打开了「只用国内模型」：国外厂商的型号不能开这一轮，这一轮的工具也只给国内厂商的型号 */
   domesticOnly: z.boolean().default(false),
   /** 用户这一轮说的话 */

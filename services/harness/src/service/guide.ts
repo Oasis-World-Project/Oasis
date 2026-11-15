@@ -1,5 +1,5 @@
 // 给沙箱里主 AI 的说明和命令：guide/AGENTS.md 是平台规则（在 Oasis 里怎么干活；在用户电脑上干活时
-// 「环境」一节换成 guide/device.md），guide/playbooks/ 下
+// 「环境」一节换成 guide/device.md，群里的一轮开头换成 guide/group.md），guide/playbooks/ 下
 // 每个 .md 是一份场景经验，作为技能交给 AI，需要时它自己读；oasis-tool 这些命令和 dsh 组合也从仓库里拿。
 // 每轮开沙箱时现读，改了不用重启 harness。
 // 经验格式：第一行「# 名称」，接着一行「> 适用：……」，其余是正文。
@@ -82,16 +82,18 @@ export async function loadSandboxFiles(root: string): Promise<SandboxFiles[]> {
   ]);
 }
 
-/** 读平台规则（device.md 是在用户电脑上干活时换上的「环境」一节）和全部经验 */
+/** 读平台规则（device.md 是在用户电脑上干活时换上的「环境」一节，group.md 是群里换上的开头）和全部经验 */
 export async function loadGuide(dir: string): Promise<AgentGuide> {
-  const [rules, device, playbooks] = await Promise.all([
+  const [rules, device, group, playbooks] = await Promise.all([
     readFile(join(dir, 'AGENTS.md'), 'utf8'),
     readFile(join(dir, 'device.md'), 'utf8'),
+    readFile(join(dir, 'group.md'), 'utf8'),
     loadPlaybooks(join(dir, 'playbooks')),
   ]);
   return {
     rules,
     device,
+    group,
     skills: playbooks.map((p) => ({
       name: p.key,
       description: `${p.name}。适用：${p.when}`,

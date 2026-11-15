@@ -155,6 +155,13 @@ export async function signIn(options) {
       for (const c of targets) await api.del(dm(c.id));
       return targets.length;
     },
+    /** 解散这个用户建的群（真删除：每个 AI 的会话、工作目录、成果一起删）；返回解散了几个 */
+    async removeGroups() {
+      const { groups } = await api.get('/conversation/v1/groups');
+      const mine = groups.filter((g) => g.ownerId === signed.user.id);
+      for (const g of mine) await api.del(`/conversation/v1/groups/${g.id}`);
+      return mine.length;
+    },
     artifacts: listOf,
     /** 等到这些文件都在（返回全部成果） */
     waitArtifacts: (conversationId, paths, timeoutMs = 60_000) =>

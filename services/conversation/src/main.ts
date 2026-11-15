@@ -1,5 +1,6 @@
 // conversation：私聊和群聊。私聊里的 AI 就是干活的主 AI：用户说一句开一轮（harness 的一次运行），
 // 一轮进行中说的话是插话；这里跟进每一轮，把 AI 说的话和做的步骤写进消息，结束时成品登记进画布。
+// 群里的每个 AI 有一个席位，它的一轮和私聊的是同一套，消息写进群里。
 import { fileURLToPath } from 'node:url';
 import { createPostgres, createServiceClient, startService } from '@oasis/service-kit';
 import { registerRoutes } from './api/routes.ts';
@@ -7,8 +8,10 @@ import { registerGroupRoutes } from './api/group-routes.ts';
 import { conversationEnv } from './config.ts';
 import { createConversationRepo } from './repo/conversation-repo.ts';
 import { createGroupRepo } from './repo/group-repo.ts';
+import { createGroupSeats } from './repo/group-seats.ts';
 import { createDmService } from './service/dm-service.ts';
 import { createGroupService } from './service/group-service.ts';
+import { createPurge } from './service/purge.ts';
 import { createTurns } from './service/turns.ts';
 
 /** 多久看一次有没有别的实例丢下的一轮（它的跟进租约过期后接手） */
@@ -39,17 +42,34 @@ await startService({
       logger,
       pollMs: config.TURN_POLL_MS,
     });
-    const dms = createDmService({ repo, agent, harness, canvas, modelGateway, turns, logger });
+    const purge = createPurge({ harness, modelGateway, canvas });
+    const dms = createDmService({
+      repo,
+      agent,
+      harness,
+      canvas,
+      modelGateway,
+      turns,
+      purge,
+      logger,
+    });
     registerRoutes(app, dms);
     registerGroupRoutes(
       app,
-      createGroupService(
-        createGroupRepo(resources.postgres.pool, {
+      createGroupService({
+        repo: createGroupRepo(resources.postgres.pool, {
           members: config.GROUP_MAX_MEMBERS,
           groups: config.GROUP_MAX_PER_USER,
           messagesPerMinute: config.GROUP_MESSAGES_PER_MINUTE,
+          ais: config.GROUP_MAX_AIS,
         }),
-      ),
+        seats: createGroupSeats(resources.postgres.pool),
+        store: repo,
+        turns,
+        agent,
+        purge,
+        logger,
+      }),
       config.GROUP_STREAMS_PER_USER,
     );
     const resume = () =>

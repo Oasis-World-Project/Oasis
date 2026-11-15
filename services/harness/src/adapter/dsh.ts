@@ -39,6 +39,8 @@ export interface AgentGuide {
   rules: string;
   /** 在用户电脑上干活时换掉说明里的「## 环境」一节 */
   device: string;
+  /** 群里的一轮换掉说明的开头（第一个二级标题之前）：不是一对一聊天，是群里的一个 AI */
+  group?: string;
   skills: { name: string; description: string; content: string }[];
 }
 
@@ -51,19 +53,27 @@ function replaceSection(rules: string, section: string): string {
   return `${rules.slice(0, start)}${section.trim()}\n${next < 0 ? '' : rules.slice(next)}`;
 }
 
+/** 说明的开头（第一个二级标题之前）换成 intro */
+function replaceIntro(rules: string, intro: string): string {
+  const next = rules.indexOf('\n## ');
+  return `${intro.trim()}\n${next < 0 ? '' : rules.slice(next)}`;
+}
+
 /**
  * 放进 dsh 用户目录的文件（路径相对 {@link SANDBOX_PATHS.dshHome}）：dsh 把 AGENTS.md 当作用户的
  * 全局说明放进系统提示，把 skills/ 下的技能列给 AI（2026-11-14 用镜像里的 dsh 实测两处都会读）。
- * 这个 AI 的人设放在说明最前面；在用户电脑上干活时「环境」一节换成电脑上的。
+ * 这个 AI 的人设放在说明最前面；在用户电脑上干活时「环境」一节换成电脑上的；群里的一轮开头换成群里的。
  */
 export function guideFiles(
   guide: AgentGuide,
   persona: string,
   workplace: Workplace = { kind: 'cloud' },
+  scene: 'dm' | 'group' = 'dm',
 ) {
   const who = persona.trim() ? `# 你是谁\n\n${persona.trim()}\n\n` : '';
-  const rules =
+  const placed =
     workplace.kind === 'device' ? replaceSection(guide.rules, guide.device) : guide.rules;
+  const rules = scene === 'group' && guide.group ? replaceIntro(placed, guide.group) : placed;
   return [
     { path: 'AGENTS.md', content: Buffer.from(who + rules) },
     ...guide.skills.map((skill) => ({

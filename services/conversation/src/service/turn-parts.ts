@@ -10,7 +10,12 @@ import {
 import type { RunBody, RunEventBody } from '@oasis/contracts/harness';
 import { HttpError } from '@oasis/service-kit';
 import { z } from 'zod';
-import type { Conversation, ConversationRepo, Message } from '../repo/conversation-repo.ts';
+import {
+  roomOf,
+  type Conversation,
+  type ConversationRepo,
+  type Message,
+} from '../repo/conversation-repo.ts';
 
 /** 一段 AI 消息：按顺序的几段内容，和最新的待办 */
 export interface Segment {
@@ -165,15 +170,15 @@ function deliveredFiles(segment: Segment, events: RunEventBody[]): string[] {
   );
 }
 
-/** 把一段事件写进这条 AI 消息，返回这段里做好的 out/ 里的文件 */
+/** 把一段事件写进这条 AI 消息（room：消息在哪个对话里），返回这段里做好的 out/ 里的文件 */
 async function append(
   store: ConversationRepo,
-  conversationId: string,
+  room: string,
   segmentId: string,
   events: RunEventBody[],
   durations: Durations | undefined,
 ): Promise<string[]> {
-  const message = events.length ? await store.findMessage(conversationId, segmentId) : undefined;
+  const message = events.length ? await store.findMessage(room, segmentId) : undefined;
   if (!message) return [];
   const next = applyEvents(segmentOf(message), events, durations);
   await store.updateMessage(message.id, {
@@ -193,7 +198,7 @@ async function afterInterjection(
   runId: string,
   segmentId: string,
 ): Promise<string> {
-  const previous = await store.findMessage(conversation.id, segmentId);
+  const previous = await store.findMessage(roomOf(conversation), segmentId);
   const before: Segment = previous ? segmentOf(previous) : { parts: [] };
   const running = before.parts.filter((p) => p.type === 'step' && p.status === 'running');
   const kept = { parts: before.parts.filter((p) => !running.includes(p)) };
@@ -205,7 +210,7 @@ async function afterInterjection(
       data: { ...previous.data, parts: kept.parts },
     });
   const segment = await store.insertMessage({
-    conversationId: conversation.id,
+    conversationId: roomOf(conversation),
     authorKind: 'ai',
     authorId: conversation.modelKey ?? 'unknown',
     content: '',
@@ -235,6 +240,7 @@ export async function writeEvents(
       const turn = conversation?.turn;
       if (!conversation || turn?.runId !== runId) return false;
       let { segmentId, unheard = 0 } = turn;
+      const room = roomOf(conversation);
       const delivering = [...(turn.delivering ?? [])];
       const deliver = (paths: string[]) => {
         for (const path of paths) if (!delivering.includes(path)) delivering.push(path);
@@ -248,12 +254,12 @@ export async function writeEvents(
           pending.push(event);
           continue;
         }
-        deliver(await append(locked, conversationId, segmentId, pending, durations));
+        deliver(await append(locked, room, segmentId, pending, durations));
         pending = [];
         segmentId = await afterInterjection(locked, conversation, runId, segmentId);
         unheard -= 1;
       }
-      deliver(await append(locked, conversationId, segmentId, pending, durations));
+      deliver(await append(locked, room, segmentId, pending, durations));
       await locked.updateTurn(conversationId, runId, {
         cursor: events.at(-1)!.seq,
         segmentId,

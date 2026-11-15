@@ -37,11 +37,22 @@ export function AiAvatar({ mono, glow, size = 36, glowing = false }: AiAvatarPro
   );
 }
 
-export function PersonAvatar({ label, size = 36 }: { label: string; size?: number }) {
+/** 真人头像的几种柔色：群里按人分（tone），不给就是自己的那种 */
+const PERSON_TONES = ['bg-person-me', 'bg-person-2', 'bg-person-3', 'bg-person-4'];
+
+export function PersonAvatar({
+  label,
+  size = 36,
+  tone = 0,
+}: {
+  label: string;
+  size?: number;
+  tone?: number;
+}) {
   return (
     <span
       aria-hidden="true"
-      className="flex shrink-0 items-center justify-center rounded-full bg-person-me font-medium text-ink shadow-avatar-ring"
+      className={`flex shrink-0 items-center justify-center rounded-full font-medium text-ink shadow-avatar-ring ${PERSON_TONES[tone % PERSON_TONES.length]}`}
       style={{ width: size, height: size, fontSize: Math.round(size * 0.4) }}
     >
       {label.slice(0, 1).toUpperCase()}

@@ -4,10 +4,9 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { createHttpServer } from '@oasis/service-kit';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createGroupRepo } from '../src/repo/group-repo.ts';
-import { createGroupService } from '../src/service/group-service.ts';
 import { createConversationRepo } from '../src/repo/conversation-repo.ts';
 import { registerGroupRoutes } from '../src/api/group-routes.ts';
+import { humanGroups, NEW_GROUP } from './support/group-fixture.ts';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与事件连接', () => {
   const schema = 'groups_test_' + randomUUID().replaceAll('-', '');
@@ -19,8 +18,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     member = randomUUID(),
     outsider = randomUUID(),
     dm = randomUUID();
-  const repo = createGroupRepo(pool, { members: 3, groups: 20, messagesPerMinute: 30 }),
-    groups = createGroupService(repo);
+  const groups = humanGroups(pool, 30);
+  const newGroup = (title: string) => groups.create(owner, { title, ...NEW_GROUP }, 'r');
   const app = createHttpServer({
     service: 'groups-test',
     version: 'test',
@@ -64,7 +63,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
   });
   const headers = (id: string) => ({ 'x-oasis-user-id': id });
   async function setup() {
-    const group = await groups.create(owner, '测试群', '群主');
+    const group = await newGroup('测试群');
     const ticket = await groups.invite(owner, group.id);
     await groups.redeem(member, ticket.token, '成员');
     return group;
@@ -86,7 +85,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     await expect(groups.get(member, dm)).rejects.toMatchObject({ statusCode: 404 });
   });
   it('单次邀请并发兑换只有一人成功，明文令牌不入库，重新生成和撤销生效', async () => {
-    const group = await groups.create(owner, '邀请测试', '群主');
+    const group = await newGroup('邀请测试');
     const invite = await groups.invite(owner, group.id);
     const attempts = await Promise.allSettled([
       groups.redeem(member, invite.token, '乙'),
@@ -124,7 +123,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       statusCode: 403,
     });
     await expect(groups.invite(member, group.id)).rejects.toMatchObject({ statusCode: 403 });
-    await expect(groups.destroy(member, group.id)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(groups.destroy(member, group.id, 'r')).rejects.toMatchObject({ statusCode: 403 });
     // 过期一小时：数据库和测试机的钟差一两秒也算过期
     await pool.query(
       "update group_invites set expires_at=now()-interval '1 hour' where conversation_id=$1",
@@ -138,16 +137,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     const group = await setup(),
       requestId = randomUUID();
     await Promise.all(
-      Array.from({ length: 10 }, (_, i) => groups.send(owner, group.id, `m${i}`, randomUUID())),
+      Array.from({ length: 10 }, (_, i) => groups.send(owner, group.id, `m${i}`, randomUUID(), [])),
     );
     await Promise.all([
-      groups.send(member, group.id, 'same', requestId),
-      groups.send(member, group.id, 'same', requestId),
+      groups.send(member, group.id, 'same', requestId, []),
+      groups.send(member, group.id, 'same', requestId, []),
     ]);
     const snapshot = await groups.get(member, group.id);
     expect(snapshot.messages).toHaveLength(11);
     expect(new Set(snapshot.messages.map((message) => message.seq)).size).toBe(11);
-    await expect(groups.send(member, group.id, 'different', requestId)).rejects.toMatchObject({
+    await expect(groups.send(member, group.id, 'different', requestId, [])).rejects.toMatchObject({
       statusCode: 409,
     });
     expect(
@@ -172,11 +171,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       statusCode: 409,
     });
     expect((await groups.preview(fourth.token)).title).toBe('测试群');
-    const strict = createGroupService(
-      createGroupRepo(pool, { members: 3, groups: 20, messagesPerMinute: 1 }),
-    );
-    await strict.send(owner, group.id, 'one', randomUUID());
-    await expect(strict.send(owner, group.id, 'two', randomUUID())).rejects.toMatchObject({
+    const strict = humanGroups(pool, 1);
+    await strict.send(owner, group.id, 'one', randomUUID(), []);
+    await expect(strict.send(owner, group.id, 'two', randomUUID(), [])).rejects.toMatchObject({
       statusCode: 429,
     });
   });
@@ -199,13 +196,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     expect(text).toContain('removed');
     reader.releaseLock();
     await expect(groups.get(member, group.id)).rejects.toMatchObject({ statusCode: 404 });
-    await expect(groups.send(member, group.id, 'late', randomUUID())).rejects.toMatchObject({
+    await expect(groups.send(member, group.id, 'late', randomUUID(), [])).rejects.toMatchObject({
       statusCode: 404,
     });
     await expect(groups.get(outsider, group.id)).rejects.toMatchObject({ statusCode: 404 });
-    await groups.send(owner, group.id, 'cleanup', randomUUID());
+    await groups.send(owner, group.id, 'cleanup', randomUUID(), []);
     await groups.invite(owner, group.id);
-    await groups.destroy(owner, group.id);
+    await groups.destroy(owner, group.id, 'r');
     for (const table of ['messages', 'group_members', 'group_invites'])
       expect(
         (

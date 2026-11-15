@@ -8,6 +8,7 @@ import Fastify from 'fastify';
 import { pino } from 'pino';
 import type { Conversation } from '../../src/repo/conversation-repo.ts';
 import { createDmService } from '../../src/service/dm-service.ts';
+import { createPurge } from '../../src/service/purge.ts';
 import { createTurns } from '../../src/service/turns.ts';
 import { memoryRepo } from '../memory-repo.ts';
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
@@ -353,6 +354,11 @@ beforeEach(async () => {
     canvas: client('canvas', othersUrl),
     modelGateway: client('model-gateway', othersUrl),
     turns,
+    purge: createPurge({
+      harness: client('harness', harnessUrl),
+      canvas: client('canvas', othersUrl),
+      modelGateway: client('model-gateway', othersUrl),
+    }),
     logger: pino({ level: 'silent' }),
   });
   conversation = await repo.upsertDm(OWNER, 'deepseek', 'DeepSeek');

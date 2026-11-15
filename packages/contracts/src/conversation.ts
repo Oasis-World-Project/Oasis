@@ -63,6 +63,14 @@ export const MessageArtifact = z.object({
 });
 export type MessageArtifact = z.infer<typeof MessageArtifact>;
 
+/** 群里的一句话 @ 了谁：某个 AI（它的 key）、全体 AI、某个人 */
+export const Mention = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('ai'), key: z.string().min(1).max(50) }),
+  z.object({ kind: z.literal('all') }),
+  z.object({ kind: z.literal('user'), userId: z.uuid() }),
+]);
+export type Mention = z.infer<typeof Mention>;
+
 /** 一步里一个长任务的进展（见 StepPart.jobs） */
 export const StepJob = z.object({
   id: z.string(),
@@ -175,6 +183,8 @@ export const MessageBody = z.discriminatedUnion('kind', [
       interjection: z.boolean().optional(),
       /** 用户：AI 干活时发的，还排着队（显示在输入框上面）；这一轮做完接着开下一轮 */
       pending: z.boolean().optional(),
+      /** 群里，用户：这句 @ 了谁 */
+      mentions: z.array(Mention).optional(),
       /** AI：按顺序说的话和做的步骤 */
       parts: z.array(MessagePart).optional(),
       /** AI：最新的待办 */

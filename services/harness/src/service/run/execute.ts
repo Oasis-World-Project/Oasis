@@ -246,7 +246,7 @@ export function createExecution(
             {
               dir: SANDBOX_PATHS.dshHome,
               tar: await packFiles(
-                guideFiles(await deps.guide(), request.persona, request.workplace),
+                guideFiles(await deps.guide(), request.persona, request.workplace, request.scene),
               ),
             },
             // oasis-tool 这些命令和 dsh 组合也每轮现放：改了，下一轮就用上，不用重建镜像

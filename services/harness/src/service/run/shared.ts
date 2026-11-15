@@ -155,10 +155,11 @@ export function createGate(limit: number) {
 
 type Material = Required<StartRunBody>['materials'][number];
 
-/** 开一轮时定下、接管时照原样用的设置：用户发的文件、这个 AI 的人设、「只用国内模型」、在哪干活和权限 */
+/** 开一轮时定下、接管时照原样用的设置：用户发的文件、这个 AI 的人设、场合、「只用国内模型」、在哪干活和权限 */
 interface RunRequest {
   materials: Material[];
   persona: string;
+  scene: 'dm' | 'group';
   domesticOnly: boolean;
   workplace: Workplace;
   permissions: Permissions;
@@ -170,6 +171,7 @@ export function requestOf(body: StartRunBody): RunRequest {
   return {
     materials: body.materials ?? [],
     persona: body.persona ?? '',
+    scene: body.scene ?? 'dm',
     domesticOnly: body.domesticOnly ?? false,
     workplace,
     permissions: body.permissions ?? defaultPermissions(workplace),

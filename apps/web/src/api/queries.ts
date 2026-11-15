@@ -1,6 +1,12 @@
 // 各页面用到的查询和操作。查询的 key 集中在这里，便于在操作后刷新对应数据。
 import { AiSettings, ModelEntry, ModelList, type SaveAiBody } from '@oasis/contracts/agent';
-import { GroupList, GroupSnapshot, GroupInvite, GroupInvitePreview } from '@oasis/contracts/group';
+import {
+  GroupList,
+  GroupSnapshot,
+  GroupInvite,
+  GroupInvitePreview,
+  type GroupOptions,
+} from '@oasis/contracts/group';
 import { WalletBody } from '@oasis/contracts/billing';
 import { ArtifactBody, ArtifactList, type Annotation } from '@oasis/contracts/canvas';
 import {
@@ -9,6 +15,7 @@ import {
   MessageBody,
   MessageList,
   SendResult,
+  type Mention,
   SetupResult,
   TaskList,
   type SetupBody,
@@ -64,8 +71,30 @@ export const groupsQuery = queryOptions({
   queryKey: ['groups'],
   queryFn: async () => (await api('/conversation/v1/groups', GroupList)).groups,
 });
-export const createGroup = (title: string, displayName: string) =>
-  api('/conversation/v1/groups', GroupSnapshot, { method: 'POST', body: { title, displayName } });
+/** 拉群：群名、自己在群里的名字、叫进来的 AI、群的光和发言方式 */
+export const createGroup = (
+  body: { title: string; displayName: string; ais: string[] } & Partial<GroupOptions>,
+) => api('/conversation/v1/groups', GroupSnapshot, { method: 'POST', body });
+const groupPath = (id: string) => `/conversation/v1/groups/${id}`;
+/** 群主改群的设置（光色、发言方式） */
+export const setGroupOptions = (id: string, patch: Partial<GroupOptions>) =>
+  api(`${groupPath(id)}/options`, GroupSnapshot, { method: 'PUT', body: patch });
+/** 群主叫一个 AI 进群、把它移出群、写它在群里负责什么 */
+export const addGroupAi = (id: string, key: string) =>
+  api(`${groupPath(id)}/ais`, GroupSnapshot, { method: 'POST', body: { key } });
+export const removeGroupAi = (id: string, key: string) =>
+  apiVoid(`${groupPath(id)}/ais/${encodeURIComponent(key)}`, { method: 'DELETE' });
+export const setGroupAiRole = (id: string, key: string, role: string) =>
+  api(`${groupPath(id)}/ais/${encodeURIComponent(key)}`, GroupSnapshot, {
+    method: 'PUT',
+    body: { role },
+  });
+/** 停下群里这个 AI 正在做的一轮 */
+export const stopGroupAi = (id: string, key: string) =>
+  apiVoid(`${groupPath(id)}/ais/${encodeURIComponent(key)}/stop`, { method: 'POST', body: {} });
+/** 「现在告诉它」：@ 了这个 AI、它还没看到的一句，现在送进它正在做的一轮 */
+export const steerGroupMessage = (id: string, messageId: string, key: string) =>
+  apiVoid(`${groupPath(id)}/messages/${messageId}/steer`, { method: 'POST', body: { key } });
 export const previewGroupInvite = (token: string) =>
   api('/conversation/v1/groups/invites/preview', GroupInvitePreview, {
     method: 'POST',
@@ -89,10 +118,15 @@ export const removeGroupMember = (id: string, userId: string) =>
   apiVoid(`/conversation/v1/groups/${id}/members/${userId}`, { method: 'DELETE' });
 export const deleteGroup = (id: string) =>
   apiVoid(`/conversation/v1/groups/${id}`, { method: 'DELETE' });
-export const sendGroupMessage = (id: string, content: string, requestId: string) =>
-  api(`/conversation/v1/groups/${id}/messages`, GroupSnapshot, {
+export const sendGroupMessage = (
+  id: string,
+  content: string,
+  requestId: string,
+  mentions: Mention[] = [],
+) =>
+  api(`${groupPath(id)}/messages`, GroupSnapshot, {
     method: 'POST',
-    body: { content, requestId },
+    body: { content, requestId, mentions },
   });
 
 export const requestCode = (email: string) =>

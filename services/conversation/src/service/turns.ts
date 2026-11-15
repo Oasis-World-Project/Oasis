@@ -16,9 +16,15 @@ import {
 } from '@oasis/contracts/harness';
 import { GENERATION_TOOLS, ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
-import type { Conversation, ConversationRepo, Message } from '../repo/conversation-repo.ts';
+import {
+  roomOf,
+  type Conversation,
+  type ConversationRepo,
+  type Message,
+} from '../repo/conversation-repo.ts';
 import type { Turn } from '../repo/schema.ts';
 import { gather, handOver, withNote } from './hand-over.ts';
+import type { SeatBrief } from './group-hearing.ts';
 import { createTaskCards } from './task-cards.ts';
 import { taskTitle } from './task-title.ts';
 import {
@@ -45,6 +51,9 @@ export interface TurnDeps {
   spendMs?: number;
 }
 
+/** 群里的席位做完一轮、空下来了：还有叫它的话就接着开下一轮（调用方拿着这个席位的 message 锁） */
+type SeatIdle = (store: ConversationRepo, seat: Conversation, requestId: string) => Promise<void>;
+
 /** 一次拉多少条运行事件 */
 const EVENT_PAGE = 500;
 /** 工具目录（各型号通常要多久）多久重新拉一次 */
@@ -64,6 +73,7 @@ export function createTurns(deps: TurnDeps) {
   const following = new Map<string, Promise<void>>();
   const closing = new AbortController();
   const cards = createTaskCards(deps);
+  let seatIdle: SeatIdle | undefined;
 
   async function getRun(runId: string): Promise<RunBody | undefined> {
     try {
@@ -122,7 +132,7 @@ export function createTurns(deps: TurnDeps) {
           return { spentMicro: 0, tools: [] };
         })
       : { spentMicro: 0, tools: [] };
-    const message = await store.findMessage(conversation.id, turn.segmentId);
+    const message = await store.findMessage(roomOf(conversation), turn.segmentId);
     if (message) {
       const settled = settleSteps(
         segmentOf(message),
@@ -157,16 +167,21 @@ export function createTurns(deps: TurnDeps) {
     for (let attempt = 0; ; attempt += 1) {
       try {
         await store.withLock('message', conversation.id, async (locked) => {
-          await locked.endTurn(
-            conversation.id,
-            turn.runId,
-            run ? (run.resumable ? run.id : null) : conversation.lastRunId,
-          );
-          await locked.touchConversation(conversation.id);
-          const pending = await locked.pendingMessages(conversation.id);
+          // 这一轮进行时席位被移出了群（forget 记着这一轮）：不留它的会话，再叫回来从头开始
+          const forgotten = (await locked.find(conversation.id))?.options.forget === turn.runId;
+          const resume = run ? (run.resumable ? run.id : null) : conversation.lastRunId;
+          await locked.endTurn(conversation.id, turn.runId, forgotten ? null : resume);
+          await locked.touchConversation(roomOf(conversation));
           const latest = await locked.find(conversation.id);
-          if (pending.length && latest && !latest.turn)
-            await begin(locked, latest, pending, `pending:${turn.runId}`);
+          if (!latest || latest.turn) return;
+          if (latest.kind === 'seat') {
+            await seatIdle?.(locked, latest, `seat:${turn.runId}`).catch((err: unknown) =>
+              logger.warn({ err, seatId: latest.id }, '席位空下来后没能接着开下一轮'),
+            );
+            return;
+          }
+          const pending = await locked.pendingMessages(conversation.id);
+          if (pending.length) await begin(locked, latest, pending, `pending:${turn.runId}`);
         });
         break;
       } catch (err) {
@@ -233,28 +248,39 @@ export function createTurns(deps: TurnDeps) {
   function follow(conversationId: string) {
     if (closing.signal.aborted || following.has(conversationId)) return;
     const task = deps.repo
-      .withLock('follow', conversationId, (store) => track(store, conversationId))
+      .withLock('follow', conversationId, (store) => track(store, conversationId).then(() => true))
       .catch((err: unknown) => {
         // 别的实例正在跟
-        if (err instanceof HttpError && err.code === 'conversation_busy') return;
-        logger.error({ err, conversationId }, '跟进一轮失败');
+        if (!(err instanceof HttpError && err.code === 'conversation_busy'))
+          logger.error({ err, conversationId }, '跟进一轮失败');
+        return false;
       })
-      .finally(() => following.delete(conversationId));
+      .finally(() => following.delete(conversationId))
+      // 收尾时接着开了下一轮（排着的话、群里叫它的话）：接着跟
+      .then(async (ended) => {
+        if (ended && (await deps.repo.find(conversationId))?.turn) follow(conversationId);
+      })
+      .catch(() => undefined);
     following.set(conversationId, task);
   }
 
   /**
    * 开一轮（调用方拿着这个对话的 message 锁）：userMessages 是这一轮用户说的话（已经存下；排着队的
    * 挪到最后），交给 AI 的是它们连起来的文字和带的文件。返回这一轮新增的 AI 消息。
+   * 群里的席位开一轮时给 brief：交给 AI 的是 brief 里的那段话，AI 的消息写进群里。
    */
   async function begin(
     store: ConversationRepo,
     conversation: Conversation,
     userMessages: Message[],
     requestId: string,
+    brief?: SeatBrief,
   ): Promise<Message[]> {
     const runId = randomUUID();
-    const { text, attachments, revisingIds } = gather(userMessages);
+    const room = roomOf(conversation);
+    const gathered = gather(userMessages);
+    const { attachments, revisingIds } = gathered;
+    const text = brief?.text ?? gathered.text;
     for (const m of userMessages) {
       const { pending, ...data } = m.data;
       if (pending) await store.moveToEnd(conversation.id, m.id);
@@ -262,7 +288,7 @@ export function createTurns(deps: TurnDeps) {
     }
     const aiMessage = (status: Message['status'], data: Record<string, unknown>, error?: string) =>
       store.insertMessage({
-        conversationId: conversation.id,
+        conversationId: room,
         authorKind: 'ai',
         authorId: conversation.modelKey ?? 'unknown',
         content: '',
@@ -294,25 +320,34 @@ export function createTurns(deps: TurnDeps) {
         { err, conversationId: conversation.id },
         '这一轮开不了：查不到 AI 的型号或要改的成果',
       );
-      await store.touchConversation(conversation.id);
+      await store.touchConversation(room);
       return [await aiMessage('failed', {}, refused(err))];
     }
     const handed = handOver(attachments, revising, sessionId);
-    // 任务名：往回看这一轮之前的话（确认的任务单、答的题）
-    const history = await store.listMessages(conversation.id, TITLE_HISTORY);
+    // 任务名：往回看这一轮之前的话（确认的任务单、答的题）；群里用叫它的那句话
+    const history = brief ? [] : await store.listMessages(room, TITLE_HISTORY);
     const own = new Set(userMessages.map((m) => m.id));
     const first = history.findIndex((m) => own.has(m.id));
-    const title = taskTitle(
-      (first < 0 ? history : history.slice(0, first)).map((m) => ({
-        author: m.authorKind,
-        kind: m.kind,
-        content: m.content,
-      })),
-      text,
-    );
+    const title =
+      brief?.title ??
+      taskTitle(
+        (first < 0 ? history : history.slice(0, first)).map((m) => ({
+          author: m.authorKind,
+          kind: m.kind,
+          content: m.content,
+        })),
+        text,
+      );
     const segment = await aiMessage('streaming', { parts: [] });
     const startedAt = new Date().toISOString();
-    const turn: Turn = { runId, startedAt, title, cursor: -1, segmentId: segment.id };
+    const turn: Turn = {
+      runId,
+      startedAt,
+      title,
+      cursor: -1,
+      segmentId: segment.id,
+      ...(brief ? { callers: brief.callers } : {}),
+    };
     if (!(await store.startTurn(conversation.id, turn))) {
       await store.deleteMessage(segment.id);
       throw new HttpError(409, 'turn_active', '这个对话还有一轮在进行');
@@ -323,7 +358,8 @@ export function createTurns(deps: TurnDeps) {
       payerId: conversation.ownerId,
       conversationId: conversation.id,
       model: route.providerModel,
-      persona: route.systemPrompt,
+      persona: brief ? `${route.systemPrompt}\n\n${brief.persona}`.trim() : route.systemPrompt,
+      ...(brief ? { scene: 'group' as const } : {}),
       domesticOnly: route.domesticOnly,
       prompt: withNote(text, handed.note),
       materials: handed.materials,
@@ -361,9 +397,31 @@ export function createTurns(deps: TurnDeps) {
       await store.endTurn(conversation.id, runId, conversation.lastRunId);
       return [await finishRefused(store, conversation, segment, err)];
     }
-    await store.touchConversation(conversation.id);
+    await store.touchConversation(room);
     follow(conversation.id);
-    return [(await store.findMessage(conversation.id, segment.id)) ?? segment];
+    return [(await store.findMessage(room, segment.id)) ?? segment];
+  }
+
+  /**
+   * 把一句话作为插话送进正在进行的一轮：AI 做完手上这一步就看到（还没开始的话开头那句之后就看到）。
+   * 这一轮在交接或收尾、送不进去时 409。
+   */
+  async function interject(store: ConversationRepo, conversation: Conversation, text: string) {
+    const { turn } = conversation;
+    if (!turn) throw new HttpError(409, 'turn_not_active', '这一轮已经结束了');
+    follow(conversation.id);
+    try {
+      await harness.json('POST', `/internal/runs/${turn.runId}/messages`, { body: { text } });
+    } catch (err) {
+      if (err instanceof HttpError && (err.statusCode === 409 || err.statusCode === 404))
+        throw new HttpError(
+          409,
+          'turn_not_ready',
+          '这一轮正在交接或收尾，暂时送不进去；这句还排着，做完会接着做',
+        );
+      throw err;
+    }
+    await store.updateTurn(conversation.id, turn.runId, { unheard: (turn.unheard ?? 0) + 1 });
   }
 
   /** 没开成的一轮：AI 那条消息写上原因 */
@@ -373,7 +431,7 @@ export function createTurns(deps: TurnDeps) {
     message: Message,
     err: unknown,
   ): Promise<Message> {
-    await store.touchConversation(conversation.id);
+    await store.touchConversation(roomOf(conversation));
     return (
       (await store.updateMessage(message.id, { status: 'failed', error: refused(err) })) ?? message
     );
@@ -382,6 +440,11 @@ export function createTurns(deps: TurnDeps) {
   return {
     begin,
     follow,
+    interject,
+    /** 群里的席位做完一轮后要做的事（接着开下一轮），由群那边登记 */
+    onSeatIdle(hook: SeatIdle) {
+      seatIdle = hook;
+    },
 
     /**
      * 「引导」（调用方拿着 message 锁）：把排着队的一句现在交给 AI，返回新增的消息。有一轮在进行就作为
@@ -400,21 +463,7 @@ export function createTurns(deps: TurnDeps) {
         const replies = await begin(store, conversation, [user], requestId);
         return [(await store.findMessage(conversation.id, user.id)) ?? user, ...replies];
       }
-      follow(conversation.id);
-      try {
-        await harness.json('POST', `/internal/runs/${turn.runId}/messages`, {
-          body: { text: user.content },
-        });
-      } catch (err) {
-        if (err instanceof HttpError && (err.statusCode === 409 || err.statusCode === 404))
-          throw new HttpError(
-            409,
-            'turn_not_ready',
-            '这一轮正在交接或收尾，暂时送不进去；这句还排着，做完会接着做',
-          );
-        throw err;
-      }
-      await store.updateTurn(conversation.id, turn.runId, { unheard: (turn.unheard ?? 0) + 1 });
+      await interject(store, conversation, user.content);
       await store.moveToEnd(conversation.id, user.id);
       const { pending: _pending, ...data } = user.data;
       const updated = await store.updateMessage(user.id, {

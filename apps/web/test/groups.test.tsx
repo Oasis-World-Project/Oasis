@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.tsx';
 import { installFakeApi, json } from './fake-api.ts';
 import { GROUP_HISTORY_NOTICE } from '@oasis/contracts/group';
+import { Stream } from './group-stream.ts';
 
 const id = '00000000-0000-4000-8000-000000000061',
   user = '00000000-0000-4000-8000-000000000001',
@@ -13,35 +14,32 @@ const snapshot = {
   title: '周末计划',
   ownerId: owner,
   memberCount: 2,
+  aiCount: 0,
+  light: 'coral',
   createdAt: '2026-11-02T00:00:00Z',
   historyNotice: GROUP_HISTORY_NOTICE,
+  options: { light: 'coral', speak: 'mention', assign: 'ai' },
   members: [
     { userId: owner, displayName: '群主', joinedAt: '2026-11-02T00:00:00Z' },
     { userId: user, displayName: '小林', joinedAt: '2026-11-02T00:00:00Z' },
   ],
+  ais: [],
   messages: [
     {
       id: '00000000-0000-4000-8000-000000000003',
       seq: 1,
       authorId: owner,
       displayName: '群主',
+      role: 'user',
       content: '欢迎加入',
+      status: 'complete',
+      error: null,
       createdAt: '2026-11-02T00:00:00Z',
+      kind: 'text',
+      data: {},
     },
   ],
 };
-class Stream {
-  static instances: Stream[] = [];
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onerror: (() => void) | null = null;
-  close = vi.fn();
-  constructor() {
-    Stream.instances.push(this);
-  }
-  emit(value: unknown) {
-    this.onmessage?.({ data: JSON.stringify(value) });
-  }
-}
 async function open(path = '/groups') {
   const { App, router } = createApp({ history: createMemoryHistory({ initialEntries: [path] }) });
   await act(() => router.load());

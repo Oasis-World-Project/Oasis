@@ -8,7 +8,7 @@ import type { RunBody } from '@oasis/contracts/harness';
 import { GENERATION_TOOLS, RunActivity } from '@oasis/contracts/model-gateway';
 import type { Logger, ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
-import type { Conversation, ConversationRepo } from '../repo/conversation-repo.ts';
+import { roomOf, type Conversation, type ConversationRepo } from '../repo/conversation-repo.ts';
 import type { Turn } from '../repo/schema.ts';
 
 const RegisteredArtifacts = z.object({ artifacts: z.array(ArtifactBody) });
@@ -37,7 +37,7 @@ export function createTaskCards(deps: {
     const content = card.status === 'running' ? '任务进行中' : '任务结束';
     if (turn.cardId && (await store.updateMessage(turn.cardId, { content, data: card }))) return;
     const created = await store.insertMessage({
-      conversationId: conversation.id,
+      conversationId: roomOf(conversation),
       authorKind: 'ai',
       authorId: conversation.modelKey ?? 'unknown',
       content,

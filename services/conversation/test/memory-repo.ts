@@ -44,6 +44,9 @@ export function memoryRepo(): ConversationRepo & {
         lastRunId: null,
         workplace: null,
         permissions: null,
+        parentId: null,
+        heardSeq: 0,
+        options: {},
       };
       conversations.set(row.id, row);
       return row;

@@ -3,7 +3,8 @@ import { EmptyHint, Panel } from '../ui/Panel.tsx';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate, useRouter } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { createGroup, groupsQuery, previewGroupInvite, redeemGroupInvite } from '../api/queries.ts';
+import { groupsQuery, previewGroupInvite, redeemGroupInvite } from '../api/queries.ts';
+import { NewGroupDialog } from '../group/NewGroupDialog.tsx';
 import { GROUP_HISTORY_NOTICE } from '@oasis/contracts/group';
 
 const input = 'rounded-item border-0 bg-glass-active px-3 py-2 text-ink shadow-edge-strong';
@@ -15,7 +16,7 @@ export function GroupsPage() {
     navigate = useNavigate();
   const { hash } = useLocation();
   const router = useRouter();
-  const [title, setTitle] = useState(''),
+  const [creating, setCreating] = useState(hash === 'create-group'),
     [name, setName] = useState(''),
     [token, setToken] = useState(() => new URLSearchParams(hash).get('invite') ?? '');
   const [invite, setInvite] = useState<{ title: string } | null>(null),
@@ -24,6 +25,8 @@ export function GroupsPage() {
     [error, setError] = useState('');
   useEffect(() => {
     const unsubscribe = router.subscribe('onBeforeNavigate', ({ toLocation }) => {
+      // 侧栏的「拉群」带着这个记号过来：打开拉群弹窗
+      if (toLocation.hash === 'create-group') setCreating(true);
       const value = new URLSearchParams(toLocation.hash).get('invite');
       if (value) {
         setToken(value);
@@ -35,14 +38,12 @@ export function GroupsPage() {
       void navigate({ to: '/groups', hash: '', replace: true });
     return unsubscribe;
   }, [hash, navigate, router]);
-  async function enter(event: FormEvent, join = false) {
+  async function enter(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError('');
     try {
-      const group = join
-        ? await redeemGroupInvite(token.trim(), name.trim())
-        : await createGroup(title.trim(), name.trim());
+      const group = await redeemGroupInvite(token.trim(), name.trim());
       await client.invalidateQueries({ queryKey: ['groups'] });
       await navigate({ to: '/groups/$groupId', params: { groupId: group.id } });
     } catch (err) {
@@ -66,7 +67,15 @@ export function GroupsPage() {
   }
   return (
     <>
-      <PageHeader title="群聊" description="和朋友在同一个群里聊想法、做计划。" />
+      <PageHeader title="群聊" description="和朋友、和各家 AI 在同一个群里聊想法、做计划。" />
+      {creating && (
+        <NewGroupDialog
+          onClose={() => {
+            setCreating(false);
+            void navigate({ to: '/groups', hash: '', replace: true });
+          }}
+        />
+      )}
       <Panel title="我的群">
         {query.isPending && <EmptyHint>正在加载…</EmptyHint>}
         {query.isError && <p role="alert">{query.error.message}</p>}
@@ -93,7 +102,10 @@ export function GroupsPage() {
           {error}
         </p>
       )}
-      <Panel title="创建或加入">
+      <button type="button" className={`${button} self-start`} onClick={() => setCreating(true)}>
+        拉个新群
+      </button>
+      <Panel title="用邀请加入">
         <label className="flex flex-col gap-2 text-sm">
           你在群里的名字
           <input
@@ -104,26 +116,7 @@ export function GroupsPage() {
             autoComplete="nickname"
           />
         </label>
-        <form
-          id="create-group"
-          onSubmit={(event) => void enter(event)}
-          className="flex flex-col gap-3"
-        >
-          <label className="flex flex-col gap-2 text-sm">
-            群名称
-            <input
-              className={input}
-              value={title}
-              maxLength={40}
-              onChange={(event) => setTitle(event.target.value)}
-            />
-          </label>
-          <p className="m-0 text-sm text-ink-muted">{GROUP_HISTORY_NOTICE}</p>
-          <button className={button} disabled={busy || !title.trim() || !name.trim()}>
-            创建群
-          </button>
-        </form>
-        <form onSubmit={(event) => void enter(event, true)} className="mt-4 flex flex-col gap-3">
+        <form onSubmit={(event) => void enter(event)} className="flex flex-col gap-3">
           <label className="flex flex-col gap-2 text-sm">
             邀请码
             <input

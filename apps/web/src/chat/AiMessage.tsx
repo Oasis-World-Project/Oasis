@@ -2,7 +2,7 @@
 // 系统提示，下面是它的待办（只作参考）、结局（出错、已停下）和这一轮的花费。
 import type { MessageBody, MessagePart, StepPart, TodoItem } from '@oasis/contracts/conversation';
 import { Check, Info, LoaderCircle, X } from 'lucide-react';
-import { Fragment } from 'react';
+import { Fragment, type CSSProperties } from 'react';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { splitBlocks } from './blocks.ts';
@@ -123,15 +123,33 @@ export function Todos({ items, live }: { items: TodoItem[]; live: boolean }) {
   );
 }
 
+/** AI 说的话外面的那层气泡：私聊里是白玻璃；群里带它自己的光色（由群页给） */
+export interface Bubble {
+  className: string;
+  style?: CSSProperties;
+}
+const DM_BUBBLE: Bubble = { className: 'rounded-card bg-glass-strong shadow-edge-strong' };
+
 /** AI 说的一段话：Markdown，代码块里的问卷和任务单画成卡片 */
-function AiText({ id, text, active }: { id: string; text: string; active: boolean }) {
+function AiText({
+  id,
+  text,
+  active,
+  bubble,
+}: {
+  id: string;
+  text: string;
+  active: boolean;
+  bubble: Bubble;
+}) {
   return (
     <>
       {splitBlocks(text).map((block, index) =>
         block.kind === 'text' ? (
           <div
             key={index}
-            className="rounded-card bg-glass-strong px-4 py-2.5 shadow-edge-strong [overflow-wrap:anywhere]"
+            className={`px-4 py-2.5 [overflow-wrap:anywhere] ${bubble.className}`}
+            style={bubble.style}
           >
             <Markdown source={block.text} />
           </div>
@@ -145,15 +163,19 @@ function AiText({ id, text, active }: { id: string; text: string; active: boolea
   );
 }
 
-export function AiMessage({
+/**
+ * AI 一条消息里的内容：说的话、折叠的步骤、待办、出错和停下的说明、「继续」、花费。
+ * 私聊和群里共用；外面的头像和排版各自放。
+ */
+export function AiBody({
   message,
-  speaker,
   latest,
+  bubble = DM_BUBBLE,
 }: {
   message: TextMessage;
-  speaker: Speaker;
   /** 是最新的一条（后面没有新的话）：问卷能答、任务单能确认、出错了能「继续」 */
   latest: boolean;
+  bubble?: Bubble;
 }) {
   const actions = useChatActions();
   const { parts = [], todos, stopped, spentMicro } = message.data;
@@ -161,45 +183,71 @@ export function AiMessage({
   const canContinue =
     latest && !actions.turnActive && (message.status === 'failed' || Boolean(stopped));
   return (
+    <>
+      {groupParts(parts).map((group, index) => (
+        <Fragment key={index}>
+          {group.kind === 'text' ? (
+            <AiText
+              id={`${message.id}-${index}`}
+              text={group.text}
+              active={latest}
+              bubble={bubble}
+            />
+          ) : group.kind === 'steps' ? (
+            <Steps steps={group.steps} />
+          ) : (
+            <p className="m-0 flex items-center gap-1.5 text-[12.5px] text-ink-muted">
+              <Info size={13} aria-hidden="true" />
+              {group.text}
+            </p>
+          )}
+        </Fragment>
+      ))}
+      {parts.length === 0 && live && <span className="text-ink-muted">正在想…</span>}
+      {todos && todos.length > 0 && <Todos items={todos} live={live} />}
+      {message.status === 'failed' && (
+        <p role="alert" className="m-0 text-[13px] text-accent">
+          {message.error ?? '这一轮出错了'}
+        </p>
+      )}
+      {stopped && <span className="text-[12.5px] text-ink-muted">已停下</span>}
+      {canContinue && (
+        <div>
+          <CardButton
+            tone="accent"
+            disabled={actions.busy !== null}
+            onClick={() => void actions.say('continue', '继续')}
+          >
+            继续
+          </CardButton>
+        </div>
+      )}
+      {spentMicro !== undefined && spentMicro > 0 && (
+        <span className="text-[12px] text-ink-muted">这一轮花了 {formatCost(spentMicro)}</span>
+      )}
+    </>
+  );
+}
+
+export function AiMessage({
+  message,
+  speaker,
+  latest,
+}: {
+  message: TextMessage;
+  speaker: Speaker;
+  latest: boolean;
+}) {
+  return (
     <div className="flex items-start gap-2.5">
-      <AiAvatar mono={speaker.mono} glow={speaker.glow} size={30} glowing={live} />
+      <AiAvatar
+        mono={speaker.mono}
+        glow={speaker.glow}
+        size={30}
+        glowing={message.status === 'streaming'}
+      />
       <div className="flex min-w-0 max-w-[80%] flex-col gap-2 text-[14.5px] leading-relaxed">
-        {groupParts(parts).map((group, index) => (
-          <Fragment key={index}>
-            {group.kind === 'text' ? (
-              <AiText id={`${message.id}-${index}`} text={group.text} active={latest} />
-            ) : group.kind === 'steps' ? (
-              <Steps steps={group.steps} />
-            ) : (
-              <p className="m-0 flex items-center gap-1.5 text-[12.5px] text-ink-muted">
-                <Info size={13} aria-hidden="true" />
-                {group.text}
-              </p>
-            )}
-          </Fragment>
-        ))}
-        {parts.length === 0 && live && <span className="text-ink-muted">正在想…</span>}
-        {todos && todos.length > 0 && <Todos items={todos} live={live} />}
-        {message.status === 'failed' && (
-          <p role="alert" className="m-0 text-[13px] text-accent">
-            {message.error ?? '这一轮出错了'}
-          </p>
-        )}
-        {stopped && <span className="text-[12.5px] text-ink-muted">已停下</span>}
-        {canContinue && (
-          <div>
-            <CardButton
-              tone="accent"
-              disabled={actions.busy !== null}
-              onClick={() => void actions.say('continue', '继续')}
-            >
-              继续
-            </CardButton>
-          </div>
-        )}
-        {spentMicro !== undefined && spentMicro > 0 && (
-          <span className="text-[12px] text-ink-muted">这一轮花了 {formatCost(spentMicro)}</span>
-        )}
+        <AiBody message={message} latest={latest} />
       </div>
     </div>
   );
