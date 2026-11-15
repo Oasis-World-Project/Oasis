@@ -1,5 +1,6 @@
 // Oasis 桌面端主进程：一个加载 Web 外壳的窗口。
-// 安全默认值：渲染进程隔离 + 沙箱 + 不开放 Node；外部链接交给系统浏览器；默认拒绝摄像头等权限申请。
+// 安全默认值：渲染进程隔离 + 沙箱 + 不开放 Node；外部链接交给系统浏览器；权限申请只放行自己页面的
+// 麦克风（和数字人对话），摄像头等别的一律拒绝。
 // 给页面开放的能力只有 preload 里的几个：把成果同步到用户选的文件夹、截取窗口里的一块画面用于批注、
 // 选 AI 干活的项目文件夹和看这台电脑连没连上（在你的电脑上干活，见 device.ts）。
 import { existsSync } from 'node:fs';
@@ -237,8 +238,17 @@ function handleDownloads(): void {
 
 app.whenReady().then(
   async () => {
-    session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) =>
-      callback(false),
+    // 只给自己的页面开麦克风（和数字人对话要用）；摄像头、定位这些别的权限一律拒绝
+    session.defaultSession.setPermissionRequestHandler(
+      (_contents, permission, callback, details) => {
+        const media = 'mediaTypes' in details ? (details.mediaTypes ?? []) : [];
+        const own =
+          URL.canParse(details.requestingUrl) &&
+          new URL(details.requestingUrl).origin === appOrigin;
+        callback(
+          own && permission === 'media' && media.length > 0 && media.every((t) => t === 'audio'),
+        );
+      },
     );
     const sync = createSyncFolder(path.join(app.getPath('userData'), 'sync.json'));
     await sync.recover();

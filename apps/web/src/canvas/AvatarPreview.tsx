@@ -306,7 +306,7 @@ export function AvatarPreview({ artifactId, spec }: { artifactId: string; spec: 
           <span className="ml-auto text-xs text-ink-muted">
             {session
               ? session.sandbox
-                ? `开发环境沙箱：免费，约 1 分钟自动结束`
+                ? `开发环境沙箱：用的是测试形象和声音（不是${spec.name}本来的样子），免费，约 1 分钟自动结束`
                 : `每分钟 ${formatCost(price)}，单次最长 ${clockText(session.maxSeconds)}`
               : `单次最长 ${spec.maxMinutes} 分钟，按实际用时计费`}
           </span>

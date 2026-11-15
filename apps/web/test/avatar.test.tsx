@@ -191,7 +191,8 @@ describe('数字人对话页', () => {
     fireEvent.click(screen.getByRole('button', { name: '开始对话' }));
     expect(await screen.findByText('没有麦克风权限')).toBeTruthy();
     expect(lk.connected).toEqual(['wss://room']);
-    expect(screen.getByText(/开发环境沙箱：免费/)).toBeTruthy();
+    // 沙箱里形象和声音是测试样例，要说清楚，免得以为配置做错了
+    expect(screen.getByText(/开发环境沙箱：用的是测试形象和声音.*免费/)).toBeTruthy();
 
     act(() =>
       lk.emit({
