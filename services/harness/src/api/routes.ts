@@ -2,7 +2,7 @@
 // 取消、清理对话，给 canvas 读产出文件；对外只有一条——用户电脑上的桌面版经 gateway 连上来
 // （WebSocket，gateway 认过人、在 x-oasis-user-id 里写上是谁）。harness 不调 inspector。
 import { OASIS_HEADERS } from '@oasis/contracts/common';
-import { RunMessageBody, StartRunBody } from '@oasis/contracts/harness';
+import { RunMaterialsBody, RunMessageBody, StartRunBody } from '@oasis/contracts/harness';
 import { HttpError, parseWith, type ServiceApp } from '@oasis/service-kit';
 import { WebSocketServer } from 'ws';
 import { z } from 'zod';
@@ -91,6 +91,14 @@ export function registerRoutes(app: ServiceApp, runs: RunService): void {
     const { text } = parseWith(RunMessageBody, request.body);
     await runs.message(runId, text);
     return reply.code(202).send();
+  });
+
+  /** 一轮进行中往它的工作目录里再放文件（群里别的 AI 刚交的群文件） */
+  app.post('/internal/runs/:runId/materials', async (request, reply) => {
+    const { runId } = parseWith(RunParams, request.params);
+    const { materials } = parseWith(RunMaterialsBody, request.body);
+    await runs.addMaterials(runId, materials);
+    return reply.code(204).send();
   });
 
   /** 停止：存下产出（会话留在持久工作目录里），下一轮接着做 */

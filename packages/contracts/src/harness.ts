@@ -65,6 +65,15 @@ const MaterialPath = z
   .max(600)
   .regex(/^materials\/(?!.*(?:^|\/)\.\.(?:\/|$))[^\n]+$/, '必须放在 materials/ 下，不能有 ..');
 
+const Materials = z
+  .array(
+    z.union([
+      z.object({ uploadId: z.uuid(), path: MaterialPath, ownerId: z.uuid().optional() }),
+      z.object({ artifactId: z.uuid(), path: MaterialPath }),
+    ]),
+  )
+  .max(2000);
+
 export const StartRunBody = z.object({
   /** 调用方可以自带运行 ID（便于幂等）；不给就由 harness 生成 */
   runId: z.uuid().optional(),
@@ -90,15 +99,7 @@ export const StartRunBody = z.object({
    * 工作目录里时拷一份进来）。是不是这个用户的，conversation 收消息时已经核对过。
    * ownerId：这个文件在 canvas 里是谁名下的；不给就是付费人（群里别的成员传的群文件要给）。
    */
-  materials: z
-    .array(
-      z.union([
-        z.object({ uploadId: z.uuid(), path: MaterialPath, ownerId: z.uuid().optional() }),
-        z.object({ artifactId: z.uuid(), path: MaterialPath }),
-      ]),
-    )
-    .max(2000)
-    .default([]),
+  materials: Materials.default([]),
   /**
    * 接着上一轮做：挂上它的持久工作目录（会话、out/、装好的依赖都在），AI 记得前面的事。
    * 只能接同一付费人、已结束、工作目录还在的运行；工作目录不在了返回 409 {@link WORKSPACE_UNAVAILABLE}。
@@ -183,3 +184,5 @@ export const RunEventList = z.object({ events: z.array(RunEventBody) });
 
 /** 用户在这一轮进行中插话：在 AI 的下一步送到，带着完整上下文 */
 export const RunMessageBody = z.object({ text: z.string().trim().min(1).max(20_000) });
+/** 一轮进行中往它的工作目录里再放文件（群里别的 AI 刚交的群文件）；这一轮已经不在跑时 409 */
+export const RunMaterialsBody = z.object({ materials: Materials.min(1) });

@@ -9,8 +9,11 @@ export interface Said {
   content: string;
 }
 
-/** AI 话里的卡片（写法和网页上的 blocks.ts 一样） */
-const FENCE = /```oasis-(questions|plan)[^\n]*\n([\s\S]*?)\n?```/g;
+/** AI 话里的卡片（写法和网页上的 blocks.ts 一样；整块写在一行里也认） */
+const FENCE = /```oasis-(questions|plan)\b([\s\S]*?)```/g;
+/** 代码块里的 JSON：从第一个 { 到最后一个 }；不是 JSON 就抛错 */
+export const fenceJson = (body: string): unknown =>
+  JSON.parse(body.slice(body.indexOf('{'), body.lastIndexOf('}') + 1));
 /** 确认任务单、答题这种短回复；再长就当是一句新的要求 */
 const SHORT_REPLY = 20;
 /** 网页上答题发来的：一题一行「1. 题目——答案」 */
@@ -29,7 +32,7 @@ function cardsOf(text: string): { plan?: string; questions: boolean } {
       continue;
     }
     try {
-      const parsed = PlanBlock.safeParse(JSON.parse(body!));
+      const parsed = PlanBlock.safeParse(fenceJson(body!));
       if (parsed.success) plan = parsed.data.title;
     } catch {
       // 不是 JSON：当普通文字

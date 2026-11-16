@@ -68,7 +68,7 @@ export const messages = pgTable('messages', {
   content: text('content').notNull(),
   status: text('status', { enum: ['complete', 'streaming', 'failed'] }).notNull(),
   error: text('error'),
-  kind: text('kind', { enum: ['text', 'task', 'topic'] })
+  kind: text('kind', { enum: ['text', 'task', 'topic', 'assign'] })
     .notNull()
     .default('text'),
   data: jsonb('data').$type<Record<string, unknown>>().notNull().default({}),

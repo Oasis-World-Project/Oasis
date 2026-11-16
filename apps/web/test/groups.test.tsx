@@ -18,7 +18,7 @@ const snapshot = {
   light: 'coral',
   createdAt: '2026-11-02T00:00:00Z',
   historyNotice: GROUP_HISTORY_NOTICE,
-  options: { light: 'coral', speak: 'mention', assign: 'ai' },
+  options: { light: 'coral', speak: 'mention' },
   members: [
     { userId: owner, displayName: '群主', joinedAt: '2026-11-02T00:00:00Z' },
     { userId: user, displayName: '小林', joinedAt: '2026-11-02T00:00:00Z' },

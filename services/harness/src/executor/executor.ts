@@ -30,6 +30,8 @@ export interface Sandbox {
   readArchive(path: string): Promise<Readable | undefined>;
   /** 在沙箱里跑一条命令（沙箱要在运行，没暂停）并等它结束；退出码不是 0 就报错 */
   exec(cmd: string[]): Promise<void>;
+  /** 运行中往沙箱的某个目录里再解一包文件（群里别的 AI 刚交的群文件）；用户电脑上的沙箱没有 */
+  put?(dir: string, tar: Buffer | Readable): Promise<void>;
   /** 销毁沙箱（运行中也立即结束）；可重复调用 */
   destroy(): Promise<void>;
 }
@@ -213,6 +215,7 @@ export function createDockerExecutor(deps: {
           stdout,
           stderr,
           exec,
+          put: (dir, tar) => docker.putArchive(id, dir, tar),
           readArchive: (path) => docker.getArchive(id, path),
           pause: () => docker.pauseContainer(id),
           destroy,

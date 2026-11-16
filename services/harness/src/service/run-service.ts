@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { type RunBody, type StartRunBody, WORKSPACE_UNAVAILABLE } from '@oasis/contracts/harness';
-import { HttpError } from '@oasis/service-kit';
+import { HttpError, packStreams } from '@oasis/service-kit';
 import type { Run } from '../repo/runs-repo.ts';
 import { createControl } from './run/control.ts';
 import { createExecution } from './run/execute.ts';
@@ -198,6 +198,18 @@ export function createRunService(deps: RunDeps) {
       }
       run.prompts += 1;
       await run.agent.prompt(text);
+    },
+
+    /**
+     * 一轮进行中往它的工作目录里再放文件（群里别的 AI 刚交的群文件）。
+     * 这一轮不在这个进程里跑、在收尾、沙箱还没起来或不支持时 409。
+     */
+    async addMaterials(id: string, materials: Required<StartRunBody>['materials']): Promise<void> {
+      const row = await owned(id);
+      const run = live.get(id);
+      if (!run?.put || run.closing || run.abort.signal.aborted)
+        throw new HttpError(409, 'run_not_active', '这一轮现在放不进文件');
+      await run.put(packStreams(await ctx.materialFiles(materials, id, row.payerId)));
     },
 
     ...createOutputs(ctx),

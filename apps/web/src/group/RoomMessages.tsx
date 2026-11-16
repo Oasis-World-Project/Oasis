@@ -1,6 +1,11 @@
 // 群里的消息：时间分隔、别人的话（左，头像加名字）、我的话（右，墨色）、AI 的话（左，气泡带它的光色；
 // 干活的过程不放在这里，只写做到第几步，点它去工作台看）、任务卡、话带的文件。@ 了的 AI 还在忙时，话下面写着它忙完就看，可以「现在告诉它」。照原型 ②。
-import type { Mention, MessageAttachment, TaskCard } from '@oasis/contracts/conversation';
+import type {
+  AssignCard,
+  Mention,
+  MessageAttachment,
+  TaskCard,
+} from '@oasis/contracts/conversation';
 import type { GroupAi, GroupMessage } from '@oasis/contracts/group';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { groupAttachmentUrl, steerGroupMessage, stopGroupAi } from '../api/queries.ts';
@@ -16,6 +21,7 @@ import { MemberAvatar } from './Members.tsx';
 import { aiLook, DIVIDER_GAP_MS, dividerText } from './people.ts';
 import { mentionText, uploadPath, useRoom, type Room } from './room.ts';
 import { FilePill } from './workbench/files.tsx';
+import { itemNote } from './workbench/tasks.ts';
 
 type TextMessage = Extract<GroupMessage, { kind: 'text' }>;
 
@@ -90,6 +96,15 @@ function UserMessage({ message }: { message: TextMessage }) {
   const waiting = waitingFor(message, group.ais);
   // 只发了文件、没写字，也没 @ 谁：不画空气泡
   const said = message.content.length > 0 || mentions.length > 0;
+  // 对全体说的话（@ 了全体，或作为任务发布）：写明挑了谁先出来负责
+  const { task, lead } = message.data;
+  const led = (task || lead) && (
+    <span className={`px-1.5 text-xs text-ink-muted ${mine ? 'self-end' : ''}`}>
+      {task ? '任务' : ''}
+      {task && lead ? ' · ' : ''}
+      {lead ? `由 ${aiLook(models, lead).name} 先出来负责` : ''}
+    </span>
+  );
   const hint = waiting.length > 0 && (
     <div
       className={`flex flex-wrap items-center gap-x-2.5 gap-y-1 px-1.5 text-xs text-ink-muted ${
@@ -123,6 +138,7 @@ function UserMessage({ message }: { message: TextMessage }) {
           </p>
         )}
         <MessageFiles message={message} mine />
+        {led}
         {hint}
       </div>
     );
@@ -146,6 +162,7 @@ function UserMessage({ message }: { message: TextMessage }) {
           </p>
         )}
         <MessageFiles message={message} mine={false} />
+        {led}
         {hint}
       </div>
     </div>
@@ -232,6 +249,105 @@ function RoomTask({ card, authorId, name }: { card: TaskCard; authorId: string; 
   );
 }
 
+/** 圆环的周长（半径 21） */
+const RING = 2 * Math.PI * 21;
+/** 分工单里一项做到哪了，画成圆环上的一段：交了是满的，在做是一半 */
+const PROGRESS: Record<AssignCard['items'][number]['status'], number> = {
+  waiting: 0,
+  running: 0.5,
+  done: 1,
+  declined: 0,
+  failed: 0,
+  stopped: 0,
+};
+
+/**
+ * 分工单：一个 AI 把一件事的几部分交给了群里别的 AI。交了几项、一共几项，每项一个圆环（里面是负责它的
+ * AI），「看分工」去工作台的任务。照原型 ② 的「任务进度」。
+ */
+function AssignProgress({
+  card,
+  authorId,
+  name,
+}: {
+  card: AssignCard;
+  authorId: string;
+  name: string;
+}) {
+  const { models, bench } = useRoom();
+  const done = card.items.filter((item) => item.status === 'done').length;
+  return (
+    <section
+      aria-label="任务进度"
+      className="flex flex-wrap items-center gap-[18px] rounded-pop bg-glass-strong px-[18px] py-4 shadow-edge-strong"
+    >
+      <div className="flex items-baseline gap-2.5">
+        <span className="font-display text-[30px] leading-none tracking-[-0.03em]">
+          {done}/{card.items.length}
+        </span>
+        <span className="flex min-w-0 flex-col">
+          <span className="text-[13.5px] font-medium">{card.title}</span>
+          <span className="text-xs text-ink-muted">
+            {aiLook(models, authorId, name).name} 分了工
+          </span>
+        </span>
+      </div>
+      <ul aria-label="分工" className="m-0 flex flex-1 list-none flex-wrap gap-2.5 p-0">
+        {card.items.map((item) => {
+          const look = aiLook(models, item.key);
+          return (
+            <li
+              key={item.id}
+              role="img"
+              aria-label={`${look.name}：${item.task}，${itemNote(item)}`}
+              title={`${look.name}：${item.task}（${itemNote(item)}）`}
+              className="relative inline-flex size-[46px] items-center justify-center"
+            >
+              <svg
+                width="46"
+                height="46"
+                viewBox="0 0 46 46"
+                aria-hidden="true"
+                className="absolute left-0 top-0"
+              >
+                <circle
+                  cx="23"
+                  cy="23"
+                  r="21"
+                  fill="none"
+                  strokeWidth="2.5"
+                  className="stroke-track"
+                />
+                {PROGRESS[item.status] > 0 && (
+                  <circle
+                    cx="23"
+                    cy="23"
+                    r="21"
+                    fill="none"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeDasharray={`${(RING * PROGRESS[item.status]).toFixed(1)} ${RING.toFixed(1)}`}
+                    transform="rotate(-90 23 23)"
+                    className="stroke-accent"
+                  />
+                )}
+              </svg>
+              <AiAvatar mono={look.mono} glow={look.glow} size={30} />
+            </li>
+          );
+        })}
+      </ul>
+      <button
+        type="button"
+        onClick={() => bench.openTasks()}
+        className="h-[38px] cursor-pointer rounded-full border-0 bg-solid px-4 text-[13px] font-medium text-on-solid"
+      >
+        看分工
+      </button>
+    </section>
+  );
+}
+
 export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder: () => void }) {
   const room = useRoom();
   const { group, busy } = room;
@@ -300,6 +416,12 @@ export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder
               )}
               {message.kind === 'task' ? (
                 <RoomTask
+                  card={message.data}
+                  authorId={message.authorId}
+                  name={message.displayName}
+                />
+              ) : message.kind === 'assign' ? (
+                <AssignProgress
                   card={message.data}
                   authorId={message.authorId}
                   name={message.displayName}

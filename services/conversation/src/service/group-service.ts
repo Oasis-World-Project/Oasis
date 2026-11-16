@@ -34,12 +34,24 @@ export function createGroupService(deps: {
   profiles: Profiles;
   /** 群文件：人发的文件进群文件，AI 开一轮时带上别人新交的 */
   files: GroupFiles;
-  /** 群里有了新的话：没人 @ 的时候谁接话（group-speak.ts） */
-  speak: { nudge(groupId: string): void };
+  /** 开一轮前给席位带上群文件、各 AI 的型号；不给就只带群文件 */
+  brief?: Pick<GroupFiles, 'attach'>;
+  /**
+   * 群里有了新的话：没人 @ 的时候谁接话；对全体说的话谁先出来负责（group-speak.ts）。
+   * 没有 lead 时按进群先后挑第一个有空的。
+   */
+  speak: { nudge(groupId: string): void; lead?(groupId: string): Promise<string | undefined> };
+  /** 分工单（group-assign.ts）：席位一轮结束时记下结果、收下它发的分工单，再推进 */
+  assign?: {
+    settled(seat: Conversation, runId: string): Promise<void>;
+    schedule(groupId: string): void;
+    setLead(groupId: string, seq: number, key: string): Promise<void>;
+  };
   purge: Purge;
   logger: Logger;
 }) {
   const { repo, seats, store, turns, profiles } = deps;
+  const attach = (deps.brief ?? deps.files).attach;
 
   /** 给群现在的样子补上成员的头像（名字在库里记着，账号改名时 profiles 会让它跟着改） */
   async function seen(snapshot: GroupSnapshot): Promise<GroupSnapshot> {
@@ -85,18 +97,21 @@ export function createGroupService(deps: {
       return;
     }
     await seats.setHeard(seat.id, last.seq);
-    await turns.begin(locked, seat, [], requestId, await deps.files.attach(seat, brief));
+    await turns.begin(locked, seat, [], requestId, await attach(seat, brief));
   }
-  turns.onSeatIdle(next);
+  turns.onSeatIdle(async (locked, seat, runId) => {
+    await deps.assign?.settled(seat, runId);
+    await next(locked, seat, `seat:${runId}`);
+    if (seat.parentId) deps.assign?.schedule(seat.parentId);
+  });
 
-  /** 一句话进群后：被 @ 的 AI 里有空的各开一轮；忙着的不动，它做完这一轮自己接着开 */
-  async function dispatch(groupId: string, mentions: Mention[], requestId: string) {
-    const everyone = mentions.some((m) => m.kind === 'all');
-    const keys = new Set(mentions.flatMap((m) => (m.kind === 'ai' ? [m.key] : [])));
-    if (!everyone && !keys.size) return;
-    const targets = (await seats.list(groupId)).filter(
-      (seat) => everyone || keys.has(seat.model_key),
-    );
+  /**
+   * 一句话进群后：被 @ 的 AI（和对全体说的话挑中先出来的那个）里有空的各开一轮；忙着的不动，
+   * 它做完这一轮自己接着开
+   */
+  async function dispatch(groupId: string, keys: Set<string>, requestId: string) {
+    if (!keys.size) return;
+    const targets = (await seats.list(groupId)).filter((seat) => keys.has(seat.model_key));
     await Promise.all(
       targets.map((target) =>
         withMessageLock(store, target.id, async (locked) => {
@@ -107,6 +122,20 @@ export function createGroupService(deps: {
         ),
       ),
     );
+  }
+
+  /**
+   * 对全体 AI 说的话（@ 了全体，或作为任务发到群里）谁先出来负责：判断模型挑最对口的那个有空的；
+   * 挑不出来就按进群先后（有空的在前）。别的 AI 等它说完。
+   */
+  async function pickLead(groupId: string): Promise<string | undefined> {
+    const all = await seats.list(groupId);
+    const picked = await deps.speak.lead?.(groupId).catch((err: unknown) => {
+      deps.logger.warn({ err, groupId }, '没问出谁最对口，按进群先后挑');
+      return undefined;
+    });
+    if (picked && all.some((seat) => seat.model_key === picked)) return picked;
+    return (all.find((seat) => !seat.turn) ?? all[0])?.model_key;
   }
 
   /** 取消这个席位正在做的一轮，清掉它在别的服务里的东西 */
@@ -150,13 +179,13 @@ export function createGroupService(deps: {
         if (!name) throw new HttpError(404, 'user_not_found', '没有这个人');
         return name;
       };
-      const { light, speak, assign } = body;
+      const { light, speak } = body;
       return seen(
         await repo.create(
           userId,
           body.title,
           nameOf(userId),
-          { light, speak, assign },
+          { light, speak },
           ais,
           friends.map((id) => ({ userId: id, name: nameOf(id) })),
         ),
@@ -201,10 +230,14 @@ export function createGroupService(deps: {
       content: string,
       requestId: string,
       mentions: Mention[],
-      files: { attachments: string[]; refs: string[] } = { attachments: [], refs: [] },
+      files: { attachments: string[]; refs: string[]; task?: boolean } = {
+        attachments: [],
+        refs: [],
+      },
     ) {
-      // 先核对是成员；引用群文件只有群里能用
+      // 先核对是成员；引用群文件、作为任务发布只有群里能用
       const room = await repo.get(userId, id, NO_MESSAGES);
+      const task = room.kind === 'group' && files.task === true;
       if (room.kind !== 'group' && files.refs.length)
         throw new HttpError(400, 'file_not_found', '引用的文件已经不在群文件里');
       const uploads = await deps.files.resolve(userId, files.attachments, requestId);
@@ -212,15 +245,25 @@ export function createGroupService(deps: {
       const sent = await repo.send(userId, id, content, requestId, mentions, {
         attachments: uploads.map(toAttachment),
         refs,
+        task,
       });
       if (sent.seq === undefined) return seen(sent.snapshot);
       if (room.kind === 'group') await deps.files.uploaded(id, userId, uploads, requestId);
-      if (!mentions.some((m) => m.kind !== 'user')) {
-        // 没 @ AI：等群里安静一会儿，看有没有 AI 想接话
-        deps.speak.nudge(id);
-        return seen(await repo.get(userId, id, { after: sent.seq - 1 }));
+      const keys = new Set(mentions.flatMap((m) => (m.kind === 'ai' ? [m.key] : [])));
+      // 对全体说的（@ 了全体，或作为任务发布又没点名）：挑一个先出来负责，记在这句话上
+      if (
+        room.kind === 'group' &&
+        (mentions.some((m) => m.kind === 'all') || (task && !keys.size))
+      ) {
+        const lead = await pickLead(id);
+        if (lead) {
+          await deps.assign?.setLead(id, sent.seq, lead);
+          keys.add(lead);
+        }
       }
-      await dispatch(id, mentions, requestId);
+      // 没叫到哪个 AI：等群里安静一会儿，看有没有 AI 想接话
+      if (!keys.size) deps.speak.nudge(id);
+      else await dispatch(id, keys, requestId);
       return seen(await repo.get(userId, id, { after: sent.seq - 1 }));
     },
 

@@ -23,7 +23,7 @@ const direct = {
   light: 'coral',
   createdAt: at,
   historyNotice: GROUP_HISTORY_NOTICE,
-  options: { light: 'coral', speak: 'mention', assign: 'ai' },
+  options: { light: 'coral', speak: 'mention' },
   members: [
     { userId: USER.id, displayName: '阿凯', joinedAt: at },
     { userId: pal, displayName: '阿杰', joinedAt: at },

@@ -11,7 +11,7 @@ import { createGroupSeats } from '../src/repo/group-seats.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
-import { befriend, fakeProfiles, groupFiles } from './support/group-fixture.ts';
+import { befriend, fakeProfiles, groupAssign, groupFiles } from './support/group-fixture.ts';
 import { client, event, fake, harnessUrl, othersUrl, until } from './support/turn-fixture.ts';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', () => {
@@ -60,6 +60,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
         ]),
       ),
       files: groupFiles(pool),
+      assign: groupAssign(pool, { store, turns }),
       speak: { nudge: (groupId) => void nudged.push(groupId) },
       purge: createPurge({ harness, modelGateway, canvas }),
       logger,
@@ -81,7 +82,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
         members: [],
         light: 'mint',
         speak: 'mention',
-        assign: 'ai',
       },
       'r',
     );
@@ -149,17 +149,28 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     );
   });
 
-  it('@ 全体：每个 AI 各开一轮，各自一个会话；成员叫的也记在群主账上', async () => {
+  it('@ 全体：只挑一个先出来负责（挑不出来按进群先后），别的 AI 不因为这句话开工；成员叫的也记在群主账上', async () => {
     const group = await setup();
-    await say(member, group.id, '大家各用一句话介绍自己', 'all');
-    expect(fake.starts).toHaveLength(2);
-    expect(new Set(fake.starts.map((start) => start.conversationId)).size).toBe(2);
-    for (const start of fake.starts) {
-      expect(start).toMatchObject({ payerId: owner, scene: 'group' });
-      expect(String(start.prompt)).toContain('林夏 @全体 AI：大家各用一句话介绍自己');
-      expect(String(start.prompt)).toContain('轮到你了：林夏 @ 了全体 AI。');
-    }
+    const sent = await say(member, group.id, '大家各用一句话介绍自己', 'all');
+    expect(fake.starts).toHaveLength(1);
+    expect(sent.messages.find((m) => m.role === 'user')).toMatchObject({
+      data: { lead: 'claude' },
+    });
+    const start = fake.starts[0]!;
+    expect(start).toMatchObject({ payerId: owner, scene: 'group' });
+    expect(String(start.prompt)).toContain('林夏 @全体 AI：大家各用一句话介绍自己');
+    expect(String(start.prompt)).toContain(
+      '轮到你了：林夏 @ 了全体 AI，判断下来你最对口，由你先出来负责（别的 AI 在等你说完）。',
+    );
     expect((await ai(group.id, 'claude')).callers).toEqual([member]);
+    // 先出来的说完了：另一个 AI 没有因为这句话开工；之后点名叫它，它听得到之前那句
+    finish(String(start.runId), '我先来');
+    await until(async () => !(await ai(group.id, 'claude')).runId);
+    expect(fake.starts).toHaveLength(1);
+    await say(owner, group.id, '你也说说', 'glm');
+    expect(fake.starts).toHaveLength(2);
+    expect(String(fake.starts[1]!.prompt)).toContain('林夏 @全体 AI：大家各用一句话介绍自己');
+    expect(String(fake.starts[1]!.prompt)).toContain('轮到你了：阿杰 @ 了你。');
     // 不在群里的 AI、不在群里的人不能 @
     await expect(say(owner, group.id, '在吗', 'grok')).rejects.toMatchObject({ statusCode: 400 });
   });

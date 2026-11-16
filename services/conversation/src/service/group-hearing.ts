@@ -32,6 +32,10 @@ export interface Heard {
   mentions: Mention[];
   /** 这句话带的文件、引用的群文件（文件名） */
   files: string[];
+  /** 这句是作为任务发到群里的 */
+  task?: boolean;
+  /** @ 了全体或作为任务发布时，挑中先出来负责的那个 AI */
+  lead?: string;
 }
 
 /** 群里有谁 */
@@ -46,10 +50,19 @@ export interface Roster {
 const MAX_HEARD = 40;
 const MAX_CHARS = 12_000;
 
-/** 这句话是不是在叫这个 AI：@ 了它，或 @ 了全体 AI */
+/** 这句话是对全体 AI 说的：@ 了全体，或作为任务发到群里（没点名某个 AI） */
+const toEveryone = (message: Heard) =>
+  message.mentions.some((m) => m.kind === 'all') ||
+  (message.task === true && !message.mentions.some((m) => m.kind === 'ai'));
+
+/**
+ * 这句话是不是在叫这个 AI：@ 了它；或者是对全体 AI 说的、挑中先出来负责的是它
+ * （别的 AI 不因为这句话开工，等它说完）
+ */
 export const calls = (message: Heard, key: string) =>
   message.authorKind === 'user' &&
-  message.mentions.some((m) => m.kind === 'all' || (m.kind === 'ai' && m.key === key));
+  (message.mentions.some((m) => m.kind === 'ai' && m.key === key) ||
+    (toEveryone(message) && message.lead === key));
 
 const clock = (at: Date) => at.toISOString().slice(5, 16).replace('T', ' ');
 
@@ -144,16 +157,12 @@ export function seatBrief(
   const last = mine.at(-1);
   if (!last) return undefined;
   const names = [...new Set(mine.map((message) => message.name))].join('、');
-  const byName = mine.some((message) =>
-    message.mentions.some((m) => m.kind === 'ai' && m.key === key),
-  );
+  const byName = last.mentions.some((m) => m.kind === 'ai' && m.key === key);
+  const how = byName
+    ? `@ 了你${last.task ? '，这件事是作为任务发到群里的，由你负责' : ''}`
+    : `${last.task ? '把一件事作为任务发到了群里' : '@ 了全体 AI'}，判断下来你最对口，由你先出来负责（别的 AI 在等你说完）`;
   return {
-    text: hearingText(
-      heard,
-      roster,
-      skipped,
-      `轮到你了：${names} ${byName ? '@ 了你' : '@ 了全体 AI'}。`,
-    ),
+    text: hearingText(heard, roster, skipped, `轮到你了：${names} ${how}。`),
     persona: groupPersona(key, roster),
     title: taskTitle([], last.content),
     callers: [...new Set(mine.map((message) => message.authorId))],

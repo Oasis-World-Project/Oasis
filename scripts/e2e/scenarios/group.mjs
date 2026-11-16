@@ -1,5 +1,6 @@
 // 回归场景（docs/engineering/回归测试.md）：好友和群里的 AI。按账号 ID 加好友、对方同意；好友之间私聊；
-// 群主建群时直接把好友拉进来。@ 谁谁回，回之前先听它没听过的群聊；@ 全体各回各的；
+// 群主建群时直接把好友拉进来。@ 谁谁回，回之前先听它没听过的群聊；@ 全体只挑一个先出来负责，
+// 它发分工单把一项交给另一个 AI，那个 AI 做完交了，再轮到它收口；
 // 它忙着时 @ 它的话先等着，「现在告诉它」作为插话送进正在做的一轮；群员叫的 AI 花群主的钱；
 // 群文件：人发的文件和 AI 交的文件都在里面，别的 AI 开一轮时拿到、改了就是新版本；好友私聊里也能发文件。
 // 解散群，席位的会话、工作目录、成果、发过的文件一起清掉；删好友，两人的私聊一起删。
@@ -46,6 +47,9 @@ async function idle(user, groupId, label, timeoutMs = 300_000) {
 const spoke = (group, key) =>
   group.messages.filter((m) => m.authorId === key && m.kind === 'text' && m.role === 'assistant');
 
+/** 分工单里那一项交给谁（跑起来才知道第二个 AI 是谁） */
+let assignTo = '';
+
 export const group = {
   says: {
     // 群员 @ 第一个 AI：它开口前应先听到之前没 @ 它的那句群聊，知道是谁叫的它
@@ -60,7 +64,44 @@ export const group = {
       ],
       reply: '开场白：欢迎来到 B 栋天台。',
     },
-    2: { reply: '收到，我来说一句。' },
+    // @ 全体：先出来的那个 AI 发一份分工单，把欢迎词交给另一个 AI（单子的标题带着收口那一轮的标记）
+    2: {
+      get reply() {
+        const plan = {
+          title: `开场 ${marker('group', '2r')}`,
+          items: [
+            { id: '1', to: assignTo, task: `写一句欢迎词 ${marker('group', '2i')}`, after: [] },
+          ],
+        };
+        return `我来负责，欢迎词交给别人写。\n\`\`\`oasis-assign\n${JSON.stringify(plan)}\n\`\`\``;
+      },
+    },
+    // 被派到的 AI：应听到是谁发的单子、交给它的是哪一项；写好交出来
+    '2i': {
+      steps: [
+        ({ seg }) =>
+          seg.text.includes('发了分工单') && seg.text.includes('把第 1 项交给你：写一句欢迎词')
+            ? {
+                bash: writeFiles({ 'out/欢迎词.md': '欢迎来到 B 栋天台\n' }),
+                description: '写欢迎词',
+              }
+            : { text: `没听到交给它的那一项：${seg.text.slice(-300)}` },
+      ],
+      reply: '欢迎词写好了。',
+    },
+    // 发单的 AI 收口：应听到各项都结束了，交的文件已经在它的工作目录里
+    '2r': {
+      steps: [
+        ({ seg }) =>
+          seg.text.includes('都结束了') && /第 1 项（[^）]+）：交了/.test(seg.text)
+            ? { bash: 'cat materials/group/欢迎词.md', description: '核对欢迎词' }
+            : { text: `没听到分工单的结果：${seg.text.slice(-300)}` },
+        ({ last }) =>
+          String(last).includes('欢迎来到 B 栋天台')
+            ? { text: '都交了，欢迎词在群文件里。' }
+            : { text: `交的文件没在工作目录里：${String(last).slice(0, 300)}` },
+      ],
+    },
     3: {
       steps: [
         {
@@ -197,21 +238,46 @@ export const group = {
         `群员叫的 AI 应花群主的钱：群主 ${before.owner.availableMicro}→${after.owner.availableMicro}，群员 ${before.member.availableMicro}→${after.member.availableMicro}`,
       );
 
-      // ---- @ 全体：两个各回各的；第一个接着自己的会话，第二个第一次开口 ----
-      await say(owner, groupId, `各说一句 ${marker('group', 2)}`, [{ kind: 'all' }]);
-      now = await idle(owner, groupId, '@ 全体');
+      // ---- @ 全体：只挑一个先出来负责（判断模型都给 0 分时是第一个）；它发分工单把欢迎词交给第二个，
+      //      第二个做完交了，再轮到它收口。第一个接着自己的会话，第二个第一次开口 ----
+      assignTo = second;
+      const toAll = await say(owner, groupId, `准备开场 ${marker('group', 2)}`, [{ kind: 'all' }]);
       t.check(
-        spoke(now, first).length === 2 && spoke(now, second).length === 1,
-        `@ 全体后两个 AI 应各回一句：${first} ${spoke(now, first).length} 句、${second} ${spoke(now, second).length} 句`,
+        toAll.messages.findLast((m) => m.role === 'user')?.data.lead === first &&
+          !toAll.ais.find((ai) => ai.key === second)?.runId,
+        `@ 全体应只挑一个先出来负责，别的不开工：${JSON.stringify(toAll.ais.map((ai) => [ai.key, Boolean(ai.runId)]))}`,
       );
-      const sessions = t.provider
-        .of('group', 2)
-        .filter((c) => c.action === 'done')
-        .map((c) => c.says)
-        .sort();
+      const planOf = (group) => group.messages.find((m) => m.kind === 'assign');
+      for (let i = 0; i < 180; i++) {
+        now = await owner.api.get(`${base}/${groupId}`);
+        if (planOf(now)?.data.status === 'closed') break;
+        await sleep(1_000);
+      }
+      now = await idle(owner, groupId, '分工单收口');
+      const plan = planOf(now);
       t.check(
-        sessions.join() === '1,2',
-        `第一个 AI 应接着自己在群里的会话（2 句），第二个是第一次（1 句）：${sessions.join()}`,
+        plan?.authorId === first &&
+          plan.data.status === 'closed' &&
+          plan.data.items.length === 1 &&
+          plan.data.items[0].key === second &&
+          plan.data.items[0].status === 'done',
+        `分工单应是第一个 AI 发的、交给第二个的那一项交了、已经收口：${JSON.stringify(plan?.data ?? null)}`,
+      );
+      t.check(
+        spoke(now, first).length === 3 && spoke(now, second).length === 1,
+        `发单的 AI 应说两次（发单、收口），被派的说一次：${first} ${spoke(now, first).length} 句、${second} ${spoke(now, second).length} 句`,
+      );
+      t.check(
+        spoke(now, first).at(-1)?.content.includes('都交了'),
+        `发单的 AI 收口时应拿得到交上来的文件：${spoke(now, first).at(-1)?.content}`,
+      );
+      const sessions = ['2', '2i', '2r'].map(
+        (mark) =>
+          t.provider.of('group', mark).findLast((c) => c.kind === 'agent' && c.model)?.says ?? 0,
+      );
+      t.check(
+        sessions.join() === '2,1,3',
+        `第一个 AI 应一直接着自己在群里的会话（2 句、3 句），第二个是第一次（1 句）：${sessions.join()}`,
       );
 
       // ---- 它忙着时 @ 它：这句先等着；「现在告诉它」作为插话送进正在做的一轮 ----
@@ -237,8 +303,8 @@ export const group = {
       const seatId = seatOf(first);
       const runs = runsOf(seatId);
       t.check(
-        runs.length === 3 && runs.every((run) => run.status === 'succeeded'),
-        `插话应在同一轮里做完（这个席位一共 3 轮）：${JSON.stringify(runs.map((run) => run.status))}`,
+        runs.length === 4 && runs.every((run) => run.status === 'succeeded'),
+        `插话应在同一轮里做完（这个席位一共 4 轮）：${JSON.stringify(runs.map((run) => run.status))}`,
       );
       t.check(
         t.provider.of('group', 4).some((c) => c.action === 'bash:0'),
@@ -310,7 +376,7 @@ export const group = {
       }
       const changed = files.find((file) => file.path === '标语.md');
       t.check(
-        files.length === 2 && changed?.madeBy.id === first && changed.changedBy.id === second,
+        files.length === 3 && changed?.madeBy.id === first && changed.changedBy.id === second,
         `标语应还是一份、写着第一个 AI 做的第二个 AI 改过：${JSON.stringify(files.map((f) => [f.path, f.madeBy.id, f.changedBy.id]))}`,
       );
       const sloganText = await textOf(owner, `${base}/${groupId}/files/${changed.id}/content`);

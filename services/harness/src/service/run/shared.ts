@@ -1,6 +1,7 @@
 // 运行服务（run-service.ts）分成几块：执行一次运行（execute）、沙箱和对象存储之间搬文件（storage）、
 // 停止 / 取消 / 重启接管（control）、读产出和过程（outputs）。各块通过同一个 RunContext 互相调用，
 // 这里只放它们共用的类型、状态和小工具，免得文件之间循环 import。
+import type { Readable } from 'node:stream';
 import {
   defaultPermissions,
   type ExecutionEnvironment,
@@ -84,6 +85,8 @@ export interface LiveRun {
   done: Promise<void>;
   sessionId?: string;
   suspended?: boolean;
+  /** 沙箱起来以后：往工作目录里再放一包文件（没有就是这个执行环境不支持，或沙箱还没起来） */
+  put?: (tar: Readable) => Promise<void>;
 }
 
 /** 新登记的一次运行（在这个进程里执行） */

@@ -12,7 +12,7 @@ import { createGroupService, type GroupService } from '../src/service/group-serv
 import { createGroupSpeak, type GroupSpeak } from '../src/service/group-speak.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
-import { fakeProfiles, groupFiles } from './support/group-fixture.ts';
+import { fakeProfiles, groupAssign, groupFiles } from './support/group-fixture.ts';
 import { scratchSchema } from './support/schema.ts';
 import { client, fake, harnessUrl, othersUrl, until } from './support/turn-fixture.ts';
 
@@ -74,6 +74,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('没人 @ 时谁接话', () => {
       profiles: fakeProfiles(new Map([[owner, '阿杰']])),
       files: groupFiles(pool),
       speak,
+      assign: groupAssign(pool, { store, turns, speak }),
       purge: createPurge({ harness, modelGateway, canvas }),
       logger,
     });
@@ -95,7 +96,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('没人 @ 时谁接话', () => {
         members: [],
         light: 'mint',
         speak: speakMode,
-        assign: 'ai',
       },
       'r',
     );

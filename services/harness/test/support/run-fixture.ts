@@ -51,6 +51,8 @@ export const destroyed: string[] = [];
 export const lifecycle: string[] = [];
 export let orphansRemoved: ReadonlySet<string> | undefined;
 export const workspaces = new Set<string>();
+/** 运行中又放进沙箱的文件 */
+export const puts: { dir: string; files: { path: string; content: Buffer }[] }[] = [];
 export const executor: Executor = {
   check: async () => {},
   workspaceExists: async (id) => workspaces.has(id),
@@ -83,6 +85,7 @@ export const executor: Executor = {
       stdout,
       stderr: new PassThrough(),
       exec: async (cmd) => void lifecycle.push(`exec ${cmd.join(' ')}`),
+      put: async (dir, tar) => void puts.push({ dir, files: await tarEntries(tar) }),
       async readArchive(path) {
         lifecycle.push('archive');
         await sleep(fake.archiveDelayMs);

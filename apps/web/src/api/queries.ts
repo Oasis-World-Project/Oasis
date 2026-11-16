@@ -153,13 +153,13 @@ export const removeGroupMember = (id: string, userId: string) =>
   apiVoid(`/conversation/v1/groups/${id}/members/${userId}`, { method: 'DELETE' });
 export const deleteGroup = (id: string) =>
   apiVoid(`/conversation/v1/groups/${id}`, { method: 'DELETE' });
-/** 发一句话；files：随这句发的文件（已经传到 canvas 的 id）和引用的群文件（路径） */
+/** 发一句话；files：随这句发的文件（已经传到 canvas 的 id）、引用的群文件（路径）、是不是作为任务发布 */
 export const sendGroupMessage = (
   id: string,
   content: string,
   requestId: string,
   mentions: Mention[] = [],
-  files: { attachments?: string[]; refs?: string[] } = {},
+  files: { attachments?: string[]; refs?: string[]; task?: boolean } = {},
 ) =>
   api(`${groupPath(id)}/messages`, GroupSnapshot, {
     method: 'POST',
@@ -169,6 +169,7 @@ export const sendGroupMessage = (
       mentions,
       attachments: files.attachments ?? [],
       refs: files.refs ?? [],
+      task: files.task ?? false,
     },
   });
 

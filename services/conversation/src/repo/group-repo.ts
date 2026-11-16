@@ -341,7 +341,11 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
       content: string,
       requestId: string,
       mentions: Mention[],
-      files: { attachments?: MessageAttachment[]; refs?: { path: string; name: string }[] } = {},
+      files: {
+        attachments?: MessageAttachment[];
+        refs?: { path: string; name: string }[];
+        task?: boolean;
+      } = {},
     ) {
       return transaction(async (db) => {
         const row = await owned(db, id, userId);
@@ -399,6 +403,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
                 ...(mentions.length ? { mentions } : {}),
                 ...(files.attachments?.length ? { attachments: files.attachments } : {}),
                 ...(files.refs?.length ? { refs: files.refs } : {}),
+                ...(files.task ? { task: true } : {}),
               },
             ],
           )

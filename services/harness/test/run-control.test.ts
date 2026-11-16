@@ -1,4 +1,5 @@
 // 运行服务：一轮进行中的插话、停止、取消和重复提交。
+import { SANDBOX_PATHS } from '../src/adapter/dsh.ts';
 import { HttpError } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +14,8 @@ import {
   stored,
   issued,
   revoked,
+  PHOTO,
+  puts,
   service,
   until,
   finished,
@@ -35,6 +38,20 @@ describe('对话里的一轮：插话、停止和取消', () => {
     ]);
     const err = await service.message(run.id, '还在吗').catch((e: unknown) => e);
     expect((err as HttpError).statusCode).toBe(409);
+  });
+
+  it('进行中还能往它的工作目录里放文件（群里别的 AI 刚交的群文件）；结束后放不进去', async () => {
+    const run = await service.start({ ...base, prompt: '写报告' });
+    await until(() => events.find((e) => e.kind === 'user_message'));
+    await service.addMaterials(run.id, [{ uploadId: PHOTO, path: 'materials/group/图表.png' }]);
+    expect(puts.at(-1)?.dir).toBe(SANDBOX_PATHS.workdir);
+    expect(puts.at(-1)?.files.map((f) => [f.path, f.content.toString()])).toEqual([
+      ['materials/group/图表.png', 'photo-bytes'],
+    ]);
+    await finished(run.id);
+    await expect(
+      service.addMaterials(run.id, [{ uploadId: PHOTO, path: 'materials/group/图表.png' }]),
+    ).rejects.toMatchObject({ code: 'run_not_active' });
   });
 
   it('AI 还没开始（排队、起沙箱、装 dsh）时插话：先存着，开头那句交出去后按顺序送到', async () => {

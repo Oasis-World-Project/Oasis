@@ -10,12 +10,15 @@ import { registerRoutes } from './api/routes.ts';
 import { conversationEnv } from './config.ts';
 import { createConversationRepo } from './repo/conversation-repo.ts';
 import { createFriendRepo } from './repo/friend-repo.ts';
+import { createGroupAssignRepo } from './repo/group-assign-repo.ts';
 import { createGroupFilesRepo } from './repo/group-files-repo.ts';
 import { createGroupRepo } from './repo/group-repo.ts';
 import { createGroupSeats } from './repo/group-seats.ts';
 import { createGroupTalk } from './repo/group-talk.ts';
 import { createDmService } from './service/dm-service.ts';
 import { createFriendService } from './service/friend-service.ts';
+import { createGroupAssign } from './service/group-assign.ts';
+import { createGroupBrief } from './service/group-brief.ts';
 import { createGroupFiles } from './service/group-files.ts';
 import { createGroupService } from './service/group-service.ts';
 import { createGroupSpeak } from './service/group-speak.ts';
@@ -45,6 +48,7 @@ await startService({
     const files = createGroupFiles({
       repo: createGroupFilesRepo(resources.postgres.pool),
       canvas,
+      harness,
       logger,
       maxFiles: config.GROUP_FILES_MAX,
       handoverBytes: config.GROUP_FILES_HANDOVER_BYTES,
@@ -83,6 +87,7 @@ await startService({
       onName: (profile) => groupRepo.syncName(profile.id, profile.name),
     });
     const seats = createGroupSeats(resources.postgres.pool);
+    const brief = createGroupBrief({ files, seats, agent, logger });
     /** 每个群现在有几条推送连着（有人开着这个群） */
     const watching = new Map<string, number>();
     const speak = createGroupSpeak({
@@ -93,10 +98,19 @@ await startService({
       agent,
       modelGateway,
       logger,
-      files,
+      files: brief,
       model: config.GROUP_JUDGE_MODEL,
       quietMs: config.GROUP_QUIET_MS,
       watched: (groupId) => watching.has(groupId),
+    });
+    const assign = createGroupAssign({
+      repo: createGroupAssignRepo(resources.postgres.pool),
+      seats,
+      store: repo,
+      turns,
+      brief,
+      speak,
+      logger,
     });
     registerGroupRoutes(
       app,
@@ -108,7 +122,9 @@ await startService({
         agent,
         profiles,
         files,
+        brief,
         speak,
+        assign,
         purge,
         logger,
       }),
@@ -136,6 +152,7 @@ await startService({
       void speak
         .sweep(SWEEP_MS)
         .catch((err: unknown) => logger.warn({ err }, '看群里有没有 AI 想开口失败，稍后再试'));
+      void assign.sweep().catch((err: unknown) => logger.warn({ err }, '推进分工单失败，稍后再试'));
     }, SWEEP_MS);
     sweep.unref();
     app.addHook('onReady', async () => resume());

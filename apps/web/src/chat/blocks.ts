@@ -1,20 +1,36 @@
-// AI 说的话里的卡片：```oasis-questions 和 ```oasis-plan 代码块（写法见 harness 给 AI 的说明）。
+// AI 说的话里的卡片：```oasis-questions 和 ```oasis-plan 代码块（写法见 harness 给 AI 的说明）；
+// 群里的 ```oasis-assign（分工单）不在话里显示，```oasis-decline（不接）显示成一句话。
 // 格式不对的代码块照原样当文字显示，不丢内容。
-import { PlanBlock, QuestionsBlock } from '@oasis/contracts/conversation';
+import {
+  AssignBlock,
+  DeclineBlock,
+  PlanBlock,
+  QuestionsBlock,
+} from '@oasis/contracts/conversation';
 
 export type TextBlock =
   | { kind: 'text'; text: string }
   | { kind: 'questions'; data: QuestionsBlock }
   | { kind: 'plan'; data: PlanBlock };
 
-const FENCE = /```oasis-(questions|plan)[^\n]*\n([\s\S]*?)\n?```/g;
+// 有的模型把整个代码块写在一行里（```oasis-assign {…} ```）：不要求换行，取里面从第一个 { 到最后一个 }
+const FENCE = /```oasis-(questions|plan|assign|decline)\b([\s\S]*?)```/g;
 
 function card(kind: string, body: string): TextBlock | null {
   let data: unknown;
   try {
-    data = JSON.parse(body);
+    data = JSON.parse(body.slice(body.indexOf('{'), body.lastIndexOf('}') + 1));
   } catch {
     return null;
+  }
+  // 群里的分工单另有一张卡片（它是群里单独的一条消息），话里的这一块不再显示
+  if (kind === 'assign')
+    return AssignBlock.safeParse(data).success ? { kind: 'text', text: '' } : null;
+  if (kind === 'decline') {
+    const parsed = DeclineBlock.safeParse(data);
+    if (!parsed.success) return null;
+    const { reason } = parsed.data;
+    return { kind: 'text', text: reason ? `这一项我不接：${reason}` : '这一项我不接。' };
   }
   if (kind === 'questions') {
     const parsed = QuestionsBlock.safeParse(data);
@@ -35,7 +51,8 @@ export function splitBlocks(text: string): TextBlock[] {
     const found = card(match[1]!, match[2]!);
     if (!found) continue;
     pushText(text.slice(last, match.index));
-    blocks.push(found);
+    if (found.kind === 'text') pushText(found.text);
+    else blocks.push(found);
     last = match.index + match[0].length;
   }
   pushText(text.slice(last));

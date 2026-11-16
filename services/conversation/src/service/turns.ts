@@ -53,8 +53,8 @@ export interface TurnDeps {
   delivered?: (seat: Conversation, runId: string, files: ArtifactBody[]) => Promise<void>;
 }
 
-/** 群里的席位做完一轮、空下来了：还有叫它的话就接着开下一轮（调用方拿着这个席位的 message 锁） */
-type SeatIdle = (store: ConversationRepo, seat: Conversation, requestId: string) => Promise<void>;
+/** 群里的席位做完一轮（runId）、空下来了：还有叫它的话就接着开下一轮（调用方拿着这个席位的 message 锁） */
+type SeatIdle = (store: ConversationRepo, seat: Conversation, runId: string) => Promise<void>;
 
 /** 一次拉多少条运行事件 */
 const EVENT_PAGE = 500;
@@ -177,7 +177,7 @@ export function createTurns(deps: TurnDeps) {
           const latest = await locked.find(conversation.id);
           if (!latest || latest.turn) return;
           if (latest.kind === 'seat') {
-            await seatIdle?.(locked, latest, `seat:${turn.runId}`).catch((err: unknown) =>
+            await seatIdle?.(locked, latest, turn.runId).catch((err: unknown) =>
               logger.warn({ err, seatId: latest.id }, '席位空下来后没能接着开下一轮'),
             );
             return;

@@ -11,9 +11,11 @@ import type { SendFiles } from './room.ts';
 /** 推送连接彻底关了（EventSource.CLOSED）：浏览器不会再自己重连 */
 const CLOSED = 2;
 
-/** 还在变的消息：AI 正在写的话、进行中的任务卡 */
+/** 还在变的消息：AI 正在写的话、进行中的任务卡、没关上的分工单 */
 const inFlux = (message: GroupMessage) =>
-  message.status === 'streaming' || (message.kind === 'task' && message.data.status === 'running');
+  message.status === 'streaming' ||
+  (message.kind === 'task' && message.data.status === 'running') ||
+  (message.kind === 'assign' && message.data.status === 'open');
 
 /** 新来的一份并进手上的：消息按 id 换新、按序号排，不在了的去掉 */
 function mergeSnapshot(previous: GroupSnapshot | null, next: GroupSnapshot): GroupSnapshot {
@@ -172,7 +174,12 @@ export function useGroupRoom(id: string, gone = '这个群已解散，或你已�
       setSending(true);
       setError('');
       // 同样的话、同样的文件重发用同一个请求号
-      const draft = JSON.stringify([content, files.attachments ?? [], files.refs ?? []]);
+      const draft = JSON.stringify([
+        content,
+        files.attachments ?? [],
+        files.refs ?? [],
+        files.task,
+      ]);
       if (pending.current?.draft !== draft) pending.current = { draft, id: crypto.randomUUID() };
       try {
         apply(await sendGroupMessage(id, content, pending.current.id, mentions, files));

@@ -157,6 +157,37 @@ export const TaskSummary = TaskCard.extend({ conversationId: z.uuid() });
 export type TaskSummary = z.infer<typeof TaskSummary>;
 export const TaskList = z.object({ tasks: z.array(TaskSummary) });
 
+/** 分工单里的一项：交给群里哪个 AI、做什么、等哪几项交了再开工，现在到哪了 */
+export const AssignItem = z.object({
+  id: z.string(),
+  /** 交给哪个 AI（它的 key） */
+  key: z.string(),
+  task: z.string(),
+  /** 等这几项（编号）交了才开工 */
+  after: z.array(z.string()),
+  /** waiting 还没开工；declined 它没接；failed、stopped 没做成 */
+  status: z.enum(['waiting', 'running', 'done', 'declined', 'failed', 'stopped']),
+  /** 它做这一项的那一轮 */
+  runId: z.uuid().nullable(),
+  /** 没接、没做成的原因 */
+  note: z.string().optional(),
+  /** 没接、没做成这件事已经告诉过发分工单的 AI */
+  told: z.boolean().optional(),
+});
+export type AssignItem = z.infer<typeof AssignItem>;
+/**
+ * 分工单：群里一个 AI 把一件事的几部分交给别的 AI（《群聊》§6）。存成群里的一条消息，进行中原地更新；
+ * 都结束、轮到发单的 AI 收口时关上。
+ */
+export const AssignCard = z.object({
+  /** 发这份分工单的那一轮 */
+  runId: z.uuid(),
+  title: z.string(),
+  status: z.enum(['open', 'closed']),
+  items: z.array(AssignItem),
+});
+export type AssignCard = z.infer<typeof AssignCard>;
+
 const MessageBase = {
   id: z.uuid(),
   role: z.enum(['user', 'assistant']),
@@ -185,6 +216,10 @@ export const MessageBody = z.discriminatedUnion('kind', [
       pending: z.boolean().optional(),
       /** 群里，用户：这句 @ 了谁 */
       mentions: z.array(Mention).optional(),
+      /** 群里，用户：这句是作为任务发到群里的 */
+      task: z.boolean().optional(),
+      /** 群里，用户：@ 了全体或作为任务发布时，挑中先出来负责的那个 AI（它的 key） */
+      lead: z.string().optional(),
       /** 群里，用户：这句引用的群文件 */
       refs: z.array(z.object({ path: z.string(), name: z.string() })).optional(),
       /** AI：这一轮的任务名（工作台的任务卡上用） */
@@ -200,6 +235,8 @@ export const MessageBody = z.discriminatedUnion('kind', [
     }),
   }),
   z.object({ ...MessageBase, kind: z.literal('task'), data: TaskCard }),
+  /** 群里的分工单 */
+  z.object({ ...MessageBase, kind: z.literal('assign'), data: AssignCard }),
   /** 用户开了新话题：AI 从这里起不记得之前的事，之前的工作目录清空 */
   z.object({ ...MessageBase, kind: z.literal('topic'), data: z.object({}) }),
 ]);
@@ -251,6 +288,28 @@ export const QuestionsBlock = z.object({
     .max(4),
 });
 export type QuestionsBlock = z.infer<typeof QuestionsBlock>;
+
+/**
+ * ```oasis-assign 代码块：群里的 AI 把一件事的几部分交给群里别的 AI。to 写对方的名字；
+ * after 是要等的那几项的编号（没有就同时开工）
+ */
+export const AssignBlock = z.object({
+  title: z.string().trim().max(100).default(''),
+  items: z
+    .array(
+      z.object({
+        id: z.coerce.string().trim().min(1).max(20),
+        to: z.string().trim().min(1).max(50),
+        task: z.string().trim().min(1).max(2000),
+        after: z.array(z.coerce.string().trim().min(1).max(20)).max(8).default([]),
+      }),
+    )
+    .min(1)
+    .max(8),
+});
+export type AssignBlock = z.infer<typeof AssignBlock>;
+/** ```oasis-decline 代码块：分工单里交给自己的那一项不接，写明原因 */
+export const DeclineBlock = z.object({ reason: z.string().trim().max(500).default('') });
 
 /** ```oasis-plan 代码块：大活开工前给用户看的任务单，用户确认后照着做 */
 export const PlanBlock = z.object({

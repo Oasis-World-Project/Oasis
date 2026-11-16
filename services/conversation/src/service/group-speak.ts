@@ -29,11 +29,14 @@ const Completion = z.looseObject({
   choices: z.array(z.looseObject({ message: z.looseObject({ content: z.string().nullable() }) })),
 });
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
-/** 最后连着几句是 AI 说的（没有真人插话） */
-const roundsOf = (lines: TalkLine[]) => {
-  const human = lines.findLastIndex((line) => !line.ai);
+/** 最后连着几句是 AI 说的（没有真人插话）；since：只数这一条之后的（被派了活的 AI 从那里重新算） */
+const roundsOf = (lines: TalkLine[], since = 0) => {
+  const human = lines.findLastIndex((line) => !line.ai || line.seq <= since);
   return lines.length - 1 - human;
 };
+const CHIME_INTRO = '下面几个 AI 现在有空，没有人 @ 它们。判断此刻它们各自会不会想接话：';
+const LEAD_INTRO =
+  '群里最后那句话是对全体 AI 说的（@ 了全体，或作为任务发到群里）。下面几个 AI 现在有空，判断它们各自对这件事有多对口：';
 
 export function createGroupSpeak(deps: {
   talk: GroupTalk;
@@ -58,6 +61,8 @@ export function createGroupSpeak(deps: {
   const random = deps.random ?? Math.random;
   const now = deps.now ?? Date.now;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** 这些群下一次判断不看档位（对全体说的话，先出来的 AI 说完了，别的 AI 可以补一句） */
+  const forced = new Set<string>();
 
   /** 群主给这个 AI 写的人设（判断它爱不爱说话要看） */
   async function persona(ownerId: string, key: string): Promise<string> {
@@ -74,6 +79,7 @@ export function createGroupSpeak(deps: {
     state: NonNullable<Awaited<ReturnType<GroupTalk['state']>>>,
     idle: { model_key: string; title: string; options: { role?: string } }[],
     rounds: number,
+    intro = CHIME_INTRO,
   ): Promise<Judgment | undefined> {
     const ais = await Promise.all(
       idle.map(async (seat) => {
@@ -88,7 +94,7 @@ export function createGroupSpeak(deps: {
     const prompt = [
       `群名：${state.title}`,
       '',
-      '下面几个 AI 现在有空，没有人 @ 它们。判断此刻它们各自会不会想接话：',
+      intro,
       ...ais,
       '',
       `最近的群聊（按先后；最后已经连着 ${rounds} 句是 AI 说的、没有真人插话）：`,
@@ -155,8 +161,11 @@ export function createGroupSpeak(deps: {
     const state = await talk.state(groupId, LINES);
     const last = state?.lines.at(-1);
     if (!state || !last) return;
-    const tier = GroupOptions.parse(state.options).speak;
-    if (tier === 'mention' || !(await talk.claim(groupId, last.seq))) return;
+    const force = forced.delete(groupId);
+    const speak = GroupOptions.parse(state.options).speak;
+    if ((speak === 'mention' && !force) || !(await talk.claim(groupId, last.seq))) return;
+    // 「只在被 @ 时」的群里补话：按「积极参与」的概率算
+    const tier = speak === 'mention' ? 'active' : speak;
     const idle = state.seats.filter((seat) => !seat.turn);
     if (!idle.length) return;
     const rounds = roundsOf(state.lines);
@@ -166,7 +175,14 @@ export function createGroupSpeak(deps: {
       const seat = idle.find((item) => item.model_key === urge.key);
       if (seat) await talk.remember(seat.id, urge.warmth);
     }
-    const picked = pickSpeaker(tier, judgment, rounds, random);
+    // 刚被派了活的 AI「越聊越低」从派活那一条重新算
+    const since = new Map(idle.map((seat) => [seat.model_key, seat.options.assignedSeq ?? 0]));
+    const picked = pickSpeaker(
+      tier,
+      judgment,
+      (key) => roundsOf(state.lines, since.get(key)),
+      random,
+    );
     logger.info({ groupId, tier, rounds, judgment, picked }, '群里谁想接话');
     const seat = picked && idle.find((item) => item.model_key === picked.key);
     if (seat) await open(seat.id, CHIME, `speak:${groupId}:${last.seq}`);
@@ -177,7 +193,8 @@ export function createGroupSpeak(deps: {
 
   return {
     /** 群里有了新的话（人说的，或一个 AI 说完了）：等安静一会儿再判断，这期间又有话就重新等 */
-    nudge(groupId: string) {
+    nudge(groupId: string, force = false) {
+      if (force) forced.add(groupId);
       clearTimeout(timers.get(groupId));
       const timer = setTimeout(() => {
         timers.delete(groupId);
@@ -215,6 +232,20 @@ export function createGroupSpeak(deps: {
             logger.warn({ err, groupId }, '没能让 AI 起话头'),
           );
       }
+    },
+    /**
+     * 对全体 AI 说的一句话（@ 了全体，或作为任务发布）让谁先出来负责：问判断模型，挑最对口的那个有空的 AI。
+     * 没有有空的、问不出来，返回 undefined（调用方按进群先后挑）。
+     */
+    async lead(groupId: string): Promise<string | undefined> {
+      const state = await talk.state(groupId, LINES);
+      const idle = state?.seats.filter((seat) => !seat.turn) ?? [];
+      if (!state || !idle.length) return undefined;
+      if (idle.length === 1) return idle[0]!.model_key;
+      const judgment = await judge(state, idle, 0, LEAD_INTRO);
+      const best = judgment?.urges.toSorted((a, b) => b.relevance - a.relevance)[0];
+      logger.info({ groupId, judgment, lead: best?.key }, '对全体说的话谁先出来');
+      return best?.key;
     },
     close() {
       for (const timer of timers.values()) clearTimeout(timer);

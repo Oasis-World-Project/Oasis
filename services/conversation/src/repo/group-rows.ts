@@ -20,9 +20,16 @@ export interface SeatRow {
   title: string;
   /**
    * role：在群里负责什么；removedAt：什么时候被移出的；warmth：判断出来它平时有多爱说话（0 到 1）；
-   * filesSeen：群文件它拿到第几版了（group_files.rev）
+   * filesSeen：群文件它拿到第几版了（group_files.rev）；assignedSeq：最近一次被派活时群里到第几条了
+   * （它的「越聊越低」从那里重新算）
    */
-  options: { role?: string; removedAt?: string; warmth?: number; filesSeen?: number };
+  options: {
+    role?: string;
+    removedAt?: string;
+    warmth?: number;
+    filesSeen?: number;
+    assignedSeq?: number;
+  };
   turn: Turn | null;
   heard_seq: string;
 }
@@ -42,7 +49,8 @@ export const MESSAGE_COLUMNS =
   'id,seq,author_kind,author_id,content,status,error,kind,data,created_at';
 const SEAT_COLUMNS = 'id,model_key,title,options,turn,heard_seq';
 /** 还在变的消息：AI 正在写的话、进行中的任务卡 */
-export const IN_FLUX = "(status='streaming' or (kind='task' and data->>'status'='running'))";
+export const IN_FLUX =
+  "(status='streaming' or (kind='task' and data->>'status'='running') or (kind='assign' and data->>'status'='open'))";
 
 /** 群里的席位，按进群先后；all：连被移出的也算（解散群时要清它们留下的成果） */
 export async function seatsOf(db: pg.Pool | pg.PoolClient, groupId: string, all = false) {

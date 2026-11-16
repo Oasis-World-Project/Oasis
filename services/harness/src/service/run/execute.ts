@@ -269,6 +269,8 @@ export function createExecution(
           ],
         });
         const box = sandbox;
+        const { put } = box;
+        if (put) run.put = (tar) => put.call(box, SANDBOX_PATHS.workdir, tar);
         run.abort.signal.addEventListener(
           'abort',
           () => {

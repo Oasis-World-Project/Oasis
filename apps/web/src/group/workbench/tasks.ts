@@ -1,11 +1,13 @@
-// 工作台「任务」页签上的任务：群里 AI 动过手（有步骤）、交过文件，或在等人回答的每一轮是一张卡。
+// 工作台「任务」页签上的任务：群里 AI 动过手（有步骤）、交过文件，或在等人回答的每一轮是一张卡；
+// 分工单里还没开工的每一项也是一张卡（在「待开始」）。
 // 从群消息里拼出来：这一轮里 AI 的话（带步骤、待办）和它的任务卡（任务名、花费、交的文件）。
-import type { MessagePart, TaskFile, TodoItem } from '@oasis/contracts/conversation';
+import type { AssignItem, MessagePart, TaskFile, TodoItem } from '@oasis/contracts/conversation';
 import type { GroupMessage } from '@oasis/contracts/group';
 import { splitBlocks } from '../../chat/blocks.ts';
 
-export type TaskColumn = 'doing' | 'review' | 'done';
+export type TaskColumn = 'wait' | 'doing' | 'review' | 'done';
 export const TASK_COLUMNS: { id: TaskColumn; title: string }[] = [
+  { id: 'wait', title: '待开始' },
   { id: 'doing', title: '进行中' },
   { id: 'review', title: '等你确认' },
   { id: 'done', title: '完成' },
@@ -33,6 +35,45 @@ export interface RoomTask {
 
 type Text = Extract<GroupMessage, { kind: 'text' }>;
 type Card = Extract<GroupMessage, { kind: 'task' }>;
+type Assign = Extract<GroupMessage, { kind: 'assign' }>;
+
+/** 分工单里的一项现在到哪了，写成一句话 */
+export function itemNote(item: AssignItem): string {
+  const why = item.note ? `：${item.note}` : '';
+  switch (item.status) {
+    case 'waiting':
+      return item.after.length ? `等第 ${item.after.join('、')} 项交了再开工` : '等它有空就开工';
+    case 'running':
+      return '正在做';
+    case 'done':
+      return '交了';
+    case 'declined':
+      return `没接${why}`;
+    case 'failed':
+      return `没做成${why}`;
+    case 'stopped':
+      return `停下了${why}`;
+  }
+}
+
+/** 分工单里还没有自己那一轮可看的几项（还没开工的、刚开工还没动手的、没接的）：各一张卡 */
+function itemTasks(message: Assign, shown: Set<string>): RoomTask[] {
+  return message.data.items
+    .filter((item) => !item.runId || !shown.has(item.runId))
+    .map((item) => ({
+      runId: `${message.id}:${item.id}`,
+      key: item.key,
+      title: item.task,
+      column: item.status === 'waiting' ? 'wait' : item.status === 'running' ? 'doing' : 'done',
+      note: itemNote(item),
+      parts: [],
+      files: [],
+      spentMicro: 0,
+      startedAt: message.createdAt,
+      finishedAt: null,
+      live: item.status === 'running',
+    }));
+}
 
 /** 话里还有没答的问卷、没确认的任务单 */
 const asks = (message: Text) =>
@@ -47,10 +88,15 @@ export function tasksOf(messages: GroupMessage[]): RoomTask[] {
     (a, b) => a.seq - b.seq,
   );
   const runs = new Map<string, { texts: Text[]; card?: Card }>();
+  const plans: Assign[] = [];
   /** 每个 AI 最新说的那条话：只有它上面的问卷还等着人答，只有它出错、停下了还等着人说「继续」 */
   const latest = new Map<string, string>();
   for (const message of unique) {
     if (message.role !== 'assistant') continue;
+    if (message.kind === 'assign') {
+      plans.push(message);
+      continue;
+    }
     const runId = message.kind === 'topic' ? undefined : message.data.runId;
     if (!runId) continue;
     const run = runs.get(runId) ?? { texts: [] };
@@ -112,7 +158,8 @@ export function tasksOf(messages: GroupMessage[]): RoomTask[] {
       live: Boolean(running),
     });
   }
-  return tasks.reverse();
+  const shown = new Set(tasks.map((task) => task.runId));
+  return [...tasks, ...plans.flatMap((plan) => itemTasks(plan, shown))].reverse();
 }
 
 /** 任务有没有变的记号：有任务开始、结束、换了状态，工作台就重新读一遍 */
@@ -120,11 +167,13 @@ export const workMark = (messages: GroupMessage[]) =>
   messages
     .filter((message) => message.role === 'assistant' && message.kind !== 'topic')
     .map((message) =>
-      message.kind === 'task'
-        ? `${message.id}:${message.data.status}`
-        : message.status === 'streaming'
-          ? `${message.id}:live`
-          : '',
+      message.kind === 'assign'
+        ? `${message.id}:${message.data.items.map((item) => item.status[0]).join('')}`
+        : message.kind === 'task'
+          ? `${message.id}:${message.data.status}`
+          : message.status === 'streaming'
+            ? `${message.id}:live`
+            : '',
     )
     .filter(Boolean)
     .join(',');

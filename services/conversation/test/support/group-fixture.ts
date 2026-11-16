@@ -6,9 +6,12 @@ import type { GroupOptions } from '@oasis/contracts/group';
 import type { PublicProfile } from '@oasis/contracts/identity';
 import { HttpError, type ServiceClient } from '@oasis/service-kit';
 import { createConversationRepo } from '../../src/repo/conversation-repo.ts';
+import type { ConversationRepo } from '../../src/repo/conversation-repo.ts';
+import { createGroupAssignRepo } from '../../src/repo/group-assign-repo.ts';
 import { createGroupFilesRepo } from '../../src/repo/group-files-repo.ts';
 import { createGroupRepo } from '../../src/repo/group-repo.ts';
 import { createGroupSeats } from '../../src/repo/group-seats.ts';
+import { createGroupAssign } from '../../src/service/group-assign.ts';
 import { createGroupFiles } from '../../src/service/group-files.ts';
 import { createGroupService } from '../../src/service/group-service.ts';
 import type { Profiles } from '../../src/service/profiles.ts';
@@ -20,7 +23,6 @@ export const NEW_GROUP: { ais: string[]; members: string[] } & GroupOptions = {
   members: [],
   light: 'coral',
   speak: 'mention',
-  assign: 'ai',
 };
 
 /** 测试里一个人账号的名字：按用户 ID 编 */
@@ -64,6 +66,25 @@ export const groupFiles = (pool: pg.Pool, canvas = {} as ServiceClient) =>
     logger: pino({ level: 'silent' }),
     maxFiles: 5,
     handoverBytes: 10 * 1024 * 1024,
+  });
+
+/** 分工单：真的存储；speak 不给就不让别的 AI 补话 */
+export const groupAssign = (
+  pool: pg.Pool,
+  deps: {
+    store: ConversationRepo;
+    turns: Turns;
+    speak?: { nudge(id: string, force?: boolean): void };
+  },
+) =>
+  createGroupAssign({
+    repo: createGroupAssignRepo(pool),
+    seats: createGroupSeats(pool),
+    store: deps.store,
+    turns: deps.turns,
+    brief: groupFiles(pool),
+    speak: deps.speak ?? { nudge: () => undefined },
+    logger: pino({ level: 'silent' }),
   });
 
 export const humanGroups = (pool: pg.Pool, messagesPerMinute: number) =>

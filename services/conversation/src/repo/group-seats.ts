@@ -96,6 +96,8 @@ export function createGroupSeats(pool: pg.Pool) {
           createdAt: row.created_at,
           mentions: (Array.isArray(row.data.mentions) ? row.data.mentions : []) as Mention[],
           files: fileNames(row.data),
+          ...(row.data.task === true ? { task: true } : {}),
+          ...(typeof row.data.lead === 'string' ? { lead: row.data.lead } : {}),
         })),
         skipped: total - rows.length,
       };

@@ -28,9 +28,11 @@ const Cursor = z
     (value) => value.after === undefined || value.before === undefined,
     '不能同时指定前后游标',
   );
-/** 还在变的消息（AI 正在写的话、进行中的任务卡）：下一次推送时再给一遍最新的样子 */
+/** 还在变的消息（AI 正在写的话、进行中的任务卡、没关上的分工单）：下一次推送时再给一遍最新的样子 */
 const inFlux = (message: GroupMessage) =>
-  message.status === 'streaming' || (message.kind === 'task' && message.data.status === 'running');
+  message.status === 'streaming' ||
+  (message.kind === 'task' && message.data.status === 'running') ||
+  (message.kind === 'assign' && message.data.status === 'open');
 
 export function registerGroupRoutes(
   app: ServiceApp,

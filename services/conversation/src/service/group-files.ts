@@ -43,6 +43,8 @@ const toBody = (row: FileRow): GroupFile => ({
 export function createGroupFiles(deps: {
   repo: GroupFilesRepo;
   canvas: ServiceClient;
+  /** 群里别的 AI 正在干活时，新交的群文件直接放进它们的工作目录；不给就等它们下一轮再拿 */
+  harness?: ServiceClient;
   logger: Logger;
   /** 一个群最多多少个群文件 */
   maxFiles: number;
@@ -68,6 +70,25 @@ export function createGroupFiles(deps: {
       .catch((err: unknown) => logger.warn({ err, uploadId: row.ref_id }, '换下的群文件没删掉'));
   }
 
+  /**
+   * 新交的这一版放进群里正在干活的别的 AI 的工作目录（materials/group/ 下）：它们不用等下一轮。
+   * 不打断它们（说明里写了别人交的文件随时会出现在那里）；放不进去就算了，下一轮开工时照常拿到。
+   */
+  async function push(groupId: string, next: Parameters<GroupFilesRepo['put']>[1]) {
+    if (!deps.harness) return;
+    const path = `${GROUP_DIR}/${next.path}`;
+    const material =
+      next.source === 'artifact'
+        ? { artifactId: next.refId, path }
+        : { uploadId: next.refId, ownerId: next.refOwner, path };
+    for (const runId of (await repo.people(groupId)).running) {
+      if (runId === next.runId) continue;
+      await deps.harness
+        .json('POST', `/internal/runs/${runId}/materials`, { body: { materials: [material] } })
+        .catch((err: unknown) => logger.debug({ err, runId, path }, '群文件没能放进正在跑的一轮'));
+    }
+  }
+
   async function put(
     groupId: string,
     next: Parameters<GroupFilesRepo['put']>[1],
@@ -75,6 +96,7 @@ export function createGroupFiles(deps: {
   ) {
     const result = await repo.put(groupId, next, deps.maxFiles);
     if (result.status === 'changed') await drop(result.replaced, requestId);
+    if (result.status === 'changed' || result.status === 'added') await push(groupId, next);
     if (result.status === 'full')
       logger.warn({ groupId, path: next.path }, '群文件已满，这个文件没进群文件');
     return result.status;

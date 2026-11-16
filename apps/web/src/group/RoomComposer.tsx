@@ -38,12 +38,17 @@ const MENU_ITEM =
 function PlusMenu({
   anchor,
   refs,
+  task,
+  onTask,
   onUpload,
   onRef,
   onClose,
 }: {
   anchor: string;
   refs: string[];
+  /** 这句话是不是作为任务发布 */
+  task: boolean;
+  onTask: (next: boolean) => void;
   onUpload: () => void;
   onRef: (path: string) => void;
   onClose: () => void;
@@ -82,6 +87,28 @@ function PlusMenu({
         </>
       ) : (
         <>
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={task}
+            onClick={() => onTask(!task)}
+            className="flex cursor-pointer items-center gap-2.5 rounded-[20px] border-0 bg-transparent px-3 py-2.5 text-left text-ink hover:bg-glass-active"
+          >
+            <span className="flex flex-1 flex-col">
+              <span className="text-sm font-medium">作为任务发布</span>
+              <span className="text-xs text-ink-muted">
+                没 @ 谁时挑最对口的 AI 出来负责，它可以把一部分交给别的 AI
+              </span>
+            </span>
+            <span
+              aria-hidden="true"
+              className={`relative h-[22px] w-[38px] shrink-0 rounded-full ${task ? 'bg-accent' : 'bg-dot-idle'}`}
+            >
+              <span
+                className={`absolute top-[3px] size-4 rounded-full bg-on-solid shadow-raised ${task ? 'left-[19px]' : 'left-[3px]'}`}
+              />
+            </span>
+          </button>
           <button type="button" role="menuitem" onClick={onUpload} className={MENU_ITEM}>
             上传文件
           </button>
@@ -156,6 +183,7 @@ export function RoomComposer({
   const direct = group.kind === 'direct';
   const attachments = useAttachments();
   const [draft, setDraft] = useState('');
+  const [task, setTask] = useState(false);
   const [open, setOpen] = useState<'mention' | 'plus' | null>(null);
   const locked = !online || sending;
   // 弹层贴着输入框的上沿：上面有「谁在忙」那一行时盖住它，没有时就在输入框上面
@@ -170,8 +198,9 @@ export function RoomComposer({
 
   async function send() {
     if (!canSend) return;
-    if (await room.send(draft.trim(), mentions, { attachments: attachments.ids, refs })) {
+    if (await room.send(draft.trim(), mentions, { attachments: attachments.ids, refs, task })) {
       setDraft('');
+      setTask(false);
       onMentions([]);
       onRefs([]);
       attachments.clear();
@@ -194,11 +223,13 @@ export function RoomComposer({
   };
   const placeholder = sending
     ? '发送中…'
-    : mentions.length
-      ? '说说要它做什么'
-      : group.ais.length
-        ? '说点什么，或者 @ 一个 AI'
-        : '说点什么';
+    : task
+      ? '说说要做成什么样'
+      : mentions.length
+        ? '说说要它做什么'
+        : group.ais.length
+          ? '说点什么，或者 @ 一个 AI'
+          : '说点什么';
 
   return (
     <footer className="relative flex flex-col px-[18px] pb-[18px] pt-1">
@@ -210,6 +241,8 @@ export function RoomComposer({
         <PlusMenu
           anchor={anchor}
           refs={refs}
+          task={task}
+          onTask={setTask}
           onUpload={upload}
           onRef={(path) => {
             onRefs([...refs, path]);
@@ -267,6 +300,11 @@ export function RoomComposer({
           </div>
         )}
         <div className="flex min-h-8 flex-wrap items-center gap-1.5">
+          {task && (
+            <span className="h-7 shrink-0 rounded-full bg-solid px-2.5 text-[12.5px] font-medium leading-7 text-on-solid">
+              任务
+            </span>
+          )}
           {mentions.map((mention, index) => (
             <span
               key={index}
@@ -333,7 +371,7 @@ export function RoomComposer({
           <span className="flex-1" />
           <button
             type="button"
-            aria-label="发送"
+            aria-label={task ? '发布任务' : '发送'}
             disabled={!canSend}
             onClick={() => void send()}
             className="flex size-11 cursor-pointer items-center justify-center rounded-full border-0 bg-accent text-on-accent shadow-accent disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"

@@ -53,11 +53,16 @@ export function startChance(warmth: number, rounds: number, quietMs: number): nu
 export function pickSpeaker(
   tier: Lively,
   judgment: Judgment,
-  rounds: number,
+  /** 连着几句没有真人插话；给函数时每个 AI 各算各的（刚被派了活的从头算） */
+  rounds: number | ((key: string) => number),
   random: () => number,
 ): { key: string; chance: number } | undefined {
+  const roundsOf = typeof rounds === 'number' ? () => rounds : rounds;
   return judgment.urges
-    .map((urge) => ({ urge, chance: speakChance(tier, urge, judgment.depth, rounds) }))
+    .map((urge) => ({
+      urge,
+      chance: speakChance(tier, urge, judgment.depth, roundsOf(urge.key)),
+    }))
     .filter(({ chance }) => random() < chance)
     .sort((a, b) => b.urge.relevance - a.urge.relevance)
     .map(({ urge, chance }) => ({ key: urge.key, chance }))[0];

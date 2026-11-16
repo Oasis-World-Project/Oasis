@@ -33,6 +33,20 @@ describe('AI 自己开口的概率', () => {
     expect(easy[3]).toBeLessThan(0.01);
   });
 
+  it('刚被派了活的 AI 从头算：别人已经聊了很多轮兴致低了，它还是原来的概率', () => {
+    const judgment = { depth: 0, urges: [urge(1, 1, 'tired'), urge(0.9, 1, 'assigned')] };
+    // 都按聊了 5 轮算：谁都几乎不会开口
+    expect(pickSpeaker('active', judgment, 5, () => 0.5)).toBeUndefined();
+    // 被派活的那个从 0 轮算：掷得中
+    const picked = pickSpeaker(
+      'active',
+      judgment,
+      (key) => (key === 'assigned' ? 0 : 5),
+      () => 0.5,
+    );
+    expect(picked?.key).toBe('assigned');
+  });
+
   it('掷骰子：掷中的里面最有话说的开口；都没掷中没人开口', () => {
     const judgment = { depth: 0.5, urges: [urge(0.6, 1, 'a'), urge(1, 1, 'b'), urge(0, 1, 'c')] };
     expect(pickSpeaker('active', judgment, 0, () => 0)?.key).toBe('b');

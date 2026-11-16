@@ -37,7 +37,7 @@ function TaskCard({
         className="flex cursor-pointer flex-col gap-2.5 border-0 bg-transparent p-0 text-left text-ink [font:inherit]"
       >
         <span className="flex items-start gap-2.5">
-          <span className="min-w-0 flex-1 break-words text-sm font-medium leading-[1.4]">
+          <span className="line-clamp-3 min-w-0 flex-1 break-words text-sm font-medium leading-[1.4]">
             {task.title}
           </span>
           <AiAvatar mono={look.mono} glow={look.glow} size={28} glowing={task.live} />
@@ -128,7 +128,7 @@ function TaskProcess({ task }: { task: RoomTask }) {
       {task.parts.length > 0 || task.todos?.length ? (
         <ProcessBody parts={task.parts} todos={task.todos} live={task.live} />
       ) : (
-        <p className="m-0 text-[13px] text-ink-muted">这一轮没有动手做的步骤。</p>
+        <p className="m-0 text-[13px] text-ink-muted">{task.note}。还没有可以看的步骤。</p>
       )}
     </section>
   );

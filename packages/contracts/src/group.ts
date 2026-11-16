@@ -14,12 +14,9 @@ export type GroupLight = z.infer<typeof GroupLight>;
 /** 没人被 @ 的时候 AI 们：只在被 @ 时说话 / 看情况 / 积极参与 */
 export const GroupSpeak = z.enum(['mention', 'auto', 'active']);
 export type GroupSpeak = z.infer<typeof GroupSpeak>;
-/** 发任务时：AI 们自己商量认领 / 群主来指派 */
-export const GroupAssign = z.enum(['ai', 'owner']);
 export const GroupOptions = z.object({
   light: GroupLight.default('coral'),
   speak: GroupSpeak.default('mention'),
-  assign: GroupAssign.default('ai'),
 });
 export type GroupOptions = z.infer<typeof GroupOptions>;
 
@@ -55,6 +52,8 @@ export const GroupSendBody = z
     attachments: z.array(z.uuid()).max(MAX_ATTACHMENTS).default([]),
     /** 引用的群文件（路径）；只有群里能用 */
     refs: z.array(FilePath).max(MAX_FILE_REFS).default([]),
+    /** 作为任务发到群里：没 @ 某个 AI 时，挑最对口的一个出来负责；只有群里能用 */
+    task: z.boolean().default(false),
   })
   .refine(
     (body) => body.content || body.attachments.length || body.refs.length,

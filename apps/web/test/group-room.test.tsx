@@ -40,7 +40,7 @@ const group = (patch = {}) => ({
   light: 'coral',
   createdAt: at,
   historyNotice: GROUP_HISTORY_NOTICE,
-  options: { light: 'coral', speak: 'mention', assign: 'ai' },
+  options: { light: 'coral', speak: 'mention' },
   members: [
     { userId: me, displayName: '我', joinedAt: at },
     { userId: friend, displayName: '阿杰', joinedAt: at },
@@ -75,9 +75,7 @@ afterEach(() => {
 describe('群页里的 AI', () => {
   it('页头是群名和几个人几个 AI；舞台上有它，点开看它负责什么；整屏是这个群的光', async () => {
     installFakeApi({ signedIn: true });
-    await room(
-      group({ light: 'mint', options: { light: 'mint', speak: 'mention', assign: 'ai' } }),
-    );
+    await room(group({ light: 'mint', options: { light: 'mint', speak: 'mention' } }));
     expect(screen.getByRole('heading', { name: '周五发布会筹备' })).not.toBeNull();
     expect(screen.getByText('2 个人和 1 个 AI')).not.toBeNull();
     expect(document.querySelector('.oasis-room')?.getAttribute('data-light')).toBe('mint');

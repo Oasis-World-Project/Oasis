@@ -61,6 +61,23 @@ const card = (seq: number, runId: string, data = {}) =>
       ...data,
     },
   }) as GroupMessage;
+/** Claude 发的分工单：第 1 项给 GLM（在做，是 run 那一轮），第 2 项给 Kimi（等第 1 项） */
+const plan = (seq: number, items: object[] = []) =>
+  ({
+    ...base(seq, 'claude', 'assistant'),
+    content: '分工单：竞品 A 分析',
+    kind: 'assign',
+    data: {
+      runId: oldRun,
+      title: '竞品 A 分析',
+      status: 'open',
+      items: [
+        { id: '1', key: 'glm', task: '做图表', after: [], status: 'running', runId: run },
+        { id: '2', key: 'kimi', task: '写英文摘要', after: ['1'], status: 'waiting', runId: null },
+        ...items,
+      ],
+    },
+  }) as GroupMessage;
 const file = (n: number, path: string, patch = {}) => ({
   id: uuid(n),
   path,
@@ -82,7 +99,7 @@ const group = (patch = {}) => ({
   light: 'coral',
   createdAt: at,
   historyNotice: GROUP_HISTORY_NOTICE,
-  options: { light: 'coral', speak: 'mention', assign: 'ai' },
+  options: { light: 'coral', speak: 'mention' },
   members: [
     { userId: me, displayName: '我', joinedAt: at },
     { userId: friend, displayName: '阿杰', joinedAt: at },
@@ -168,6 +185,101 @@ describe('工作台上的任务是怎么从消息里拼出来的', () => {
       ['done', '做了 1 步'],
       ['done', '出错了'],
     ]);
+  });
+});
+
+describe('分工单在工作台和聊天里', () => {
+  it('还没开工的每一项是「待开始」里的一张卡；已经开工、有过程可看的那一项不重复出卡；没接的写明原因', () => {
+    const tasks = tasksOf([
+      plan(1, [
+        {
+          id: '3',
+          key: 'kimi',
+          task: '做海报',
+          after: [],
+          status: 'declined',
+          runId: uuid(5),
+          note: '不会画',
+        },
+      ]),
+      { ...aiSays(2, run, [step('1', 'running')], { status: 'streaming' }), authorId: 'glm' },
+    ]);
+    expect(tasks.map((task) => [task.key, task.title, task.column, task.note])).toEqual([
+      ['kimi', '做海报', 'done', '没接：不会画'],
+      ['kimi', '写英文摘要', 'wait', '等第 1 项交了再开工'],
+      ['glm', '排发布会流程', 'doing', '第 1 步'],
+    ]);
+  });
+
+  it('聊天里是一张进度卡：交了几项、每项一个圆环；「看分工」去任务页签，「待开始」一栏有它', async () => {
+    api();
+    await room(group({ messages: [plan(1)] }));
+    const progress = await screen.findByRole('region', { name: '任务进度' });
+    expect(within(progress).getByText('0/2')).toBeTruthy();
+    expect(within(progress).getByText('竞品 A 分析')).toBeTruthy();
+    expect(within(progress).getByText('Claude 分了工')).toBeTruthy();
+    expect(
+      within(progress).getByRole('img', { name: /写英文摘要，等第 1 项交了再开工/ }),
+    ).toBeTruthy();
+    fireEvent.click(within(progress).getByRole('button', { name: '看分工' }));
+    const bench = screen.getByRole('region', { name: '工作台' });
+    const waiting = within(bench).getByRole('region', { name: '待开始' });
+    expect(within(waiting).getByText('写英文摘要')).toBeTruthy();
+    expect(
+      within(within(bench).getByRole('region', { name: '进行中' })).getByText('做图表'),
+    ).toBeTruthy();
+  });
+
+  it('AI 话里的分工单代码块不显示（它另有一张卡），整块写在一行里也一样；不接的那一块显示成一句话', async () => {
+    api();
+    const fence = (kind: string, value: object) =>
+      `\`\`\`oasis-${kind} ${JSON.stringify(value)} \`\`\``;
+    const plan = {
+      title: '竞品 A 分析',
+      items: [{ id: '1', to: 'GLM', task: '做图表', after: [] }],
+    };
+    await room(
+      group({
+        messages: [
+          aiSays(1, oldRun, [
+            { type: 'text', text: `我来派： ${fence('assign', plan)} 等你们的结果。` },
+          ]),
+          {
+            ...aiSays(2, run, [{ type: 'text', text: fence('decline', { reason: '没有数据' }) }]),
+            authorId: 'glm',
+          },
+        ],
+      }),
+    );
+    expect(await screen.findByText('我来派：')).toBeTruthy();
+    expect(screen.getByText('等你们的结果。')).toBeTruthy();
+    expect(screen.queryByText(/oasis-assign/)).toBeNull();
+    expect(screen.getByText('这一项我不接：没有数据')).toBeTruthy();
+  });
+
+  it('「＋」里打开「作为任务发布」：输入框里有「任务」，发出去的话带着它；这句话下面写着挑了谁负责', async () => {
+    const state = api();
+    await room(
+      group({
+        messages: [said(1, friend, '做一份竞品分析', { task: true, lead: 'claude' })],
+      }),
+    );
+    expect(await screen.findByText('任务 · 由 Claude 先出来负责')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '更多' }));
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /作为任务发布/ }));
+    expect(
+      screen.getByRole('menuitemcheckbox', { name: /作为任务发布/ }).getAttribute('aria-checked'),
+    ).toBe('true');
+    fireEvent.change(screen.getByRole('textbox', { name: '消息' }), {
+      target: { value: '做一个小游戏' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发布任务' }));
+    await waitFor(() =>
+      expect(state.bodies.find((b) => b.path.endsWith('/messages'))?.body).toMatchObject({
+        content: '做一个小游戏',
+        task: true,
+      }),
+    );
   });
 });
 

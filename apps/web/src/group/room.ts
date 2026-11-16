@@ -8,6 +8,8 @@ import { createContext, useContext } from 'react';
 export interface SendFiles {
   attachments?: string[];
   refs?: string[];
+  /** 作为任务发到群里：没 @ 谁时挑最对口的 AI 出来负责 */
+  task?: boolean;
 }
 
 /** 聊天里能对工作台做的事 */
