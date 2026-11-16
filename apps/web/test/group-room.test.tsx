@@ -81,6 +81,10 @@ describe('群页里的 AI', () => {
     expect(screen.getByRole('heading', { name: '周五发布会筹备' })).not.toBeNull();
     expect(screen.getByText('2 个人和 1 个 AI')).not.toBeNull();
     expect(document.querySelector('.oasis-room')?.getAttribute('data-light')).toBe('mint');
+    // 消息区是定位基准：问卷卡里视觉隐藏的单选框跟着它滚，选的时候不会把整页滚走
+    expect(screen.getByRole('log', { name: '群消息记录' }).parentElement?.className).toContain(
+      'relative',
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Claude，有空' }));
     const card = screen.getByRole('dialog', { name: 'Claude' });
     expect(within(card).getByText(/在这个群里负责统筹、长文/)).not.toBeNull();
