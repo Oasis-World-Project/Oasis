@@ -17,7 +17,8 @@ export interface SeatRow {
   model_key: string;
   /** AI 的名字（进群时、每次开一轮时记下） */
   title: string;
-  options: { role?: string; removedAt?: string };
+  /** role：在群里负责什么；removedAt：什么时候被移出的；warmth：判断出来它平时有多爱说话（0 到 1） */
+  options: { role?: string; removedAt?: string; warmth?: number };
   turn: Turn | null;
   heard_seq: string;
 }

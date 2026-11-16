@@ -132,6 +132,7 @@ function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) 
           <AiBody
             message={message}
             latest={latest}
+            quiet
             bubble={{
               className: 'bubble-in shadow-bubble-edge',
               style: { background: `color-mix(in srgb, ${look.glow} 14%, transparent)` },

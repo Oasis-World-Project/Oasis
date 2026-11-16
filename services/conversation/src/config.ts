@@ -9,6 +9,9 @@ export const conversationEnv = {
   /** 一个人最多几个好友、最多几条发出去还没回的好友申请 */
   FRIEND_MAX: z.coerce.number().int().positive().max(5000).default(500),
   FRIEND_REQUESTS_PENDING: z.coerce.number().int().positive().max(500).default(50),
+  /** 没人 @ 时判断「谁想接话」用的型号（要快）；一句话之后群里安静多久再判断 */
+  GROUP_JUDGE_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
+  GROUP_QUIET_MS: z.coerce.number().int().min(0).max(60_000).default(4_000),
   /** 一个群最多几个 AI（契约里的上限是 8） */
   GROUP_MAX_AIS: z.coerce.number().int().positive().max(8).default(8),
   ...databaseEnv,

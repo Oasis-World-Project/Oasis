@@ -32,6 +32,18 @@ function groupParts(parts: MessagePart[]): Group[] {
   return groups;
 }
 
+/**
+ * 群里只留它对大家说的话：开工前说的和收工后说的。中间的步骤、边做边说的话不放进群聊
+ * （群聊不能被干活的过程塞满；过程以后在工作台里看）。
+ */
+function spokenOnly(groups: Group[]): Group[] {
+  const first = groups.findIndex((group) => group.kind === 'steps');
+  const last = groups.findLastIndex((group) => group.kind === 'steps');
+  return groups.filter(
+    (group, index) => group.kind !== 'steps' && (first < 0 || index < first || index > last),
+  );
+}
+
 export function StepIcon({ status }: { status: StepPart['status'] }) {
   if (status === 'running')
     return <LoaderCircle size={13} aria-hidden="true" className="animate-spin text-accent" />;
@@ -171,20 +183,26 @@ export function AiBody({
   message,
   latest,
   bubble = DM_BUBBLE,
+  quiet = false,
 }: {
   message: TextMessage;
   /** 是最新的一条（后面没有新的话）：问卷能答、任务单能确认、出错了能「继续」 */
   latest: boolean;
   bubble?: Bubble;
+  /** 群里：不放干活的过程（步骤、待办、边做边说的话），在做时只写一行做到第几步 */
+  quiet?: boolean;
 }) {
   const actions = useChatActions();
   const { parts = [], todos, stopped, spentMicro } = message.data;
   const live = message.status === 'streaming';
   const canContinue =
     latest && !actions.turnActive && (message.status === 'failed' || Boolean(stopped));
+  const groups = groupParts(parts);
+  const shown = quiet ? spokenOnly(groups) : groups;
+  const steps = parts.filter((part) => part.type === 'step').length;
   return (
     <>
-      {groupParts(parts).map((group, index) => (
+      {shown.map((group, index) => (
         <Fragment key={index}>
           {group.kind === 'text' ? (
             <AiText
@@ -204,7 +222,13 @@ export function AiBody({
         </Fragment>
       ))}
       {parts.length === 0 && live && <span className="text-ink-muted">正在想…</span>}
-      {todos && todos.length > 0 && <Todos items={todos} live={live} />}
+      {quiet && live && steps > 0 && (
+        <span className="text-[13px] text-ink-muted">正在干活，做到第 {steps} 步…</span>
+      )}
+      {quiet && !live && steps > 0 && shown.length === 0 && message.status !== 'failed' && (
+        <span className="text-[13px] text-ink-muted">做完了。</span>
+      )}
+      {!quiet && todos && todos.length > 0 && <Todos items={todos} live={live} />}
       {message.status === 'failed' && (
         <p role="alert" className="m-0 text-[13px] text-accent">
           {message.error ?? '这一轮出错了'}

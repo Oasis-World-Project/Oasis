@@ -62,6 +62,7 @@ export const humanGroups = (pool: pg.Pool, messagesPerMinute: number) =>
     turns: { onSeatIdle: () => undefined } as unknown as Turns,
     agent: {} as ServiceClient,
     profiles: fakeProfiles(),
+    speak: { nudge: () => undefined },
     purge: { cancelTurn: async () => undefined, remote: async () => undefined },
     logger: pino({ level: 'silent' }),
   });

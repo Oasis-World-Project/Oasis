@@ -229,4 +229,56 @@ describe('群页里的 AI', () => {
     expect(await screen.findByText('改到周六')).toBeTruthy();
     expect(screen.getByText('场地定在 B 栋天台')).toBeTruthy();
   });
+  it('群聊里不放干活的过程：只留开工前和收工后说的话，在做时一行写做到第几步；群主能换成「看情况」', async () => {
+    const step = (id: string, status: string) => ({
+      type: 'step',
+      id,
+      tool: 'bash',
+      label: `第 ${id} 步`,
+      status,
+    });
+    const parts = [
+      { type: 'text', text: '好，我来做海报。' },
+      step('1', 'done'),
+      { type: 'text', text: '先看看素材' },
+      step('2', 'done'),
+    ];
+    const state = installFakeApi({
+      signedIn: true,
+      extra: (method, path) =>
+        method === 'PUT' && path.endsWith('/options') ? json(200, group()) : undefined,
+    });
+    const stream = await room(
+      group({
+        messages: [writing(2, { content: '好，我来做海报。', data: { runId: run, parts } })],
+      }),
+    );
+    expect(await screen.findByText('好，我来做海报。')).toBeTruthy();
+    expect(screen.getByText('正在干活，做到第 2 步…')).toBeTruthy();
+    expect(screen.queryByText('先看看素材')).toBeNull();
+    expect(screen.queryByText(/做了 \d+ 步/)).toBeNull();
+    act(() =>
+      push(stream, {
+        ...group(),
+        messages: [],
+        live: [
+          writing(2, {
+            status: 'complete',
+            data: { runId: run, parts: [...parts, { type: 'text', text: '海报做好了。' }] },
+          }),
+        ],
+      }),
+    );
+    expect(await screen.findByText('海报做好了。')).toBeTruthy();
+    expect(screen.queryByText('先看看素材')).toBeNull();
+    expect(screen.queryByText(/正在干活/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '群设置' }));
+    fireEvent.click(screen.getByText('看情况'));
+    await waitFor(() =>
+      expect(state.bodies.find((b) => b.path.endsWith('/options'))?.body).toEqual({
+        speak: 'auto',
+      }),
+    );
+  });
 });

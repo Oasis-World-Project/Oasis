@@ -11,9 +11,11 @@ import { createConversationRepo } from './repo/conversation-repo.ts';
 import { createFriendRepo } from './repo/friend-repo.ts';
 import { createGroupRepo } from './repo/group-repo.ts';
 import { createGroupSeats } from './repo/group-seats.ts';
+import { createGroupTalk } from './repo/group-talk.ts';
 import { createDmService } from './service/dm-service.ts';
 import { createFriendService } from './service/friend-service.ts';
 import { createGroupService } from './service/group-service.ts';
+import { createGroupSpeak } from './service/group-speak.ts';
 import { createProfiles } from './service/profiles.ts';
 import { createPurge } from './service/purge.ts';
 import { createTurns } from './service/turns.ts';
@@ -69,19 +71,36 @@ await startService({
       logger,
       onName: (profile) => groupRepo.syncName(profile.id, profile.name),
     });
+    const seats = createGroupSeats(resources.postgres.pool);
+    /** 每个群现在有几条推送连着（有人开着这个群） */
+    const watching = new Map<string, number>();
+    const speak = createGroupSpeak({
+      talk: createGroupTalk(resources.postgres.pool),
+      seats,
+      store: repo,
+      turns,
+      agent,
+      modelGateway,
+      logger,
+      model: config.GROUP_JUDGE_MODEL,
+      quietMs: config.GROUP_QUIET_MS,
+      watched: (groupId) => watching.has(groupId),
+    });
     registerGroupRoutes(
       app,
       createGroupService({
         repo: groupRepo,
-        seats: createGroupSeats(resources.postgres.pool),
+        seats,
         store: repo,
         turns,
         agent,
         profiles,
+        speak,
         purge,
         logger,
       }),
       config.GROUP_STREAMS_PER_USER,
+      watching,
     );
     registerFriendRoutes(
       app,
@@ -97,11 +116,17 @@ await startService({
       void turns
         .resumeAll()
         .catch((err: unknown) => logger.warn({ err }, '接着跟进没结束的轮失败，稍后再试'));
-    const sweep = setInterval(resume, SWEEP_MS);
+    const sweep = setInterval(() => {
+      resume();
+      void speak
+        .sweep(SWEEP_MS)
+        .catch((err: unknown) => logger.warn({ err }, '看群里有没有 AI 想开口失败，稍后再试'));
+    }, SWEEP_MS);
     sweep.unref();
     app.addHook('onReady', async () => resume());
     app.addHook('onClose', async () => {
       clearInterval(sweep);
+      speak.close();
       await turns.close();
     });
   },

@@ -24,6 +24,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     member = randomUUID();
   const store = createConversationRepo(pool);
   let turns: Turns, groups: GroupService;
+  const nudged: string[] = [];
   beforeAll(async () => {
     await pool.query(`create schema ${schema}`);
     const root = new URL('../migrations/', import.meta.url);
@@ -58,6 +59,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
           [member, '林夏'],
         ]),
       ),
+      speak: { nudge: (groupId) => void nudged.push(groupId) },
       purge: createPurge({ harness, modelGateway, canvas }),
       logger,
     });

@@ -9,11 +9,11 @@ import { MemberAvatar, MyNickname, PullFriends } from './Members.tsx';
 import { headcount } from './people.ts';
 import { useRoom } from './room.ts';
 
-/** 没人被 @ 的时候 AI 们怎么办；后两种还没做 */
-const SPEAK: { id: GroupSpeak; label: string; desc: string; ready: boolean }[] = [
-  { id: 'mention', label: '只在被 @ 时', desc: '点到谁谁才说话', ready: true },
-  { id: 'auto', label: '看情况', desc: '和自己的角色相关才开口（即将开放）', ready: false },
-  { id: 'active', label: '积极参与', desc: '每条消息都可能有 AI 接话（即将开放）', ready: false },
+/** 没人被 @ 的时候 AI 们怎么办（后两种按概率开口，见《群聊》§3） */
+const SPEAK: { id: GroupSpeak; label: string; desc: string }[] = [
+  { id: 'mention', label: '只在被 @ 时', desc: '点到谁谁才说话' },
+  { id: 'auto', label: '看情况', desc: '有话说的 AI 可能接话，不会自己找话' },
+  { id: 'active', label: '积极参与', desc: '更爱接话、互相讨论，偶尔自己起个话头' },
 ];
 
 /** 弹层：点外面或按 Esc 收起 */
@@ -76,13 +76,13 @@ function RoomMenu({ onClose, onLeft }: { onClose: () => void; onLeft: () => void
             type="button"
             role="menuitemradio"
             aria-checked={on}
-            disabled={!owner || !option.ready || busy}
+            disabled={!owner || busy}
             onClick={() =>
               void act(() => setGroupOptions(group.id, { speak: option.id })).then(onClose)
             }
             className={`flex items-center gap-2.5 rounded-[20px] border-0 px-3 py-2.5 text-left text-ink disabled:cursor-default ${
               on ? 'bg-glass-active' : 'bg-transparent'
-            } ${option.ready ? '' : 'opacity-60'}`}
+            }`}
           >
             <span className="flex flex-1 flex-col gap-px">
               <span className="text-sm font-medium">{option.label}</span>

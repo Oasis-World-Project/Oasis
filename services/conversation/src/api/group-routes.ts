@@ -32,7 +32,13 @@ const Cursor = z
 const inFlux = (message: GroupMessage) =>
   message.status === 'streaming' || (message.kind === 'task' && message.data.status === 'running');
 
-export function registerGroupRoutes(app: ServiceApp, groups: GroupService, streamLimit: number) {
+export function registerGroupRoutes(
+  app: ServiceApp,
+  groups: GroupService,
+  streamLimit: number,
+  /** 每个群现在有几条推送连着：有人开着群，「积极参与」的 AI 才会自己起话头 */
+  watching = new Map<string, number>(),
+) {
   const streams = new Map<string, Set<AbortController>>();
   app.addHook('preClose', async () => {
     for (const group of streams.values()) for (const controller of group) controller.abort();
@@ -142,6 +148,7 @@ export function registerGroupRoutes(app: ServiceApp, groups: GroupService, strea
     const controller = new AbortController();
     active.add(controller);
     streams.set(userId, active);
+    watching.set(id, (watching.get(id) ?? 0) + 1);
     const close = () => controller.abort();
     reply.raw.once('close', close);
     reply.hijack();
@@ -173,6 +180,9 @@ export function registerGroupRoutes(app: ServiceApp, groups: GroupService, strea
       reply.raw.off('close', close);
       active.delete(controller);
       if (!active.size) streams.delete(userId);
+      const left = (watching.get(id) ?? 1) - 1;
+      if (left > 0) watching.set(id, left);
+      else watching.delete(id);
       reply.raw.end();
     }
   });

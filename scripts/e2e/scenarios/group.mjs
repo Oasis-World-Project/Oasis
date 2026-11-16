@@ -66,6 +66,8 @@ export const group = {
       ],
       reply: '按你说的改成冬日了。',
     },
+    // 没 @ 谁：判断模型说第二个 AI 有话说（speaker 是有空的 AI 里第几个），它自己接话
+    5: { speaker: 1, reply: '叫「天台见」怎么样？' },
   },
   async run(t) {
     const owner = t.user;
@@ -223,6 +225,26 @@ export const group = {
       );
       const text = await owner.waitContent(seatId, '标语.md', (x) => x.includes('冬日'));
       t.check(text.includes('冬日市集'), `标语应按插话改成冬日：${text}`);
+
+      // ---- 「积极参与」：没 @ 谁，有话说的那个 AI 自己接话，别的不开口；它说完不会没完没了地接下去 ----
+      await owner.api.put(`${base}/${groupId}/options`, { speak: 'active' });
+      const spokeBefore = spoke(now, first).length;
+      await say(owner, groupId, `谁帮我想个活动名 ${marker('group', 5)}`);
+      await t.provider.waitFor(
+        (c) => c.scenario === 'group' && c.say === '5' && c.action === 'done',
+        '没被 @ 的 AI 自己接话',
+      );
+      now = await idle(owner, groupId, '自己接话');
+      t.check(
+        spoke(now, second).at(-1)?.content.includes('天台见') &&
+          spoke(now, first).length === spokeBefore,
+        `没 @ 谁时应只有有话说的那个 AI 接话：${JSON.stringify(spoke(now, second).map((m) => m.content))}`,
+      );
+      t.check(
+        t.provider.calls.some((c) => c.kind === 'judge' && c.say === '5' && c.keys.length === 2),
+        '接话前应问过一次「谁想接话」，两个有空的 AI 都在里面',
+      );
+      await owner.api.put(`${base}/${groupId}/options`, { speak: 'mention' });
 
       // ---- 解散群：席位的会话、工作目录、成果一起清掉 ----
       const sessionIds = [...new Set(runs.map((run) => run.session_id).filter(Boolean))];

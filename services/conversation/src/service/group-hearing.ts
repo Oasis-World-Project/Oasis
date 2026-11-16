@@ -103,6 +103,22 @@ export function hearingText(heard: Heard[], roster: Roster, skipped: number, end
   ].join('\n');
 }
 
+/** 没人叫它、它自己开口时交给它的东西：接群里的话，或者群里安静时起个话头（ending 说明是哪一种） */
+export function ownBrief(
+  key: string,
+  roster: Roster,
+  heard: Heard[],
+  skipped: number,
+  ending: string,
+): SeatBrief {
+  return {
+    text: heard.length ? hearingText(heard, roster, skipped, ending) : ending,
+    persona: groupPersona(key, roster),
+    title: taskTitle([], heard.at(-1)?.content ?? '群里闲聊'),
+    callers: [],
+  };
+}
+
 /**
  * 轮到这个 AI 时交给它的东西；这些话里没有人叫它就返回 undefined（不开这一轮）。
  * heard：它没听过的话，按先后；skipped：更早还有多少条没取出来。

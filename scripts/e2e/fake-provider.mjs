@@ -210,6 +210,25 @@ export function createFakeProvider(options) {
     return answer(res, body, { text: script.reply ?? '做好了。' });
   }
 
+  /**
+   * 群里「谁想接话」的判断（conversation 的 group-speak.ts）：最后一句是人说的、那句话的脚本写了
+   * speaker（有空的 AI 里第几个），就说它一定有话说；别的情况谁都没话说。
+   */
+  function judgeTurn(res, body, prompt) {
+    const keys = [...prompt.matchAll(/^- key=([^，]+)，/gm)].map((m) => m[1]);
+    const last = prompt.split('\n\n只输出一个 JSON')[0].split('\n').at(-1) ?? '';
+    const mark = last.startsWith('[AI] ')
+      ? undefined
+      : last.match(/\[\[e2e:([\w-]+)@(\w+)\/([\w-]+)\]\]/);
+    const speaker =
+      mark && mark[2] === RUN ? scenarios[mark[1]]?.says?.[mark[3]]?.speaker : undefined;
+    record({ kind: 'judge', scenario: mark?.[1], say: mark?.[3], keys, speaker });
+    const ais = Object.fromEntries(
+      keys.map((key, index) => [key, { relevance: index === speaker ? 1 : 0, warmth: 1 }]),
+    );
+    return answer(res, body, { text: JSON.stringify({ depth: 0, ais }), cost: 0.0001 });
+  }
+
   async function chat(res, body) {
     const max = body.max_completion_tokens ?? body.max_tokens;
     if (typeof max === 'number' && max > MODEL_MAX_TOKENS) {
@@ -240,6 +259,8 @@ export function createFakeProvider(options) {
       return answer(res, body, { text: JSON.stringify({ choice, reason }), cost: 0.002 });
     }
     if (body.tools?.length) return agentTurn(res, body, segmentsOf(messages));
+    if (textOf(messages[0]?.content).includes('哪些 AI 会想接话'))
+      return judgeTurn(res, body, textOf(messages[1]?.content));
     record({ kind: 'chat', model: body.model });
     return answer(res, body, { text: '好的。', cost: 0.0001 });
   }

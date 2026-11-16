@@ -31,6 +31,8 @@ export function createGroupService(deps: {
   agent: ServiceClient;
   /** 账号的名字和头像（在 identity） */
   profiles: Profiles;
+  /** 群里有了新的话：没人 @ 的时候谁接话（group-speak.ts） */
+  speak: { nudge(groupId: string): void };
   purge: Purge;
   logger: Logger;
 }) {
@@ -74,7 +76,11 @@ export function createGroupService(deps: {
     const last = hearing?.heard.at(-1);
     const brief =
       hearing && seatBrief(seat.modelKey ?? '', hearing.roster, hearing.heard, hearing.skipped);
-    if (!last || !brief) return;
+    if (!last || !brief) {
+      // 没有人叫它：它刚说完的话，别的 AI 可能想接
+      if (seat.parentId) deps.speak.nudge(seat.parentId);
+      return;
+    }
     await seats.setHeard(seat.id, last.seq);
     await turns.begin(locked, seat, [], requestId, brief);
   }
@@ -190,8 +196,12 @@ export function createGroupService(deps: {
       mentions: Mention[],
     ) {
       const sent = await repo.send(userId, id, content, requestId, mentions);
-      if (sent.seq === undefined || !mentions.some((m) => m.kind !== 'user'))
+      if (sent.seq === undefined) return seen(sent.snapshot);
+      if (!mentions.some((m) => m.kind !== 'user')) {
+        // 没 @ AI：等群里安静一会儿，看有没有 AI 想接话
+        deps.speak.nudge(id);
         return seen(sent.snapshot);
+      }
       await dispatch(id, mentions, requestId);
       return seen(await repo.get(userId, id, { after: sent.seq - 1 }));
     },
