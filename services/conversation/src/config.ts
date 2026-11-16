@@ -12,6 +12,13 @@ export const conversationEnv = {
   /** 没人 @ 时判断「谁想接话」用的型号（要快）；一句话之后群里安静多久再判断 */
   GROUP_JUDGE_MODEL: z.string().min(1).default('deepseek/deepseek-v4.1-flash'),
   GROUP_QUIET_MS: z.coerce.number().int().min(0).max(60_000).default(4_000),
+  /** 一个群最多多少个群文件；AI 开一轮时最多往它的工作目录拷多少字节的群文件 */
+  GROUP_FILES_MAX: z.coerce.number().int().positive().max(2000).default(500),
+  GROUP_FILES_HANDOVER_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(200 * 1024 * 1024),
   /** 一个群最多几个 AI（契约里的上限是 8） */
   GROUP_MAX_AIS: z.coerce.number().int().positive().max(8).default(8),
   ...databaseEnv,

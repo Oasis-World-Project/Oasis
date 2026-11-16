@@ -13,6 +13,7 @@ import {
 } from '../repo/conversation-repo.ts';
 import type { GroupRepo } from '../repo/group-repo.ts';
 import type { GroupSeats } from '../repo/group-seats.ts';
+import { toAttachment, type GroupFiles } from './group-files.ts';
 import { calls, hearingText, seatBrief } from './group-hearing.ts';
 import type { Profiles } from './profiles.ts';
 import type { Purge } from './purge.ts';
@@ -31,6 +32,8 @@ export function createGroupService(deps: {
   agent: ServiceClient;
   /** 账号的名字和头像（在 identity） */
   profiles: Profiles;
+  /** 群文件：人发的文件进群文件，AI 开一轮时带上别人新交的 */
+  files: GroupFiles;
   /** 群里有了新的话：没人 @ 的时候谁接话（group-speak.ts） */
   speak: { nudge(groupId: string): void };
   purge: Purge;
@@ -82,7 +85,7 @@ export function createGroupService(deps: {
       return;
     }
     await seats.setHeard(seat.id, last.seq);
-    await turns.begin(locked, seat, [], requestId, brief);
+    await turns.begin(locked, seat, [], requestId, await deps.files.attach(seat, brief));
   }
   turns.onSeatIdle(next);
 
@@ -183,24 +186,39 @@ export function createGroupService(deps: {
     async destroy(userId: string, id: string, requestId: string) {
       for (const seat of await repo.seatsToPurge(userId, id))
         await purgeSeat(seat.id, userId, requestId, false);
+      await deps.files.purge(id, requestId);
       await repo.destroy(userId, id);
       deps.logger.info({ groupId: id }, '群已解散');
     },
 
-    /** 发一句话；@ 了 AI 的，那些 AI 各开一轮（见 dispatch）。返回这句话和刚开的那几轮里 AI 的消息 */
+    /**
+     * 发一句话，可以带文件、引用群文件；@ 了 AI 的，那些 AI 各开一轮（见 dispatch）。群里发的文件同时
+     * 进群文件。返回这句话和刚开的那几轮里 AI 的消息。
+     */
     async send(
       userId: string,
       id: string,
       content: string,
       requestId: string,
       mentions: Mention[],
+      files: { attachments: string[]; refs: string[] } = { attachments: [], refs: [] },
     ) {
-      const sent = await repo.send(userId, id, content, requestId, mentions);
+      // 先核对是成员；引用群文件只有群里能用
+      const room = await repo.get(userId, id, NO_MESSAGES);
+      if (room.kind !== 'group' && files.refs.length)
+        throw new HttpError(400, 'file_not_found', '引用的文件已经不在群文件里');
+      const uploads = await deps.files.resolve(userId, files.attachments, requestId);
+      const refs = await deps.files.refs(id, files.refs);
+      const sent = await repo.send(userId, id, content, requestId, mentions, {
+        attachments: uploads.map(toAttachment),
+        refs,
+      });
       if (sent.seq === undefined) return seen(sent.snapshot);
+      if (room.kind === 'group') await deps.files.uploaded(id, userId, uploads, requestId);
       if (!mentions.some((m) => m.kind !== 'user')) {
         // 没 @ AI：等群里安静一会儿，看有没有 AI 想接话
         deps.speak.nudge(id);
-        return seen(sent.snapshot);
+        return seen(await repo.get(userId, id, { after: sent.seq - 1 }));
       }
       await dispatch(id, mentions, requestId);
       return seen(await repo.get(userId, id, { after: sent.seq - 1 }));

@@ -2,7 +2,7 @@
 // 自己的会话和工作目录、同一时间只有一轮）。群消息和私聊消息是同一个形状（MessageBody），
 // 多了序号、作者和 @ 了谁。两个好友的私聊（kind = 'direct'，见 social.ts）也是这个形状：两个人、没有 AI。
 import { z } from 'zod';
-import { Mention, MessageBody } from './conversation.ts';
+import { MAX_ATTACHMENTS, Mention, MessageBody } from './conversation.ts';
 
 export const GROUP_HISTORY_NOTICE = '加入后可查看本群全部历史消息。';
 const name = z.string().trim().min(1).max(40);
@@ -40,12 +40,50 @@ export const GroupOptionsPatch = GroupOptions.partial();
 export const AddGroupMemberBody = z.object({ userId: z.uuid() });
 /** 改自己在这个群里的昵称；空的就是不设（显示账号的名字） */
 export const GroupNicknameBody = z.object({ nickname: z.string().trim().max(40) });
-export const GroupSendBody = z.object({
-  content: z.string().trim().min(1).max(4000),
-  requestId: z.uuid(),
-  /** @ 了谁：某个 AI、全体 AI、某个人。被 @ 的 AI 各开一轮 */
-  mentions: z.array(Mention).max(20).default([]),
+/** 一句话最多引用几个群文件 */
+export const MAX_FILE_REFS = 10;
+/** 群文件的路径：AI 交的是它 out/ 里的相对路径，人传的是文件名 */
+const FilePath = z.string().min(1).max(500);
+export const GroupSendBody = z
+  .object({
+    /** 说的话；带了文件或引用了群文件时可以不写 */
+    content: z.string().trim().max(4000),
+    requestId: z.uuid(),
+    /** @ 了谁：某个 AI、全体 AI、某个人。被 @ 的 AI 各开一轮 */
+    mentions: z.array(Mention).max(20).default([]),
+    /** 随这句话发的文件（先传到 canvas 的文件 id）；在群里它们同时进群文件 */
+    attachments: z.array(z.uuid()).max(MAX_ATTACHMENTS).default([]),
+    /** 引用的群文件（路径）；只有群里能用 */
+    refs: z.array(FilePath).max(MAX_FILE_REFS).default([]),
+  })
+  .refine(
+    (body) => body.content || body.attachments.length || body.refs.length,
+    '说点什么，或者带上文件',
+  );
+
+/** 群文件是谁做的、谁传的：AI（它的 key）或人（用户 ID） */
+export const FileAuthor = z.object({ kind: z.enum(['ai', 'user']), id: z.string() });
+export type FileAuthor = z.infer<typeof FileAuthor>;
+/**
+ * 群文件：AI 交的和人传的。同一个路径只有一份：再交、再传同一个路径就是新版本，旧的不留。
+ * AI 开一轮时，别人交的新文件和新版本会拷进它的工作目录（见《群聊》§4）。
+ */
+export const GroupFile = z.object({
+  id: z.uuid(),
+  path: FilePath,
+  /** 文件名（不含目录） */
+  name: z.string(),
+  size: z.number().int().nonnegative(),
+  /** 最早是谁做的、谁传的 */
+  madeBy: FileAuthor,
+  /** 现在这一版是谁交的；和 madeBy 不是同一个就是别人改过 */
+  changedBy: FileAuthor,
+  /** 现在这一版是 AI 的哪一轮交的（人传的没有）；那一轮还在进行就是它正在改 */
+  runId: z.uuid().nullable(),
+  updatedAt: z.iso.datetime(),
 });
+export type GroupFile = z.infer<typeof GroupFile>;
+export const GroupFileList = z.object({ files: z.array(GroupFile) });
 export const GroupMember = z.object({
   userId: z.uuid(),
   /** 在这个群里叫什么：设了群昵称是群昵称，没设是账号的名字 */
@@ -109,9 +147,16 @@ export const GroupSnapshot = GroupSummary.extend({
   live: z.array(GroupMessage).default([]),
   /** 上次还在变、现在已经不在了的消息（AI 什么都没写的空消息会被去掉） */
   gone: z.array(z.uuid()).default([]),
+  /** 群文件变过几次的记号：变了就重新读群文件（GET …/files） */
+  filesRev: z.number().int().nonnegative().safe().default(0),
   historyNotice: z.literal(GROUP_HISTORY_NOTICE),
 });
 export type GroupSnapshot = z.infer<typeof GroupSnapshot>;
+/**
+ * 工作台「任务」页签要的消息：群里最近动过手（有步骤）或在等人回答的那些轮里 AI 的话，和它们的任务卡。
+ * 聊天里不放干活的过程，过程在这里看。
+ */
+export const GroupWork = z.object({ messages: z.array(GroupMessage) });
 export const GroupStreamEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('snapshot'), snapshot: GroupSnapshot }),
   z.object({ type: z.literal('removed') }),

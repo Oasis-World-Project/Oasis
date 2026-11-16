@@ -4,16 +4,19 @@
 import { fileURLToPath } from 'node:url';
 import { createPostgres, createServiceClient, startService } from '@oasis/service-kit';
 import { registerFriendRoutes } from './api/friend-routes.ts';
+import { registerGroupFileRoutes } from './api/group-file-routes.ts';
 import { registerGroupRoutes } from './api/group-routes.ts';
 import { registerRoutes } from './api/routes.ts';
 import { conversationEnv } from './config.ts';
 import { createConversationRepo } from './repo/conversation-repo.ts';
 import { createFriendRepo } from './repo/friend-repo.ts';
+import { createGroupFilesRepo } from './repo/group-files-repo.ts';
 import { createGroupRepo } from './repo/group-repo.ts';
 import { createGroupSeats } from './repo/group-seats.ts';
 import { createGroupTalk } from './repo/group-talk.ts';
 import { createDmService } from './service/dm-service.ts';
 import { createFriendService } from './service/friend-service.ts';
+import { createGroupFiles } from './service/group-files.ts';
 import { createGroupService } from './service/group-service.ts';
 import { createGroupSpeak } from './service/group-speak.ts';
 import { createProfiles } from './service/profiles.ts';
@@ -39,6 +42,13 @@ await startService({
     // 登记成品要从 harness 复制文件，可能要一会儿
     const canvas = createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 600_000 });
     const harness = createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 30_000 });
+    const files = createGroupFiles({
+      repo: createGroupFilesRepo(resources.postgres.pool),
+      canvas,
+      logger,
+      maxFiles: config.GROUP_FILES_MAX,
+      handoverBytes: config.GROUP_FILES_HANDOVER_BYTES,
+    });
     const turns = createTurns({
       repo,
       agent,
@@ -47,6 +57,7 @@ await startService({
       modelGateway,
       logger,
       pollMs: config.TURN_POLL_MS,
+      delivered: files.delivered,
     });
     const purge = createPurge({ harness, modelGateway, canvas });
     const dms = createDmService({
@@ -82,6 +93,7 @@ await startService({
       agent,
       modelGateway,
       logger,
+      files,
       model: config.GROUP_JUDGE_MODEL,
       quietMs: config.GROUP_QUIET_MS,
       watched: (groupId) => watching.has(groupId),
@@ -95,6 +107,7 @@ await startService({
         turns,
         agent,
         profiles,
+        files,
         speak,
         purge,
         logger,
@@ -102,6 +115,7 @@ await startService({
       config.GROUP_STREAMS_PER_USER,
       watching,
     );
+    registerGroupFileRoutes(app, files);
     registerFriendRoutes(
       app,
       createFriendService({
@@ -110,6 +124,7 @@ await startService({
           pending: config.FRIEND_REQUESTS_PENDING,
         }),
         profiles,
+        files,
       }),
     );
     const resume = () =>

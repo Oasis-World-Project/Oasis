@@ -88,11 +88,12 @@ export const StartRunBody = z.object({
    * 交给 AI 的文件：开沙箱前由 harness 向 canvas 取出，放在沙箱里的 path（如 materials/照片.jpg）。
    * uploadId 是用户随消息发的文件；artifactId 是画布里的成果（「让 AI 改」的成果不在这个会话的
    * 工作目录里时拷一份进来）。是不是这个用户的，conversation 收消息时已经核对过。
+   * ownerId：这个文件在 canvas 里是谁名下的；不给就是付费人（群里别的成员传的群文件要给）。
    */
   materials: z
     .array(
       z.union([
-        z.object({ uploadId: z.uuid(), path: MaterialPath }),
+        z.object({ uploadId: z.uuid(), path: MaterialPath, ownerId: z.uuid().optional() }),
         z.object({ artifactId: z.uuid(), path: MaterialPath }),
       ]),
     )

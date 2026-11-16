@@ -1,138 +1,34 @@
-// AI 在一轮里的一段消息：按发生的顺序显示它说的话（里面的问卷、任务单画成卡片）、做的步骤（默认折叠）、
-// 系统提示，下面是它的待办（只作参考）、结局（出错、已停下）和这一轮的花费。
-import type { MessageBody, MessagePart, StepPart, TodoItem } from '@oasis/contracts/conversation';
-import { Check, Info, LoaderCircle, X } from 'lucide-react';
+// AI 在一轮里的一段消息：它开工前说的话、干活的过程、收工后说的话（话里的问卷、任务单画成卡片），
+// 下面是结局（出错、已停下）和这一轮的花费。过程不整段铺在聊天里：私聊收成一行、点开才看；
+// 群里只写做到第几步，过程在工作台看。
+import type { MessageBody, MessagePart } from '@oasis/contracts/conversation';
+import { Info } from 'lucide-react';
 import { Fragment, type CSSProperties } from 'react';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { splitBlocks } from './blocks.ts';
 import { Markdown } from './Markdown.tsx';
 import { CardButton, type Speaker } from './parts.tsx';
+import { ProcessFold, stepFacts, Todos } from './Process.tsx';
 import { QuestionsCard } from './QuestionsCard.tsx';
 import { SheetCard } from './SheetCard.tsx';
 import { useChatActions } from './use-chat-actions.ts';
 
 type TextMessage = Extract<MessageBody, { kind: 'text' }>;
 
-/** 连着的几步并成一组 */
-type Group =
-  | { kind: 'text'; text: string }
-  | { kind: 'notice'; text: string }
-  | { kind: 'steps'; steps: StepPart[] };
-
-function groupParts(parts: MessagePart[]): Group[] {
-  const groups: Group[] = [];
-  for (const part of parts) {
-    const last = groups.at(-1);
-    if (part.type === 'step') {
-      if (last?.kind === 'steps') last.steps.push(part);
-      else groups.push({ kind: 'steps', steps: [part] });
-    } else groups.push({ kind: part.type, text: part.text });
-  }
-  return groups;
-}
-
 /**
- * 群里只留它对大家说的话：开工前说的和收工后说的。中间的步骤、边做边说的话不放进群聊
- * （群聊不能被干活的过程塞满；过程以后在工作台里看）。
+ * 一条消息分成三段：第一步之前说的话、过程（第一步到最后一步，连同中间边做边说的话）、最后一步之后
+ * 说的话。没动过手的消息只有第一段。
  */
-function spokenOnly(groups: Group[]): Group[] {
-  const first = groups.findIndex((group) => group.kind === 'steps');
-  const last = groups.findLastIndex((group) => group.kind === 'steps');
-  return groups.filter(
-    (group, index) => group.kind !== 'steps' && (first < 0 || index < first || index > last),
-  );
-}
-
-export function StepIcon({ status }: { status: StepPart['status'] }) {
-  if (status === 'running')
-    return <LoaderCircle size={13} aria-hidden="true" className="animate-spin text-accent" />;
-  if (status === 'failed') return <X size={13} aria-hidden="true" className="text-accent" />;
-  return <Check size={13} aria-hidden="true" className="text-ink-muted" />;
-}
-
-const STATUS_TEXT: Record<StepPart['status'], string> = {
-  running: '进行中',
-  done: '完成',
-  failed: '没成',
-};
-
-/** 一组步骤：折叠时显示正在做的那一步，或一共做了几步 */
-export function Steps({ steps }: { steps: StepPart[] }) {
-  const running = steps.findLast((s) => s.status === 'running');
-  const failed = steps.filter((s) => s.status === 'failed').length;
-  return (
-    <details className="group rounded-item bg-glass-strong/60 px-3 py-2 text-[13px]">
-      <summary className="flex cursor-pointer items-center gap-2 text-ink-muted">
-        {running ? (
-          <>
-            <StepIcon status="running" />
-            <span className="truncate text-ink">{running.label}</span>
-          </>
-        ) : (
-          <span>
-            做了 {steps.length} 步{failed ? `，${failed} 步没成` : ''}
-          </span>
-        )}
-      </summary>
-      <ol aria-label="步骤" className="m-0 mt-2 flex list-none flex-col gap-1 p-0">
-        {steps.map((step) => (
-          <li key={step.id} className="flex flex-col gap-0.5">
-            <span className="flex items-center gap-2">
-              <StepIcon status={step.status} />
-              <span className="min-w-0 break-words">{step.label}</span>
-              <span className="sr-only">：{STATUS_TEXT[step.status]}</span>
-            </span>
-            {step.detail && (
-              <span className="whitespace-pre-wrap break-words pl-5 text-[12px] text-accent">
-                {step.detail}
-              </span>
-            )}
-          </li>
-        ))}
-      </ol>
-    </details>
-  );
-}
-
-/** AI 列的待办：一轮进行中展开；结束后没做完的变灰 */
-export function Todos({ items, live }: { items: TodoItem[]; live: boolean }) {
-  const done = items.filter((t) => t.status === 'done').length;
-  return (
-    <details open={live} className="rounded-item bg-glass-strong/60 px-3 py-2 text-[13px]">
-      <summary className="cursor-pointer text-ink-muted">
-        待办 {done}/{items.length}
-      </summary>
-      <ul className="m-0 mt-2 flex list-none flex-col gap-1 p-0">
-        {items.map((item, index) => (
-          <li
-            key={index}
-            className={`flex items-center gap-2 ${
-              item.status === 'done'
-                ? 'text-ink-muted line-through'
-                : !live
-                  ? 'text-ink-muted opacity-60'
-                  : item.status === 'doing'
-                    ? 'font-medium text-ink'
-                    : 'text-ink'
-            }`}
-          >
-            <span
-              aria-hidden="true"
-              className={`size-2 shrink-0 rounded-full ${
-                item.status === 'done'
-                  ? 'bg-ink-muted'
-                  : item.status === 'doing' && live
-                    ? 'bg-accent'
-                    : 'border border-ink-muted'
-              }`}
-            />
-            {item.text}
-          </li>
-        ))}
-      </ul>
-    </details>
-  );
+function splitProcess(parts: MessagePart[]) {
+  const first = parts.findIndex((part) => part.type === 'step');
+  if (first < 0) return { before: parts, process: [], after: [] };
+  const last = parts.findLastIndex((part) => part.type === 'step');
+  return {
+    before: parts.slice(0, first),
+    process: parts.slice(first, last + 1),
+    after: parts.slice(last + 1),
+  };
 }
 
 /** AI 说的话外面的那层气泡：私聊里是白玻璃；群里带它自己的光色（由群页给） */
@@ -176,59 +72,68 @@ function AiText({
 }
 
 /**
- * AI 一条消息里的内容：说的话、折叠的步骤、待办、出错和停下的说明、「继续」、花费。
+ * AI 一条消息里的内容：开工前说的话、过程（收成一行）、收工后说的话、出错和停下的说明、「继续」、花费。
  * 私聊和群里共用；外面的头像和排版各自放。
  */
 export function AiBody({
   message,
   latest,
   bubble = DM_BUBBLE,
-  quiet = false,
+  onProcess,
 }: {
   message: TextMessage;
   /** 是最新的一条（后面没有新的话）：问卷能答、任务单能确认、出错了能「继续」 */
   latest: boolean;
   bubble?: Bubble;
-  /** 群里：不放干活的过程（步骤、待办、边做边说的话），在做时只写一行做到第几步 */
-  quiet?: boolean;
+  /** 群里：过程不放在聊天里，只写一行做到第几步，点它去工作台看这一轮的过程 */
+  onProcess?: (() => void) | undefined;
 }) {
   const actions = useChatActions();
   const { parts = [], todos, stopped, spentMicro } = message.data;
   const live = message.status === 'streaming';
   const canContinue =
     latest && !actions.turnActive && (message.status === 'failed' || Boolean(stopped));
-  const groups = groupParts(parts);
-  const shown = quiet ? spokenOnly(groups) : groups;
-  const steps = parts.filter((part) => part.type === 'step').length;
+  const { before, process, after } = splitProcess(parts);
+  const steps = stepFacts(process).count;
+  const said = (list: MessagePart[], offset: number) =>
+    list.map((part, index) => (
+      <Fragment key={offset + index}>
+        {part.type === 'text' ? (
+          <AiText
+            id={`${message.id}-${offset + index}`}
+            text={part.text}
+            active={latest}
+            bubble={bubble}
+          />
+        ) : part.type === 'notice' ? (
+          <p className="m-0 flex items-center gap-1.5 text-[12.5px] text-ink-muted">
+            <Info size={13} aria-hidden="true" />
+            {part.text}
+          </p>
+        ) : null}
+      </Fragment>
+    ));
   return (
     <>
-      {shown.map((group, index) => (
-        <Fragment key={index}>
-          {group.kind === 'text' ? (
-            <AiText
-              id={`${message.id}-${index}`}
-              text={group.text}
-              active={latest}
-              bubble={bubble}
-            />
-          ) : group.kind === 'steps' ? (
-            <Steps steps={group.steps} />
-          ) : (
-            <p className="m-0 flex items-center gap-1.5 text-[12.5px] text-ink-muted">
-              <Info size={13} aria-hidden="true" />
-              {group.text}
-            </p>
-          )}
-        </Fragment>
-      ))}
+      {said(before, 0)}
       {parts.length === 0 && live && <span className="text-ink-muted">正在想…</span>}
-      {quiet && live && steps > 0 && (
-        <span className="text-[13px] text-ink-muted">正在干活，做到第 {steps} 步…</span>
+      {steps > 0 &&
+        (onProcess ? (
+          <button
+            type="button"
+            onClick={onProcess}
+            className="cursor-pointer self-start border-0 bg-transparent p-0 text-left text-[13px] text-ink-muted underline decoration-hairline underline-offset-4"
+          >
+            {live ? `正在干活，做到第 ${steps} 步…` : `做了 ${steps} 步`}
+            <span className="sr-only">，看过程</span>
+          </button>
+        ) : (
+          <ProcessFold parts={process} todos={todos} live={live} />
+        ))}
+      {!onProcess && steps === 0 && todos && todos.length > 0 && (
+        <Todos items={todos} live={live} />
       )}
-      {quiet && !live && steps > 0 && shown.length === 0 && message.status !== 'failed' && (
-        <span className="text-[13px] text-ink-muted">做完了。</span>
-      )}
-      {!quiet && todos && todos.length > 0 && <Todos items={todos} live={live} />}
+      {said(after, before.length + process.length)}
       {message.status === 'failed' && (
         <p role="alert" className="m-0 text-[13px] text-accent">
           {message.error ?? '这一轮出错了'}

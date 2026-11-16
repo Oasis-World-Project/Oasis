@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ModelRoute } from '@oasis/contracts/agent';
-import { ArtifactLookupResult } from '@oasis/contracts/canvas';
+import { ArtifactLookupResult, type ArtifactBody } from '@oasis/contracts/canvas';
 import type { TaskFile } from '@oasis/contracts/conversation';
 import {
   defaultPermissions,
@@ -49,6 +49,8 @@ export interface TurnDeps {
   pollMs?: number;
   /** 进行中多久看一次 model-gateway 那边（确认卡、花费） */
   spendMs?: number;
+  /** 群里的席位交了文件（已登记进画布）：进群文件 */
+  delivered?: (seat: Conversation, runId: string, files: ArtifactBody[]) => Promise<void>;
 }
 
 /** 群里的席位做完一轮、空下来了：还有叫它的话就接着开下一轮（调用方拿着这个席位的 message 锁） */
@@ -323,7 +325,7 @@ export function createTurns(deps: TurnDeps) {
       await store.touchConversation(room);
       return [await aiMessage('failed', {}, refused(err))];
     }
-    const handed = handOver(attachments, revising, sessionId);
+    const handed = brief?.files ?? handOver(attachments, revising, sessionId);
     // 任务名：往回看这一轮之前的话（确认的任务单、答的题）；群里用叫它的那句话
     const history = brief ? [] : await store.listMessages(room, TITLE_HISTORY);
     const own = new Set(userMessages.map((m) => m.id));
@@ -338,7 +340,7 @@ export function createTurns(deps: TurnDeps) {
         })),
         text,
       );
-    const segment = await aiMessage('streaming', { parts: [] });
+    const segment = await aiMessage('streaming', { parts: [], title });
     const startedAt = new Date().toISOString();
     const turn: Turn = {
       runId,
@@ -374,7 +376,7 @@ export function createTurns(deps: TurnDeps) {
         if (!(err instanceof HttpError && SESSION_GONE.has(err.code))) throw err;
         // 原来的工作目录不在了：这一轮开新会话，AI 不记得之前的事；要改的成果都得拷进来
         const { continueFrom: _continueFrom, ...rest } = body;
-        const fresh = handOver(attachments, revising, undefined);
+        const fresh = brief?.allFiles ?? handOver(attachments, revising, undefined);
         await harness.json('POST', '/internal/runs', {
           body: { ...rest, prompt: withNote(text, fresh.note), materials: fresh.materials },
           requestId,
@@ -383,6 +385,7 @@ export function createTurns(deps: TurnDeps) {
         await store.updateMessage(segment.id, {
           data: {
             runId,
+            title,
             parts: [
               {
                 type: 'notice',

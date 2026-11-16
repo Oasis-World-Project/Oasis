@@ -1,6 +1,12 @@
 // 各页面用到的查询和操作。查询的 key 集中在这里，便于在操作后刷新对应数据。
 import { AiSettings, ModelEntry, ModelList, type SaveAiBody } from '@oasis/contracts/agent';
-import { GroupList, GroupSnapshot, type GroupOptions } from '@oasis/contracts/group';
+import {
+  GroupFileList,
+  GroupList,
+  GroupSnapshot,
+  GroupWork,
+  type GroupOptions,
+} from '@oasis/contracts/group';
 import { WalletBody } from '@oasis/contracts/billing';
 import { ArtifactBody, ArtifactList, type Annotation } from '@oasis/contracts/canvas';
 import {
@@ -22,7 +28,7 @@ import {
 } from '@oasis/contracts/identity';
 import { Confirmation, type ConfirmDecision } from '@oasis/contracts/model-gateway';
 import { FriendChat, FriendRequestResult, FriendsBody } from '@oasis/contracts/social';
-import { queryOptions } from '@tanstack/react-query';
+import { keepPreviousData, queryOptions } from '@tanstack/react-query';
 import { z } from 'zod';
 import { api, ApiError, apiVoid, isConnectionError } from './client.ts';
 
@@ -147,15 +153,51 @@ export const removeGroupMember = (id: string, userId: string) =>
   apiVoid(`/conversation/v1/groups/${id}/members/${userId}`, { method: 'DELETE' });
 export const deleteGroup = (id: string) =>
   apiVoid(`/conversation/v1/groups/${id}`, { method: 'DELETE' });
+/** 发一句话；files：随这句发的文件（已经传到 canvas 的 id）和引用的群文件（路径） */
 export const sendGroupMessage = (
   id: string,
   content: string,
   requestId: string,
   mentions: Mention[] = [],
+  files: { attachments?: string[]; refs?: string[] } = {},
 ) =>
   api(`${groupPath(id)}/messages`, GroupSnapshot, {
     method: 'POST',
-    body: { content, requestId, mentions },
+    body: {
+      content,
+      requestId,
+      mentions,
+      attachments: files.attachments ?? [],
+      refs: files.refs ?? [],
+    },
+  });
+
+/** 群文件；rev 是群上的记号（GroupSnapshot.filesRev），变了就重新读 */
+export const groupFilesQuery = (id: string, rev: number) =>
+  queryOptions({
+    queryKey: ['group-files', id, rev],
+    queryFn: async () => (await api(`${groupPath(id)}/files`, GroupFileList)).files,
+    placeholderData: keepPreviousData,
+    staleTime: Infinity,
+  });
+/** 一个群文件的内容；地址里带上这一版的时间，换了新版本预览就重新读 */
+export const groupFileUrl = (
+  id: string,
+  file: { id: string; updatedAt: string },
+  download = false,
+) =>
+  `/api${groupPath(id)}/files/${file.id}/content?v=${Date.parse(file.updatedAt)}${download ? '&download=1' : ''}`;
+/** 一条消息带的文件（群，或和好友的私聊） */
+export const groupAttachmentUrl = (id: string, uploadId: string, download = false) =>
+  `/api${groupPath(id)}/attachments/${uploadId}/content${download ? '?download=1' : ''}`;
+export const deleteGroupFile = (id: string, fileId: string) =>
+  apiVoid(`${groupPath(id)}/files/${fileId}`, { method: 'DELETE' });
+/** 工作台「任务」页签要的消息；mark 变了（有任务开始、结束）就重新读 */
+export const groupWorkQuery = (id: string, mark: string) =>
+  queryOptions({
+    queryKey: ['group-work', id, mark],
+    queryFn: async () => (await api(`${groupPath(id)}/work`, GroupWork)).messages,
+    placeholderData: keepPreviousData,
   });
 
 export const requestCode = (email: string) =>

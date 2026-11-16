@@ -124,6 +124,7 @@ export function registerGroupRoutes(
       body.content,
       body.requestId,
       body.mentions,
+      body,
     );
   });
   /** 「现在告诉它」：@ 了这个 AI、它还没看到的一句，现在作为插话送进它正在做的一轮 */

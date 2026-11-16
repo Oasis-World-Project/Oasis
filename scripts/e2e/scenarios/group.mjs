@@ -1,7 +1,8 @@
 // 回归场景（docs/engineering/回归测试.md）：好友和群里的 AI。按账号 ID 加好友、对方同意；好友之间私聊；
 // 群主建群时直接把好友拉进来。@ 谁谁回，回之前先听它没听过的群聊；@ 全体各回各的；
 // 它忙着时 @ 它的话先等着，「现在告诉它」作为插话送进正在做的一轮；群员叫的 AI 花群主的钱；
-// 解散群，席位的会话、工作目录、成果一起清掉；删好友，两人的私聊一起删。
+// 群文件：人发的文件和 AI 交的文件都在里面，别的 AI 开一轮时拿到、改了就是新版本；好友私聊里也能发文件。
+// 解散群，席位的会话、工作目录、成果、发过的文件一起清掉；删好友，两人的私聊一起删。
 import { randomUUID } from 'node:crypto';
 import { literal, query } from '../db.mjs';
 import { marker, writeFiles } from '../fake-provider.mjs';
@@ -11,12 +12,21 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const base = '/conversation/v1/groups';
 
 /** 群里说一句话；mentions 是 @ 了谁 */
-const say = (user, groupId, content, mentions = []) =>
+const say = (user, groupId, content, mentions = [], files = {}) =>
   user.api.post(`${base}/${groupId}/messages`, {
     content,
     requestId: randomUUID(),
     mentions,
+    ...files,
   });
+/** 读一个地址的文字内容 */
+const textOf = async (user, route) => (await user.api.get(route, { raw: true })).text();
+/** 这个地址现在回什么状态码 */
+const statusOf = (user, route) =>
+  user.api.get(route, { raw: true }).then(
+    () => 200,
+    (err) => err.status,
+  );
 
 /** 等群里的 AI 都空下来、没有还在写的话，返回群现在的样子 */
 async function idle(user, groupId, label, timeoutMs = 300_000) {
@@ -68,6 +78,26 @@ export const group = {
     },
     // 没 @ 谁：判断模型说第二个 AI 有话说（speaker 是有空的 AI 里第几个），它自己接话
     5: { speaker: 1, reply: '叫「天台见」怎么样？' },
+    // 群员带着一份名单、引用第一个 AI 交的标语 @ 第二个 AI：它工作目录里应有这两份群文件，改了标语交回来
+    6: {
+      steps: [
+        ({ seg }) =>
+          seg.text.includes('带了群文件：名单.csv、标语.md')
+            ? {
+                bash: 'cat materials/group/名单.csv materials/group/标语.md',
+                description: '看群文件',
+              }
+            : { text: `没听到这句话带的群文件：${seg.text.slice(-300)}` },
+        ({ last }) =>
+          String(last).includes('林夏') && String(last).includes('冬日市集')
+            ? {
+                bash: `mkdir -p out && sed 's/冬日市集/冬日市集（3 位嘉宾）/' materials/group/标语.md > out/标语.md`,
+                description: '改标语',
+              }
+            : { text: `群文件没拷进工作目录：${String(last).slice(0, 300)}` },
+      ],
+      reply: '标语里加上了嘉宾数。',
+    },
   },
   async run(t) {
     const owner = t.user;
@@ -246,7 +276,70 @@ export const group = {
       );
       await owner.api.put(`${base}/${groupId}/options`, { speak: 'mention' });
 
-      // ---- 解散群：席位的会话、工作目录、成果一起清掉 ----
+      // ---- 群文件：AI 交的在里面；群员发一份名单、引用标语 @ 第二个 AI，它拿到两份、改了标语就是新版本 ----
+      const filesOf = async () => (await member.api.get(`${base}/${groupId}/files`)).files;
+      const slogan = (await filesOf()).find((file) => file.path === '标语.md');
+      t.check(
+        slogan?.madeBy.id === first && slogan.changedBy.id === first,
+        `第一个 AI 交的标语应在群文件里：${JSON.stringify(slogan ?? null)}`,
+      );
+      const roster = await member.upload('名单.csv', '姓名\n林夏\n阿杰\n小满\n');
+      const asked = await say(
+        member,
+        groupId,
+        `按名单把标语改一下 ${marker('group', 6)}`,
+        [{ kind: 'ai', key: second }],
+        { attachments: [roster.id], refs: ['标语.md'] },
+      );
+      const withFiles = asked.messages.findLast((m) => m.role === 'user');
+      t.check(
+        withFiles?.data.attachments?.[0]?.id === roster.id &&
+          withFiles.data.refs?.[0]?.path === '标语.md',
+        `这句话上应写着带的文件和引用的群文件：${JSON.stringify(withFiles?.data ?? null)}`,
+      );
+      await idle(owner, groupId, '第二个 AI 改标语');
+      t.check(
+        t.provider.of('group', 6).some((c) => c.action === 'bash:1'),
+        '第二个 AI 的工作目录里应有名单和标语这两份群文件',
+      );
+      let files = [];
+      for (let i = 0; i < 20; i++) {
+        files = await filesOf();
+        if (files.find((file) => file.path === '标语.md')?.changedBy.id === second) break;
+        await sleep(1_000);
+      }
+      const changed = files.find((file) => file.path === '标语.md');
+      t.check(
+        files.length === 2 && changed?.madeBy.id === first && changed.changedBy.id === second,
+        `标语应还是一份、写着第一个 AI 做的第二个 AI 改过：${JSON.stringify(files.map((f) => [f.path, f.madeBy.id, f.changedBy.id]))}`,
+      );
+      const sloganText = await textOf(owner, `${base}/${groupId}/files/${changed.id}/content`);
+      t.check(sloganText.includes('3 位嘉宾'), `群文件里的标语应是改过的那一版：${sloganText}`);
+      const list = files.find((file) => file.path === '名单.csv');
+      t.check(
+        list?.madeBy.kind === 'user' && list.madeBy.id === member.userId,
+        `群员发的名单应在群文件里：${JSON.stringify(list ?? null)}`,
+      );
+      const work = (await member.api.get(`${base}/${groupId}/work`)).messages;
+      t.check(
+        work.some((m) => m.kind === 'text' && m.authorId === second && m.data.title) &&
+          work.some((m) => m.kind === 'task' && m.authorId === first),
+        `工作台应看得到两个 AI 动过手的那几轮：${JSON.stringify(work.map((m) => [m.kind, m.authorId]))}`,
+      );
+      // AI 交的文件群员删不了；传的人能删自己传的（这里留着名单，解散时看它有没有被清掉）
+      const denied = await member.api.del(`${base}/${groupId}/files/${changed.id}`).then(
+        () => 204,
+        (err) => err.status,
+      );
+      t.check(denied === 403, `群员不应能删 AI 交的群文件：${denied}`);
+
+      // ---- 好友私聊里发文件：只跟着那条消息，对方能读 ----
+      const photo = await owner.upload('合照.txt', '天台合照');
+      await say(owner, chat.id, '', [], { attachments: [photo.id] });
+      const photoRoute = `${base}/${chat.id}/attachments/${photo.id}/content`;
+      t.check((await textOf(member, photoRoute)) === '天台合照', '好友私聊里发的文件对方应能读到');
+
+      // ---- 解散群：席位的会话、工作目录、成果、发过的文件一起清掉 ----
       const sessionIds = [...new Set(runs.map((run) => run.session_id).filter(Boolean))];
       await owner.api.del(`${base}/${groupId}`);
       destroyed = true;
@@ -266,14 +359,15 @@ export const group = {
       );
       for (const sessionId of sessionIds)
         t.check(!workspaceExists(sessionId), `解散群后席位的工作目录应删掉：${sessionId}`);
+      const rosterLeft = await statusOf(member, `/canvas/v1/uploads/${roster.id}`);
+      t.check(rosterLeft === 404, `解散群后群里发过的文件应从画布删掉：${rosterLeft}`);
 
       // ---- 删好友：两人的私聊（连消息）一起删掉 ----
       await member.api.del(`/conversation/v1/friends/${owner.userId}`);
-      const gone = await owner.api.get(`${base}/${chat.id}`).then(
-        () => 200,
-        (err) => err.status,
-      );
+      const gone = await statusOf(owner, `${base}/${chat.id}`);
       t.check(gone === 404, `删好友后两人的私聊应不在了：${gone}`);
+      const photoLeft = await statusOf(owner, `/canvas/v1/uploads/${photo.id}`);
+      t.check(photoLeft === 404, `删好友后私聊里发过的文件应从画布删掉：${photoLeft}`);
       t.check(
         (await owner.api.get('/conversation/v1/friends')).friends.length === 0,
         '删好友后好友列表里应没有他',

@@ -1,18 +1,21 @@
-// 群里的消息：时间分隔、别人的话（左，头像加名字）、我的话（右，墨色）、AI 的话（左，气泡带它的光色，
-// 里面是说的话和折叠的步骤）、任务卡。@ 了的 AI 还在忙时，话下面写着它忙完就看，可以「现在告诉它」。照原型 ②。
-import type { Mention, TaskCard } from '@oasis/contracts/conversation';
+// 群里的消息：时间分隔、别人的话（左，头像加名字）、我的话（右，墨色）、AI 的话（左，气泡带它的光色；
+// 干活的过程不放在这里，只写做到第几步，点它去工作台看）、任务卡、话带的文件。@ 了的 AI 还在忙时，话下面写着它忙完就看，可以「现在告诉它」。照原型 ②。
+import type { Mention, MessageAttachment, TaskCard } from '@oasis/contracts/conversation';
 import type { GroupAi, GroupMessage } from '@oasis/contracts/group';
-import { Fragment, useEffect, useMemo, useRef } from 'react';
-import { steerGroupMessage, stopGroupAi } from '../api/queries.ts';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { groupAttachmentUrl, steerGroupMessage, stopGroupAi } from '../api/queries.ts';
 import { AiBody } from '../chat/AiMessage.tsx';
-import { CardFrame, CardHeading, StatusTag } from '../chat/parts.tsx';
+import { FileChip } from '../chat/FileChip.tsx';
+import { FilePreview, type PreviewFile } from '../chat/FilePreview.tsx';
+import { CardButton, CardFrame, CardHeading, StatusTag } from '../chat/parts.tsx';
 import { TASK_STATUS, TaskFacts } from '../chat/TaskCard.tsx';
 import { ChatActionsContext, type ChatActions } from '../chat/use-chat-actions.ts';
 import { useStickToBottom } from '../chat/use-stick-to-bottom.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { MemberAvatar } from './Members.tsx';
 import { aiLook, DIVIDER_GAP_MS, dividerText } from './people.ts';
-import { mentionText, useRoom, type Room } from './room.ts';
+import { mentionText, uploadPath, useRoom, type Room } from './room.ts';
+import { FilePill } from './workbench/files.tsx';
 
 type TextMessage = Extract<GroupMessage, { kind: 'text' }>;
 
@@ -36,11 +39,57 @@ function Mentions({ mentions, mine }: { mentions: Mention[]; mine: boolean }) {
   );
 }
 
+/**
+ * 一句话带的文件、引用的群文件。群里发的文件就是群文件，点开在工作台看（看到的是现在最新的那一版）；
+ * 和好友的私聊里文件只跟着这条消息，点开弹出预览。
+ */
+function MessageFiles({ message, mine }: { message: TextMessage; mine: boolean }) {
+  const { group } = useRoom();
+  const [preview, setPreview] = useState<PreviewFile | null>(null);
+  const attachments = message.data.attachments ?? [];
+  const refs = message.data.refs ?? [];
+  if (!attachments.length && !refs.length) return null;
+  const toPreview = (file: MessageAttachment): PreviewFile => ({
+    path: file.name,
+    size: file.size,
+    url: groupAttachmentUrl(group.id, file.id),
+    downloadUrl: groupAttachmentUrl(group.id, file.id, true),
+  });
+  return (
+    <>
+      <ul
+        aria-label="带的文件"
+        className={`m-0 flex max-w-[320px] list-none flex-col gap-1.5 p-0 ${mine ? 'items-end' : 'items-start'}`}
+      >
+        {group.kind === 'direct'
+          ? attachments.map((file) => (
+              <FileChip
+                key={file.id}
+                file={toPreview(file)}
+                onOpen={() => setPreview(toPreview(file))}
+              />
+            ))
+          : [
+              ...attachments.map((file) => ({ path: uploadPath(file.name), name: file.name })),
+              ...refs,
+            ].map((file, index) => (
+              <li key={index} className="flex max-w-full">
+                <FilePill path={file.path} name={file.name} />
+              </li>
+            ))}
+      </ul>
+      {preview && <FilePreview file={preview} onClose={() => setPreview(null)} />}
+    </>
+  );
+}
+
 function UserMessage({ message }: { message: TextMessage }) {
   const { group, me, owner, models, busy, act } = useRoom();
   const mine = message.authorId === me;
   const mentions = message.data.mentions ?? [];
   const waiting = waitingFor(message, group.ais);
+  // 只发了文件、没写字，也没 @ 谁：不画空气泡
+  const said = message.content.length > 0 || mentions.length > 0;
   const hint = waiting.length > 0 && (
     <div
       className={`flex flex-wrap items-center gap-x-2.5 gap-y-1 px-1.5 text-xs text-ink-muted ${
@@ -67,10 +116,13 @@ function UserMessage({ message }: { message: TextMessage }) {
   if (mine)
     return (
       <div className="flex flex-col items-end gap-1">
-        <p className="bubble-out m-0 max-w-[460px] whitespace-pre-wrap break-words bg-solid px-4 py-2.5 text-[14.5px] leading-[1.65] text-on-solid">
-          <Mentions mentions={mentions} mine />
-          {message.content}
-        </p>
+        {said && (
+          <p className="bubble-out m-0 max-w-[460px] whitespace-pre-wrap break-words bg-solid px-4 py-2.5 text-[14.5px] leading-[1.65] text-on-solid">
+            <Mentions mentions={mentions} mine />
+            {message.content}
+          </p>
+        )}
+        <MessageFiles message={message} mine />
         {hint}
       </div>
     );
@@ -87,10 +139,13 @@ function UserMessage({ message }: { message: TextMessage }) {
       />
       <div className="flex min-w-0 flex-col items-start gap-[3px]">
         <span className="pl-1.5 text-xs text-ink-muted">{message.displayName}</span>
-        <p className="bubble-in m-0 max-w-[440px] whitespace-pre-wrap break-words bg-bubble px-4 py-2.5 text-[14.5px] leading-[1.65] shadow-edge-strong">
-          <Mentions mentions={mentions} mine={false} />
-          {message.content}
-        </p>
+        {said && (
+          <p className="bubble-in m-0 max-w-[440px] whitespace-pre-wrap break-words bg-bubble px-4 py-2.5 text-[14.5px] leading-[1.65] shadow-edge-strong">
+            <Mentions mentions={mentions} mine={false} />
+            {message.content}
+          </p>
+        )}
+        <MessageFiles message={message} mine={false} />
         {hint}
       </div>
     </div>
@@ -116,7 +171,8 @@ function actionsFor(room: Room, key: string): ChatActions {
 }
 
 function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) {
-  const { models } = useRoom();
+  const { models, bench } = useRoom();
+  const { runId } = message.data;
   const look = aiLook(models, message.authorId, message.displayName);
   return (
     <div className="flex items-end gap-2.5">
@@ -132,7 +188,7 @@ function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) 
           <AiBody
             message={message}
             latest={latest}
-            quiet
+            onProcess={() => bench.openTasks(runId)}
             bubble={{
               className: 'bubble-in shadow-bubble-edge',
               style: { background: `color-mix(in srgb, ${look.glow} 14%, transparent)` },
@@ -144,9 +200,9 @@ function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) 
   );
 }
 
-/** 群里一个 AI 这一轮的任务卡：任务名、状态、用时、花费、交了哪些文件（打开文件在工作台，之后的阶段做） */
+/** 群里一个 AI 这一轮的任务卡：任务名、状态、用时、花费、交了哪些文件（点开在工作台看），过程去工作台看 */
 function RoomTask({ card, authorId, name }: { card: TaskCard; authorId: string; name: string }) {
-  const { models } = useRoom();
+  const { models, bench } = useRoom();
   const status = TASK_STATUS[card.status];
   return (
     <CardFrame
@@ -163,15 +219,15 @@ function RoomTask({ card, authorId, name }: { card: TaskCard; authorId: string; 
       {card.files.length > 0 && (
         <ul aria-label="交出的文件" className="m-0 flex list-none flex-wrap gap-1.5 p-0">
           {card.files.map((file) => (
-            <li
-              key={file.artifactId}
-              className="rounded-full bg-glass-active px-3 py-1.5 text-[12.5px] shadow-edge-strong"
-            >
-              {file.name}
+            <li key={file.artifactId} className="flex max-w-full">
+              <FilePill path={file.path} name={file.name} />
             </li>
           ))}
         </ul>
       )}
+      <div>
+        <CardButton onClick={() => bench.openTasks(card.runId)}>看过程</CardButton>
+      </div>
     </CardFrame>
   );
 }

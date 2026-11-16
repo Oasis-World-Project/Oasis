@@ -131,6 +131,15 @@ export function createFriendRepo(pool: pg.Pool, limits: Limits) {
       );
       if (!rowCount) throw new HttpError(404, 'friend_request_not_found', '这条好友申请不在了');
     },
+    /** 两人的私聊的 ID；还没聊过返回 undefined */
+    async chat(userId: string, friendId: string) {
+      return (
+        await pool.query<{ id: string }>(
+          `select id from conversations where kind='direct' and direct_key=${KEY}`,
+          [userId, friendId],
+        )
+      ).rows[0]?.id;
+    },
     /** 删好友：好友关系和两人的私聊（连消息）一起真删除 */
     unfriend(userId: string, friendId: string) {
       return inTransaction(pool, async (db) => {

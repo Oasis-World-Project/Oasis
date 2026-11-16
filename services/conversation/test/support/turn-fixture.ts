@@ -180,8 +180,11 @@ others.post('/internal/conversations/:id/purge', async (request, reply) => {
   );
   return reply.code(204).send();
 });
-/** 假画布：每一轮登记过的成果（按路径；site/index.html 的 id 是 ARTIFACT） */
+/** 假画布：每一轮登记过的成果（按路径；site/index.html 的 id 是 ARTIFACT），和各自内容的摘要 */
 const inRun = new Map<string, Map<string, string>>();
+const shaOf = new Map<string, string>();
+/** 同一个对话里同一个路径的成果，换了内容还是同一个 ID */
+const idOf = new Map<string, string>();
 /** 登记时读不到的文件（一个读不到，整次登记失败） */
 export const unreadable = new Set<string>();
 others.post('/internal/artifacts/runs', async (request, reply) => {
@@ -190,17 +193,21 @@ others.post('/internal/artifacts/runs', async (request, reply) => {
     conversationId: string;
     runId: string;
     task: string;
-    outputs: { path: string }[];
+    outputs: { path: string; sha256?: string }[];
   };
   if (body.outputs.some((file) => unreadable.has(file.path)))
     return reply.code(404).send(fail(404, 'file_not_found', '没有这个文件'));
   const paths = inRun.get(body.runId) ?? new Map<string, string>();
   inRun.set(body.runId, paths);
-  for (const { path } of body.outputs)
-    if (!paths.has(path)) paths.set(path, path === 'site/index.html' ? ARTIFACT : randomUUID());
+  for (const { path, sha256 } of body.outputs) {
+    const key = `${body.conversationId}:${path}`;
+    if (!idOf.has(key)) idOf.set(key, path === 'site/index.html' ? ARTIFACT : randomUUID());
+    if (!paths.has(path)) paths.set(path, idOf.get(key)!);
+    if (sha256) shaOf.set(paths.get(path)!, sha256);
+  }
   return {
     artifacts: [...paths].map(([path, id]) => ({
-      sha256: 'a'.repeat(64),
+      sha256: shaOf.get(id) ?? 'a'.repeat(64),
       id,
       name: path.split('/').at(-1)!,
       path,
@@ -222,15 +229,16 @@ others.post('/internal/artifacts/runs', async (request, reply) => {
     })),
   };
 });
-/** 核对过的上传文件（核对时会被标成已用上） */
+/** 核对过的上传文件（核对时会被标成已用上）；uploadNames：测试给某个文件起的名字（不给都叫 照片.jpg） */
 export const uploadLookups: string[][] = [];
+export const uploadNames = new Map<string, string>();
 others.post('/internal/uploads/lookup', async (request) => {
   const { ids } = request.body as { ids: string[] };
   uploadLookups.push(ids);
   return {
     uploads: ids.map((id) => ({
       id,
-      name: '照片.jpg',
+      name: uploadNames.get(id) ?? '照片.jpg',
       size: 2 * 1024 * 1024,
       contentType: 'image/jpeg',
       createdAt: new Date().toISOString(),
@@ -284,6 +292,11 @@ others.post('/internal/artifacts/lookup', async (request, reply) => {
         )
       : [],
   };
+});
+/** 文件内容：内容就是「哪一种:ID」 */
+others.get('/internal/:kind/:id/content', async (request, reply) => {
+  const { kind, id } = request.params as { kind: string; id: string };
+  return reply.type('text/plain').send(`${kind}:${id}`);
 });
 others.post('/internal/uploads/delete', async (request) => {
   deletedUploads.push((request.body as { ids: string[] }).ids);

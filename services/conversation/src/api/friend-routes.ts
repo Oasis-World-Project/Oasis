@@ -22,7 +22,8 @@ export function registerFriendRoutes(app: ServiceApp, friends: FriendService): v
     return reply.code(204).send();
   });
   app.delete('/v1/friends/:userId', async (request, reply) => {
-    await friends.unfriend(requireUserId(request), parseWith(UserId, request.params).userId);
+    const { userId } = parseWith(UserId, request.params);
+    await friends.unfriend(requireUserId(request), userId, request.id);
     return reply.code(204).send();
   });
   app.post('/v1/friends/:userId/chat', async (request) =>

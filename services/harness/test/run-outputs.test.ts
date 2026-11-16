@@ -20,6 +20,7 @@ import {
   compute,
   lifecycle,
   PHOTO,
+  uploadOwners,
   BIG,
   POSTER,
   service,
@@ -27,6 +28,8 @@ import {
   base,
   tarEntries,
 } from './support/run-fixture.ts';
+
+const UPLOADER = '6e6e6e6e-6e6e-4e6e-8e6e-6e6e6e6e6e6e';
 
 const OTHER_CONVERSATION = '4d4d4d4d-4d4d-4d4d-8d4d-4d4d4d4d4d4d';
 const placed = (index: number, dir: string) =>
@@ -140,10 +143,14 @@ describe('对话里的一轮：输入和产出', () => {
       materials: [
         { uploadId: PHOTO, path: 'materials/照片.jpg' },
         { artifactId: POSTER, path: 'materials/canvas/site/poster.png' },
+        // 群里别的成员传的群文件：不在付费人名下，按给的那个人查
+        { uploadId: PHOTO, ownerId: UPLOADER, path: 'materials/group/名单.jpg' },
       ],
     });
     await finished(run.id);
     const files = await extractFiles(placed(0, SANDBOX_PATHS.workdir));
+    expect(uploadOwners.slice(-2).sort()).toEqual([base.payerId, UPLOADER].sort());
+    expect(files.find((f) => f.path === 'group/名单.jpg')?.content.toString()).toBe('photo-bytes');
     expect(files.find((f) => f.path === '照片.jpg')?.content.toString()).toBe('photo-bytes');
     expect(files.find((f) => f.path === 'canvas/site/poster.png')?.content.toString()).toBe(
       'poster-bytes',

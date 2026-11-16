@@ -1,4 +1,4 @@
-// 预览 Markdown 成果用的简单渲染：标题、段落、列表、引用、代码块、粗体和行内代码。
+// 预览 Markdown 成果用的简单渲染：标题、段落、列表、引用、代码块、表格、粗体和行内代码。
 // 直接生成 React 元素，不拼 HTML，AI 写的内容里就算有标签也只会原样显示成文字。
 import type { ReactNode } from 'react';
 
@@ -7,9 +7,22 @@ type Block =
   | { kind: 'list'; ordered: boolean; items: string[] }
   | { kind: 'quote'; text: string }
   | { kind: 'code'; text: string }
+  | { kind: 'table'; head: string[]; align: Align[]; rows: string[][] }
   | { kind: 'paragraph'; text: string };
+type Align = 'left' | 'center' | 'right';
 
 const LIST_ITEM = /^\s*(?:[-*+]|(\d+)[.)])\s+(.*)$/;
+/** 表格的一行：| a | b |；表头下面那行是 | --- | :--: | */
+const ROW = /^\s*\|.*\|\s*$/;
+const RULE = /^\s*\|(\s*:?-+:?\s*\|)+\s*$/;
+const cells = (line: string) =>
+  line
+    .trim()
+    .slice(1, -1)
+    .split('|')
+    .map((cell) => cell.trim());
+const alignOf = (rule: string): Align =>
+  rule.endsWith(':') ? (rule.startsWith(':') ? 'center' : 'right') : 'left';
 
 function parse(source: string): Block[] {
   const lines = source.replaceAll('\r\n', '\n').split('\n');
@@ -48,6 +61,15 @@ function parse(source: string): Block[] {
       blocks.push({ kind: 'list', ordered, items });
       continue;
     }
+    if (ROW.test(line) && RULE.test(lines[i + 1] ?? '')) {
+      const rows: string[][] = [];
+      const align = cells(lines[i + 1] ?? '').map(alignOf);
+      for (let r = i + 2; r < lines.length && ROW.test(lines[r] ?? ''); r += 1)
+        rows.push(cells(lines[r] ?? ''));
+      blocks.push({ kind: 'table', head: cells(line), align, rows });
+      i += rows.length + 2;
+      continue;
+    }
     if (line.startsWith('>')) {
       const quote: string[] = [];
       while (i < lines.length && (lines[i] ?? '').startsWith('>'))
@@ -60,7 +82,8 @@ function parse(source: string): Block[] {
       i < lines.length &&
       (lines[i] ?? '').trim() !== '' &&
       !/^(#{1,6}\s|```|>)/.test(lines[i] ?? '') &&
-      !LIST_ITEM.test(lines[i] ?? '')
+      !LIST_ITEM.test(lines[i] ?? '') &&
+      !(ROW.test(lines[i] ?? '') && RULE.test(lines[i + 1] ?? ''))
     ) {
       paragraph.push(lines[i++] ?? '');
     }
@@ -136,6 +159,41 @@ export function Markdown({ source }: { source: string }) {
               >
                 <code>{block.text}</code>
               </pre>
+            );
+          case 'table':
+            return (
+              <div key={index} className="overflow-x-auto">
+                <table className="w-full border-separate border-spacing-x-0 border-spacing-y-1 text-[13.5px] [font-variant-numeric:tabular-nums]">
+                  <thead>
+                    <tr>
+                      {block.head.map((cell, c) => (
+                        <th
+                          key={c}
+                          style={{ textAlign: block.align[c] ?? 'left' }}
+                          className="px-3 py-1.5 text-xs font-normal text-ink-muted"
+                        >
+                          {inline(cell)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {block.rows.map((row, r) => (
+                      <tr key={r}>
+                        {block.head.map((_, c) => (
+                          <td
+                            key={c}
+                            style={{ textAlign: block.align[c] ?? 'left' }}
+                            className="bg-well px-3 py-2.5 first:rounded-l-2xl last:rounded-r-2xl"
+                          >
+                            {inline(row[c] ?? '')}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             );
           case 'paragraph':
             return (

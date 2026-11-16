@@ -4,7 +4,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createFriendRepo } from '../src/repo/friend-repo.ts';
 import { createGroupRepo } from '../src/repo/group-repo.ts';
 import { createFriendService } from '../src/service/friend-service.ts';
-import { befriend, fakeProfiles, humanGroups, nameOf, NEW_GROUP } from './support/group-fixture.ts';
+import {
+  befriend,
+  fakeProfiles,
+  groupFiles,
+  humanGroups,
+  nameOf,
+  NEW_GROUP,
+} from './support/group-fixture.ts';
 import { scratchSchema } from './support/schema.ts';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('好友、好友之间的私聊、拉好友进群', () => {
@@ -12,7 +19,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('好友、好友之间的私聊�
   const ghost = randomUUID();
   const profiles = fakeProfiles(new Map(), new Set([ghost]));
   const repo = createFriendRepo(pool, { friends: 500, pending: 50 });
-  const friends = createFriendService({ repo, profiles });
+  const friends = createFriendService({ repo, profiles, files: groupFiles(pool) });
   const groups = humanGroups(pool, 30);
   const people = (count: number) => Array.from({ length: count }, () => randomUUID());
   const count = async (sql: string, args: unknown[]) =>
@@ -95,10 +102,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('好友、好友之间的私聊�
       () => groups.destroy(a, id, 'r'),
     ])
       await expect(attempt()).rejects.toMatchObject({ statusCode: 404 });
-    await friends.unfriend(b, a);
+    await friends.unfriend(b, a, 'r');
     await expect(groups.get(a, id)).rejects.toMatchObject({ statusCode: 404 });
     expect(await count('messages where conversation_id=$1', [id])).toBe(0);
-    await expect(friends.unfriend(a, b)).rejects.toMatchObject({ code: 'friend_not_found' });
+    await expect(friends.unfriend(a, b, 'r')).rejects.toMatchObject({ code: 'friend_not_found' });
   });
 
   it('群主直接拉好友进群：不是好友拉不了，群员不能拉；建群时可以一起拉；群昵称只改自己的', async () => {

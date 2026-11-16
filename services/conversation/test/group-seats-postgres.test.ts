@@ -11,7 +11,7 @@ import { createGroupSeats } from '../src/repo/group-seats.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
-import { befriend, fakeProfiles } from './support/group-fixture.ts';
+import { befriend, fakeProfiles, groupFiles } from './support/group-fixture.ts';
 import { client, event, fake, harnessUrl, othersUrl, until } from './support/turn-fixture.ts';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', () => {
@@ -59,6 +59,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
           [member, '林夏'],
         ]),
       ),
+      files: groupFiles(pool),
       speak: { nudge: (groupId) => void nudged.push(groupId) },
       purge: createPurge({ harness, modelGateway, canvas }),
       logger,

@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { withMessageLock, type ConversationRepo } from '../repo/conversation-repo.ts';
 import type { GroupSeats } from '../repo/group-seats.ts';
 import type { GroupTalk, TalkLine } from '../repo/group-talk.ts';
+import type { GroupFiles } from './group-files.ts';
 import { ownBrief } from './group-hearing.ts';
 import { parseJudgment, pickSpeaker, startChance, type Judgment } from './speak-chance.ts';
 import type { Turns } from './turns.ts';
@@ -42,6 +43,8 @@ export function createGroupSpeak(deps: {
   agent: ServiceClient;
   modelGateway: ServiceClient;
   logger: Logger;
+  /** 开一轮时带上群文件里它还没拿到的 */
+  files: Pick<GroupFiles, 'attach'>;
   /** 判断用的型号：要快 */
   model: string;
   /** 一句话之后群里安静多久再判断（等人把话说完） */
@@ -139,7 +142,10 @@ export function createGroupSpeak(deps: {
         seat,
         [],
         requestId,
-        ownBrief(seat.modelKey ?? '', hearing.roster, hearing.heard, hearing.skipped, ending),
+        await deps.files.attach(
+          seat,
+          ownBrief(seat.modelKey ?? '', hearing.roster, hearing.heard, hearing.skipped, ending),
+        ),
       );
     });
   }

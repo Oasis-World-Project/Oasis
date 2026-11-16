@@ -185,6 +185,10 @@ export const MessageBody = z.discriminatedUnion('kind', [
       pending: z.boolean().optional(),
       /** 群里，用户：这句 @ 了谁 */
       mentions: z.array(Mention).optional(),
+      /** 群里，用户：这句引用的群文件 */
+      refs: z.array(z.object({ path: z.string(), name: z.string() })).optional(),
+      /** AI：这一轮的任务名（工作台的任务卡上用） */
+      title: z.string().optional(),
       /** AI：按顺序说的话和做的步骤 */
       parts: z.array(MessagePart).optional(),
       /** AI：最新的待办 */

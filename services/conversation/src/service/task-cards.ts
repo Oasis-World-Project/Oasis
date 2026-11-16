@@ -17,6 +17,8 @@ export function createTaskCards(deps: {
   canvas: ServiceClient;
   modelGateway: ServiceClient;
   logger: Logger;
+  /** 群里的席位交了文件（已登记进画布）：进群文件 */
+  delivered?: (seat: Conversation, runId: string, files: ArtifactBody[]) => Promise<void>;
 }) {
   const { logger } = deps;
 
@@ -68,6 +70,7 @@ export function createTaskCards(deps: {
       },
       schema: RegisteredArtifacts,
     });
+    if (conversation.kind === 'seat') await deps.delivered?.(conversation, run.id, artifacts);
     return artifacts.map((a) => ({
       artifactId: a.id,
       name: a.name,

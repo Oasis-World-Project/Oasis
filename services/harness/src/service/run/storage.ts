@@ -74,17 +74,24 @@ export function createStorage(ctx: RunContext): Pick<RunContext, 'save' | 'mater
     async materialFiles(materials, runId, ownerId) {
       if (!materials.length) return [];
       const metadata = new Map<string, { size: number; sha256?: string | null | undefined }>();
-      const uploadIds = materials.flatMap((m) => ('uploadId' in m ? [m.uploadId] : []));
+      // 上传的文件按是谁名下的分开查（群里别的成员传的群文件不在付费人名下）
+      const uploadIds = new Map<string, string[]>();
+      for (const m of materials)
+        if ('uploadId' in m) {
+          const owner = m.ownerId ?? ownerId;
+          uploadIds.set(owner, [...(uploadIds.get(owner) ?? []), m.uploadId]);
+        }
       const artifactIds = materials.flatMap((m) => ('artifactId' in m ? [m.artifactId] : []));
       // 查询一次最多 20 个（几条消息合成一轮时可能更多）
-      for (let i = 0; i < uploadIds.length; i += 20) {
-        const { uploads } = await deps.canvas.json('POST', '/internal/uploads/lookup', {
-          body: { ownerId, ids: uploadIds.slice(i, i + 20) },
-          schema: UploadLookupResult,
-          requestId: runId,
-        });
-        for (const file of uploads) metadata.set(file.id, file);
-      }
+      for (const [owner, ids] of uploadIds)
+        for (let i = 0; i < ids.length; i += 20) {
+          const { uploads } = await deps.canvas.json('POST', '/internal/uploads/lookup', {
+            body: { ownerId: owner, ids: ids.slice(i, i + 20) },
+            schema: UploadLookupResult,
+            requestId: runId,
+          });
+          for (const file of uploads) metadata.set(file.id, file);
+        }
       if (artifactIds.length) {
         const { artifacts } = await deps.canvas.json('POST', '/internal/artifacts/lookup', {
           body: { ownerId, ids: artifactIds },

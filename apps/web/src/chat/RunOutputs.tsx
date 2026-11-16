@@ -3,7 +3,7 @@
 import type { TaskFile } from '@oasis/contracts/conversation';
 import type { ReactNode } from 'react';
 import { artifactContentUrl, runFileUrl } from '../api/queries.ts';
-import { StepIcon } from './AiMessage.tsx';
+import { StepIcon } from './Process.tsx';
 import { FileChip } from './FileChip.tsx';
 import { baseName, type PreviewFile } from './files.ts';
 import { OUTPUT_BOXES, type LongTask, type OutputItem, type OutputKind } from './run-progress.ts';

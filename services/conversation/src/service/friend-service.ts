@@ -4,7 +4,12 @@ import type { Friend, FriendRequest, FriendsBody } from '@oasis/contracts/social
 import type { FriendRepo } from '../repo/friend-repo.ts';
 import type { Profiles } from './profiles.ts';
 
-export function createFriendService(deps: { repo: FriendRepo; profiles: Profiles }) {
+export function createFriendService(deps: {
+  repo: FriendRepo;
+  profiles: Profiles;
+  /** 删好友时，两人私聊里发过的文件从 canvas 删掉 */
+  files: { purge(roomId: string, requestId: string): Promise<void> };
+}) {
   const { repo, profiles } = deps;
   return {
     /** 我的好友、别人发给我的申请、我发出去还没回的申请 */
@@ -45,7 +50,12 @@ export function createFriendService(deps: { repo: FriendRepo; profiles: Profiles
     },
     accept: repo.accept,
     dropRequest: repo.dropRequest,
-    unfriend: repo.unfriend,
+    /** 删好友：两人的私聊（连消息和发过的文件）一起真删除。先删文件再删聊天：删文件失败可以重试 */
+    async unfriend(userId: string, friendId: string, requestId: string) {
+      const chat = await repo.chat(userId, friendId);
+      if (chat) await deps.files.purge(chat, requestId);
+      await repo.unfriend(userId, friendId);
+    },
     /** 打开和一个好友的私聊（没有就建），返回它的 ID */
     async openChat(userId: string, friendId: string, requestId: string) {
       const people = await profiles.get([userId, friendId], requestId);

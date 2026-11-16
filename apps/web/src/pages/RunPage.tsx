@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { ApiError } from '../api/client.ts';
 import { dmsQuery, messagesQuery, stopTurn } from '../api/queries.ts';
 import { aiName, useModelMap } from '../api/use-model-map.ts';
-import { Todos } from '../chat/AiMessage.tsx';
+import { Todos } from '../chat/Process.tsx';
 import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
 import { FilePreview } from '../chat/FilePreview.tsx';
 import type { PreviewFile } from '../chat/files.ts';

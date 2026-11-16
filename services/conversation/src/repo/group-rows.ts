@@ -1,5 +1,6 @@
 // 群的几种行，和几处都要用的查询：群、席位（群里的一个 AI）、消息。
 import type pg from 'pg';
+import type { GroupMessage } from '@oasis/contracts/group';
 import type { Turn } from './schema.ts';
 
 export type GroupRow = {
@@ -17,8 +18,11 @@ export interface SeatRow {
   model_key: string;
   /** AI 的名字（进群时、每次开一轮时记下） */
   title: string;
-  /** role：在群里负责什么；removedAt：什么时候被移出的；warmth：判断出来它平时有多爱说话（0 到 1） */
-  options: { role?: string; removedAt?: string; warmth?: number };
+  /**
+   * role：在群里负责什么；removedAt：什么时候被移出的；warmth：判断出来它平时有多爱说话（0 到 1）；
+   * filesSeen：群文件它拿到第几版了（group_files.rev）
+   */
+  options: { role?: string; removedAt?: string; warmth?: number; filesSeen?: number };
   turn: Turn | null;
   heard_seq: string;
 }
@@ -60,6 +64,23 @@ export const nameOf = (row: MessageRow, names: Map<string, string>) =>
     : typeof row.data.displayName === 'string'
       ? row.data.displayName
       : '成员');
+
+/** 库里的一行消息 → 给网页的群消息 */
+export const toMessage = (row: MessageRow, names: Map<string, string>): GroupMessage =>
+  ({
+    id: row.id,
+    seq: Number(row.seq),
+    authorId: row.author_id,
+    displayName: nameOf(row, names),
+    role: row.author_kind === 'user' ? 'user' : 'assistant',
+    content: row.content,
+    status: row.status,
+    error: row.error,
+    createdAt: row.created_at.toISOString(),
+    // data 按 kind 存的就是对应的内容（写入时已经是契约里的形状）
+    kind: row.kind,
+    data: row.data,
+  }) as GroupMessage;
 
 /** 成员在群里叫什么：设了群昵称用群昵称，没设用账号的名字 */
 export const MEMBER_NAME = 'coalesce(nickname,display_name)';

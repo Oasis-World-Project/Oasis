@@ -6,8 +6,10 @@ import type { GroupOptions } from '@oasis/contracts/group';
 import type { PublicProfile } from '@oasis/contracts/identity';
 import { HttpError, type ServiceClient } from '@oasis/service-kit';
 import { createConversationRepo } from '../../src/repo/conversation-repo.ts';
+import { createGroupFilesRepo } from '../../src/repo/group-files-repo.ts';
 import { createGroupRepo } from '../../src/repo/group-repo.ts';
 import { createGroupSeats } from '../../src/repo/group-seats.ts';
+import { createGroupFiles } from '../../src/service/group-files.ts';
 import { createGroupService } from '../../src/service/group-service.ts';
 import type { Profiles } from '../../src/service/profiles.ts';
 import type { Turns } from '../../src/service/turns.ts';
@@ -54,6 +56,16 @@ export const befriend = (pool: pg.Pool, a: string, b: string) =>
     [a, b],
   );
 
+/** 群文件：真的存储；canvas 不给时是空的（没人发文件、没 AI 交文件的测试用不到它） */
+export const groupFiles = (pool: pg.Pool, canvas = {} as ServiceClient) =>
+  createGroupFiles({
+    repo: createGroupFilesRepo(pool),
+    canvas,
+    logger: pino({ level: 'silent' }),
+    maxFiles: 5,
+    handoverBytes: 10 * 1024 * 1024,
+  });
+
 export const humanGroups = (pool: pg.Pool, messagesPerMinute: number) =>
   createGroupService({
     repo: createGroupRepo(pool, { members: 3, groups: 20, messagesPerMinute, ais: 8 }),
@@ -62,6 +74,7 @@ export const humanGroups = (pool: pg.Pool, messagesPerMinute: number) =>
     turns: { onSeatIdle: () => undefined } as unknown as Turns,
     agent: {} as ServiceClient,
     profiles: fakeProfiles(),
+    files: groupFiles(pool),
     speak: { nudge: () => undefined },
     purge: { cancelTurn: async () => undefined, remote: async () => undefined },
     logger: pino({ level: 'silent' }),

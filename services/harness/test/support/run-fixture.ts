@@ -302,8 +302,11 @@ modelGateway.post('/internal/run-keys/:id/revoke', async (request, reply) => {
 /** 假 canvas（和假 model-gateway 共用一个服务器）：用户上传的素材 */
 export const PHOTO = '6a6a6a6a-6a6a-4a6a-8a6a-6a6a6a6a6a6a';
 export const BIG = '6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b';
+/** 每次查上传文件时说的是谁名下的 */
+export const uploadOwners: string[] = [];
 modelGateway.post('/internal/uploads/lookup', async (request, reply) => {
-  const { ids } = request.body as { ids: string[] };
+  const { ids, ownerId } = request.body as { ids: string[]; ownerId: string };
+  uploadOwners.push(ownerId);
   if (ids.some((id) => id !== PHOTO && id !== BIG))
     return reply
       .code(404)

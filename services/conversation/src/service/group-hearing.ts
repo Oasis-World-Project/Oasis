@@ -1,7 +1,11 @@
 // 群里轮到一个 AI 时交给它什么：群里它没听过的话连成一段（谁说的、几点、@ 了谁），最后写明为什么
 // 轮到它；人设后面接上群里有谁、每个 AI 负责什么。
 import type { Mention } from '@oasis/contracts/conversation';
+import type { handOver } from './hand-over.ts';
 import { taskTitle } from './task-title.ts';
+
+/** 拷进工作目录的文件，和接在话后面、告诉 AI 文件在哪的说明 */
+type Handed = ReturnType<typeof handOver>;
 
 /** 群里的一轮交给 AI 的东西：那段话、接在人设后面的群说明、任务名、说了叫它的话的人 */
 export interface SeatBrief {
@@ -9,6 +13,10 @@ export interface SeatBrief {
   persona: string;
   title: string;
   callers: string[];
+  /** 群文件里它还没拿到的（别人新交、新改的）：拷进它的工作目录（group-files.ts） */
+  files?: Handed;
+  /** 原来的工作目录接不上、这一轮从头开始时：全部群文件 */
+  allFiles?: Handed;
 }
 
 /** 群里的一句话里 AI 听的那部分 */
@@ -22,6 +30,8 @@ export interface Heard {
   content: string;
   createdAt: Date;
   mentions: Mention[];
+  /** 这句话带的文件、引用的群文件（文件名） */
+  files: string[];
 }
 
 /** 群里有谁 */
@@ -58,7 +68,8 @@ function line(message: Heard, roster: Roster): string {
         ? `${message.name}（群主）`
         : message.name;
   const at = message.mentions.map((m) => `@${mentionName(m, roster)}`).join(' ');
-  return `[${clock(message.createdAt)}] ${who}${at ? ` ${at}` : ''}：${message.content}`;
+  const files = message.files.length ? `（带了群文件：${message.files.join('、')}）` : '';
+  return `[${clock(message.createdAt)}] ${who}${at ? ` ${at}` : ''}：${message.content}${files}`;
 }
 
 /** 从最新的往回留，留到条数或字数的上限；返回留下的几行 */

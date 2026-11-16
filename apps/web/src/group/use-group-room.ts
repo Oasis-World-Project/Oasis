@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client.ts';
 import { groupSnapshot, sendGroupMessage } from '../api/queries.ts';
+import type { SendFiles } from './room.ts';
 
 /** 推送连接彻底关了（EventSource.CLOSED）：浏览器不会再自己重连 */
 const CLOSED = 2;
@@ -49,7 +50,7 @@ export function useGroupRoom(id: string, gone = '这个群已解散，或你已�
   const [busy, setBusy] = useState(false);
   const [older, setOlder] = useState(true);
   const revoked = useRef(false);
-  const pending = useRef<{ content: string; id: string } | null>(null);
+  const pending = useRef<{ draft: string; id: string } | null>(null);
   const checking = useRef(false);
   const latest = useRef<GroupSnapshot | null>(null);
   const client = useQueryClient();
@@ -166,14 +167,15 @@ export function useGroupRoom(id: string, gone = '这个群已解散，或你已�
 
   /** 发一句话；没发出去时保留草稿，重试用同一个请求号（不会重复发送）。返回发出去了没有 */
   const send = useCallback(
-    async (content: string, mentions: Mention[]): Promise<boolean> => {
+    async (content: string, mentions: Mention[], files: SendFiles = {}): Promise<boolean> => {
       if (sending || revoked.current) return false;
       setSending(true);
       setError('');
-      if (pending.current?.content !== content)
-        pending.current = { content, id: crypto.randomUUID() };
+      // 同样的话、同样的文件重发用同一个请求号
+      const draft = JSON.stringify([content, files.attachments ?? [], files.refs ?? []]);
+      if (pending.current?.draft !== draft) pending.current = { draft, id: crypto.randomUUID() };
       try {
-        apply(await sendGroupMessage(id, content, pending.current.id, mentions));
+        apply(await sendGroupMessage(id, content, pending.current.id, mentions, files));
         pending.current = null;
         return true;
       } catch (err) {

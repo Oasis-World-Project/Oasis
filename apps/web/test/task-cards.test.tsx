@@ -133,6 +133,37 @@ describe('AI 在一轮里说的话和做的事', () => {
     expect(screen.getByRole('button', { name: '停下这一轮' })).toBeTruthy();
   });
 
+  it('干活的过程不整段铺在聊天里：开工前、收工后的话在外面，中间的步骤和边做边说的话收成一行，点开才看', async () => {
+    const step = (id: string) => ({
+      type: 'step',
+      id,
+      tool: 'bash',
+      label: `第 ${id} 步`,
+      status: 'done',
+    });
+    fakeChat([
+      user('做张海报'),
+      ai([
+        say('好，我来做海报。'),
+        step('1'),
+        say('先看看素材'),
+        step('2'),
+        step('3'),
+        say('海报做好了。'),
+      ]),
+    ]);
+    await openChat();
+    expect((await screen.findByText('好，我来做海报。')).closest('details')).toBeNull();
+    expect(screen.getByText('海报做好了。').closest('details')).toBeNull();
+    // 整个过程只有一行，默认收着；边做边说的话在里面
+    const folds = document.querySelectorAll('details');
+    expect(folds).toHaveLength(1);
+    expect(folds[0]!.open).toBe(false);
+    expect(folds[0]!.querySelector('summary')!.textContent).toBe('做了 3 步');
+    expect(screen.getByText('先看看素材').closest('details')).toBe(folds[0]);
+    expect(within(folds[0]!).getAllByText(/第 \d 步/)).toHaveLength(3);
+  });
+
   it('做完：步骤说一共做了几步、几步没成；写上这一轮的花费；只是聊天时没有任务卡', async () => {
     fakeChat([
       user('你好'),

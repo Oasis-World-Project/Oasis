@@ -2,13 +2,8 @@
 // 两个好友的私聊（kind = 'direct'，见 friend-repo.ts）读消息、发消息、推送也走这里；只有群才有的操作它做不了。
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
-import type { Mention } from '@oasis/contracts/conversation';
-import {
-  GROUP_HISTORY_NOTICE,
-  GroupOptions,
-  type GroupMessage,
-  type GroupSnapshot,
-} from '@oasis/contracts/group';
+import type { Mention, MessageAttachment } from '@oasis/contracts/conversation';
+import { GROUP_HISTORY_NOTICE, GroupOptions, type GroupSnapshot } from '@oasis/contracts/group';
 import { HttpError } from '@oasis/service-kit';
 import { areFriends } from './friend-repo.ts';
 import {
@@ -16,8 +11,8 @@ import {
   MEMBER_NAME,
   MEMBER_ORDER,
   MESSAGE_COLUMNS,
-  nameOf,
   seatsOf,
+  toMessage,
   type GroupRow,
   type MessageRow,
 } from './group-rows.ts';
@@ -82,21 +77,6 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
     ).rows[0].n as number;
     if (count >= limits.groups) throw new HttpError(409, 'group_limit', '加入的群已达上限');
   }
-  const toMessage = (row: MessageRow, names: Map<string, string>): GroupMessage =>
-    ({
-      id: row.id,
-      seq: Number(row.seq),
-      authorId: row.author_id,
-      displayName: nameOf(row, names),
-      role: row.author_kind === 'user' ? 'user' : 'assistant',
-      content: row.content,
-      status: row.status,
-      error: row.error,
-      createdAt: row.created_at.toISOString(),
-      // data 按 kind 存的就是对应的内容（写入时已经是契约里的形状）
-      kind: row.kind,
-      data: row.data,
-    }) as GroupMessage;
   /**
    * 群现在的样子。cursor 之后（或之前）的一页消息；watch 是上次还在变的消息：这次连同还在变的一起
    * 给出最新的样子，已经不在的列在 gone 里。
@@ -165,6 +145,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
       messages: messages.map((message) => toMessage(message, names)),
       live: live.map((message) => toMessage(message, names)),
       gone: watch.filter((id) => !live.some((message) => message.id === id)),
+      filesRev: Number(row.options.filesRev ?? 0),
     };
   }
   return {
@@ -351,10 +332,17 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
       });
     },
     /**
-     * 发一句话。mentions 里的 AI 要在群里、人要是成员。返回群现在的样子，和这句话的序号
-     * （同一个请求号重发时没有：这句之前已经收下了）。
+     * 发一句话。mentions 里的 AI 要在群里、人要是成员；files 是随这句发的文件和引用的群文件（调用方
+     * 已经核对过）。返回群现在的样子，和这句话的序号（同一个请求号重发时没有：这句之前已经收下了）。
      */
-    send(userId: string, id: string, content: string, requestId: string, mentions: Mention[]) {
+    send(
+      userId: string,
+      id: string,
+      content: string,
+      requestId: string,
+      mentions: Mention[],
+      files: { attachments?: MessageAttachment[]; refs?: { path: string; name: string }[] } = {},
+    ) {
       return transaction(async (db) => {
         const row = await owned(db, id, userId);
         const previous = (
@@ -409,6 +397,8 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
                 clientRequestId: requestId,
                 displayName: member.display_name,
                 ...(mentions.length ? { mentions } : {}),
+                ...(files.attachments?.length ? { attachments: files.attachments } : {}),
+                ...(files.refs?.length ? { refs: files.refs } : {}),
               },
             ],
           )

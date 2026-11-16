@@ -188,6 +188,17 @@ export async function signIn(options) {
       return text;
     },
     content,
+    /** 传一个文件到 canvas（请求体就是文件本身），返回它的 ID、名字、大小 */
+    async upload(name, body) {
+      const route = `/canvas/v1/uploads?name=${encodeURIComponent(name)}`;
+      const response = await fetch(`${options.gateway}/api${route}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream', origin: options.origin, cookie },
+        body,
+      });
+      if (!response.ok) throw new ApiError(response.status, await response.text(), route);
+      return response.json();
+    },
     wallet: () => api.get('/billing/v1/wallet'),
   };
 }

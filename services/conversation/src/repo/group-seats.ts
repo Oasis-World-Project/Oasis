@@ -11,6 +11,16 @@ import {
   type MessageRow,
 } from './group-rows.ts';
 
+/** 一句话带的文件、引用的群文件叫什么 */
+const fileNames = (data: Record<string, unknown>): string[] =>
+  [data.attachments, data.refs].flatMap((list) =>
+    Array.isArray(list)
+      ? list.flatMap((item: { name?: unknown }) =>
+          typeof item.name === 'string' ? [item.name] : [],
+        )
+      : [],
+  );
+
 export function createGroupSeats(pool: pg.Pool) {
   return {
     /** 群里的席位（没被移出的），按进群先后 */
@@ -49,7 +59,8 @@ export function createGroupSeats(pool: pg.Pool) {
         ...allSeats.map((item) => [item.model_key, item.title] as const),
         ...members.map((member) => [member.userId, member.displayName] as const),
       ]);
-      const unheard = `conversation_id=$1 and seq>$2 and kind='text' and content<>'' and not (author_kind='ai' and author_id=$3)`;
+      // 只带文件、没写字的话也算
+      const unheard = `conversation_id=$1 and seq>$2 and kind='text' and (content<>'' or data ? 'attachments' or data ? 'refs') and not (author_kind='ai' and author_id=$3)`;
       const args = [group.id, seat.heard_seq, seat.model_key];
       const rows = (
         await pool.query<MessageRow>(
@@ -84,6 +95,7 @@ export function createGroupSeats(pool: pg.Pool) {
           content: row.content,
           createdAt: row.created_at,
           mentions: (Array.isArray(row.data.mentions) ? row.data.mentions : []) as Mention[],
+          files: fileNames(row.data),
         })),
         skipped: total - rows.length,
       };

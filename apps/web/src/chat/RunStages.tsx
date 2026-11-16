@@ -1,7 +1,7 @@
 // 进度页下半部：过程。AI 每说一句话是一段，一段一个框，按先后连成一条线：框里是那句话、状态和用时、
 // 折叠的步骤（点开看每一步）、系统提示。做出的东西在上面的成果里，这里不重复放；用户的话不放。
 import { Info } from 'lucide-react';
-import { StepIcon, Steps } from './AiMessage.tsx';
+import { ProcessFold, StepIcon } from './Process.tsx';
 import { splitBlocks } from './blocks.ts';
 import { Markdown } from './Markdown.tsx';
 import type { Stage } from './run-progress.ts';
@@ -76,7 +76,7 @@ export function RunStages({ stages, now }: { stages: Stage[]; now: number }) {
                       ` · ${elapsedText(ended - started)}`}
                   </span>
                 </div>
-                {stage.steps.length > 0 && <Steps steps={stage.steps} />}
+                {stage.steps.length > 0 && <ProcessFold parts={stage.steps} live={false} />}
                 {stage.notices.map((text, at) => (
                   <p
                     key={at}

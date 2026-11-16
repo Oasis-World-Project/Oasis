@@ -246,7 +246,7 @@ describe('开一轮、跟进到结束', () => {
     expect(result.turn).toMatchObject({ runId });
     expect(result.messages.map((m) => [m.role, m.status, m.data])).toEqual([
       ['user', 'complete', { attachments: files, runId }],
-      ['assistant', 'streaming', { runId, parts: [] }],
+      ['assistant', 'streaming', { runId, parts: [], title: '照着这两张图做海报' }],
     ]);
     expect((await repo.find(conversation.id))?.turn?.title).toBe('照着这两张图做海报');
   });
