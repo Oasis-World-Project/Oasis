@@ -198,11 +198,14 @@ export function createDmService(deps: {
       return (await repo.listDms(ownerId)).map(toConversationBody);
     },
 
-    /** 画布按任务分：这个人私聊里的任务（任务卡和它在哪个私聊），新的在前 */
+    /** 画布按任务分：这个人私聊里的任务，和他当群主的群里的任务（任务卡和它在哪段对话），新的在前 */
     async listTasks(ownerId: string): Promise<TaskSummary[]> {
-      return (await repo.listTasks(ownerId, TASK_LIMIT)).map((row) => ({
-        ...(row.data as TaskCard),
-        conversationId: row.conversationId,
+      return (await repo.listTasks(ownerId, TASK_LIMIT)).map(({ message, seat }) => ({
+        ...(message.data as TaskCard),
+        conversationId: seat?.id ?? message.conversationId,
+        ...(seat
+          ? { group: { id: message.conversationId, title: seat.group, key: message.authorId } }
+          : {}),
       }));
     },
 

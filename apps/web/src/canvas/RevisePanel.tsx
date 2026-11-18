@@ -1,6 +1,7 @@
 // 「让 AI 改」：写下修改意见、可附文件，连同这个话题里成果上的批注（圈画过的画面合成标注截图）
 // 作为一条消息发到做这个成果的私聊里。系统把要改的成果交给 AI（还在它工作目录里的直接改，
 // 之前话题做的拷一份进去），AI 接着改；改好的新版替换画布里的这一份。发出去后回到私聊看它改。
+// 群里的 AI 做的成果（群主的画布里）：发进那个群、@ 做它的 AI，引用群文件里的这一份；发出去后回到群里。
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import { MAX_ATTACHMENTS } from '@oasis/contracts/conversation';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -8,7 +9,13 @@ import { useNavigate } from '@tanstack/react-router';
 import { Paperclip, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client.ts';
-import { dmsQuery, messagesQuery, sendMessage } from '../api/queries.ts';
+import {
+  dmsQuery,
+  groupFiles,
+  messagesQuery,
+  sendGroupMessage,
+  sendMessage,
+} from '../api/queries.ts';
 import { uploadFile } from '../api/upload.ts';
 import { PendingFiles } from '../chat/Attachments.tsx';
 import { useAttachments } from '../chat/use-attachments.ts';
@@ -26,6 +33,7 @@ export function RevisePanel({
   artifact,
   siblings,
   parameters = [],
+  group,
   onClose,
 }: {
   /** 当前打开的成果 */
@@ -34,6 +42,8 @@ export function RevisePanel({
   siblings: ArtifactBody[];
   /** 从参数面板来的成品参数 */
   parameters?: RevisionParameter[];
+  /** 群里的 AI 做的：发进这个群，@ 做它的那个 AI（key） */
+  group?: { id: string; title: string; key: string };
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -75,15 +85,29 @@ export function RevisePanel({
       const artifacts = [
         ...new Set([artifact.id, ...(notes.length ? noted.map((a) => a.id) : [])]),
       ];
-      return sendMessage(artifact.conversationId, {
-        content: revisionText(request.trim() || `改一下「${name}」`, notes, parameters),
-        attachments: [...files.ids, ...shots],
-        artifacts,
-      });
+      const content = revisionText(request.trim() || `改一下「${name}」`, notes, parameters);
+      const attachments = [...files.ids, ...shots];
+      if (!group) return sendMessage(artifact.conversationId, { content, attachments, artifacts });
+      // 引用群文件里现在就是这些成果的那几个（已经被别的 AI 换成新版的不引用）
+      const refs = (await groupFiles(group.id))
+        .filter((file) => file.artifactId && artifacts.includes(file.artifactId))
+        .map((file) => file.path);
+      return sendGroupMessage(
+        group.id,
+        content,
+        crypto.randomUUID(),
+        [{ kind: 'ai', key: group.key }],
+        { attachments, refs },
+      );
     },
     onSettled: () => setStage(null),
     onSuccess: async () => {
       files.clear();
+      if (group) {
+        onClose();
+        await navigate({ to: '/groups/$groupId', params: { groupId: group.id } });
+        return;
+      }
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: messagesQuery(artifact.conversationId).queryKey,
@@ -195,8 +219,9 @@ export function RevisePanel({
             </button>
           </div>
           <p className="m-0 text-[12.5px] leading-relaxed text-ink-muted">
-            发到做这个成果的私聊里，AI
-            接着改，只改你提到的地方；发出去后会回到私聊，可以看它改、随时插话。
+            {group
+              ? `发进群「${group.title}」并 @ 做它的 AI，只改你提到的地方；发出去后会回到群里。标注截图和附的文件会进群文件。`
+              : '发到做这个成果的私聊里，AI 接着改，只改你提到的地方；发出去后会回到私聊，可以看它改、随时插话。'}{' '}
             改好的新版替换画布里的这一份，上面的批注随之清掉。
           </p>
           {send.isError && (

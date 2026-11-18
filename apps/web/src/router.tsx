@@ -180,6 +180,10 @@ const groupsRoute = createRoute({
 const groupRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/groups/$groupId',
+  // ?task= 进来就在工作台里展开这个任务的过程（画布里群任务的「看过程」）
+  validateSearch: (search: Record<string, unknown>): { task?: string | undefined } => ({
+    task: typeof search.task === 'string' ? search.task : undefined,
+  }),
   component: GroupPage,
 });
 const dmsRoute = createRoute({

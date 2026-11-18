@@ -240,8 +240,8 @@ export const RegisterRunArtifactsBody = z.object({
 });
 export type RegisterRunArtifactsBody = z.infer<typeof RegisterRunArtifactsBody>;
 
-/** 内部：删对话（真删除）时删掉它的成果和批注截图 */
-export const PurgeConversationArtifactsBody = z.object({ ownerId: z.uuid() });
+/** 内部：删对话、删任务（真删除）时删掉这个人名下对应的成果和批注截图 */
+export const PurgeArtifactsBody = z.object({ ownerId: z.uuid() });
 
 const PreviewCell = z.union([z.string().max(20_000), z.number().finite(), z.boolean(), z.null()]);
 export const FilePreviewBody = z.discriminatedUnion('kind', [

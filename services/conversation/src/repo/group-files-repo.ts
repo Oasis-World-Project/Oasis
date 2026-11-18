@@ -168,6 +168,31 @@ export function createGroupFilesRepo(pool: pg.Pool) {
         return row;
       });
     },
+    /** 这一轮的任务卡：是哪条消息、卡上记着它交了哪些成果；没有这张卡返回 undefined */
+    async taskCard(groupId: string, runId: string) {
+      return (
+        await pool.query<{ id: string; artifacts: string[] }>(
+          `select id, array(select f->>'artifactId' from jsonb_array_elements(coalesce(data->'files','[]'::jsonb)) f) as artifacts
+             from messages where conversation_id=$1 and kind='task' and data->>'runId'=$2`,
+          [groupId, runId],
+        )
+      ).rows[0];
+    },
+    /** 删任务：任务卡那条消息，和群文件里现在这一版是这一轮交的那些（卡上记着的成果也算） */
+    removeTask(groupId: string, card: { id: string; artifacts: string[] }, runId: string) {
+      return inTransaction(pool, async (db) => {
+        const files = await db.query(
+          `delete from group_files where group_id=$1 and source='artifact'
+             and (run_id=$2 or ref_id = any($3::uuid[]))`,
+          [groupId, runId, card.artifacts],
+        );
+        await db.query('delete from messages where conversation_id=$1 and id=$2', [
+          groupId,
+          card.id,
+        ]);
+        if (files.rowCount) await bump(db, groupId, await nextRev(db));
+      });
+    },
     /** 这个席位拿到群文件的第几版了（只往后挪） */
     async setSeen(seatId: string, rev: number) {
       await pool.query(

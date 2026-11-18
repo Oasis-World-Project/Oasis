@@ -1,5 +1,5 @@
 // 画布：一个任务一个小窗口（任务名、状态、用时、花费、做它的 AI、成果个数），点开进任务页（成品和素材，看过程、回到私聊、打包下载）、
-// 类别和搜索、只看某个私聊的、打开成果；桌面端把成果同步到电脑。
+// 群里的任务（来自哪个群、回到群、删除）、类别和搜索、只看某个私聊的、打开成果；桌面端把成果同步到电脑。
 import type { ArtifactBody } from '@oasis/contracts/canvas';
 import type { OasisDesktop } from '@oasis/contracts/desktop';
 import { createMemoryHistory } from '@tanstack/react-router';
@@ -96,6 +96,8 @@ function fakeCanvas(list = ARTIFACTS, tasks: unknown[] = TASKS) {
     dms: DMS,
     tasks,
     extra: (method, path) => {
+      if (method === 'DELETE' && path.includes('/tasks/'))
+        return new Response(null, { status: 204 });
       if (method !== 'GET') return undefined;
       if (path === '/canvas/v1/artifacts') return json(200, { artifacts: newest });
       if (path === `/canvas/v1/artifacts?conversationId=${CONV}`)
@@ -166,6 +168,55 @@ describe('画布', () => {
     await open(`/canvas/tasks/${OTHER_RUN}`);
     const price = await screen.findByRole('region', { name: '价格表' });
     expect(within(price).getByRole('link', { name: '看进度' })).toBeTruthy();
+  });
+
+  it('群里的任务（自己是群主）：写着来自哪个群、哪个 AI 做的；看过程去群的工作台，回到群；删掉后回到画布', async () => {
+    const GROUP = '00000000-0000-4000-8000-0000000000d1';
+    const SEAT = '00000000-0000-4000-8000-0000000000d2';
+    const GROUP_RUN = '00000000-0000-4000-8000-0000000000a3';
+    const api = fakeCanvas(
+      [
+        ...ARTIFACTS,
+        artifact(5, '流程.md', 'doc', {
+          conversationId: SEAT,
+          sessionId: SEAT,
+          runId: GROUP_RUN,
+          task: '写流程',
+        }),
+      ],
+      [
+        ...TASKS,
+        {
+          runId: GROUP_RUN,
+          conversationId: SEAT,
+          title: '写流程',
+          status: 'done',
+          startedAt: '2026-10-24T02:00:00.000Z',
+          finishedAt: '2026-10-24T02:01:00.000Z',
+          spentMicro: 1_000,
+          files: [],
+          group: { id: GROUP, title: '发布会', key: 'ernie' },
+        },
+      ],
+    );
+    await open('/canvas');
+    const tile = await screen.findByRole('link', { name: '打开任务 写流程' });
+    expect(tile.textContent).toContain('来自群：发布会');
+    expect(within(tile).getByText('文心')).toBeTruthy();
+
+    cleanup();
+    await open(`/canvas/tasks/${GROUP_RUN}`);
+    const panel = await screen.findByRole('region', { name: '写流程' });
+    expect(within(panel).getByRole('link', { name: '看过程' }).getAttribute('href')).toBe(
+      `/groups/${GROUP}?task=${GROUP_RUN}`,
+    );
+    expect(within(panel).getByRole('link', { name: '回到群' }).getAttribute('href')).toBe(
+      `/groups/${GROUP}`,
+    );
+    fireEvent.click(within(panel).getByRole('button', { name: '删除' }));
+    fireEvent.click(within(panel).getByRole('button', { name: '删掉' }));
+    await screen.findByRole('heading', { name: '画布' });
+    expect(api.requests).toContain(`DELETE /conversation/v1/groups/${GROUP}/tasks/${GROUP_RUN}`);
   });
 
   it('按类别筛选，标签上有数量；能搜任务名', async () => {

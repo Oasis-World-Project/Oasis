@@ -178,10 +178,12 @@ export const sendGroupMessage = (
   });
 
 /** 群文件；rev 是群上的记号（GroupSnapshot.filesRev），变了就重新读 */
+export const groupFiles = async (id: string) =>
+  (await api(`${groupPath(id)}/files`, GroupFileList)).files;
 export const groupFilesQuery = (id: string, rev: number) =>
   queryOptions({
     queryKey: ['group-files', id, rev],
-    queryFn: async () => (await api(`${groupPath(id)}/files`, GroupFileList)).files,
+    queryFn: () => groupFiles(id),
     placeholderData: keepPreviousData,
     staleTime: Infinity,
   });
@@ -197,6 +199,9 @@ export const groupAttachmentUrl = (id: string, uploadId: string, download = fals
   `/api${groupPath(id)}/attachments/${uploadId}/content${download ? '?download=1' : ''}`;
 export const deleteGroupFile = (id: string, fileId: string) =>
   apiVoid(`${groupPath(id)}/files/${fileId}`, { method: 'DELETE' });
+/** 群主在画布里删掉群里的一个任务：任务卡和它交的文件（群文件里的也删），聊天记录留着 */
+export const deleteGroupTask = (id: string, runId: string) =>
+  apiVoid(`${groupPath(id)}/tasks/${runId}`, { method: 'DELETE' });
 /** 工作台「任务」页签要的消息；mark 变了（有任务开始、结束）就重新读 */
 export const groupWorkQuery = (id: string, mark: string) =>
   queryOptions({
@@ -293,7 +298,7 @@ export const confirmTurn = (
   });
 
 // ---- 画布----
-/** 私聊里的任务（任务卡）：画布按任务分框；有任务在做时每 3 秒刷新 */
+/** 私聊里的任务和自己当群主的群里的任务（任务卡）：画布按任务分框；有任务在做时每 3 秒刷新 */
 export const tasksQuery = queryOptions({
   queryKey: ['tasks'],
   queryFn: async () => (await api('/conversation/v1/tasks', TaskList)).tasks,

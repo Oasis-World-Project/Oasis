@@ -3,7 +3,7 @@ import {
   AnnotationList,
   ArtifactLookupBody,
   ArtifactQuery,
-  PurgeConversationArtifactsBody,
+  PurgeArtifactsBody,
   RegisterRunArtifactsBody,
   UploadDeleteBody,
   UploadLookupBody,
@@ -255,8 +255,16 @@ export function registerRoutes(
   /** 删对话（真删除）：删掉这个对话的成果和批注截图；可以重复调用 */
   app.post('/internal/conversations/:conversationId/purge', async (request, reply) => {
     const { conversationId } = parseWith(ConversationParams, request.params);
-    const { ownerId } = parseWith(PurgeConversationArtifactsBody, request.body);
+    const { ownerId } = parseWith(PurgeArtifactsBody, request.body);
     await artifacts.purgeConversation(ownerId, conversationId);
+    return reply.code(204).send();
+  });
+
+  /** 删任务（真删除）：删掉这个人名下归在这一轮下的成果和批注截图；可以重复调用 */
+  app.post('/internal/runs/:runId/purge', async (request, reply) => {
+    const { runId } = parseWith(RunParams, request.params);
+    const { ownerId } = parseWith(PurgeArtifactsBody, request.body);
+    await artifacts.purgeRun(ownerId, runId);
     return reply.code(204).send();
   });
 

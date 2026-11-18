@@ -255,7 +255,7 @@ describe('后来的一轮改了成果；删对话', () => {
     expect(same).toMatchObject({ sha256: hero.sha256, replacesSha256: null, runId: R1 });
   });
 
-  it('删对话：成果行、对象和批注截图都删掉；重复调用没有副作用；别的对话、别人的不受影响', async () => {
+  it('删对话、删任务：成果行、对象和批注截图都删掉；重复调用没有副作用；别的对话、别人的不受影响', async () => {
     await service.registerRun(run(R1));
     await service.registerRun(
       run(R3, ['首页文案.md'], { conversationId: OTHER_CONVERSATION, sessionId: S2 }),
@@ -293,10 +293,19 @@ describe('后来的一轮改了成果；删对话', () => {
       });
     expect((await purge(MIA)).statusCode).toBe(204);
     expect(repo.rows).toHaveLength(3);
+    // 删任务：只删这个人名下归在这一轮下的
+    const purgeRun = (ownerId: string) =>
+      app.inject({ method: 'POST', url: `/internal/runs/${R3}/purge`, payload: { ownerId } });
+    expect((await purgeRun(MIA)).statusCode).toBe(204);
+    expect(repo.rows).toHaveLength(3);
     expect((await purge(KAI)).statusCode).toBe(204);
     expect((await purge(KAI)).statusCode).toBe(204);
     expect(repo.rows.map((r) => r.sessionId)).toEqual([S2]);
     expect([...objects.objects.keys()]).toEqual([`artifacts/${S2}/首页文案.md`]);
     expect(uploadRows.rows.has(FRAME)).toBe(false);
+    expect((await purgeRun(KAI)).statusCode).toBe(204);
+    expect((await purgeRun(KAI)).statusCode).toBe(204);
+    expect(repo.rows).toEqual([]);
+    expect([...objects.objects.keys()]).toEqual([]);
   });
 });

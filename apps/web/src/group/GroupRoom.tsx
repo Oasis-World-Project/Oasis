@@ -26,7 +26,16 @@ const CHAT_WIDTH = {
 /** 好友不再是好友时，两人的私聊就不在了 */
 const CHAT_GONE = '这个聊天不在了：你们已经不是好友。';
 
-export function GroupRoom({ id, chat = false }: { id: string; chat?: boolean }) {
+export function GroupRoom({
+  id,
+  chat = false,
+  task,
+}: {
+  id: string;
+  chat?: boolean;
+  /** 进来就在工作台里展开这个任务的过程（从画布的「看过程」来） */
+  task?: string;
+}) {
   const state = useGroupRoom(id, chat ? CHAT_GONE : undefined);
   const { group, error } = state;
   const me = useQuery(meQuery);
@@ -38,7 +47,7 @@ export function GroupRoom({ id, chat = false }: { id: string; chat?: boolean }) 
   }, []);
   /** 输入框里引用着的群文件（路径） */
   const [refs, setRefs] = useState<string[]>([]);
-  const workbench = useWorkbench(group);
+  const workbench = useWorkbench(group, task);
   const { files, openFile, openTasks } = workbench;
   const bench = useMemo<Bench>(
     () => ({

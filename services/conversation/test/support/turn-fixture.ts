@@ -180,6 +180,10 @@ others.post('/internal/conversations/:id/purge', async (request, reply) => {
   );
   return reply.code(204).send();
 });
+others.post('/internal/runs/:id/purge', async (request, reply) => {
+  fake.purged.push(`canvas-run:${(request.params as { id: string }).id}`);
+  return reply.code(204).send();
+});
 /** 假画布：每一轮登记过的成果（按路径；site/index.html 的 id 是 ARTIFACT），和各自内容的摘要 */
 const inRun = new Map<string, Map<string, string>>();
 const shaOf = new Map<string, string>();

@@ -152,8 +152,14 @@ export const TaskCard = z.object({
 });
 export type TaskCard = z.infer<typeof TaskCard>;
 
-/** 画布上的一个任务：任务卡，加上它在哪个私聊 */
-export const TaskSummary = TaskCard.extend({ conversationId: z.uuid() });
+/**
+ * 画布上的一个任务：任务卡，加上它在哪段对话（成果上记的也是这个 ID）。私聊里的是那个私聊；
+ * 群里的是做它的那个 AI 在群里的席位，另带 group：哪个群、哪个 AI（只有群主的画布里有群里的任务）。
+ */
+export const TaskSummary = TaskCard.extend({
+  conversationId: z.uuid(),
+  group: z.object({ id: z.uuid(), title: z.string(), key: z.string() }).optional(),
+});
 export type TaskSummary = z.infer<typeof TaskSummary>;
 export const TaskList = z.object({ tasks: z.array(TaskSummary) });
 

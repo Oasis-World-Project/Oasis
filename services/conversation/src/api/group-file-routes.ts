@@ -1,4 +1,4 @@
-// 群文件的接口：列表、读内容、删除；一条消息带的文件；工作台「任务」页签要的消息。非成员一律 404。
+// 群文件的接口：列表、读内容、删除；删一个任务；一条消息带的文件；工作台「任务」页签要的消息。非成员一律 404。
 import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { fileResponseHeaders, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
@@ -31,6 +31,12 @@ export function registerGroupFileRoutes(app: ServiceApp, files: GroupFiles): voi
   app.delete('/v1/groups/:id/files/:fileId', async (request, reply) => {
     const { id, fileId } = parseWith(FileParams, request.params);
     await files.remove(requireUserId(request), id, fileId, request.id);
+    return reply.code(204).send();
+  });
+  /** 删掉群里的一个任务（画布里删，只有群主）：任务卡和它交的文件，聊天记录留着 */
+  app.delete('/v1/groups/:id/tasks/:runId', async (request, reply) => {
+    const { id, runId } = parseWith(Id.extend({ runId: z.uuid() }), request.params);
+    await files.removeTask(requireUserId(request), id, runId, request.id);
     return reply.code(204).send();
   });
   /** 一条消息带的文件（群，或两个好友的私聊） */

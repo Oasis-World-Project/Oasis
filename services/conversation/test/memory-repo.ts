@@ -104,7 +104,8 @@ export function memoryRepo(): ConversationRepo & {
               conversations.get(m.conversationId)?.kind === 'dm',
           )
           .sort((a, b) => b.seq - a.seq)
-          .slice(0, limit),
+          .slice(0, limit)
+          .map((message) => ({ message })),
       ),
     findMessage: async (conversationId, id) => {
       const row = messages.find((m) => m.id === id && m.conversationId === conversationId);

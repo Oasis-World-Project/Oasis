@@ -1,7 +1,8 @@
 // 私聊的存储：对话、消息，以及正在进行的一轮（turn）。
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { and, asc, desc, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { HttpError } from '@oasis/service-kit';
@@ -24,6 +25,13 @@ type MessagePatch = Partial<Pick<Message, 'content' | 'status' | 'error' | 'data
  */
 type LockName = 'message' | 'follow' | 'assign';
 
+/** 画布上的一个任务：任务卡那条消息；群里的另带做它的席位和群的名字 */
+interface TaskRow {
+  message: Message;
+  seat?: { id: string; group: string };
+}
+const seats = alias(conversations, 'seats');
+
 export interface ConversationRepo {
   /** 拿到这个对话的锁才做；别人拿着时 409（跟进的锁在 follow 名下，和用户操作互不挡） */
   withLock<T>(
@@ -42,8 +50,11 @@ export interface ConversationRepo {
   touchConversation(id: string): Promise<void>;
   /** 最近的 limit 条消息，按先后 */
   listMessages(conversationId: string, limit: number): Promise<Message[]>;
-  /** 这个人私聊里的任务卡（画布按任务分），新的在前 */
-  listTasks(ownerId: string, limit: number): Promise<Message[]>;
+  /**
+   * 这个人的任务卡（画布按任务分），新的在前：私聊里的，和他当群主的群里的（seat 是做它的那个 AI 的席位，
+   * 群的名字在 group 里；席位已经不在的不算）
+   */
+  listTasks(ownerId: string, limit: number): Promise<TaskRow[]>;
   findMessage(conversationId: string, id: string): Promise<Message | undefined>;
   /** AI 干活时用户发来、还排着队的话（这一轮做完接着开下一轮），按发的先后 */
   pendingMessages(conversationId: string): Promise<Message[]>;
@@ -219,19 +230,33 @@ export function createConversationRepo(
     listTasks: async (ownerId, limit) =>
       (
         await db
-          .select({ message: messages })
+          .select({ message: messages, group: conversations.title, seat: seats.id })
           .from(messages)
           .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+          .leftJoin(
+            seats,
+            and(
+              eq(seats.parentId, conversations.id),
+              eq(seats.kind, 'seat'),
+              eq(seats.modelKey, messages.authorId),
+            ),
+          )
           .where(
             and(
               eq(conversations.ownerId, ownerId),
-              eq(conversations.kind, 'dm'),
               eq(messages.kind, 'task'),
+              or(
+                eq(conversations.kind, 'dm'),
+                and(eq(conversations.kind, 'group'), isNotNull(seats.id)),
+              ),
             ),
           )
           .orderBy(desc(messages.createdAt))
           .limit(limit)
-      ).map((row) => row.message),
+      ).map(({ message, group, seat }) => ({
+        message,
+        ...(seat ? { seat: { id: seat, group } } : {}),
+      })),
 
     async findMessage(conversationId, id) {
       const [row] = await db

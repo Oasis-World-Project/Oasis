@@ -1,12 +1,15 @@
 // 一个任务的页面里的任务框（画布上点开一个任务）：框顶是任务名、状态、开始时间、用时、花费、做它的 AI，
 // 可以看过程（在做时是看进度）、回到私聊、打包下载；框里分「成品」「素材」两排，素材小一号。
-import { useQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
+// 群里的任务（只有群主的画布里有）写着来自哪个群：看过程去群的工作台，回到群；做完的可以删掉。
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { Activity, Download, MessageCircle } from 'lucide-react';
-import { dmsQuery, taskArchiveUrl } from '../api/queries.ts';
+import { ApiError } from '../api/client.ts';
+import { deleteGroupTask, dmsQuery, taskArchiveUrl, tasksQuery } from '../api/queries.ts';
 import { aiName, useModelMap } from '../api/use-model-map.ts';
-import { StatusTag } from '../chat/parts.tsx';
+import { ConfirmButton, StatusTag } from '../chat/parts.tsx';
 import { elapsedText, TASK_STATUS } from '../chat/TaskCard.tsx';
+import { aiLook } from '../group/people.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { ArtifactCard } from './ArtifactCard.tsx';
@@ -19,12 +22,14 @@ export interface Maker {
   name: string;
 }
 
-/** 做任务的 AI：任务所在私聊的 AI（名字用用户给它起的） */
-export function useMakerOf(): (conversationId: string) => Maker | undefined {
+/** 做任务的 AI：任务所在私聊的 AI（名字用用户给它起的）；群里的任务是任务卡上写的那个 AI */
+export function useMakerOf(): (group: TaskGroup) => Maker | undefined {
   const { data: dms = [] } = useQuery(dmsQuery);
   const models = useModelMap();
-  return (conversationId) => {
-    const dm = dms.find((d) => d.id === conversationId);
+  return (group) => {
+    const key = group.task?.group?.key;
+    if (key) return aiLook(models, key);
+    const dm = dms.find((d) => d.id === group.conversationId);
     const model = dm?.modelKey ? models.get(dm.modelKey) : undefined;
     return dm && model
       ? { mono: model.mono, glow: model.glow, name: aiName(models, dm) }
@@ -49,6 +54,27 @@ export function TaskPanel({ group, maker, now }: { group: TaskGroup; maker?: Mak
   const running = task?.status === 'running';
   const status = task ? TASK_STATUS[task.status] : undefined;
   const count = group.finals.length + group.materials.length;
+  /** 群里的任务：哪个群 */
+  const from = task?.group;
+  const client = useQueryClient();
+  const navigate = useNavigate();
+  const remove = useMutation({
+    mutationFn: () => deleteGroupTask(from!.id, group.runId),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: tasksQuery.queryKey }),
+        client.invalidateQueries({ queryKey: ['artifacts'] }),
+      ]);
+      await navigate({ to: '/canvas', search: {} });
+    },
+  });
+  const processButton = running ? `${button} bg-accent text-on-accent` : button;
+  const process = (
+    <>
+      <Activity size={14} aria-hidden="true" />
+      {running ? '看进度' : '看过程'}
+    </>
+  );
   return (
     <section aria-label={group.title} className="glass flex flex-col gap-4 rounded-panel px-5 py-4">
       <header className="flex flex-wrap items-start gap-3">
@@ -77,31 +103,63 @@ export function TaskPanel({ group, maker, now }: { group: TaskGroup; maker?: Mak
                 <span>{maker.name}</span>
               </span>
             )}
+            {from && <span>· 来自群：{from.title}</span>}
           </p>
+          {remove.isError && (
+            <p role="alert" className="m-0 text-[12.5px] text-accent">
+              {remove.error instanceof ApiError ? remove.error.message : '没删掉，稍后再试。'}
+            </p>
+          )}
         </div>
         <span className="flex flex-wrap items-center gap-1.5">
-          <Link
-            to="/canvas/runs/$runId"
-            params={{ runId: group.runId }}
-            search={{ conversation: group.conversationId }}
-            className={running ? `${button} bg-accent text-on-accent` : button}
-          >
-            <Activity size={14} aria-hidden="true" />
-            {running ? '看进度' : '看过程'}
-          </Link>
-          <Link
-            to="/dms/$conversationId"
-            params={{ conversationId: group.conversationId }}
-            className={button}
-          >
-            <MessageCircle size={14} aria-hidden="true" />
-            回到私聊
-          </Link>
+          {from ? (
+            <Link
+              to="/groups/$groupId"
+              params={{ groupId: from.id }}
+              search={{ task: group.runId }}
+              className={processButton}
+            >
+              {process}
+            </Link>
+          ) : (
+            <Link
+              to="/canvas/runs/$runId"
+              params={{ runId: group.runId }}
+              search={{ conversation: group.conversationId }}
+              className={processButton}
+            >
+              {process}
+            </Link>
+          )}
+          {from ? (
+            <Link to="/groups/$groupId" params={{ groupId: from.id }} className={button}>
+              <MessageCircle size={14} aria-hidden="true" />
+              回到群
+            </Link>
+          ) : (
+            <Link
+              to="/dms/$conversationId"
+              params={{ conversationId: group.conversationId }}
+              className={button}
+            >
+              <MessageCircle size={14} aria-hidden="true" />
+              回到私聊
+            </Link>
+          )}
           {count > 0 && (
             <a href={taskArchiveUrl(group.runId)} download className={button}>
               <Download size={14} aria-hidden="true" />
               打包下载
             </a>
+          )}
+          {from && !running && (
+            <ConfirmButton
+              label="删除"
+              question="连它交的文件一起删？聊天记录留着"
+              confirmLabel="删掉"
+              disabled={remove.isPending}
+              onConfirm={() => remove.mutate()}
+            />
           )}
         </span>
       </header>

@@ -399,6 +399,39 @@ export const group = {
       );
       t.check(denied === 403, `群员不应能删 AI 交的群文件：${denied}`);
 
+      // ---- 群里的任务在群主的画布里；群主删掉改标语的那个任务：任务卡、成果、群文件里的标语一起没了 ----
+      const tasksOf = async (user) =>
+        (await user.api.get('/conversation/v1/tasks')).tasks.filter(
+          (task) => task.group?.id === groupId,
+        );
+      const edit = (await tasksOf(owner)).find(
+        (task) => task.group.key === second && task.files.some((file) => file.path === '标语.md'),
+      );
+      t.check(
+        edit && (await tasksOf(member)).length === 0,
+        '群里的任务应在群主的画布里（带着哪个群、哪个 AI），群员的画布里没有',
+      );
+      const refused = await member.api.del(`${base}/${groupId}/tasks/${edit.runId}`).then(
+        () => 204,
+        (err) => err.status,
+      );
+      await owner.api.del(`${base}/${groupId}/tasks/${edit.runId}`);
+      const artifactGone = await owner.api
+        .get(
+          `/canvas/v1/artifacts/${edit.files.find((file) => file.path === '标语.md').artifactId}`,
+        )
+        .then(
+          () => 200,
+          (err) => err.status,
+        );
+      t.check(
+        refused === 403 &&
+          artifactGone === 404 &&
+          !(await filesOf()).some((file) => file.path === '标语.md') &&
+          !(await tasksOf(owner)).some((task) => task.runId === edit.runId),
+        `群主删任务后任务卡、成果、群文件里的标语都应不在了（群员删应是 403）：${refused} ${artifactGone}`,
+      );
+
       // ---- 好友私聊里发文件：只跟着那条消息，对方能读 ----
       const photo = await owner.upload('合照.txt', '天台合照');
       await say(owner, chat.id, '', [], { attachments: [photo.id] });

@@ -1,4 +1,4 @@
-// 画布（照原型 ⑧）：AI 们做的成果，按任务放（任务是私聊里用了生图、视频这类工具或交了文件的那一轮）。
+// 画布（照原型 ⑧）：AI 们做的成果，按任务放（任务是私聊里、自己当群主的群里用了生图、视频这类工具或交了文件的那一轮）。
 // 一个任务一个小窗口：封面是几个成果的缩略图，写着任务名、状态、用时、花费、做它的 AI；点开进这个任务的页面
 // 看全部成品和素材。最近的任务在前；有任务在做时定时刷新，做好一个就出现。可以按类别筛选、搜索，也可以只看
 // 某个私聊的（?conversation=，任务卡上的「在画布里看」）。桌面端在这里设置同步到电脑的文件夹（按任务分文件夹）。
@@ -117,7 +117,7 @@ export function CanvasPage() {
       {artifacts && groups.length === 0 && (
         <EmptyHint>
           {artifacts.length === 0 && tasks.length === 0
-            ? '还没有成果。在私聊里让 AI 做点东西，做好的文件会放到这里。'
+            ? '还没有成果。在私聊或自己的群里让 AI 做点东西，做好的文件会放到这里。'
             : keyword
               ? '没有匹配的成果。'
               : '这一类里还没有成果。'}
@@ -125,12 +125,7 @@ export function CanvasPage() {
       )}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
         {groups.map((group) => (
-          <TaskTile
-            key={group.runId}
-            group={group}
-            maker={makerOf(group.conversationId)}
-            now={now}
-          />
+          <TaskTile key={group.runId} group={group} maker={makerOf(group)} now={now} />
         ))}
       </div>
     </>

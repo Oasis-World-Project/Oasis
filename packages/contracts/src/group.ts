@@ -79,6 +79,8 @@ export const GroupFile = z.object({
   changedBy: FileAuthor,
   /** 现在这一版是 AI 的哪一轮交的（人传的没有）；那一轮还在进行就是它正在改 */
   runId: z.uuid().nullable(),
+  /** AI 交的这一版在画布里是哪个成果：只给它在画布里的主人（群主），「在画布里打开」用 */
+  artifactId: z.uuid().optional(),
   updatedAt: z.iso.datetime(),
 });
 export type GroupFile = z.infer<typeof GroupFile>;

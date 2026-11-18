@@ -327,7 +327,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
       kind: 'task',
       data: { runId: r1 },
     });
-    expect((await store.listTasks(owner, 10)).map((m) => m.data.runId)).toEqual([r1]);
+    expect((await store.listTasks(owner, 10)).map((t) => t.message.data.runId)).toEqual([r1]);
     expect(await store.listTasks(randomUUID(), 10)).toEqual([]);
     expect((await store.listMessages(conversation.id, 1)).map((m) => m.content)).toEqual([
       '任务结束',

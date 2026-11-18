@@ -1,5 +1,5 @@
 // 画布首页上的一个任务（小窗口）：封面是它最多 4 个成果的缩略图，下面是任务名、状态、时间、用时、花费、
-// 做它的 AI 和成果个数。点开进这个任务的页面看全部成品和素材（不在原地展开）。
+// 做它的 AI 和成果个数，群里的任务写着来自哪个群。点开进这个任务的页面看全部成品和素材（不在原地展开）。
 import { Link } from '@tanstack/react-router';
 import { FolderOpen } from 'lucide-react';
 import { StatusTag } from '../chat/parts.tsx';
@@ -73,6 +73,9 @@ export function TaskTile({ group, maker, now }: { group: TaskGroup; maker?: Make
             {group.materials.length > 0 && ` · 素材 ${group.materials.length}`}
           </span>
         </span>
+        {task?.group && (
+          <span className="truncate text-[12px] text-ink-muted">来自群：{task.group.title}</span>
+        )}
       </span>
     </Link>
   );

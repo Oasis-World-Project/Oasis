@@ -1,7 +1,7 @@
 // 画布里打开一个成果（外观照原型 ⑨⑩）：点阵底；顶栏只有返回、批注、下载三个图标（2026-11-04 精简）。
 // 中间预览（图片、视频、音频、PDF、Markdown、文字、网页；其他格式提示下载）。网页和静态应用在本机隔离框里直接运行；
 // 带后端的应用不在画布里运行，只能下载（画面转发式的平台容器预览已经删掉）。
-// 批注面板里「让 AI 改」，作为一条消息发到做这个成果的私聊里，AI 接着改。
+// 批注面板里「让 AI 改」，作为一条消息发到做这个成果的私聊里（群里的 AI 做的发进那个群、@ 它），AI 接着改。
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ArrowLeft, Download, LoaderCircle, PencilLine, SlidersHorizontal } from 'lucide-react';
@@ -12,6 +12,7 @@ import {
   artifactQuery,
   artifactsQuery,
   dmsQuery,
+  tasksQuery,
 } from '../api/queries.ts';
 import { ArtifactReview } from '../canvas/ArtifactReview.tsx';
 import { AvatarPreview } from '../canvas/AvatarPreview.tsx';
@@ -39,6 +40,9 @@ export function ArtifactPage() {
   // 做这个成果的 AI 正在做一轮：做完之前不能再让它改（文件只在一轮开始时交给它）
   const working = artifact ? dms.find((dm) => dm.id === artifact.conversationId)?.turn : null;
   const revising = working ? artifact : undefined;
+  // 群里的 AI 做的（自己是群主）：「让 AI 改」发进那个群，@ 做它的 AI
+  const { data: tasks = [] } = useQuery(tasksQuery);
+  const from = artifact ? tasks.find((task) => task.runId === artifact.runId)?.group : undefined;
   const [reviseOpen, setReviseOpen] = useState(false);
   /** 从参数面板来的修改：参数随对话框一起发 */
   const [parameters, setParameters] = useState<RevisionParameter[]>([]);
@@ -136,6 +140,7 @@ export function ArtifactPage() {
           artifact={artifact}
           siblings={siblings}
           parameters={parameters}
+          {...(from ? { group: from } : {})}
           onClose={() => setReviseOpen(false)}
         />
       )}

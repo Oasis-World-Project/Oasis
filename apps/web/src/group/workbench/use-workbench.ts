@@ -49,12 +49,15 @@ export interface Workbench {
 
 const EMPTY: never[] = [];
 
-export function useWorkbench(group: GroupSnapshot | null): Workbench {
-  const [mode, setModeState] = useState<BenchMode>(storedMode);
-  const [tab, setTab] = useState<BenchTab>('files');
+/** task：进来就展开这个任务的过程（工作台收着也先展开，不改记住的收放） */
+export function useWorkbench(group: GroupSnapshot | null, task?: string): Workbench {
+  const [mode, setModeState] = useState<BenchMode>(() =>
+    task && storedMode() === 'collapsed' ? 'open' : storedMode(),
+  );
+  const [tab, setTab] = useState<BenchTab>(task ? 'tasks' : 'files');
   const [openedPaths, setOpened] = useState<string[]>([]);
   const [currentPath, setCurrent] = useState<string>();
-  const [focus, setFocus] = useState<string>();
+  const [focus, setFocus] = useState(task);
   const enabled = group?.kind === 'group';
   const id = group?.id ?? '';
   const messages = group?.messages ?? EMPTY;

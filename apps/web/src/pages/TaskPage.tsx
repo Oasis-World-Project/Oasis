@@ -49,7 +49,7 @@ export function TaskPage() {
       {!isPending && !tasksPending && !group && (
         <EmptyHint>没有这个任务（可能已经删了），回画布看看。</EmptyHint>
       )}
-      {group && <TaskPanel group={group} maker={makerOf(group.conversationId)} now={now} />}
+      {group && <TaskPanel group={group} maker={makerOf(group)} now={now} />}
     </>
   );
 }

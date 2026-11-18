@@ -1,5 +1,5 @@
 // 群文件：人发的和 AI 交的都进群文件，同一个路径只有一份、再交就是新版本；AI 开一轮时拿到别人新交的；
-// 引用、删除；好友私聊里的文件只跟着消息；工作台要的消息。真实数据库 + 假 harness / agent / model-gateway / canvas。
+// 引用、删除；群主删一个任务；好友私聊里的文件只跟着消息；工作台要的消息。真实数据库 + 假 harness / agent / model-gateway / canvas。
 import { randomUUID } from 'node:crypto';
 import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -301,6 +301,44 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群文件', () => {
     for (let n = 1; n <= 6; n += 1)
       await say(owner, id, '', { attachments: [upload(`图${n}.png`)] });
     expect(await files.list(owner, id)).toHaveLength(5);
+  });
+
+  it('群里的任务进群主的画布；群主删任务：任务卡、它交的成果和群文件一起删，聊天留着；别人删不了，还在做时不能删', async () => {
+    const id = await setup();
+    await say(owner, id, '写个流程', { at: ['claude'] });
+    const running = (await busy(id, 'claude'))!;
+    fake.events.set(running, [
+      event(0, 'tool_call', { callId: 'c1', name: 'write', label: '写流程', path: 'out/流程.md' }),
+      event(1, 'tool_result', { callId: 'c1', ok: true }),
+    ]);
+    await until(async () => (await files.list(owner, id)).length || undefined);
+    await expect(files.removeTask(owner, id, running, 'r')).rejects.toMatchObject({
+      code: 'task_running',
+    });
+    const runId = await finish(id, 'claude', { '流程.md': 'e' });
+    // 群主的画布里有它：记在做它的席位名下，带着哪个群、哪个 AI；群员的画布里没有
+    const tasks = async () =>
+      (await store.listTasks(owner, 50)).filter((task) => task.message.conversationId === id);
+    const [task] = await tasks();
+    expect(task).toMatchObject({ message: { data: { runId } }, seat: { group: '发布会' } });
+    expect(task!.seat!.id).not.toBe(id);
+    expect(await store.listTasks(member, 50)).toEqual([]);
+    // 成果 ID 只给群主（在画布里打开）
+    expect((await files.list(owner, id))[0]!.artifactId).toBeTruthy();
+    expect((await files.list(member, id))[0]!.artifactId).toBeUndefined();
+
+    await expect(files.removeTask(member, id, runId, 'r')).rejects.toMatchObject({
+      code: 'task_delete_not_allowed',
+    });
+    const before = (await groups.get(owner, id)).messages.map((m) => m.kind);
+    await files.removeTask(owner, id, runId, 'r');
+    await files.removeTask(owner, id, runId, 'r');
+    expect(fake.purged).toContain(`canvas-run:${runId}`);
+    expect(await files.list(owner, id)).toEqual([]);
+    expect(await tasks()).toEqual([]);
+    expect((await groups.get(owner, id)).messages.map((m) => m.kind)).toEqual(
+      before.filter((kind) => kind !== 'task'),
+    );
   });
 
   it('工作台要的消息：动过手的那一轮里 AI 的话（带任务名）和任务卡；只聊天的那一轮不算', async () => {

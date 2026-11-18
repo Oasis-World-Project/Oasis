@@ -29,7 +29,8 @@ const pathOf = (name: string) => {
   return safe === '' || safe === '.' || safe === '..' ? '_' : safe;
 };
 
-const toBody = (row: FileRow): GroupFile => ({
+/** viewer：谁在看。AI 交的那一版在画布里记在群主名下，只有他拿得到成果 ID（在画布里打开） */
+const toBody = (row: FileRow, viewer: string): GroupFile => ({
   id: row.id,
   path: row.path,
   name: row.name,
@@ -37,6 +38,7 @@ const toBody = (row: FileRow): GroupFile => ({
   madeBy: { kind: row.made_kind, id: row.made_by },
   changedBy: { kind: row.changed_kind, id: row.changed_by },
   runId: row.run_id,
+  ...(row.source === 'artifact' && row.ref_owner === viewer ? { artifactId: row.ref_id } : {}),
   updatedAt: row.updated_at.toISOString(),
 });
 
@@ -159,7 +161,7 @@ export function createGroupFiles(deps: {
     /** 群文件列表 */
     async list(userId: string, groupId: string): Promise<GroupFile[]> {
       await group(userId, groupId);
-      return (await repo.list(groupId)).map(toBody);
+      return (await repo.list(groupId)).map((row) => toBody(row, userId));
     },
 
     /** 一个群文件的内容（成员都能读） */
@@ -290,6 +292,25 @@ export function createGroupFiles(deps: {
         throw new HttpError(409, 'file_in_use', '它还在做这个文件，等它这一轮做完再删');
       const removed = await repo.remove(groupId, fileId);
       if (removed) await drop(removed, requestId);
+    },
+
+    /**
+     * 删掉群里的一个任务（群主在画布里删）：任务卡、它交的成果（canvas 里的）、群文件里现在这一版是它交的
+     * 那些；聊天记录留着。还在做的不能删。先删 canvas 里的再删这边的，中途失败重来一遍就行。
+     */
+    async removeTask(userId: string, groupId: string, runId: string, requestId: string) {
+      const room = await group(userId, groupId);
+      if (room.ownerId !== userId)
+        throw new HttpError(403, 'task_delete_not_allowed', '只有群主可以删任务');
+      if ((await repo.people(groupId)).running.has(runId))
+        throw new HttpError(409, 'task_running', '它还在做这个任务，先停下再删');
+      const card = await repo.taskCard(groupId, runId);
+      if (!card) return;
+      await canvas.json('POST', `/internal/runs/${runId}/purge`, {
+        body: { ownerId: userId },
+        requestId,
+      });
+      await repo.removeTask(groupId, card, runId);
     },
 
     /** 解散群、删好友之前：这段聊天里消息带的文件从 canvas 删掉（可以重复调用） */

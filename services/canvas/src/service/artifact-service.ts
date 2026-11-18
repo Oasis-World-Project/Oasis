@@ -86,6 +86,13 @@ export function createArtifactService(deps: {
     }
   }
 
+  /** 真删除这些成果：先删对象再删行，批注截图一起删 */
+  async function remove(ownerId: string, rows: Artifact[]) {
+    for (const row of rows) await store.delete(row.objectKey);
+    await repo.removeRows(rows.map((row) => row.id));
+    await dropFrames(ownerId, framesOf(rows));
+  }
+
   /**
    * 这个任务（一轮）的成果在同步文件夹里放哪个目录：这一轮已经登记过的沿用（目录名是任务名，重名时
    * 带序号；这一轮改了的旧成果留在原来任务的目录里，不算）；没有就用任务名，和已有的重名就加序号
@@ -265,11 +272,15 @@ export function createArtifactService(deps: {
       const rows = (await repo.listByConversation(conversationId)).filter(
         (row) => row.ownerId === ownerId,
       );
-      for (const row of rows) await store.delete(row.objectKey);
-      await repo.removeRows(rows.map((row) => row.id));
-      await dropFrames(ownerId, framesOf(rows));
+      await remove(ownerId, rows);
       if (rows.length)
         logger.info({ conversationId, files: rows.length }, '对话已删除，成果一并清理');
+    },
+    /** 删任务（真删除）：这个人名下归在这一轮下的成果和批注截图。重复调用时没有可删的。 */
+    async purgeRun(ownerId: string, runId: string): Promise<void> {
+      const rows = await repo.list(ownerId, { runId }, LIST_LIMIT);
+      await remove(ownerId, rows);
+      if (rows.length) logger.info({ runId, files: rows.length }, '任务已删除，成果一并清理');
     },
 
     async list(

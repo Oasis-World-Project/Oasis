@@ -1,4 +1,4 @@
-// 画布按任务分框：私聊里的任务（任务卡）和它们的成果（成果上记着最近做出或改了它的那一轮）。
+// 画布按任务分框：私聊里的任务、自己当群主的群里的任务（任务卡）和它们的成果（成果上记着最近做出或改了它的那一轮）。
 // 成品和素材（out/素材/ 里的）分开；应用目录里的文件归在应用下面，不单独列。最近的任务在前。
 import type { ArtifactBody, ArtifactCategory } from '@oasis/contracts/canvas';
 import type { TaskSummary } from '@oasis/contracts/conversation';
