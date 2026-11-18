@@ -199,8 +199,6 @@ export const build = (
         'google/lyria/v3',
         'fal-ai/ace-step-1.5',
         'elevenlabs/music/v2.5',
-        'mureka/v9.5/generate/song',
-        'mureka/v9.5/generate/instrumental',
         'minimax/music-3',
         'someone/unknown-music',
       ],

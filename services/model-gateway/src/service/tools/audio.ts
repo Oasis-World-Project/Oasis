@@ -55,14 +55,14 @@ const MusicResult = z.object({
 /**
  * fal 上的音乐型号：入参各不相同，差别只写在这张表里，目录只列表里有的。
  * micro 是这一次的标价（微美元）：按首计价的不看参数，按时长计价的看 duration（秒，不写用各自的默认）。
- * makes 是做得了什么：both 都行，instrumental 只做纯器乐，song 只做带歌词的歌。
+ * makes 是做得了什么：both 都行，instrumental 只做纯器乐。
  * actual：结果里带实际时长、又按时长计价的，照实际的算（不超过提交时的标价）。
  */
 const MUSIC_MODELS: Record<
   string,
   {
     micro: (a: { duration?: number | undefined }) => number;
-    makes: 'both' | 'instrumental' | 'song';
+    makes: 'both' | 'instrumental';
     input: (a: MusicInput) => Record<string, unknown>;
     actual?: (result: z.infer<typeof MusicResult>) => number | undefined;
   }
@@ -91,6 +91,7 @@ const MUSIC_MODELS: Record<
     }),
   },
   // 按输出分钟计价（$0.6/分钟，不足一分钟按一分钟）：不写时长出 60 秒。没有歌词参数，歌词和 Lyria 一样写进 prompt
+  // （2026-11-19 真实调用：中文歌词唱出来了）
   'elevenlabs/music/v2.5': {
     micro: (a) => Math.ceil((a.duration ?? 60) / 60) * 600_000,
     makes: 'both',
@@ -100,23 +101,9 @@ const MUSIC_MODELS: Record<
       force_instrumental: a.instrumental,
     }),
   },
-  // 带歌词 $0.15 一首（只给描述的要 $0.50，不走这条）；风格说明最多 1024 字；时长 120–300 秒，不写由它定
-  'mureka/v9.5/generate/song': {
-    micro: () => 150_000,
-    makes: 'song',
-    input: (a) => ({
-      lyrics: a.lyrics,
-      prompt: a.prompt.slice(0, 1024),
-      ...(a.duration ? { duration: Math.max(120, a.duration) } : {}),
-    }),
-  },
-  'mureka/v9.5/generate/instrumental': {
-    micro: () => 150_000,
-    makes: 'instrumental',
-    input: (a) => ({ prompt: a.prompt }),
-  },
   // 按秒计价（$0.002/秒）：duration 是上限（不写 60 秒），可能提前结束，照结果里的实际秒数算。
-  // 歌词必填、没有器乐开关：器乐把歌词写成一行段落标记。出的是 WAV（一分钟约 10 MB）
+  // 歌词必填、没有器乐开关：器乐把歌词写成一行段落标记。出的是 WAV（一分钟约 10 MB）。
+  // 2026-11-19 真实调用：带歌词的唱出来了；器乐没有人声，但那一次没照描述的风格来，要 30 秒给了 20 秒
   'minimax/music-3': {
     micro: (a) => (a.duration ?? 60) * 2_000,
     makes: 'both',
@@ -131,12 +118,9 @@ const MUSIC_MODELS: Record<
         : undefined,
   },
 };
-/** 这个型号做不做得了这次要的：有的只做纯器乐，有的只做带歌词的歌 */
-function canMake(model: string, instrumental: unknown) {
-  const makes = MUSIC_MODELS[model]?.makes ?? 'both';
-  const wanted = instrumental === true || instrumental === 'true' ? 'instrumental' : 'song';
-  return makes === 'both' || makes === wanted;
-}
+/** 这个型号做不做得了这次要的：带歌词的歌要会唱的型号 */
+const canMake = (model: string, instrumental: unknown) =>
+  instrumental === true || instrumental === 'true' || MUSIC_MODELS[model]?.makes !== 'instrumental';
 /** 这次的标价：型号不在表里返回 undefined */
 const musicPrice = (model: string | undefined, args: Record<string, unknown>) =>
   MUSIC_MODELS[model ?? '']?.micro({ duration: Number(args.duration) || undefined });
@@ -146,7 +130,7 @@ const MusicArgs = MusicFields.refine(
   '歌曲必须提供歌词；器乐请指定 instrumental=true',
 ).refine(
   (args) => !args.model || canMake(args.model, args.instrumental),
-  '点名的型号做不了这一种（有的只做纯器乐，有的只做带歌词的歌）；换一个型号，或不写 model',
+  '点名的型号只做纯器乐；带歌词的歌换一个型号，或不写 model',
 );
 /** 任务号里没记型号的旧任务：那时只有这一个型号 */
 const MUSIC_BEFORE_MEMO = { model: 'fal-ai/minimax-music/v2.6', micro: 150_000 };
@@ -165,11 +149,18 @@ function audioFileOf(audio: z.infer<typeof MusicResult>['audio']) {
   return { name: `music.${ext}`, mediaType: ext === 'mp3' ? 'audio/mpeg' : `audio/${ext}` };
 }
 
-/** 供应商说的没生成的原因，原话交给调用方（2026-11-11：一句普通的器乐描述被内容审核误拦，原样重发就过了） */
+/**
+ * 供应商说的没生成的原因，原话交给调用方（2026-11-11：一句普通的器乐描述被内容审核误拦，原样重发就过了）。
+ * fal 的错误体是 detail[{ msg, type }]：读得出这个结构就是供应商给了定论（2026-11-19：Mureka 排到了、
+ * 结果却是 500 downstream_service_error，每次都一样）；读不出的（网关出错、临时故障）返回 undefined。
+ */
 async function refusalOf(response: Response) {
-  const body = (await response.json().catch(() => null)) as { detail?: { msg?: unknown }[] } | null;
-  const reason = body?.detail?.[0]?.msg;
-  return typeof reason === 'string' && reason ? reason.slice(0, 300) : '没有给出原因';
+  const body = (await response.json().catch(() => null)) as {
+    detail?: { msg?: unknown; type?: unknown }[];
+  } | null;
+  const first = body?.detail?.[0];
+  if (typeof first?.type !== 'string' && typeof first?.msg !== 'string') return undefined;
+  return typeof first.msg === 'string' && first.msg ? first.msg.slice(0, 300) : '没有给出原因';
 }
 
 const TranscriptionResponse = z.looseObject({
@@ -343,9 +334,14 @@ export const music: ToolDef = {
       .parse(await status.json());
     if (state.status !== 'COMPLETED') return { state: 'pending' };
     const response = await deps.fal.result(id);
-    if (response.status === 422 || response.status === 400)
-      return { state: 'failed', error: `音乐供应商没有生成：${await refusalOf(response)}` };
-    if (!response.ok) throw new Error(`取音乐结果失败：${response.status}`);
+    if (!response.ok) {
+      // 供应商明说没生成（内容审核拦下、它下游的服务出错）：不收费，原因交回去；别的错下次再取
+      const reason = await refusalOf(response);
+      const refused = response.status === 422 || response.status === 400;
+      if (refused || reason !== undefined)
+        return { state: 'failed', error: `音乐供应商没有生成：${reason ?? '没有给出原因'}` };
+      throw new Error(`取音乐结果失败：${response.status}`);
+    }
     const result = MusicResult.parse(await response.json());
     const memo = deps.fal.memo(id) ?? MUSIC_BEFORE_MEMO;
     const media = await deps.fal.media(result.audio.url);

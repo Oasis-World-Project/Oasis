@@ -70,7 +70,8 @@ const GEOMETRY_MODELS: Record<
     glb: (r) => (r.model_glb ?? r.model_urls?.glb)?.url,
     micro: () => 1_200_000,
   },
-  // 不分精度：默认档（Gen-2.5-High），不加 HighPack（+$0.80）
+  // 不分精度：默认档（Gen-2.5-High），不加 HighPack（+$0.80）。2026-11-19 真实调用：出来 50 万面、三张 2048 贴图、
+  // 21 MB，超过画布直接预览的上限，要用 oasis-3d preview 另生成预览
   'fal-ai/hyper3d/rodin/v2.5': {
     from: 'image',
     input: (image) => ({ image_urls: [image], geometry_file_format: 'glb' }),

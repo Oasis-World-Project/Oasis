@@ -376,6 +376,8 @@ export const TOOL_LINEUP = {
       t('fal-ai/lyria3/pro', 'Lyria 3 Pro', 'Google'),
       t('google/lyria/v3', 'Lyria 3', 'Google'),
       t('fal-ai/ace-step-1.5', 'ACE-Step 1.5', 'ACE Studio', '只做纯器乐'),
+      t('elevenlabs/music/v2.5', 'ElevenLabs Music v2.5', 'ElevenLabs', '按分钟计价'),
+      t('minimax/music-3', 'MiniMax Music 3', 'MiniMax', '按秒计价'),
     ],
   },
   // 最贵的 Veo 3.1 4K 带声音每秒 $0.60（冻结按每秒 $0.70 算）；换更贵的型号要同时调冻结
@@ -395,10 +397,10 @@ export const TOOL_LINEUP = {
       t('kwaivgi/kling-v3.0-std', 'Kling 3.0 标准', '快手'),
     ],
   },
-  // fal 上的型号只认 tools/three-d.ts 里对接过的
+  // fal 上的型号只认 tools/three-d.ts 里对接过的；吃图的和吃文字的写在一起，各用各的第一个
   geometry: {
     tool: '3d.generate',
-    label: '图生 3D',
+    label: '生成 3D',
     category: '3d',
     provider: 'fal',
     models: [
@@ -406,6 +408,15 @@ export const TOOL_LINEUP = {
       t('fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', '混元 3D 3.1 Pro', '腾讯'),
       t('tripo3d/h3.1/image-to-3d', 'Tripo H3.1', 'VAST'),
       t('fal-ai/pixal3d', 'Pixal3D', 'Pixal'),
+      t('meshy/v7.1/image-to-3d', 'Meshy 7.1', 'Meshy', '带贴图'),
+      t('fal-ai/hyper3d/rodin/v2.5', 'Rodin 2.5', 'Hyper3D', '50 万面，预览要另生成'),
+      t(
+        'fal-ai/hyper3d/rodin/v2.5/text-to-3d/fast',
+        'Rodin 2.5 快速（文字）',
+        'Hyper3D',
+        '只给文字',
+      ),
+      t('meshy/v7.1/text-to-3d', 'Meshy 7.1（文字）', 'Meshy', '只给文字，带贴图'),
     ],
   },
   jev: {

@@ -4,7 +4,7 @@ import { knobs, PAYER, billingCalls } from './support/tool-fakes.ts';
 import { tools, falCalls, geometryImage, useTools, call, errorOf } from './support/tool-fixture.ts';
 
 describe('fal 上按型号标价的工具', () => {
-  it('按时长计价的型号照 duration 算标价，冻结跟着型号的标价走；只做歌的和只做器乐的各归各', async () => {
+  it('按时长计价的型号照 duration 算标价，冻结跟着型号的标价走；供应商下游出错算没生成', async () => {
     useTools('key', true);
     const held = () => billingCalls.filter((c) => c.path === 'hold').map((c) => c.body.amountMicro);
     const settled = () =>
@@ -44,22 +44,18 @@ describe('fal 上按型号标价的工具', () => {
     const done = await tools.job({ payerId: PAYER }, mini, AbortSignal.timeout(1000));
     expect(done.result?.files[0]).toMatchObject({ name: 'music.wav', mediaType: 'audio/wav' });
     knobs.falResult = null;
-    // Mureka：带歌词的歌和器乐是两个型号，点错了提交前就拒绝
-    const song = { prompt: 'A complete vocal song', instrumental: false, lyrics: '[Verse] 歌词' };
-    await call('audio.music', { ...song, model: 'mureka/v9.5/generate/song' });
-    expect(falCalls.at(-1)).toEqual({
-      url: 'https://queue.fal.run/mureka/v9.5/generate/song',
-      input: { lyrics: '[Verse] 歌词', prompt: 'A complete vocal song' },
+    // 排到了、取结果时供应商说它下游的服务出错（真实返回，2026-11-19）：算没生成，不收费，不再反复去取
+    knobs.falResultStatus = 500;
+    knobs.falResult = {
+      detail: [{ msg: 'Downstream service error', type: 'downstream_service_error' }],
+    };
+    const broken = (
+      await call('audio.music', { prompt: 'Warm piano and strings', instrumental: true })
+    ).job!.id;
+    expect(await tools.job({ payerId: PAYER }, broken, AbortSignal.timeout(1000))).toMatchObject({
+      status: 'failed',
+      error: '音乐供应商没有生成：Downstream service error',
     });
-    const submitted = falCalls.length;
-    for (const wrong of [
-      { ...song, model: 'mureka/v9.5/generate/instrumental' },
-      { prompt: 'Warm piano and strings', instrumental: true, model: 'mureka/v9.5/generate/song' },
-    ])
-      expect(await errorOf(call('audio.music', wrong))).toMatchObject({
-        code: 'invalid_tool_args',
-      });
-    expect(falCalls).toHaveLength(submitted);
     expect(held()).toEqual([1_440_000, 500_000, 500_000]);
     expect(settled()).toEqual([1_200_000, 83_000]);
   });

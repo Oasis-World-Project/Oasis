@@ -122,13 +122,6 @@ describe('工具目录里的单价', () => {
       { model: 'fal-ai/ace-step-1.5', costMicro: 72_000, seconds: null, basis: 'catalog' },
       // 按时长计价的列默认时长的价钱：ElevenLabs 一分钟，MiniMax Music 3 六十秒
       { model: 'elevenlabs/music/v2.5', costMicro: 600_000, seconds: null, basis: 'catalog' },
-      { model: 'mureka/v9.5/generate/song', costMicro: 150_000, seconds: null, basis: 'catalog' },
-      {
-        model: 'mureka/v9.5/generate/instrumental',
-        costMicro: 150_000,
-        seconds: null,
-        basis: 'catalog',
-      },
       { model: 'minimax/music-3', costMicro: 120_000, seconds: null, basis: 'catalog' },
     ]);
     expect(byKey['3d.generate']).toMatchObject({
