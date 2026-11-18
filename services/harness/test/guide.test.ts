@@ -119,5 +119,10 @@ describe('给主 AI 的说明和技能', () => {
     expect(group[0]!.content.toString()).toBe(
       '# 在 Oasis 的群里干活\n\n你在一个群里。\n\n## 环境\n\n- 沙箱\n\n## 交付\n\n- out/\n',
     );
+    // 用户关了联网搜索：说明最后多一段写明这件事，别的不动
+    const offline = guideFiles(guide, '', { kind: 'cloud' }, 'dm', false)[0]!.content.toString();
+    expect(offline.startsWith(guide.rules)).toBe(true);
+    expect(offline.slice(guide.rules.length)).toContain('联网搜索现在关着');
+    expect(offline).toContain('`web.search` 和 `web.fetch` 现在用不了');
   });
 });

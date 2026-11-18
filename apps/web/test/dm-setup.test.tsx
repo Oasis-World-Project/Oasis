@@ -110,6 +110,31 @@ describe('在哪干活和权限', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
+  it('输入框里的联网搜索开关：默认开着；点一下关掉，存进这段私聊的设置，再点一下打开', async () => {
+    const { api } = fakeChat([text('user', '你好'), text('assistant', '你好！')]);
+    await openChat();
+    const toggle = await screen.findByRole('switch', { name: '联网搜索' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(api.bodies.findLast((b) => b.path === `${BASE}/setup`)?.body).toEqual({
+        workplace: { kind: 'cloud' },
+        permissions: { access: 'full', beyond: 'deny', paidTools: 'allow', web: false },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: '联网搜索' }).getAttribute('aria-checked')).toBe(
+        'false',
+      ),
+    );
+    fireEvent.click(screen.getByRole('switch', { name: '联网搜索' }));
+    await waitFor(() =>
+      expect(api.bodies.findLast((b) => b.path === `${BASE}/setup`)?.body).toMatchObject({
+        permissions: { web: true },
+      }),
+    );
+  });
+
   it('桌面版里：选项目文件夹换到电脑上，权限用电脑上的默认；保存后聊天里出现换地方的分隔', async () => {
     const chooseProjectFolder = vi.fn(async () => ({
       deviceId: DEVICE.deviceId,

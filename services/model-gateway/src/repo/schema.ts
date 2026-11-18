@@ -49,6 +49,8 @@ export const runKeys = pgTable('run_keys', {
   domesticOnly: boolean('domestic_only').notNull().default(false),
   /** 花钱的工具要先问（用户设了「问我」） */
   askPaid: boolean('ask_paid').notNull().default(false),
+  /** 用户关了这段对话的联网搜索 */
+  noWeb: boolean('no_web').notNull().default(false),
   /** 用户点过「以后都允许」的确认种类（command、tool）：这一轮里不再问 */
   autoAllow: text('auto_allow').array().$type<ConfirmationKind[]>().notNull().default([]),
   expiresAt: at('expires_at').notNull(),

@@ -1,12 +1,27 @@
-// 回归场景（docs/engineering/回归测试.md）：聊天；做网页（交之前自查，发现问题自己修）；
+// 回归场景（docs/engineering/回归测试.md）：聊天（再关掉联网搜索说一句）；做网页（交之前自查，发现问题自己修）；
 // 一个 AI 用各种工具从头做到交付。
 import { literal, query } from '../db.mjs';
-import { writeFiles } from '../fake-provider.mjs';
+import { marker, writeFiles } from '../fake-provider.mjs';
 import { aiOf, cardOf, runsOf, sha256, start } from './shared.mjs';
 
-// ---------- 1. 聊天：说「你好」，AI 回一句话；只聊天不出任务卡 ----------
+// ---------- 1. 聊天：说「你好」，AI 回一句话；只聊天不出任务卡。再关掉联网搜索说一句：
+// 给 AI 的说明里写着关了，工具目录里没有联网的两个工具，硬要搜索被拒绝、不花钱 ----------
 export const chat = {
-  says: { 1: { reply: '你好！想做点什么？' } },
+  says: {
+    1: { reply: '你好！想做点什么？' },
+    2: {
+      steps: [
+        {
+          bash: 'grep -c 联网搜索现在关着 ~/.dsh/AGENTS.md; oasis-tool list | grep -c "web\\." ; true',
+          description: '看说明和工具目录',
+        },
+        { bash: 'oasis-tool web.search --query 今天的新闻 2>&1; true', description: '硬要搜索' },
+        ({ done }) => ({
+          text: `说明里 ${String(done[0]?.result).trim().split('\n')[0]} 处，目录里 ${String(done[0]?.result).trim().split('\n')[1]} 个，搜索：${String(done[1]?.result).slice(0, 200)}`,
+        }),
+      ],
+    },
+  },
   async run(t) {
     const id = await start(t, 'chat', '你好');
     const messages = await t.user.waitTurn(id, '回话');
@@ -22,6 +37,26 @@ export const chat = {
       (ai[0]?.data.spentMicro ?? 0) > 0,
       `这一轮的花费应写在 AI 的话上：${ai[0]?.data.spentMicro}`,
     );
+
+    // ---- 关掉联网搜索：不开新话题；下一轮 AI 的说明里写着关了、目录里没有联网工具、硬搜被拒 ----
+    const dm = `/conversation/v1/conversations/${id}`;
+    const saved = await t.user.api.put(`${dm}/setup`, {
+      workplace: { kind: 'cloud' },
+      permissions: { access: 'full', beyond: 'deny', paidTools: 'allow', web: false },
+    });
+    t.check(
+      saved.message === null && saved.conversation.permissions.web === false,
+      `关掉联网搜索应记在这段私聊上、不开新话题：${JSON.stringify(saved.conversation.permissions)}`,
+    );
+    await t.user.say(id, `查一下今天的新闻 ${marker('chat', 2)}`);
+    const after = await t.user.waitTurn(id, '关着联网搜索的一轮');
+    const second = runsOf(id)[1];
+    const told = aiOf(after, second?.id).at(-1)?.content ?? '';
+    t.check(
+      told.includes('说明里 1 处') && told.includes('目录里 0 个'),
+      `关着时说明里应写明、工具目录里不应有联网工具：${told}`,
+    );
+    t.check(told.includes('用户关了这段对话的联网搜索'), `硬要搜索应被拒绝并说明原因：${told}`);
   },
 };
 

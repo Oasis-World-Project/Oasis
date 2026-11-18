@@ -13,6 +13,7 @@ import { createToolJobs } from './tool-jobs.ts';
 import { localOpEntries, textBatchEntry } from './tools/catalog-extras.ts';
 import { TOOLS, type ToolDef } from './tools.ts';
 import { needsModel } from './tools/kit.ts';
+import { isWebTool } from './tools/web.ts';
 
 /** 各型号最近的实测，写给沙箱里的 AI 看；没有记录的型号不写 */
 function speedNote(models: string[], measured: Map<string, Measured>): string {
@@ -102,7 +103,8 @@ export function createToolService(deps: ToolServiceDeps) {
      * 工具目录：没配 Key、或者没有能用的模型的工具标成不可用。domesticOnly：这一轮打开了
      * 「只用国内模型」，只列国内厂商的型号。
      */
-    async list(domesticOnly?: boolean): Promise<ToolEntry[]> {
+    /** 工具目录；noWeb：用户关了这段对话的联网搜索，不列联网的两个工具 */
+    async list(domesticOnly?: boolean, noWeb?: boolean): Promise<ToolEntry[]> {
       const allowed = deps.scope.filterFor(domesticOnly);
       const measured = deps.estimateFromHistory
         ? await meter.measured().catch(() => new Map<string, Measured>())
@@ -116,7 +118,7 @@ export function createToolService(deps: ToolServiceDeps) {
           return new Map<string, Typical>();
         });
       const entries = await Promise.all(
-        TOOLS.map(async (tool) => {
+        TOOLS.filter((tool) => !(noWeb && isWebTool(tool.key))).map(async (tool) => {
           const models = modelsOf(tool, allowed);
           return {
             key: tool.key,

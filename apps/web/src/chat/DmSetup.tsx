@@ -37,13 +37,17 @@ const sameWorkplace = (a: Workplace, b: Workplace) =>
     ? b.kind === 'cloud'
     : b.kind === 'device' && a.deviceId === b.deviceId && a.folder === b.folder;
 
-/** 换地方时权限用那边的默认（花钱的工具问不问照旧） */
+/** 换地方时权限用那边的默认（花钱的工具问不问、联网搜索开没开照旧） */
 const moveTo = (workplace: Workplace, current: SetupBody): SetupBody => ({
   workplace,
   permissions:
     current.workplace.kind === workplace.kind
       ? current.permissions
-      : { ...defaultPermissions(workplace), paidTools: current.permissions.paidTools },
+      : {
+          ...defaultPermissions(workplace),
+          paidTools: current.permissions.paidTools,
+          ...(current.permissions.web === undefined ? {} : { web: current.permissions.web }),
+        },
 });
 
 export function DmSetup({

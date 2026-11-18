@@ -53,6 +53,10 @@ function replaceSection(rules: string, section: string): string {
   return `${rules.slice(0, start)}${section.trim()}\n${next < 0 ? '' : rules.slice(next)}`;
 }
 
+/** 用户关了这段对话的联网搜索时，说明最后加的一段（只写事实） */
+const WEB_OFF =
+  '\n\n## 联网搜索现在关着\n\n用户在输入框里关了这段对话的联网搜索：`oasis-tool` 的 `web.search` 和 `web.fetch` 现在用不了，`oasis-tool list` 里也没有。用户可以随时再打开，下一轮起生效。\n';
+
 /** 说明的开头（第一个二级标题之前）换成 intro */
 function replaceIntro(rules: string, intro: string): string {
   const next = rules.indexOf('\n## ');
@@ -62,20 +66,22 @@ function replaceIntro(rules: string, intro: string): string {
 /**
  * 放进 dsh 用户目录的文件（路径相对 {@link SANDBOX_PATHS.dshHome}）：dsh 把 AGENTS.md 当作用户的
  * 全局说明放进系统提示，把 skills/ 下的技能列给 AI（2026-11-14 用镜像里的 dsh 实测两处都会读）。
- * 这个 AI 的人设放在说明最前面；在用户电脑上干活时「环境」一节换成电脑上的；群里的一轮开头换成群里的。
+ * 这个 AI 的人设放在说明最前面；在用户电脑上干活时「环境」一节换成电脑上的；群里的一轮开头换成群里的；
+ * 用户关了联网搜索时，说明最后加一段写明这件事。
  */
 export function guideFiles(
   guide: AgentGuide,
   persona: string,
   workplace: Workplace = { kind: 'cloud' },
   scene: 'dm' | 'group' = 'dm',
+  web = true,
 ) {
   const who = persona.trim() ? `# 你是谁\n\n${persona.trim()}\n\n` : '';
   const placed =
     workplace.kind === 'device' ? replaceSection(guide.rules, guide.device) : guide.rules;
   const rules = scene === 'group' && guide.group ? replaceIntro(placed, guide.group) : placed;
   return [
-    { path: 'AGENTS.md', content: Buffer.from(who + rules) },
+    { path: 'AGENTS.md', content: Buffer.from(who + rules + (web ? '' : WEB_OFF)) },
     ...guide.skills.map((skill) => ({
       path: `skills/${skill.name}/SKILL.md`,
       content: Buffer.from(

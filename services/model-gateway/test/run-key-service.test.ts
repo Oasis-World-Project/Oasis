@@ -32,12 +32,13 @@ describe('运行临时 Key', () => {
       runId: RUN,
       conversationId: CONVERSATION,
     });
-    // 打开了「只用国内模型」、花钱的工具要先问的一轮：凭证带着这些设置
+    // 打开了「只用国内模型」、花钱的工具要先问、关了联网搜索的一轮：凭证带着这些设置
     const scoped = await service.issue({
       payerId: PAYER,
       runId: RUN,
       domesticOnly: true,
       askPaid: true,
+      noWeb: true,
       ttlSeconds: 60,
     });
     await expect(service.authenticate(`Bearer ${scoped.key}`)).resolves.toEqual({
@@ -45,6 +46,7 @@ describe('运行临时 Key', () => {
       runId: RUN,
       domesticOnly: true,
       askPaid: true,
+      noWeb: true,
     });
   });
 

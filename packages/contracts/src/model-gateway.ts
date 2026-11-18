@@ -96,6 +96,8 @@ export const CreateRunKeyBody = z.object({
   domesticOnly: z.boolean().default(false),
   /** 用户设了花钱的工具「问我」：这一轮用生图、视频这类工具前先登记一张确认卡，等用户点 */
   askPaid: z.boolean().default(false),
+  /** 用户关了这段对话的联网搜索：这一轮没有联网搜索、读网页这两个工具 */
+  noWeb: z.boolean().default(false),
   /** 有效期，默认 6 小时，最长 7 天 */
   ttlSeconds: z
     .number()

@@ -195,6 +195,7 @@ export function createExecution(
             conversationId: row.conversationId,
             domesticOnly: request.domesticOnly,
             askPaid: request.permissions.paidTools === 'ask',
+            noWeb: request.permissions.web === false,
             ttlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
           },
           requestId: id,
@@ -246,7 +247,13 @@ export function createExecution(
             {
               dir: SANDBOX_PATHS.dshHome,
               tar: await packFiles(
-                guideFiles(await deps.guide(), request.persona, request.workplace, request.scene),
+                guideFiles(
+                  await deps.guide(),
+                  request.persona,
+                  request.workplace,
+                  request.scene,
+                  request.permissions.web !== false,
+                ),
               ),
             },
             // oasis-tool 这些命令和 dsh 组合也每轮现放：改了，下一轮就用上，不用重建镜像

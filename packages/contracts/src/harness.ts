@@ -44,11 +44,13 @@ export type Workplace = z.infer<typeof Workplace>;
  * 权限。access 和 beyond 只在用户电脑上分档（云端沙箱本来就隔离，总是完全访问）：
  * access 只读 / 可改项目文件夹 / 完全访问；beyond AI 要做超出权限的事时问我 / 直接允许 / 不做。
  * paidTools 用生图、视频、配音、音乐、3D 这些花钱的工具前问不问（云端和电脑都算）。
+ * web 联网搜索和读网页这两个工具给不给用：没写就是开，用户在输入框里关掉后是 false（下一轮起生效）。
  */
 export const Permissions = z.object({
   access: z.enum(['read', 'project', 'full']),
   beyond: z.enum(['ask', 'allow', 'deny']),
   paidTools: z.enum(['ask', 'allow']),
+  web: z.boolean().optional(),
 });
 export type Permissions = z.infer<typeof Permissions>;
 

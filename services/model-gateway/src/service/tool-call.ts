@@ -12,6 +12,7 @@ import type { ToolDef } from './tools.ts';
 import { mediaKinds } from './tools/images.ts';
 import { needsModel } from './tools/kit.ts';
 import { videoProblems, videoRejection } from './tools/video.ts';
+import { isWebTool } from './tools/web.ts';
 
 /** 要做一阵子的生成：每个人同时最多做几个（一次 image.generate 算一个；2026-11-14 第 3 阶段） */
 const GENERATIONS = ['image.generate', 'video.generate', 'audio.music', '3d.generate'];
@@ -83,6 +84,13 @@ export function createToolCall(ctx: ToolContext) {
         const prior = await jobs.byRequest(input.idempotencyKey);
         if (prior) return resume(prior.id);
       }
+      // 用户关了这段对话的联网搜索：先说这个原因（比「没配置好」更该让 AI 知道）
+      if (input.caller.noWeb && isWebTool(tool.key))
+        throw new HttpError(
+          403,
+          'web_off',
+          '用户关了这段对话的联网搜索，现在不能搜索和读网页；需要的话请用户在输入框里打开',
+        );
       if (!configured(tool) || (needsModel(tool) && !tool.models(config).length)) {
         throw new HttpError(503, 'tool_unavailable', `${tool.name}还没有配置好，现在用不了`);
       }

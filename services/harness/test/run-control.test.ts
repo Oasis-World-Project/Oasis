@@ -201,4 +201,17 @@ describe('对话里的一轮：插话、停止和取消', () => {
     await finished(open.id);
     expect(issued.at(-1)).toMatchObject({ runId: open.id, domesticOnly: false });
   });
+
+  it('用户关了这段对话的联网搜索：临时 Key 带着它；没关（没写）就不带', async () => {
+    const off = await service.start({
+      ...base,
+      prompt: '你好',
+      permissions: { access: 'full', beyond: 'deny', paidTools: 'allow', web: false },
+    });
+    await finished(off.id);
+    expect(issued.at(-1)).toMatchObject({ runId: off.id, noWeb: true, askPaid: false });
+    const on = await service.start({ ...base, prompt: '嗨' });
+    await finished(on.id);
+    expect(issued.at(-1)).toMatchObject({ runId: on.id, noWeb: false });
+  });
 });

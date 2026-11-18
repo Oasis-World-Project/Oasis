@@ -74,6 +74,25 @@ describe('在哪干活和权限', () => {
     });
   });
 
+  it('关掉联网搜索：记在这段私聊的设置里，不开新话题；下一轮交给 harness 的权限里带着它，再打开也一样', async () => {
+    const off = await setup({
+      workplace: { kind: 'cloud' },
+      permissions: { access: 'full', beyond: 'deny', paidTools: 'allow', web: false },
+    });
+    expect(off.message).toBeNull();
+    expect(off.conversation.permissions.web).toBe(false);
+    const first = (await send('查一下今天的新闻')).turn!.runId;
+    expect(fake.starts.at(-1)).toMatchObject({ permissions: { web: false } });
+    await finish(first);
+    const on = await setup({
+      workplace: { kind: 'cloud' },
+      permissions: { access: 'full', beyond: 'deny', paidTools: 'allow', web: true },
+    });
+    expect(on.conversation.permissions.web).toBe(true);
+    await send('再查一次');
+    expect(fake.starts.at(-1)).toMatchObject({ continueFrom: first, permissions: { web: true } });
+  });
+
   it('换到电脑上：原来的会话清掉、插一条分隔，下一轮从头开始、在电脑上做；一轮进行中不能换地方', async () => {
     const first = (await send('写个脚本')).turn!.runId;
     const permissions = { access: 'project', beyond: 'ask', paidTools: 'allow' } as const;

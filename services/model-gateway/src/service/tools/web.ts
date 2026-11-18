@@ -27,6 +27,9 @@ const ExtractResponse = Tavily.extend({
   failed_results: z.array(z.looseObject({ url: z.string(), error: z.string() })).default([]),
 });
 
+/** 联网的两个工具（用户关了这段对话的联网搜索时不给用） */
+export const isWebTool = (key: string) => key === 'web.search' || key === 'web.fetch';
+
 export const webSearch: ToolDef = {
   key: 'web.search',
   name: '联网搜索',

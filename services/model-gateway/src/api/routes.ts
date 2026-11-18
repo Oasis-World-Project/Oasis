@@ -327,7 +327,7 @@ export function registerRoutes(
   // 沙箱里的 oasis-tool：看有哪些工具、调用工具
   app.get('/run/v1/tools', async (request) => {
     const caller = await runKeys.authenticate(request.headers.authorization);
-    return { tools: await tools.list(caller.domesticOnly) };
+    return { tools: await tools.list(caller.domesticOnly, caller.noWeb) };
   });
   app.post('/run/v1/tools/:key', TOOL_BODY, async (request, reply) =>
     useTool(await runKeys.authenticate(request.headers.authorization), request, reply),

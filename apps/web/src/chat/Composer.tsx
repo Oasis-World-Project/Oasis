@@ -3,7 +3,7 @@
 // 文件只能在一轮开始时交给 AI，所以一轮进行中不能带文件发送。有文件还在上传或上传失败时不能发送。
 // 从队里拿回来改的话放回这里。
 import { ArrowUp, Paperclip, Square } from 'lucide-react';
-import { useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { PendingFiles } from './Attachments.tsx';
 import type { useAttachments } from './use-attachments.ts';
 
@@ -21,6 +21,7 @@ export function Composer({
   onStop,
   stopping = false,
   restore = null,
+  tools,
 }: {
   locked: boolean;
   sending: boolean;
@@ -38,6 +39,8 @@ export function Composer({
   stopping?: boolean;
   /** 从队里拿回来改的话（每次是新的对象）：放回输入框，打了一半的接在后面 */
   restore?: { text: string } | null;
+  /** 「添加文件」旁边的其他开关（私聊里是联网搜索） */
+  tools?: ReactNode;
 }) {
   const [draft, setDraft] = useState('');
   const [restored, setRestored] = useState(restore);
@@ -92,6 +95,7 @@ export function Composer({
             <Paperclip size={18} aria-hidden="true" />
           </button>
         )}
+        {tools}
         <input
           ref={picker}
           type="file"

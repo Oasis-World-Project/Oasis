@@ -15,6 +15,7 @@ import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
 import { DmSetup } from '../chat/DmSetup.tsx';
 import { MessageItem } from '../chat/MessageItem.tsx';
 import { QueuedMessages } from '../chat/QueuedMessages.tsx';
+import { WebToggle } from '../chat/WebToggle.tsx';
 import { useAttachments } from '../chat/use-attachments.ts';
 import { ChatActionsContext, useChatActionsValue } from '../chat/use-chat-actions.ts';
 import { useStickToBottom } from '../chat/use-stick-to-bottom.ts';
@@ -189,6 +190,7 @@ export function DmPage() {
             turnActive={turnActive}
             onStop={() => void actions.stop()}
             stopping={actions.busy === 'stop'}
+            tools={conversation && <WebToggle conversation={conversation} />}
           />
         </footer>
       </section>

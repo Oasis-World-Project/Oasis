@@ -30,6 +30,7 @@ export function memoryRunKeys(): RunKeysRepo & {
         conversationId: key.conversationId ?? null,
         domesticOnly: key.domesticOnly ?? false,
         askPaid: key.askPaid ?? false,
+        noWeb: key.noWeb ?? false,
         autoAllow: [],
         revokedAt: null,
         createdAt: new Date(),

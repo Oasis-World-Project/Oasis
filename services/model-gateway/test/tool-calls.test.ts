@@ -67,6 +67,25 @@ describe('文件场景工具', () => {
     await call('web.search', { query: '天气' }, CONVERSATION);
     expect(asked).toEqual([]);
   });
+  it('用户关了这段对话的联网搜索：搜索和读网页都拒绝，不冻结、不调供应商；目录里也不列；别的工具照常', async () => {
+    const caller = { payerId: PAYER, conversationId: CONVERSATION, runId: RUN, noWeb: true };
+    const use = (key: string, args: Record<string, unknown>) =>
+      tools.call({ caller, key, args, requestId: 'r', signal: new AbortController().signal });
+    upstream.length = 0;
+    billingCalls.length = 0;
+    await expect(use('web.search', { query: '天气' })).rejects.toMatchObject({ code: 'web_off' });
+    await expect(use('web.fetch', { urls: ['https://example.com'] })).rejects.toMatchObject({
+      code: 'web_off',
+    });
+    expect(upstream).toEqual([]);
+    expect(billingCalls).toEqual([]);
+    const keys = (await tools.list(false, true)).map((tool) => tool.key);
+    expect(keys).not.toContain('web.search');
+    expect(keys).not.toContain('web.fetch');
+    expect(keys).toContain('image.generate');
+    expect((await tools.list()).map((tool) => tool.key)).toContain('web.search');
+    await expect(use('image.generate', { prompt: '猫' })).resolves.toMatchObject({ files: [{}] });
+  });
   it('大图片校验不递归溢出，总字节数超限在冻结前拒绝', async () => {
     const bytes = Buffer.alloc(6 * 1024 * 1024);
     Buffer.from(reference.base64, 'base64').copy(bytes);

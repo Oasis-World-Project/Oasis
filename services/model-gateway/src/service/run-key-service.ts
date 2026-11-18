@@ -54,6 +54,7 @@ export function createRunKeyService(deps: {
         conversationId: input.conversationId ?? null,
         domesticOnly: input.domesticOnly ?? false,
         askPaid: input.askPaid ?? false,
+        noWeb: input.noWeb ?? false,
         expiresAt,
       });
       return { keyId, key, expiresAt: expiresAt.toISOString() } satisfies RunKeyCreated;
@@ -70,6 +71,7 @@ export function createRunKeyService(deps: {
         ...(row.conversationId ? { conversationId: row.conversationId } : {}),
         ...(row.domesticOnly ? { domesticOnly: true } : {}),
         ...(row.askPaid ? { askPaid: true } : {}),
+        ...(row.noWeb ? { noWeb: true } : {}),
         ...(row.autoAllow.length ? { autoAllow: row.autoAllow } : {}),
       };
     },
