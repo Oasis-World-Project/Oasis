@@ -2,29 +2,57 @@
 # 每次 agent 运行起一个这个镜像的容器，容器里只跑 dsh，经 stdin/stdout 说 JSON-RPC。
 # dsh 版本只在这里锁定；升级时同时改镜像标签（harness 和 scripts/sandbox.mjs 的 SANDBOX_IMAGE 默认值）。
 # 构建（在仓库根目录）：pnpm sandbox:build
-ARG NODE_IMAGE=node:24.21.0-trixie-slim
+# 基础镜像连摘要一起锁：同一个标签以后被重新构建也不影响我们
+ARG NODE_IMAGE=node:24.21.0-trixie-slim@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66
 FROM ${NODE_IMAGE}
 ARG DSH_VERSION=0.2.1-rc.5
 # 通用文档/数据工具；预装包在独立 venv 内，运行时仍可经出口代理安装任务需要的包。
 ARG APT_RETRIES=3
-# 可选的 Debian 镜像站（如 https://mirrors.tuna.tsinghua.edu.cn）：deb.debian.org 太慢时用，只影响构建。
-# 这一层开始时镜像里还没有 CA 证书，https 的镜像站改走 http；包的签名由 apt 自己校验。
+# 系统软件从 Debian 的快照源装：DEBIAN_SNAPSHOT 是官方软件仓库在那一刻的样子，同一个日期什么时候构建，装到的版本都一样。
+# （以前给每个包写死小版本：官方仓库一出安全更新就把旧版本下架，过一阵子从头构建就失败。）
+# 要拿安全更新：把日期往前挪，重新构建，跑 pnpm sandbox:check 和 sandbox:check:3d。实际装上的版本记在镜像里的
+# 软件清单（/opt/oasis/software.txt）。日期不能早于基础镜像自己用的快照（写在它的 debian.sources 里）。
+ARG DEBIAN_SNAPSHOT=20261114T000000Z
+# 快照源在哪台主机上。snapshot-cloudflare.debian.org 是 Debian 官方给快照源开的 Cloudflare 入口，内容和
+# snapshot.debian.org 一样。
+ARG DEBIAN_SNAPSHOT_HOST=snapshot-cloudflare.debian.org
+# 可选的 Debian 镜像站（如 https://mirrors.tuna.tsinghua.edu.cn），只用来加快下载：快照源只在国外，从国内下
+# 很慢（2026-11-18 在开发机上量，约 50 kB/s，全部 687 MB 要几个小时；国内镜像站约 2 MB/s）。装哪个版本仍然
+# 只听快照源的（下面把它的优先级定成 1001）；镜像站上有同一个版本就从镜像站下，没有的才从快照源下。
+# 同一个版本的包在哪下都是同一个文件，apt 照常校验签名和哈希。镜像站单独写在一个软件源文件里（文件名排在
+# 前面，apt 就先从它下），这一层装完就删掉：配不配镜像站，造出来的镜像一样。
 ARG APT_MIRROR=
-RUN if [ -n "$APT_MIRROR" ]; then sed -i "s#http://deb.debian.org#$(printf %s "$APT_MIRROR" | sed 's#^https://#http://#')#g" /etc/apt/sources.list.d/debian.sources; fi \
- && apt-get -o Acquire::Retries=${APT_RETRIES} update \
+# 走 https。这一层开始时镜像里还没有 CA 证书，所以第一步装 ca-certificates 时不校验服务器证书——包本身的
+# 签名 apt 照常校验，和走 http 一样安全；装好以后的下载都校验证书。
+# 快照的 Release 文件过了有效期（Check-Valid-Until）是正常的；这些设置留在镜像里，接着它构建的镜像（3D）也用得上。
+RUN sed -i \
+      -e "s#^URIs: http://deb.debian.org/debian-security\$#URIs: https://${DEBIAN_SNAPSHOT_HOST}/archive/debian-security/${DEBIAN_SNAPSHOT}#" \
+      -e "s#^URIs: http://deb.debian.org/debian\$#URIs: https://${DEBIAN_SNAPSHOT_HOST}/archive/debian/${DEBIAN_SNAPSHOT}#" \
+      /etc/apt/sources.list.d/debian.sources \
+ && test "$(grep -c "^URIs: https://${DEBIAN_SNAPSHOT_HOST}/archive/debian.*/${DEBIAN_SNAPSHOT}\$" /etc/apt/sources.list.d/debian.sources)" = 2 \
+ && printf 'Package: *\nPin: origin "%s"\nPin-Priority: 1001\n' "${DEBIAN_SNAPSHOT_HOST}" > /etc/apt/preferences.d/oasis-snapshot \
+ && if [ -n "$APT_MIRROR" ]; then \
+      keyring="$(sed -n 's/^Signed-By: //p' /etc/apt/sources.list.d/debian.sources | head -n 1)"; \
+      printf 'Types: deb\nURIs: %s/debian\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: %s\n\nTypes: deb\nURIs: %s/debian-security\nSuites: trixie-security\nComponents: main\nSigned-By: %s\n' \
+        "$APT_MIRROR" "$keyring" "$APT_MIRROR" "$keyring" > /etc/apt/sources.list.d/00-oasis-mirror.sources; \
+    fi \
+ && printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "%s";\n' "${APT_RETRIES}" > /etc/apt/apt.conf.d/99oasis-snapshot \
+ && apt-get -o Acquire::https::Verify-Peer=false -o Acquire::https::Verify-Host=false update \
+ && apt-get -o Acquire::https::Verify-Peer=false -o Acquire::https::Verify-Host=false install -y --no-install-recommends ca-certificates \
+ && apt-get update \
  && attempt=0 \
  && until apt-get -o Acquire::Retries=${APT_RETRIES} install -y --no-install-recommends python3 python3-pip python3-venv fonts-noto-cjk \
-    libreoffice-writer=4:25.2.3-2+deb13u9 libreoffice-calc=4:25.2.3-2+deb13u9 libreoffice-impress=4:25.2.3-2+deb13u9 \
-    ffmpeg=7:7.1.5-0+deb13u1 poppler-utils=25.03.0-5+deb13u4 libpango-1.0-0=1.56.3-1 libpangoft2-1.0-0=1.56.3-1 \
-    melt=7.30.0-1+b2 frei0r-plugins=2.3.3-1+b1 \
-    chromium=156.0.8078.79-1~deb13u1 fonts-noto-color-emoji=2.051-0+deb13u1 fonts-unifont=1:15.1.01-1 \
-    pandoc=3.1.11.1+ds-2 sqlite3=3.46.1-7+deb13u2 jq=1.7.1-6+deb13u4 imagemagick=8:7.1.1.43+dfsg1-1+deb13u14 \
-    sox=14.4.2+git20190427-5+b3 git=1:2.47.3-0+deb13u1 ripgrep=14.1.1-1+b4 zip=3.0-15+deb13u1 unzip=6.0-29+deb13u1 \
-    make=4.4.1-2 g++=4:14.2.0-1; do \
+    libreoffice-writer libreoffice-calc libreoffice-impress \
+    ffmpeg poppler-utils libpango-1.0-0 libpangoft2-1.0-0 \
+    melt frei0r-plugins \
+    chromium fonts-noto-color-emoji fonts-unifont \
+    pandoc sqlite3 jq imagemagick \
+    sox git ripgrep zip unzip \
+    make g++; do \
       attempt=$((attempt + 1)); \
       if [ "$attempt" -ge "$APT_RETRIES" ]; then exit 1; fi; \
     done \
- && rm -rf /var/lib/apt/lists/* \
+ && rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/00-oasis-mirror.sources \
  # 沙箱以非 root、无特权、/dev/shm 只有 64 MB 运行，也没有显卡：这三项写成 Chromium 的默认参数，命令行和 playwright-core 都用得上
  && printf 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage --enable-unsafe-swiftshader"\n' > /etc/chromium.d/oasis
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \

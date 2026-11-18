@@ -4,13 +4,19 @@ ARG BASE_IMAGE=oasis/harness-sandbox-base:0.2.1-rc.5
 FROM ${BASE_IMAGE}
 ARG GLTF_TRANSFORM_VERSION=4.5.1
 ARG NPM_RETRIES=3
-# 可选的 Debian 镜像站（如 https://mirrors.tuna.tsinghua.edu.cn）：deb.debian.org 太慢时用，只影响构建
-ARG APT_MIRROR=
 USER root
-RUN if [ -n "$APT_MIRROR" ]; then sed -i "s#http://deb.debian.org#${APT_MIRROR}#g" /etc/apt/sources.list.d/debian.sources; fi \
+# 软件源是基础镜像里定好的 Debian 快照（DEBIAN_SNAPSHOT）。Blender 的版本写在镜像标签里，所以这里仍写明版本：
+# 快照日期往前挪以后它变了，构建会停在这里，提醒同时改标签
+# APT_MIRROR 和基础镜像里的是一回事：只加快下载，装完就删
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then \
+      keyring="$(sed -n 's/^Signed-By: //p' /etc/apt/sources.list.d/debian.sources | head -n 1)"; \
+      printf 'Types: deb\nURIs: %s/debian\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: %s\n\nTypes: deb\nURIs: %s/debian-security\nSuites: trixie-security\nComponents: main\nSigned-By: %s\n' \
+        "$APT_MIRROR" "$keyring" "$APT_MIRROR" "$keyring" > /etc/apt/sources.list.d/00-oasis-mirror.sources; \
+    fi \
  && apt-get -o Acquire::Retries=3 update \
  && apt-get install -y --no-install-recommends blender=4.3.2+dfsg-2 \
- && rm -rf /var/lib/apt/lists/* \
+ && rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/00-oasis-mirror.sources \
  && printf '\n3D software (CPU authoring; cloud GPU via oasis-tool 3d.render):\n' >> /opt/oasis/software.txt \
  && dpkg-query -W -f='${Package} ${Version}\n' blender >> /opt/oasis/software.txt
 COPY services/harness/sandbox/requirements-3d.txt /opt/oasis/requirements-3d.txt

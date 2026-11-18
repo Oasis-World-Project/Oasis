@@ -40,6 +40,7 @@ if (command === 'build' || command === 'build-3d') {
       '-t',
       image,
       ...(threed ? ['--build-arg', `BASE_IMAGE=${base}`] : []),
+      // 国内镜像站只用来加快下载；装哪个版本由 Dockerfile 里的快照日期定
       ...(process.env.SANDBOX_APT_MIRROR
         ? ['--build-arg', `APT_MIRROR=${process.env.SANDBOX_APT_MIRROR}`]
         : []),
