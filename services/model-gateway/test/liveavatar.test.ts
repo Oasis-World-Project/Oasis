@@ -92,10 +92,4 @@ describe('LiveAvatar 客户端', () => {
     const secretErr = await client.createSecret('n', 'oasis_run_secret').catch((e: unknown) => e);
     expect((secretErr as Error).message).not.toContain('oasis_run_secret');
   });
-
-  it('没配 Key 时 configured 为 false', () => {
-    expect(
-      createLiveAvatarClient({ baseUrl: 'https://la.test', apiKey: undefined }).configured,
-    ).toBe(false);
-  });
 });

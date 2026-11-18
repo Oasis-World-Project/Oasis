@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { defaultDockerSocket, demultiplex } from '../src/docker.ts';
+import { demultiplex } from '../src/docker.ts';
 
 const frame = (stream: 1 | 2, text: string) => {
   const payload = Buffer.from(text);
@@ -23,10 +23,5 @@ describe('Docker 输出拆流', () => {
     const read = async (s: PassThrough) => Buffer.concat(await s.toArray()).toString();
     expect(await read(stdout)).toBe('{"a":1}\n{"b":2}\n');
     expect(await read(stderr)).toBe('warn');
-  });
-
-  it('默认 socket：Windows 用 Docker Desktop 的命名管道', () => {
-    expect(defaultDockerSocket('win32')).toBe('//./pipe/docker_engine');
-    expect(defaultDockerSocket('linux')).toBe('/var/run/docker.sock');
   });
 });

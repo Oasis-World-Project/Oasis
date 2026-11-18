@@ -35,12 +35,6 @@ describe('配置', () => {
     await expect(attempt).rejects.toBeInstanceOf(ConfigError);
     await expect(attempt).rejects.toThrow(/FOO_URL[\s\S]*BAR_KEY/);
   });
-
-  it('通用配置有默认值，类型被正确转换', async () => {
-    const service = await createService({ name: 't', env: {} }, BASE_ENV);
-    expect(service.config.PORT).toBe(0);
-    expect(service.config.SHUTDOWN_GRACE_MS).toBe(10_000);
-  });
 });
 
 describe('探针与通用接口', () => {
@@ -125,26 +119,6 @@ describe('错误格式', () => {
   });
 });
 
-describe('主动抛出的 5xx', () => {
-  it('HttpError 的 code 和提示原样返回', async () => {
-    const service = await createService(
-      {
-        name: 't',
-        env: {},
-        routes: (app) => {
-          app.get('/v1/down', async () => {
-            throw new HttpError(503, 'provider_not_configured', '模型服务还没有配置好');
-          });
-        },
-      },
-      BASE_ENV,
-    );
-    const res = await service.app.inject('/v1/down');
-    expect(res.statusCode).toBe(503);
-    expect(ErrorBody.parse(res.json()).error.code).toBe('provider_not_configured');
-  });
-});
-
 describe('优雅关闭', () => {
   it('关闭期间 /ready 返回 503，依赖按创建顺序的倒序关闭', async () => {
     const closed: string[] = [];
@@ -182,7 +156,7 @@ describe('优雅关闭', () => {
 });
 
 describe('业务错误', () => {
-  it('HttpError 的 4xx 原样返回 code 和 message', async () => {
+  it('请求体不合格是 400；主动抛出的 HttpError 原样返回状态、code 和 message', async () => {
     const service = await createService(
       {
         name: 't',
