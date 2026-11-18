@@ -8,6 +8,7 @@ import {
   type AssignCard,
   type AssignItem,
 } from '@oasis/contracts/conversation';
+import type { AssignEditBody } from '@oasis/contracts/group';
 import { HttpError, type Logger } from '@oasis/service-kit';
 import type { z } from 'zod';
 import type { Conversation, ConversationRepo } from '../repo/conversation-repo.ts';
@@ -37,7 +38,7 @@ function blockOf<T extends z.ZodType>(
   return undefined;
 }
 
-const ENDED: AssignItem['status'][] = ['done', 'declined', 'failed', 'stopped'];
+const ENDED: AssignItem['status'][] = ['done', 'declined', 'failed', 'stopped', 'dropped'];
 /** 没接、没做成的：要告诉发单的 AI */
 const TROUBLE: AssignItem['status'][] = ['declined', 'failed', 'stopped'];
 const STATUS_TEXT: Record<AssignItem['status'], string> = {
@@ -47,6 +48,7 @@ const STATUS_TEXT: Record<AssignItem['status'], string> = {
   declined: '没接',
   failed: '没做成',
   stopped: '停下了',
+  dropped: '人撤掉了',
 };
 /** 一次取多少条没听过的群聊 */
 const HEARING = 200;
@@ -138,12 +140,13 @@ export function createGroupAssign(deps: {
     const upstream = item.after.length
       ? `它要等的第 ${item.after.join('、')} 项已经交了，文件在群文件里。`
       : '';
+    const from = item.from;
     const opened = await open(
       seat.id,
       item.key,
       `assign:${row.id}:${item.id}`,
       (names) =>
-        `轮到你了：${names.get(row.key) ?? row.key} 发了分工单「${row.card.title}」，把第 ${item.id} 项交给你：${item.task}\n${upstream}这一项由你负责：做完把成果放进 out/ 交到群里，再说一句交了什么。不接就只回一个 oasis-decline 代码块写明原因，不要动手。`,
+        `轮到你了：${names.get(row.key) ?? row.key} 发了分工单「${row.card.title}」，把第 ${item.id} 项交给你：${item.task}\n${upstream}${from ? `${names.get(from) ?? from} 之前做过一部分，它交的文件在群文件里。` : ''}这一项由你负责：做完把成果放进 out/ 交到群里，再说一句交了什么。不接就只回一个 oasis-decline 代码块写明原因，不要动手。`,
       taskTitle([], item.task),
     );
     if (!opened) return false;
@@ -233,7 +236,7 @@ export function createGroupAssign(deps: {
      * 一个席位的一轮结束了（调用方拿着它的 message 锁）：它做的是分工单里的一项就记下结果；
      * 它这一轮发了分工单就收下；它是对全体说的那句话挑中先出来的，说完了就让别的 AI 接话。
      */
-    async settled(seat: Conversation, runId: string) {
+    async settled(seat: Conversation, runId: string, callers: string[] = []) {
       const groupId = seat.parentId,
         key = seat.modelKey;
       if (!groupId || !key) return;
@@ -266,6 +269,7 @@ export function createGroupAssign(deps: {
           runId,
           title: plan.title || taskTitle([], wanted[0]!.task),
           status: 'open',
+          callers,
           items: wanted.map((item): AssignItem => {
             const target = named(item.to);
             return {
@@ -283,6 +287,81 @@ export function createGroupAssign(deps: {
         logger.info({ groupId, key, items: card.items.length }, '群里发了分工单');
       });
       if (await repo.leadSpoke(groupId, key, seat.heardSeq)) deps.speak.nudge(groupId, true);
+    },
+    /**
+     * 人改一份没关上的分工单（调用方核对过他是群成员，owner 是他是不是群主）：群主和引来这份单子的人可以。
+     * 改派、撤掉正在做的一项会先停下那个 AI 的这一轮，它已经交的文件留在群文件里；发单的 AI 仍然负责
+     * 核对和收口。返回改了什么的一句话（调用方记进群里）。
+     */
+    async edit(input: {
+      groupId: string;
+      messageId: string;
+      userId: string;
+      owner: boolean;
+      change: AssignEditBody;
+    }): Promise<string> {
+      const { groupId, change } = input;
+      return inGroup(groupId, async () => {
+        const row = (await repo.open(groupId)).find((found) => found.id === input.messageId);
+        if (!row) throw new HttpError(409, 'assign_closed', '这份分工单已经关上了');
+        if (!input.owner && !(row.card.callers ?? []).includes(input.userId))
+          throw new HttpError(403, 'assign_not_allowed', '只有群主和叫它做这件事的人可以改分工单');
+        const all = await seats.list(groupId);
+        const name = (key: string) => all.find((seat) => seat.model_key === key)?.title ?? key;
+        /** 停下正在做这一项的那一轮：它收尾时这一项已经不算它的了，不会再记成它的结果 */
+        const halt = async (item: AssignItem) => {
+          const seat = await seats.seat(groupId, item.key);
+          if (item.runId && seat?.turn?.runId === item.runId) await deps.turns.stop(seat.turn);
+        };
+        const live = (item: AssignItem) => item.status === 'waiting' || item.status === 'running';
+        let said: string;
+        if (change.op === 'close') {
+          for (const item of row.card.items.filter(live)) {
+            if (item.status === 'running') await halt(item);
+            item.status = 'dropped';
+          }
+          row.card.status = 'closed';
+          said = `把分工单「${row.card.title}」全部停下了。`;
+        } else {
+          const item = row.card.items.find((found) => found.id === change.item);
+          if (!item) throw new HttpError(404, 'assign_item_not_found', '分工单里没有这一项');
+          if (!live(item)) throw new HttpError(409, 'assign_item_ended', '这一项已经结束了');
+          const which = `分工单「${row.card.title}」第 ${item.id} 项`;
+          if (change.op === 'retask') {
+            if (item.status !== 'waiting')
+              throw new HttpError(
+                409,
+                'assign_item_started',
+                '这一项已经开工了，要求改不了；可以停下并改派',
+              );
+            item.task = change.task;
+            said = `把${which}的要求改成：${change.task}`;
+          } else if (change.op === 'drop') {
+            if (item.status === 'running') await halt(item);
+            item.status = 'dropped';
+            said = `把${which}（${name(item.key)}）撤掉了。`;
+          } else {
+            if (!all.some((seat) => seat.model_key === change.key))
+              throw new HttpError(404, 'ai_not_in_group', '群里没有这个 AI');
+            if (change.key === item.key)
+              throw new HttpError(409, 'assign_same_ai', '这一项本来就是它的');
+            if (change.key === row.key)
+              throw new HttpError(
+                409,
+                'assign_to_lead',
+                '发单的 AI 自己做的不进分工单：撤掉这一项，再对它说',
+              );
+            const was = item.key;
+            const started = item.status === 'running';
+            if (started) await halt(item);
+            Object.assign(item, { key: change.key, status: 'waiting', runId: null });
+            if (started) item.from = was;
+            said = `把${which}从 ${name(was)} 改派给 ${name(change.key)}。`;
+          }
+        }
+        await repo.save(row.id, row.card);
+        return said;
+      });
     },
     /** 稍后推进这个群的分工单（不占着调用方手里的锁） */
     schedule(groupId: string) {

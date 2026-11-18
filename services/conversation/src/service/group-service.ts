@@ -2,9 +2,10 @@
 // （@ 全体就是每个 AI 各开一轮）；被 @ 的 AI 正忙，这句话就排着，它这一轮做完接着开下一轮，
 // 也可以「现在告诉它」作为插话送进去。交给 AI 的是群里它没听过的话（group-hearing.ts）。
 // 群里 AI 花的钱都由群主付。
+import { randomUUID } from 'node:crypto';
 import { ModelRoute } from '@oasis/contracts/agent';
 import type { Mention } from '@oasis/contracts/conversation';
-import type { GroupOptions, GroupSnapshot } from '@oasis/contracts/group';
+import type { AssignEditBody, GroupOptions, GroupSnapshot } from '@oasis/contracts/group';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import {
   withMessageLock,
@@ -43,9 +44,16 @@ export function createGroupService(deps: {
   speak: { nudge(groupId: string): void; lead?(groupId: string): Promise<string | undefined> };
   /** 分工单（group-assign.ts）：席位一轮结束时记下结果、收下它发的分工单，再推进 */
   assign?: {
-    settled(seat: Conversation, runId: string): Promise<void>;
+    settled(seat: Conversation, runId: string, callers: string[]): Promise<void>;
     schedule(groupId: string): void;
     setLead(groupId: string, seq: number, key: string): Promise<void>;
+    edit(input: {
+      groupId: string;
+      messageId: string;
+      userId: string;
+      owner: boolean;
+      change: AssignEditBody;
+    }): Promise<string>;
   };
   purge: Purge;
   logger: Logger;
@@ -99,9 +107,9 @@ export function createGroupService(deps: {
     await seats.setHeard(seat.id, last.seq);
     await turns.begin(locked, seat, [], requestId, await attach(seat, brief));
   }
-  turns.onSeatIdle(async (locked, seat, runId) => {
-    await deps.assign?.settled(seat, runId);
-    await next(locked, seat, `seat:${runId}`);
+  turns.onSeatIdle(async (locked, seat, turn) => {
+    await deps.assign?.settled(seat, turn.runId, turn.callers ?? []);
+    await next(locked, seat, `seat:${turn.runId}`);
     if (seat.parentId) deps.assign?.schedule(seat.parentId);
   });
 
@@ -295,6 +303,28 @@ export function createGroupService(deps: {
         );
         await seats.setHeard(target.id, message.seq);
       });
+    },
+
+    /**
+     * 人改分工单：改派、改要求、撤掉一项，或整份全部停下（群主和引来这份单子的人可以）。改了什么在群里
+     * 记一句——人看得到是谁改的，AI 下次轮到时听得到；这一句不叫谁接话。
+     */
+    async editAssign(userId: string, id: string, messageId: string, change: AssignEditBody) {
+      const group = await repo.get(userId, id, NO_MESSAGES);
+      if (!deps.assign) throw new HttpError(409, 'assign_closed', '这份分工单已经关上了');
+      const said = await deps.assign.edit({
+        groupId: id,
+        messageId,
+        userId,
+        owner: group.ownerId === userId,
+        change,
+      });
+      await repo.send(userId, id, said, randomUUID(), [], {
+        attachments: [],
+        refs: [],
+        task: false,
+      });
+      deps.assign.schedule(id);
     },
 
     /** 停下这个 AI 正在做的一轮（已经做出来的会存下）：群主和引来这一轮的人可以 */

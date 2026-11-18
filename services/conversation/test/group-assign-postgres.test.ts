@@ -4,13 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AssignCard } from '@oasis/contracts/conversation';
+import type { AssignEditBody } from '@oasis/contracts/group';
 import { createConversationRepo } from '../src/repo/conversation-repo.ts';
 import { createGroupRepo } from '../src/repo/group-repo.ts';
 import { createGroupSeats } from '../src/repo/group-seats.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
-import { fakeProfiles, groupAssign, groupFiles } from './support/group-fixture.ts';
+import { befriend, fakeProfiles, groupAssign, groupFiles } from './support/group-fixture.ts';
 import { scratchSchema } from './support/schema.ts';
 import { client, event, fake, harnessUrl, othersUrl, until } from './support/turn-fixture.ts';
 
@@ -89,6 +90,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的分工', () => {
   const card = async (id: string) =>
     (await groups.get(owner, id, { after: 0 })).messages.find((m) => m.kind === 'assign')?.data as
       AssignCard | undefined;
+  /** 群里最新的那份分工单 */
+  const latestCard = async (id: string) =>
+    (await groups.get(owner, id, { after: 0 })).messages.findLast((m) => m.kind === 'assign')
+      ?.data as AssignCard | undefined;
   /** 最近开的那一轮交给 harness 的话 */
   const lastPrompt = () => String(fake.starts.at(-1)?.prompt);
   const block = (kind: string, value: unknown) =>
@@ -266,5 +271,94 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的分工', () => {
     });
     expect(fixed.items[0]).toMatchObject({ status: 'done', runId: going.items[0]!.runId });
     expect(handed()).toHaveLength(1);
+  });
+  it('人改分工单：改要求、改派、撤掉；正在做的先停下再改派；整份全部停下；不是群主也不是叫它的人不能改', async () => {
+    const id = await setup();
+    const plan = (items: unknown[]) => block('assign', { title: '竞品 A', items });
+    await say(id, '做竞品 A 的分析', 'claude');
+    await finish(
+      id,
+      'claude',
+      plan([
+        { id: 1, to: 'glm', task: '查价格' },
+        { id: 2, to: 'kimi', task: '写总结', after: ['1'] },
+      ]),
+    );
+    await until(async () => ((await card(id))?.items[0]?.status === 'running' ? true : undefined));
+    const messageId = async () =>
+      (await groups.get(owner, id, { after: 0 })).messages.findLast((m) => m.kind === 'assign')!.id;
+    const edit = async (change: AssignEditBody, user = owner) =>
+      groups.editAssign(user, id, await messageId(), change);
+    const starts = fake.starts.length;
+    // 还没开工的第 2 项：改要求、换一个 AI；群里记一句是谁改的，不叫谁接话
+    await edit({ op: 'retask', item: '2', task: '写一页总结，带表格' });
+    await edit({ op: 'reassign', item: '2', key: 'glm' });
+    expect((await card(id))!.items[1]).toMatchObject({
+      key: 'glm',
+      task: '写一页总结，带表格',
+      status: 'waiting',
+    });
+    const said = (await groups.get(owner, id, { after: 0 })).messages.filter(
+      (m) => m.role === 'user',
+    );
+    expect(said.slice(-2).map((m) => m.content)).toEqual([
+      '把分工单「竞品 A」第 2 项的要求改成：写一页总结，带表格',
+      '把分工单「竞品 A」第 2 项从 DeepSeek 改派给 DeepSeek。',
+    ]);
+    expect(fake.starts).toHaveLength(starts);
+    // 发单的 AI 自己做的不进单子；开工了的改不了要求；群里别的成员不能改
+    await expect(edit({ op: 'reassign', item: '2', key: 'claude' })).rejects.toMatchObject({
+      code: 'assign_to_lead',
+    });
+    await expect(edit({ op: 'retask', item: '1', task: '查价格和销量' })).rejects.toMatchObject({
+      code: 'assign_item_started',
+    });
+    const member = randomUUID();
+    await befriend(pool, owner, member);
+    await groups.addMember(owner, id, member, 'r');
+    await expect(edit({ op: 'drop', item: '2' }, member)).rejects.toMatchObject({
+      code: 'assign_not_allowed',
+    });
+    // 正在做的第 1 项改派：先停下原来那个 AI 的这一轮，新的 AI 开工时知道之前有人做过一部分
+    const stopped = (await runOf(id, 'glm'))!;
+    await edit({ op: 'reassign', item: '1', key: 'kimi' });
+    expect(fake.stops).toContain(stopped);
+    await until(async () => ((await card(id))!.items[0]!.status === 'running' ? true : undefined));
+    expect((await card(id))!.items[0]).toMatchObject({ key: 'kimi', from: 'glm' });
+    expect(lastPrompt()).toContain('把第 1 项交给你：查价格');
+    expect(lastPrompt()).toContain('DeepSeek 之前做过一部分，它交的文件在群文件里。');
+    // 被停下的那一轮收尾时，这一项已经不算它的了
+    await finish(id, 'glm', '先停在这里。');
+    expect((await card(id))!.items[0]).toMatchObject({ key: 'kimi', status: 'running' });
+    // 撤掉第 2 项；第 1 项交了就都结束了：发单的 AI 收口时听得到哪一项是人撤掉的
+    await edit({ op: 'drop', item: '2' });
+    await finish(id, 'kimi', '价格查好了。');
+    await until(async () => (await runOf(id, 'claude')) ?? undefined);
+    expect(lastPrompt()).toContain('第 1 项（DeepSeek）：交了');
+    expect(lastPrompt()).toContain('第 2 项（DeepSeek）：人撤掉了');
+    await until(async () => ((await card(id))?.status === 'closed' ? true : undefined));
+    await expect(edit({ op: 'drop', item: '1' })).rejects.toMatchObject({ code: 'assign_closed' });
+    // 再发一份，两项同时在做：整份全部停下——都停下、单子关上，不再轮到发单的 AI
+    await finish(
+      id,
+      'claude',
+      plan([
+        { id: 1, to: 'glm', task: '查价格' },
+        { id: 2, to: 'kimi', task: '查销量' },
+      ]),
+    );
+    await until(async () =>
+      (await latestCard(id))?.items.every((item) => item.status === 'running') ? true : undefined,
+    );
+    const running = [(await runOf(id, 'glm'))!, (await runOf(id, 'kimi'))!];
+    await edit({ op: 'close' });
+    expect(fake.stops).toEqual(expect.arrayContaining(running));
+    expect(await latestCard(id)).toMatchObject({
+      status: 'closed',
+      items: [{ status: 'dropped' }, { status: 'dropped' }],
+    });
+    await finish(id, 'glm', '停了。');
+    await finish(id, 'kimi', '停了。');
+    expect(await runOf(id, 'claude')).toBeNull();
   });
 });

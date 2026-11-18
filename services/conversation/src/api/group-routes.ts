@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   AddGroupAiBody,
   AddGroupMemberBody,
+  AssignEditBody,
   CreateGroupBody,
   GroupAiRoleBody,
   GroupNicknameBody,
@@ -90,6 +91,17 @@ export function registerGroupRoutes(
   app.post('/v1/groups/:id/ais/:key/stop', async (request, reply) => {
     const { id, key } = parseWith(AiParams, request.params);
     await groups.stopAi(requireUserId(request), id, key);
+    return reply.code(204).send();
+  });
+  /** 人改分工单：改派、改要求、撤掉一项，或整份全部停下 */
+  app.post('/v1/groups/:id/assigns/:messageId', async (request, reply) => {
+    const { id, messageId } = parseWith(MessageParams, request.params);
+    await groups.editAssign(
+      requireUserId(request),
+      id,
+      messageId,
+      parseWith(AssignEditBody, request.body),
+    );
     return reply.code(204).send();
   });
   /** 群主把一个好友直接拉进群（不用对方同意） */

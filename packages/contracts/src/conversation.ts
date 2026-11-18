@@ -165,14 +165,16 @@ export const AssignItem = z.object({
   task: z.string(),
   /** 等这几项（编号）交了才开工 */
   after: z.array(z.string()),
-  /** waiting 还没开工；declined 它没接；failed、stopped 没做成 */
-  status: z.enum(['waiting', 'running', 'done', 'declined', 'failed', 'stopped']),
+  /** waiting 还没开工；declined 它没接；failed、stopped 没做成；dropped 人撤掉了 */
+  status: z.enum(['waiting', 'running', 'done', 'declined', 'failed', 'stopped', 'dropped']),
   /** 它做这一项的那一轮 */
   runId: z.uuid().nullable(),
   /** 没接、没做成的原因 */
   note: z.string().optional(),
   /** 没接、没做成这件事已经告诉过发分工单的 AI */
   told: z.boolean().optional(),
+  /** 人改派过正在做的这一项：之前做过一部分的那个 AI（它交的文件在群文件里） */
+  from: z.string().optional(),
 });
 export type AssignItem = z.infer<typeof AssignItem>;
 /**
@@ -185,6 +187,8 @@ export const AssignCard = z.object({
   title: z.string(),
   status: z.enum(['open', 'closed']),
   items: z.array(AssignItem),
+  /** 发单的那一轮是谁的话引来的（用户 ID）：他们和群主能改这份单子 */
+  callers: z.array(z.uuid()).optional(),
 });
 export type AssignCard = z.infer<typeof AssignCard>;
 

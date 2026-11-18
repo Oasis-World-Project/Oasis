@@ -1,6 +1,7 @@
 // 各页面用到的查询和操作。查询的 key 集中在这里，便于在操作后刷新对应数据。
 import { AiSettings, ModelEntry, ModelList, type SaveAiBody } from '@oasis/contracts/agent';
 import {
+  type AssignEditBody,
   GroupFileList,
   GroupList,
   GroupSnapshot,
@@ -135,6 +136,9 @@ export const setGroupAiRole = (id: string, key: string, role: string) =>
 /** 停下群里这个 AI 正在做的一轮 */
 export const stopGroupAi = (id: string, key: string) =>
   apiVoid(`${groupPath(id)}/ais/${encodeURIComponent(key)}/stop`, { method: 'POST', body: {} });
+/** 人改分工单：改派、改要求、撤掉一项（正在做的先停下），或整份全部停下 */
+export const editAssign = (id: string, messageId: string, change: AssignEditBody) =>
+  apiVoid(`${groupPath(id)}/assigns/${messageId}`, { method: 'POST', body: change });
 /** 「现在告诉它」：@ 了这个 AI、它还没看到的一句，现在送进它正在做的一轮 */
 export const steerGroupMessage = (id: string, messageId: string, key: string) =>
   apiVoid(`${groupPath(id)}/messages/${messageId}/steer`, { method: 'POST', body: { key } });

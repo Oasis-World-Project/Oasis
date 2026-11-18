@@ -211,8 +211,13 @@ describe('分工单在工作台和聊天里', () => {
     ]);
   });
 
-  it('聊天里是一张进度卡：交了几项、每项一个圆环；「看分工」去任务页签，「待开始」一栏有它', async () => {
-    api();
+  it('聊天里是一张进度卡：交了几项、每项一个圆环；「看分工」去任务页签，「待开始」一栏有它；群主点开一项能改', async () => {
+    const edits: unknown[] = [];
+    api([], (method, path, body) => {
+      if (method !== 'POST' || !path.endsWith(`/assigns/${plan(1).id}`)) return undefined;
+      edits.push(body);
+      return new Response(null, { status: 204 });
+    });
     await room(group({ messages: [plan(1)] }));
     const progress = await screen.findByRole('region', { name: '任务进度' });
     expect(within(progress).getByText('0/2')).toBeTruthy();
@@ -228,6 +233,11 @@ describe('分工单在工作台和聊天里', () => {
     expect(
       within(within(bench).getByRole('region', { name: '进行中' })).getByText('做图表'),
     ).toBeTruthy();
+    fireEvent.click(within(waiting).getByRole('button', { name: /写英文摘要/ }));
+    const actions = within(bench).getByRole('group', { name: '改这一项' });
+    expect(within(actions).getByRole('button', { name: '改要求' })).toBeTruthy();
+    fireEvent.click(within(actions).getByRole('button', { name: '撤掉' }));
+    await waitFor(() => expect(edits).toEqual([{ op: 'drop', item: '2' }]));
   });
 
   it('AI 话里的分工单代码块不显示（它另有一张卡），整块写在一行里也一样；不接的那一块显示成一句话', async () => {

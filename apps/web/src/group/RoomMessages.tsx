@@ -259,6 +259,7 @@ const PROGRESS: Record<AssignCard['items'][number]['status'], number> = {
   declined: 0,
   failed: 0,
   stopped: 0,
+  dropped: 0,
 };
 
 /**
@@ -283,7 +284,7 @@ function AssignProgress({
     >
       <div className="flex items-baseline gap-2.5">
         <span className="font-display text-[30px] leading-none tracking-[-0.03em]">
-          {done}/{card.items.length}
+          {done}/{card.items.filter((item) => item.status !== 'dropped').length}
         </span>
         <span className="flex min-w-0 flex-col">
           <span className="text-[13.5px] font-medium">{card.title}</span>

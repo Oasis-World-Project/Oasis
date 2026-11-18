@@ -31,6 +31,8 @@ export interface RoomTask {
   startedAt: string;
   finishedAt: string | null;
   live: boolean;
+  /** 这张卡是分工单里的一项：哪份单子、哪一项、单子关上没有、谁发的、谁引来的（他们和群主能改） */
+  plan?: { messageId: string; item: AssignItem; open: boolean; lead: string; callers: string[] };
 }
 
 type Text = Extract<GroupMessage, { kind: 'text' }>;
@@ -53,8 +55,18 @@ export function itemNote(item: AssignItem): string {
       return `没做成${why}`;
     case 'stopped':
       return `停下了${why}`;
+    case 'dropped':
+      return '人撤掉了';
   }
 }
+
+const planOf = (message: Assign, item: AssignItem): NonNullable<RoomTask['plan']> => ({
+  messageId: message.id,
+  item,
+  open: message.data.status === 'open',
+  lead: message.authorId,
+  callers: message.data.callers ?? [],
+});
 
 /** 分工单里还没有自己那一轮可看的几项（还没开工的、刚开工还没动手的、没接的）：各一张卡 */
 function itemTasks(message: Assign, shown: Set<string>): RoomTask[] {
@@ -72,6 +84,7 @@ function itemTasks(message: Assign, shown: Set<string>): RoomTask[] {
       startedAt: message.createdAt,
       finishedAt: null,
       live: item.status === 'running',
+      plan: planOf(message, item),
     }));
 }
 
@@ -159,6 +172,12 @@ export function tasksOf(messages: GroupMessage[]): RoomTask[] {
     });
   }
   const shown = new Set(tasks.map((task) => task.runId));
+  // 已经开工、有自己那一轮的项：那一轮的卡上也记着它是分工单里的哪一项
+  for (const message of plans)
+    for (const item of message.data.items) {
+      const task = tasks.find((found) => found.runId === item.runId);
+      if (task) task.plan = planOf(message, item);
+    }
   return [...tasks, ...plans.flatMap((plan) => itemTasks(plan, shown))].reverse();
 }
 
@@ -168,7 +187,7 @@ export const workMark = (messages: GroupMessage[]) =>
     .filter((message) => message.role === 'assistant' && message.kind !== 'topic')
     .map((message) =>
       message.kind === 'assign'
-        ? `${message.id}:${message.data.items.map((item) => item.status[0]).join('')}`
+        ? `${message.id}:${message.data.status}:${message.data.items.map((item) => `${item.status}${item.key}${item.task.length}`).join('')}`
         : message.kind === 'task'
           ? `${message.id}:${message.data.status}`
           : message.status === 'streaming'
