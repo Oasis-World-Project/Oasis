@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   clip,
   estimate,
+  holdOver,
   MODEL_ARG,
   optionalModel,
   pickModel,
@@ -32,6 +33,7 @@ const MusicFields = z.object({
     z.enum(['true', 'false']).transform((value) => value === 'true'),
   ]),
   lyrics: z.string().max(3500).optional(),
+  duration: z.coerce.number().int().min(30).max(300).optional(),
   model: optionalModel,
 });
 type MusicInput = z.infer<typeof MusicFields>;
@@ -44,17 +46,30 @@ const lyriaInput = (a: MusicInput) => ({
   ).slice(0, 5000),
 });
 
+const MusicResult = z.object({
+  audio: z.object({ url: z.url(), content_type: z.string().nullish() }),
+  /** 有的型号带实际时长：MiniMax Music 3 是秒，Mureka 是毫秒（按首计价，不用它） */
+  duration: z.number().nullish(),
+});
+
 /**
  * fal 上的音乐型号：入参各不相同，差别只写在这张表里，目录只列表里有的。
- * micro 是一首的标价（微美元）；sings 为 false 的只做纯器乐。
+ * micro 是这一次的标价（微美元）：按首计价的不看参数，按时长计价的看 duration（秒，不写用各自的默认）。
+ * makes 是做得了什么：both 都行，instrumental 只做纯器乐，song 只做带歌词的歌。
+ * actual：结果里带实际时长、又按时长计价的，照实际的算（不超过提交时的标价）。
  */
 const MUSIC_MODELS: Record<
   string,
-  { micro: number; sings: boolean; input: (a: MusicInput) => Record<string, unknown> }
+  {
+    micro: (a: { duration?: number | undefined }) => number;
+    makes: 'both' | 'instrumental' | 'song';
+    input: (a: MusicInput) => Record<string, unknown>;
+    actual?: (result: z.infer<typeof MusicResult>) => number | undefined;
+  }
 > = {
   'fal-ai/minimax-music/v2.6': {
-    micro: 150_000,
-    sings: true,
+    micro: () => 150_000,
+    makes: 'both',
     input: (a) => ({
       prompt: a.prompt,
       is_instrumental: a.instrumental,
@@ -62,33 +77,80 @@ const MUSIC_MODELS: Record<
       audio_setting: { sample_rate: 44100, bitrate: 256000, format: 'mp3' },
     }),
   },
-  'fal-ai/lyria3/pro': { micro: 80_000, sings: true, input: lyriaInput },
-  'google/lyria/v3': { micro: 100_000, sings: true, input: lyriaInput },
-  // 按秒计价（$0.0003/秒，默认开着的 thinking 翻倍）：固定出 120 秒；风格说明最多 512 字；出的是 FLAC。
+  'fal-ai/lyria3/pro': { micro: () => 80_000, makes: 'both', input: lyriaInput },
+  'google/lyria/v3': { micro: () => 100_000, makes: 'both', input: lyriaInput },
+  // 按秒计价（$0.0003/秒，默认开着的 thinking 翻倍）：不写时长出 120 秒；风格说明最多 512 字；出的是 FLAC。
   // 只做纯器乐：给中文歌词，两次都唱成听不出词的哼唱（2026-11-11 真实调用）
   'fal-ai/ace-step-1.5': {
-    micro: 72_000,
-    sings: false,
-    input: (a) => ({ prompt: a.prompt.slice(0, 512), lyrics: '[Instrumental]', duration: 120 }),
+    micro: (a) => (a.duration ?? 120) * 600,
+    makes: 'instrumental',
+    input: (a) => ({
+      prompt: a.prompt.slice(0, 512),
+      lyrics: '[Instrumental]',
+      duration: a.duration ?? 120,
+    }),
+  },
+  // 按输出分钟计价（$0.6/分钟，不足一分钟按一分钟）：不写时长出 60 秒。没有歌词参数，歌词和 Lyria 一样写进 prompt
+  'elevenlabs/music/v2.5': {
+    micro: (a) => Math.ceil((a.duration ?? 60) / 60) * 600_000,
+    makes: 'both',
+    input: (a) => ({
+      prompt: a.instrumental ? a.prompt : `${a.prompt}\n\nLyrics:\n${a.lyrics}`,
+      music_length_ms: (a.duration ?? 60) * 1000,
+      force_instrumental: a.instrumental,
+    }),
+  },
+  // 带歌词 $0.15 一首（只给描述的要 $0.50，不走这条）；风格说明最多 1024 字；时长 120–300 秒，不写由它定
+  'mureka/v9.5/generate/song': {
+    micro: () => 150_000,
+    makes: 'song',
+    input: (a) => ({
+      lyrics: a.lyrics,
+      prompt: a.prompt.slice(0, 1024),
+      ...(a.duration ? { duration: Math.max(120, a.duration) } : {}),
+    }),
+  },
+  'mureka/v9.5/generate/instrumental': {
+    micro: () => 150_000,
+    makes: 'instrumental',
+    input: (a) => ({ prompt: a.prompt }),
+  },
+  // 按秒计价（$0.002/秒）：duration 是上限（不写 60 秒），可能提前结束，照结果里的实际秒数算。
+  // 歌词必填、没有器乐开关：器乐把歌词写成一行段落标记。出的是 WAV（一分钟约 10 MB）
+  'minimax/music-3': {
+    micro: (a) => (a.duration ?? 60) * 2_000,
+    makes: 'both',
+    input: (a) => ({
+      prompt: a.prompt,
+      lyrics: a.instrumental ? '[instrumental]' : a.lyrics,
+      duration: a.duration ?? 60,
+    }),
+    actual: (result) =>
+      typeof result.duration === 'number' && result.duration > 0
+        ? Math.ceil(result.duration * 2_000)
+        : undefined,
   },
 };
-/** 这个型号做不做得了这次要的：带歌词的歌要会唱的型号 */
-const canMake = (model: string, instrumental: unknown) =>
-  instrumental === true || instrumental === 'true' || MUSIC_MODELS[model]?.sings !== false;
+/** 这个型号做不做得了这次要的：有的只做纯器乐，有的只做带歌词的歌 */
+function canMake(model: string, instrumental: unknown) {
+  const makes = MUSIC_MODELS[model]?.makes ?? 'both';
+  const wanted = instrumental === true || instrumental === 'true' ? 'instrumental' : 'song';
+  return makes === 'both' || makes === wanted;
+}
+/** 这次的标价：型号不在表里返回 undefined */
+const musicPrice = (model: string | undefined, args: Record<string, unknown>) =>
+  MUSIC_MODELS[model ?? '']?.micro({ duration: Number(args.duration) || undefined });
 
 const MusicArgs = MusicFields.refine(
   (args) => args.instrumental || Boolean(args.lyrics?.trim()),
   '歌曲必须提供歌词；器乐请指定 instrumental=true',
 ).refine(
   (args) => !args.model || canMake(args.model, args.instrumental),
-  '点名的型号只做纯器乐；带歌词的歌换一个型号，或不写 model',
+  '点名的型号做不了这一种（有的只做纯器乐，有的只做带歌词的歌）；换一个型号，或不写 model',
 );
 /** 任务号里没记型号的旧任务：那时只有这一个型号 */
 const MUSIC_BEFORE_MEMO = { model: 'fal-ai/minimax-music/v2.6', micro: 150_000 };
 
-const MusicResult = z.object({
-  audio: z.object({ url: z.url(), content_type: z.string().nullish() }),
-});
 /**
  * 各型号出的格式不一样（ACE-Step 出 FLAC，地址却以 .bin 结尾）：按供应商说的类型起名，
  * 没说的看地址后缀；沙箱存的时候再按文件头核对。
@@ -221,17 +283,18 @@ export const music: ToolDef = {
   key: 'audio.music',
   name: '生成音乐',
   description:
-    '生成完整器乐曲或带歌词的歌曲（ace-step 只做纯器乐）；结果为混合音频，不保证分轨或精确时长。',
+    '生成完整器乐曲或带歌词的歌曲（有的型号只做其中一种）；结果为混合音频，不保证分轨或精确时长。',
   usage:
-    'oasis-tool audio.music --prompt "音乐风格和段落要求" --instrumental true|false [--lyrics "歌词"] --out out/音乐.mp3',
+    'oasis-tool audio.music --prompt "音乐风格和段落要求" --instrumental true|false [--lyrics "歌词"] [--duration 秒] --out out/音乐.mp3',
   unit: '首',
   estimateMicro: 150_000,
-  holdMicro: () => 500_000,
+  // 这次标价的 1.2 倍，不低于 $0.5（按时长计价的型号一首能过 $1）
+  holdMicro: (args, model) => holdOver(musicPrice(model, args), 500_000),
   long: true,
   provider: 'fal',
   models: (config) =>
     (config.musicModels ?? []).filter((model) => Object.hasOwn(MUSIC_MODELS, model)),
-  priceMicro: (model) => MUSIC_MODELS[model]?.micro,
+  priceMicro: (model) => MUSIC_MODELS[model]?.micro({}),
   args: MusicArgs,
   cli: [
     {
@@ -248,6 +311,13 @@ export const music: ToolDef = {
     },
     { name: 'lyrics', kind: 'text', description: '歌词' },
     { name: 'lyrics_file', kind: 'path', description: '歌词文件' },
+    {
+      name: 'duration',
+      kind: 'number',
+      min: 30,
+      max: 300,
+      description: '时长（秒）。按时长计价的型号按它算钱，不写用型号自己的默认；有的型号不看它',
+    },
     MODEL_ARG,
   ],
   // 不点名时用第一个做得了这次要的型号（带歌词的歌跳过只做器乐的）
@@ -259,9 +329,10 @@ export const music: ToolDef = {
     if (!deps.fal) throw new Error('音乐供应商未配置');
     const spec = MUSIC_MODELS[model];
     if (!spec) throw new Error(`音乐型号 ${model} 还没有对接`);
-    const input = spec.input(MusicArgs.parse(args));
+    const parsed = MusicArgs.parse(args);
+    const input = spec.input(parsed);
     const response = await deps.upstream(() => deps.fal!.submit(model, input, deps.signal));
-    return deps.fal.handle(await response.json(), { model, micro: spec.micro });
+    return deps.fal.handle(await response.json(), { model, micro: spec.micro(parsed) });
   },
   async check(deps, id) {
     if (!deps.fal) throw new Error('音乐供应商未配置');
@@ -276,6 +347,7 @@ export const music: ToolDef = {
       return { state: 'failed', error: `音乐供应商没有生成：${await refusalOf(response)}` };
     if (!response.ok) throw new Error(`取音乐结果失败：${response.status}`);
     const result = MusicResult.parse(await response.json());
+    const memo = deps.fal.memo(id) ?? MUSIC_BEFORE_MEMO;
     const media = await deps.fal.media(result.audio.url);
     if (
       !media.body ||
@@ -287,7 +359,9 @@ export const music: ToolDef = {
       outcome: {
         text: '音乐生成完成；这是供应商返回的混合音轨。',
         files: [{ ...audioFileOf(result.audio), body: Readable.fromWeb(media.body) }],
-        cost: estimate((deps.fal.memo(id) ?? MUSIC_BEFORE_MEMO).micro),
+        cost: estimate(
+          Math.min(memo.micro, MUSIC_MODELS[memo.model]?.actual?.(result) ?? memo.micro),
+        ),
       },
     };
   },

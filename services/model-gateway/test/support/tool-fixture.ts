@@ -198,6 +198,10 @@ export const build = (
         'fal-ai/lyria3/pro',
         'google/lyria/v3',
         'fal-ai/ace-step-1.5',
+        'elevenlabs/music/v2.5',
+        'mureka/v9.5/generate/song',
+        'mureka/v9.5/generate/instrumental',
+        'minimax/music-3',
         'someone/unknown-music',
       ],
       geometryModels: withMusic
@@ -206,6 +210,10 @@ export const build = (
             'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d',
             'tripo3d/h3.1/image-to-3d',
             'fal-ai/pixal3d',
+            'meshy/v7.1/image-to-3d',
+            'meshy/v7.1/text-to-3d',
+            'fal-ai/hyper3d/rodin/v2.5',
+            'fal-ai/hyper3d/rodin/v2.5/text-to-3d/fast',
           ]
         : [],
       imageModels: ['bytedance-seed/seedream-4.5', 'openai/gpt-image-2'],

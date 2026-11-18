@@ -185,6 +185,13 @@ export function createToolCall(ctx: ToolContext) {
         models = able;
       }
       const model = tool.modelOf(args, models);
+      // 没点名型号，可用的型号里又没有做得了这次要的（带歌词的歌只剩纯器乐的型号、文字生成 3D 没有吃文字的型号）
+      if (!model && models.length && typeof args.model !== 'string')
+        throw new HttpError(
+          400,
+          'model_unfit',
+          `${tool.name}现在可用的型号里没有做得了这一种的（可用：${models.join('、')}）；没有调用`,
+        );
       // 配了模型却一个也不给用，或点名的模型不在给用的里面：这个用户开着「只用国内模型」
       if (tool.models(config).length > 0 && !models.includes(model)) {
         throw new HttpError(
@@ -197,7 +204,7 @@ export function createToolCall(ctx: ToolContext) {
       const holdMicro =
         tool.provider === 'runpod'
           ? deps.render!.holdMicro
-          : (videoHoldMicro ?? tool.holdMicro(args));
+          : (videoHoldMicro ?? tool.holdMicro(args, model));
       // 用户设了花钱的工具「问我」：先登记确认卡、不调，等用户允许后 oasis-tool 带确认号重交
       if (GENERATION_TOOLS.includes(tool.key) && deps.confirmations) {
         const waiting = await deps.confirmations.paidTool(

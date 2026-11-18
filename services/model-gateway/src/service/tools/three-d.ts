@@ -2,10 +2,11 @@
 import { Readable, Transform } from 'node:stream';
 import { z } from 'zod';
 import { RenderArgs } from '../../adapters/runpod.ts';
-import { estimate, InputImages, MODEL_ARG, optionalModel, pickModel, type ToolDef } from './kit.ts';
+import { estimate, holdOver, InputImages, MODEL_ARG, optionalModel, type ToolDef } from './kit.ts';
 
-const GeometryArgs = z.strictObject({
-  image: InputImages.max(1),
+const GeometryFields = z.strictObject({
+  image: InputImages.max(1).optional(),
+  prompt: z.string().trim().min(3).max(600).optional(),
   resolution: z.enum(['512', '1024', '1536']).default('1024'),
   model: optionalModel,
 });
@@ -16,41 +17,87 @@ const GeometryResult = z.looseObject({
   model_urls: z.looseObject({ glb: GlbFile, pbr_model: GlbFile }).nullish(),
 });
 /**
- * fal 上的图生 3D 型号：入参、GLB 放在结果的哪一项、价钱各不相同，差别只写在这张表里，
- * 目录只列表里有的。micro 是这个精度下一次的标价（微美元）。
+ * fal 上生成 3D 的型号：入参、GLB 放在结果的哪一项、价钱各不相同，差别只写在这张表里，
+ * 目录只列表里有的。from 是它吃什么：image 是一张参考图（传 data: 地址），text 是一段文字描述。
+ * micro 是这个精度下一次的标价（微美元）。
  */
 const GEOMETRY_MODELS: Record<
   string,
   {
-    input: (image: string, resolution: number) => Record<string, unknown>;
+    from: 'image' | 'text';
+    input: (source: string, resolution: number) => Record<string, unknown>;
     glb: (result: z.infer<typeof GeometryResult>) => string | undefined;
     micro: (resolution: number) => number;
   }
 > = {
   'fal-ai/trellis-2': {
+    from: 'image',
     input: (image_url, resolution) => ({ image_url, resolution }),
     glb: (r) => r.model_glb?.url,
     micro: (resolution) => (resolution <= 512 ? 250_000 : resolution <= 1024 ? 300_000 : 350_000),
   },
   // 不分精度：单张图、不带 PBR 的标准档。同系列的 rapid 便宜，但回的是 OBJ + MTL + 贴图，没有 GLB
   'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d': {
+    from: 'image',
     input: (input_image_url) => ({ input_image_url }),
     glb: (r) => (r.model_urls?.glb ?? r.model_glb)?.url,
     micro: () => 375_000,
   },
   // 不分精度：标准几何 + 标准贴图
   'tripo3d/h3.1/image-to-3d': {
+    from: 'image',
     input: (image_url) => ({ image_url }),
     glb: (r) => (r.model_urls?.glb ?? r.model_urls?.pbr_model ?? r.model_mesh)?.url,
     micro: () => 300_000,
   },
   // 只有 1024、1536 两档
   'fal-ai/pixal3d': {
+    from: 'image',
     input: (image_url, resolution) => ({ image_url, resolution: Math.max(1024, resolution) }),
     glb: (r) => r.model_glb?.url,
     micro: (resolution) => (resolution <= 1024 ? 300_000 : 420_000),
   },
+  // 不分精度：带贴图的默认档 $1.20（不带贴图 $0.80、绑骨骼和动画另算，都没接）
+  'meshy/v7.1/image-to-3d': {
+    from: 'image',
+    input: (image_url) => ({ image_url }),
+    glb: (r) => (r.model_glb ?? r.model_urls?.glb)?.url,
+    micro: () => 1_200_000,
+  },
+  'meshy/v7.1/text-to-3d': {
+    from: 'text',
+    input: (prompt) => ({ prompt }),
+    glb: (r) => (r.model_glb ?? r.model_urls?.glb)?.url,
+    micro: () => 1_200_000,
+  },
+  // 不分精度：默认档（Gen-2.5-High），不加 HighPack（+$0.80）
+  'fal-ai/hyper3d/rodin/v2.5': {
+    from: 'image',
+    input: (image) => ({ image_urls: [image], geometry_file_format: 'glb' }),
+    glb: (r) => r.model_mesh?.url,
+    micro: () => 400_000,
+  },
+  // 文字的快速档：面数最多 2 万。不带 fast 的文字档 fal 的页面没给名字
+  'fal-ai/hyper3d/rodin/v2.5/text-to-3d/fast': {
+    from: 'text',
+    input: (prompt) => ({ prompt, geometry_file_format: 'glb' }),
+    glb: (r) => r.model_mesh?.url,
+    micro: () => 100_000,
+  },
 };
+/** 这次给的是参考图还是文字 */
+const sourceOf = (args: Record<string, unknown>) =>
+  args.image === undefined && args.prompt !== undefined ? 'text' : 'image';
+const GeometryArgs = GeometryFields.refine(
+  (args) => Boolean(args.image) !== Boolean(args.prompt),
+  '参考图（image）和文字描述（prompt）写一个：不能都写，也不能都不写',
+).refine(
+  (args) =>
+    !args.model ||
+    !GEOMETRY_MODELS[args.model] ||
+    GEOMETRY_MODELS[args.model]!.from === sourceOf(args),
+  '点名的型号吃的不是这一种（图生 3D 和文字生 3D 是不同的型号）；换一个型号，或不写 model',
+);
 /** 任务号里没记型号的旧任务：那时只有这一个型号 */
 const GEOMETRY_BEFORE_MEMO = { model: 'fal-ai/trellis-2', micro: 350_000 };
 
@@ -128,11 +175,15 @@ export const render3d: ToolDef = {
 export const generate3d: ToolDef = {
   key: '3d.generate',
   name: '生成 3D 模型',
-  description: '从一张本地参考图生成外观概念 GLB；不保证真实尺寸、背面、拓扑或可打印性。',
-  usage: 'oasis-tool 3d.generate --image materials/参考.png --resolution 1024 --out out/模型.glb',
+  description:
+    '从一张本地参考图或一段文字描述生成外观概念 GLB；不保证真实尺寸、背面、拓扑或可打印性。',
+  usage:
+    'oasis-tool 3d.generate --image materials/参考.png [--resolution 1024] --out out/模型.glb（没有参考图：--prompt "要什么" 代替 --image）',
   unit: '模型',
   estimateMicro: 500_000,
-  holdMicro: () => 1_000_000,
+  // 这次标价的 1.2 倍，不低于 $1（带贴图的 Meshy 一次 $1.20）
+  holdMicro: (args, model) =>
+    holdOver(GEOMETRY_MODELS[model ?? '']?.micro(Number(args.resolution) || 1024), 1_000_000),
   long: true,
   provider: 'fal',
   models: (config) =>
@@ -140,7 +191,8 @@ export const generate3d: ToolDef = {
   priceMicro: (model) => GEOMETRY_MODELS[model]?.micro(1024),
   args: GeometryArgs,
   cli: [
-    { name: 'image', kind: 'path', required: true, description: '一张参考图' },
+    { name: 'image', kind: 'path', description: '一张参考图（和 prompt 写一个）' },
+    { name: 'prompt', kind: 'text', description: '文字描述（没有参考图时用；3 到 600 个字）' },
     {
       name: 'resolution',
       kind: 'choice',
@@ -149,15 +201,22 @@ export const generate3d: ToolDef = {
     },
     MODEL_ARG,
   ],
-  modelOf: pickModel,
+  // 不点名时用第一个吃这一种的型号（给图的用图生 3D 的，给文字的用文字生 3D 的）
+  modelOf: (args, models) =>
+    typeof args.model === 'string'
+      ? args.model
+      : (models.find((model) => GEOMETRY_MODELS[model]?.from === sourceOf(args)) ?? ''),
   async start(deps, args, model) {
     if (!deps.fal) throw new Error('3D 供应商未配置');
     const spec = GEOMETRY_MODELS[model];
     if (!spec) throw new Error(`3D 型号 ${model} 还没有对接`);
     const a = GeometryArgs.parse(args),
-      image = a.image[0]!,
+      image = a.image?.[0],
       resolution = Number(a.resolution);
-    const input = spec.input(`data:${image.mediaType};base64,${image.base64}`, resolution);
+    const input = spec.input(
+      image ? `data:${image.mediaType};base64,${image.base64}` : (a.prompt ?? ''),
+      resolution,
+    );
     return deps.fal.handle(
       await (
         await deps.upstream(() => deps.fal!.submit(model, input, deps.signal, { noRetry: true }))
@@ -187,14 +246,15 @@ export const generate3d: ToolDef = {
     const result = await deps.fal.result(id);
     if (!result.ok) throw new Error('3D 结果暂不可取');
     const memo = deps.fal.memo(id) ?? GEOMETRY_BEFORE_MEMO;
-    const url = GEOMETRY_MODELS[memo.model]?.glb(GeometryResult.parse(await result.json()));
+    const spec = GEOMETRY_MODELS[memo.model];
+    const url = spec?.glb(GeometryResult.parse(await result.json()));
     if (!url) throw new Error('3D 结果里没有 GLB');
     const media = await deps.fal.media(url);
     if (!media.body) throw new Error('3D 结果无内容流');
     return {
       state: 'completed',
       outcome: {
-        text: '参考图生成的外观概念 GLB；真实尺寸、背面、拓扑和可打印性未检查。',
+        text: `${spec?.from === 'text' ? '文字描述' : '参考图'}生成的外观概念 GLB；真实尺寸、背面、拓扑和可打印性未检查。`,
         data: {
           source: 'fal',
           format: 'glb',

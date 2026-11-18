@@ -120,6 +120,16 @@ describe('工具目录里的单价', () => {
       { model: 'fal-ai/lyria3/pro', costMicro: 80_000, seconds: null, basis: 'catalog' },
       { model: 'google/lyria/v3', costMicro: 100_000, seconds: null, basis: 'catalog' },
       { model: 'fal-ai/ace-step-1.5', costMicro: 72_000, seconds: null, basis: 'catalog' },
+      // 按时长计价的列默认时长的价钱：ElevenLabs 一分钟，MiniMax Music 3 六十秒
+      { model: 'elevenlabs/music/v2.5', costMicro: 600_000, seconds: null, basis: 'catalog' },
+      { model: 'mureka/v9.5/generate/song', costMicro: 150_000, seconds: null, basis: 'catalog' },
+      {
+        model: 'mureka/v9.5/generate/instrumental',
+        costMicro: 150_000,
+        seconds: null,
+        basis: 'catalog',
+      },
+      { model: 'minimax/music-3', costMicro: 120_000, seconds: null, basis: 'catalog' },
     ]);
     expect(byKey['3d.generate']).toMatchObject({
       defaultModel: 'fal-ai/trellis-2',
@@ -128,6 +138,10 @@ describe('工具目录里的单价', () => {
         { model: 'fal-ai/hunyuan-3d/v3.1/pro/image-to-3d', costMicro: 375_000 },
         { model: 'tripo3d/h3.1/image-to-3d', costMicro: 300_000 },
         { model: 'fal-ai/pixal3d', costMicro: 300_000 },
+        { model: 'meshy/v7.1/image-to-3d', costMicro: 1_200_000 },
+        { model: 'meshy/v7.1/text-to-3d', costMicro: 1_200_000 },
+        { model: 'fal-ai/hyper3d/rodin/v2.5', costMicro: 400_000 },
+        { model: 'fal-ai/hyper3d/rodin/v2.5/text-to-3d/fast', costMicro: 100_000 },
       ],
     });
   });

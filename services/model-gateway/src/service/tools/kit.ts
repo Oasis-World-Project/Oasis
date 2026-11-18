@@ -90,8 +90,8 @@ interface ToolBase {
   usage: string;
   unit: string;
   estimateMicro: number;
-  /** 调用前冻结多少（微美元），按参数算 */
-  holdMicro: (args: Record<string, unknown>) => number;
+  /** 调用前冻结多少（微美元），按参数和这次用的型号算（视频在定型号之前先问一次，那时没有型号） */
+  holdMicro: (args: Record<string, unknown>, model?: string) => number;
   /** 依赖哪个供应商（没配 Key 就不能用） */
   provider: 'openrouter' | 'tavily' | 'fal' | 'runpod' | 'browserstack' | 'inspector';
   /** 可以选的模型；不需要模型的工具返回空 */
@@ -235,6 +235,10 @@ export const InputMedia = z
     '图片编码、格式或文件签名无效',
   );
 export type InputMedia = z.infer<typeof InputMedia>;
+
+/** 按型号标价的工具冻结多少：这次标价的 1.2 倍，不低于 floor（标价查不到时就是 floor） */
+export const holdOver = (priceMicro: number | undefined, floor: number) =>
+  Math.max(floor, Math.ceil((priceMicro ?? 0) * 1.2));
 
 /** 实际花费拿不到时的估算 */
 export const estimate = (costMicro: number) => ({ costMicro, source: 'estimate' as const });
