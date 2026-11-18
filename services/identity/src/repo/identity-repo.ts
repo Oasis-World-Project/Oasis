@@ -111,6 +111,27 @@ export function createIdentityRepo(pool: pg.Pool) {
       return row;
     },
 
+    /**
+     * 记一次「按账号 ID 查人」：这个人从 since 起查的次数还没到 limit 就记下这一次、返回 true，到了返回 false。
+     * 同一个人的几次请求排着队算（事务里的 advisory 锁），开几份服务都只认库里这一份。
+     */
+    takeLookup(userId: string, at: Date, since: Date, limit: number): Promise<boolean> {
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${userId}, 0))`);
+        await tx.execute(
+          sql`delete from profile_lookups where user_id = ${userId} and at <= ${since.toISOString()}`,
+        );
+        const { rows } = await tx.execute<{ count: string }>(
+          sql`select count(*) as count from profile_lookups where user_id = ${userId}`,
+        );
+        if (Number(rows[0]?.count ?? 0) >= limit) return false;
+        await tx.execute(
+          sql`insert into profile_lookups (user_id, at) values (${userId}, ${at.toISOString()})`,
+        );
+        return true;
+      });
+    },
+
     async findByAccountNo(accountNo: string): Promise<User | undefined> {
       const [row] = await db.select().from(users).where(eq(users.accountNo, accountNo));
       return row;

@@ -18,8 +18,11 @@ type NewMessage = Pick<
 >;
 type MessagePatch = Partial<Pick<Message, 'content' | 'status' | 'error' | 'data'>>;
 
-/** 租约锁的用途：处理用户的操作（开一轮、插话、开新话题、删除）；跟进一轮（同一时间只有一个实例在跟） */
-type LockName = 'message' | 'follow';
+/**
+ * 租约锁的用途：处理用户的操作（开一轮、插话、开新话题、删除）；跟进一轮（同一时间只有一个实例在跟）；
+ * 改一个群的分工单（assign，名下是群的 id）
+ */
+type LockName = 'message' | 'follow' | 'assign';
 
 export interface ConversationRepo {
   /** 拿到这个对话的锁才做；别人拿着时 409（跟进的锁在 follow 名下，和用户操作互不挡） */

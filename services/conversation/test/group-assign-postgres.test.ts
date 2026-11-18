@@ -219,4 +219,52 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的分工', () => {
     });
     expect(await runOf(id, 'kimi')).toBeNull();
   });
+  it('开两份服务：几处同时推进同一个群，一项只开一次工；收尾那一下没记上的一项，下一遍按它说的话补记', async () => {
+    const id = await setup();
+    /** 另一份服务：自己的仓库对象，连的是同一个库 */
+    const other = groupAssign(pool, { store: createConversationRepo(pool), turns, speak });
+    // 被派的 AI 正忙着别的：这一项先等着
+    await say(id, '先看看标题', 'glm');
+    await say(id, '做图表', 'claude');
+    await finish(
+      id,
+      'claude',
+      block('assign', { title: '图表', items: [{ id: 'a', to: 'glm', task: '做图表' }] }),
+    );
+    await until(async () => ((await card(id))?.items[0]?.status === 'waiting' ? true : undefined));
+    // 它忙完了：它自己收尾时会推进一次，另一份服务这时也推进两次
+    const busy = (await runOf(id, 'glm'))!;
+    fake.events.set(busy, [event(0, 'assistant_text', { text: '标题没问题。' })]);
+    Object.assign(fake.runs.get(busy)!, {
+      status: 'succeeded',
+      finishedAt: new Date().toISOString(),
+    });
+    await Promise.all([other.sweep(), other.sweep()]);
+    const going = await until(async () => {
+      const found = await card(id);
+      return found?.items[0]?.status === 'running' ? found : undefined;
+    });
+    await other.sweep();
+    const handed = () =>
+      fake.starts.filter((start) => String(start.prompt).includes('「图表」，把第 a 项交给你'));
+    expect(handed()).toHaveLength(1);
+    // 收尾那一下没记上（服务正好重启）：这一项还记着在做，那个 AI 却已经不在这一轮里了
+    await finish(id, 'glm', '图表交了。');
+    await until(async () => ((await card(id))?.status === 'closed' ? true : undefined));
+    const message = (await groups.get(owner, id, { after: 0 })).messages.find(
+      (m) => m.kind === 'assign',
+    )!;
+    await finish(id, 'claude', '图表好了。');
+    await pool.query('update messages set data = $2 where id = $1', [
+      message.id,
+      { ...going, status: 'open' },
+    ]);
+    await other.sweep();
+    const fixed = await until(async () => {
+      const found = await card(id);
+      return found?.status === 'closed' ? found : undefined;
+    });
+    expect(fixed.items[0]).toMatchObject({ status: 'done', runId: going.items[0]!.runId });
+    expect(handed()).toHaveLength(1);
+  });
 });

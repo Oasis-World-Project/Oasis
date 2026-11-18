@@ -15,6 +15,7 @@ import { createGroupFilesRepo } from './repo/group-files-repo.ts';
 import { createGroupRepo } from './repo/group-repo.ts';
 import { createGroupSeats } from './repo/group-seats.ts';
 import { createGroupTalk } from './repo/group-talk.ts';
+import { createLeases } from './repo/leases.ts';
 import { createDmService } from './service/dm-service.ts';
 import { createFriendService } from './service/friend-service.ts';
 import { createGroupAssign } from './service/group-assign.ts';
@@ -88,8 +89,9 @@ await startService({
     });
     const seats = createGroupSeats(resources.postgres.pool);
     const brief = createGroupBrief({ files, seats, agent, logger });
-    /** 每个群现在有几条推送连着（有人开着这个群） */
+    /** 每个群在这一份服务上现在有几条推送连着；「有人开着这个群」要几份服务一起认，隔一会儿记进库里 */
     const watching = new Map<string, number>();
+    const leases = createLeases(resources.postgres.pool);
     const speak = createGroupSpeak({
       talk: createGroupTalk(resources.postgres.pool),
       seats,
@@ -101,7 +103,7 @@ await startService({
       files: brief,
       model: config.GROUP_JUDGE_MODEL,
       quietMs: config.GROUP_QUIET_MS,
-      watched: (groupId) => watching.has(groupId),
+      watched: (groupId) => leases.alive(groupId),
     });
     const assign = createGroupAssign({
       repo: createGroupAssignRepo(resources.postgres.pool),
@@ -147,12 +149,24 @@ await startService({
       void turns
         .resumeAll()
         .catch((err: unknown) => logger.warn({ err }, '接着跟进没结束的轮失败，稍后再试'));
-    const sweep = setInterval(() => {
-      resume();
-      void speak
+    /**
+     * 隔一会儿的那一遍。接着跟进没结束的轮：每一份服务都做（每个对话有自己的租约，不会重复）。
+     * 看群里谁想开口、推进分工单：开几份服务也只让一份做（不然「自己起话头」会各掷一次骰子）。
+     */
+    const rounds = async () => {
+      await leases.touch([...watching.keys()], SWEEP_MS * 2.5);
+      if (!(await leases.tick('group-rounds', SWEEP_MS * 0.8))) return;
+      await leases.prune();
+      await speak
         .sweep(SWEEP_MS)
         .catch((err: unknown) => logger.warn({ err }, '看群里有没有 AI 想开口失败，稍后再试'));
-      void assign.sweep().catch((err: unknown) => logger.warn({ err }, '推进分工单失败，稍后再试'));
+      await assign
+        .sweep()
+        .catch((err: unknown) => logger.warn({ err }, '推进分工单失败，稍后再试'));
+    };
+    const sweep = setInterval(() => {
+      resume();
+      void rounds().catch((err: unknown) => logger.warn({ err }, '隔一会儿的那一遍没做成'));
     }, SWEEP_MS);
     sweep.unref();
     app.addHook('onReady', async () => resume());

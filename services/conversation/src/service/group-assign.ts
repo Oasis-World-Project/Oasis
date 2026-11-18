@@ -50,6 +50,9 @@ const STATUS_TEXT: Record<AssignItem['status'], string> = {
 };
 /** 一次取多少条没听过的群聊 */
 const HEARING = 200;
+/** 分工单的锁被占着时隔多久再试、最多试几次（一共约 30 秒） */
+const LOCK_WAIT_MS = 100;
+const LOCK_TRIES = 300;
 
 export function createGroupAssign(deps: {
   repo: GroupAssignRepo;
@@ -63,16 +66,24 @@ export function createGroupAssign(deps: {
   logger: Logger;
 }) {
   const { repo, seats, logger } = deps;
-  /** 同一个群的分工单一次只改一处（单实例；多实例部署时要换成库里的锁，见《待办》） */
-  const chains = new Map<string, Promise<unknown>>();
-  function inGroup<T>(groupId: string, work: () => Promise<T>): Promise<T> {
-    const run = (chains.get(groupId) ?? Promise.resolve()).then(work, work);
-    const tail = run.catch(() => undefined);
-    chains.set(groupId, tail);
-    void tail.then(() => {
-      if (chains.get(groupId) === tail) chains.delete(groupId);
-    });
-    return run;
+  /**
+   * 同一个群的分工单一次只改一处：库里的租约锁（开几份服务也只有一份在改）。别人正拿着就等一会儿再试，
+   * 等太久（服务卡住了）抛错，由每 30 秒那一遍补上。
+   */
+  async function inGroup<T>(groupId: string, work: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt += 1) {
+      let entered = false;
+      try {
+        return await deps.store.withLock('assign', groupId, () => {
+          entered = true;
+          return work();
+        });
+      } catch (err) {
+        const busy = err instanceof HttpError && err.code === 'conversation_busy';
+        if (entered || !busy || attempt >= LOCK_TRIES) throw err;
+        await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
+      }
+    }
   }
 
   /**
@@ -167,11 +178,30 @@ export function createGroupAssign(deps: {
     return opened !== undefined;
   }
 
+  /** 一项的这一轮结束了：按它说的话记结果（不接、出错、被停下、交了） */
+  function record(item: AssignItem, said: Awaited<ReturnType<GroupAssignRepo['said']>>) {
+    const declined = blockOf(said.text, 'decline', DeclineBlock);
+    item.status = declined
+      ? 'declined'
+      : said.failed
+        ? 'failed'
+        : said.stopped
+          ? 'stopped'
+          : 'done';
+    if (declined?.reason) item.note = declined.reason;
+  }
+
   /** 推进这个群里没关上的分工单：能开工的开工，该告诉发单的 AI 的告诉它 */
   async function advance(groupId: string) {
     for (const row of await repo.open(groupId)) {
       const { items } = row.card;
       const before = JSON.stringify(row.card);
+      // 记着在做、那个 AI 却已经不在这一轮里了（收尾那一下没记上：服务正好重启，或锁等得太久）：补记
+      for (const item of items) {
+        if (item.status !== 'running' || !item.runId) continue;
+        const seat = await seats.seat(groupId, item.key);
+        if (seat?.turn?.runId !== item.runId) record(item, await repo.said(groupId, item.runId));
+      }
       const ready = () => {
         const done = new Set(items.filter((i) => i.status === 'done').map((i) => i.id));
         return items.filter((i) => i.status === 'waiting' && i.after.every((id) => done.has(id)));
@@ -212,15 +242,7 @@ export function createGroupAssign(deps: {
         for (const row of await repo.open(groupId)) {
           const item = row.card.items.find((i) => i.runId === runId && i.status === 'running');
           if (!item) continue;
-          const declined = blockOf(said.text, 'decline', DeclineBlock);
-          item.status = declined
-            ? 'declined'
-            : said.failed
-              ? 'failed'
-              : said.stopped
-                ? 'stopped'
-                : 'done';
-          if (declined?.reason) item.note = declined.reason;
+          record(item, said);
           await repo.save(row.id, row.card);
         }
         const plan = said.failed ? undefined : blockOf(said.text, 'assign', AssignBlock);

@@ -8,6 +8,7 @@ export function memoryRepo() {
   const sessions = new Map<string, { userId: string; expiresAt: Date; lastSeenAt: Date }>();
   const events: unknown[] = [];
   const avatars = new Map<string, { content: Buffer; type: string }>();
+  const lookups = new Map<string, number[]>();
   let seq = 0;
   const repo: IdentityRepo = {
     recentCodes: async (email, since) =>
@@ -70,6 +71,12 @@ export function memoryRepo() {
     findSession: async (tokenHash, at) => {
       const s = sessions.get(tokenHash);
       return s && s.expiresAt > at ? { userId: s.userId, lastSeenAt: s.lastSeenAt } : undefined;
+    },
+    takeLookup: async (userId, at, since, limit) => {
+      const recent = (lookups.get(userId) ?? []).filter((t) => t > since.getTime());
+      if (recent.length >= limit) return false;
+      lookups.set(userId, [...recent, at.getTime()]);
+      return true;
     },
     findByAccountNo: async (accountNo) => users.find((u) => u.accountNo === accountNo),
     findUsers: async (ids) => users.filter((u) => ids.includes(u.id)),

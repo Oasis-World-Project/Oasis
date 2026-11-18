@@ -53,7 +53,8 @@ export function createGroupSpeak(deps: {
   /** 一句话之后群里安静多久再判断（等人把话说完） */
   quietMs: number;
   /** 这个群现在有没有人开着（有人在才会自己起话头） */
-  watched: (groupId: string) => boolean;
+  /** 这个群现在有没有人开着（哪一份服务上连着都算） */
+  watched: (groupId: string) => boolean | Promise<boolean>;
   random?: () => number;
   now?: () => number;
 }) {
@@ -221,7 +222,7 @@ export function createGroupSpeak(deps: {
         }
         if (GroupOptions.parse(state.options).speak !== 'active' || quiet < START_AFTER_MS)
           continue;
-        if (!deps.watched(groupId)) continue;
+        if (!(await deps.watched(groupId))) continue;
         const rounds = roundsOf(state.lines);
         const starter = state.seats.find(
           (seat) =>

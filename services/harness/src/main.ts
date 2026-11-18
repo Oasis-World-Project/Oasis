@@ -18,6 +18,7 @@ import { createDeviceHub, type DeviceHub } from './executor/device.ts';
 import { createDockerExecutor, type Executor } from './executor/executor.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
 import { loadGuide, loadSandboxFiles } from './service/guide.ts';
+import { holdInstanceLock } from './service/instance-lock.ts';
 import { createRunService, type RunService } from './service/run-service.ts';
 
 /** 给主 AI 的平台说明和技能（每轮现读） */
@@ -38,6 +39,11 @@ await startService({
   resources: async (ctx) => {
     const { config } = ctx;
     const postgres = createPostgres(config.DATABASE_URL, ctx.logger);
+    // 一台机器只跑一个 harness：占到锁才往下走（接管遗留的运行、开始接活）
+    const instanceLock = await holdInstanceLock({
+      databaseUrl: config.DATABASE_URL,
+      logger: ctx.logger,
+    });
 
     const objects = createObjectStore({
       endpoint: config.S3_ENDPOINT,
@@ -72,7 +78,7 @@ await startService({
         devices?.close();
       },
     };
-    return { postgres, objectStore: objects.resource, sandboxes };
+    return { postgres, instanceLock, objectStore: objects.resource, sandboxes };
   },
   routes: async (app, { config, resources, logger, name }) => {
     devices = createDeviceHub({ logger, paths: DEVICE_PATHS });

@@ -58,15 +58,7 @@ export function portBusy(port) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const INFRA = [
-  'postgres',
-  'nats',
-  'seaweedfs',
-  'mailpit',
-  'valkey',
-  'sandbox-ingress',
-  'sandbox-egress',
-];
+const INFRA = ['postgres', 'nats', 'seaweedfs', 'mailpit', 'sandbox-ingress', 'sandbox-egress'];
 /** 中间件都健康就不动它们（compose up 会重建容器）；否则照 pnpm infra:up 起一遍 */
 export function ensureInfra(log = () => {}) {
   const health = spawnSync(

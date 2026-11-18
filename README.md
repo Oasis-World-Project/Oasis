@@ -11,7 +11,7 @@
 ```bash
 pnpm install        # 安装依赖，同时装好 git 钩子
 pnpm env:init       # 生成根目录和每个服务的 .env（随机密码）
-pnpm infra:up       # 启动 PostgreSQL、Valkey、NATS、SeaweedFS、Mailpit，等到全部健康
+pnpm infra:up       # 启动 PostgreSQL、NATS、SeaweedFS、Mailpit，等到全部健康
 pnpm dev            # 9 个服务 + 前端开发服务器在本机运行，改代码自动重启 / 热更新
 pnpm desktop        # 另开一个终端，打开 Electron 桌面窗口（产品以桌面端为准）
 ```
@@ -90,7 +90,6 @@ pnpm browser:smoke
 | 中间件 | 本机地址 |
 |---|---|
 | PostgreSQL 18 | `127.0.0.1:5432`，每个服务一个库（`identity`、`billing`…），账号 `svc_<服务名>` |
-| Valkey 9 | `127.0.0.1:6379` |
 | NATS 2.15（JetStream） | `127.0.0.1:4222`，监控页 http://127.0.0.1:8222 |
 | SeaweedFS（S3） | http://127.0.0.1:8333 |
 | Mailpit | SMTP `127.0.0.1:1025`，收件箱 http://127.0.0.1:8025 |

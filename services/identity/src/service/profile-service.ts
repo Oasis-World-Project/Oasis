@@ -27,9 +27,6 @@ const SIGNATURES: Record<AvatarType, (bytes: Buffer) => boolean> = {
 export function createProfileService(deps: { repo: IdentityRepo; now?: () => number }) {
   const { repo } = deps;
   const now = deps.now ?? Date.now;
-  /** 每个人最近一分钟查过的时刻（单实例内存里记；多实例部署时要挪到共享存储） */
-  const lookups = new Map<string, number[]>();
-
   return {
     async update(userId: string, body: UpdateProfileBody): Promise<MeBody> {
       const user = await repo.updateProfile(userId, body);
@@ -62,11 +59,10 @@ export function createProfileService(deps: { repo: IdentityRepo; now?: () => num
 
     /** 按账号 ID 查人（加好友前先看到是谁） */
     async lookup(userId: string, accountNo: string): Promise<PublicProfile> {
-      const since = now() - 60_000;
-      const recent = (lookups.get(userId) ?? []).filter((at) => at > since);
-      if (recent.length >= LOOKUPS_PER_MINUTE)
+      // 次数记在库里：开几份服务都算在一起
+      const at = now();
+      if (!(await repo.takeLookup(userId, new Date(at), new Date(at - 60_000), LOOKUPS_PER_MINUTE)))
         throw new HttpError(429, 'lookup_rate_limited', '查得太勤了，过一会儿再试');
-      lookups.set(userId, [...recent, now()]);
       const user = await repo.findByAccountNo(accountNo);
       if (!user) throw new HttpError(404, 'user_not_found', '没有这个账号 ID');
       return toProfile(user);
