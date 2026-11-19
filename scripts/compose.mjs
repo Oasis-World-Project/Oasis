@@ -36,27 +36,38 @@ const profile = [
 const action =
   command === 'up' ? ['up', '-d', '--wait', ...(withServices ? ['--build'] : [])] : [command];
 
-const result = spawnSync(
-  'docker',
-  [
-    'compose',
-    '--env-file',
-    '.env',
-    '-f',
-    'infra/compose/docker-compose.yml',
-    ...profile,
-    ...action,
-    ...extra,
-  ],
-  {
-    cwd: ROOT,
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      GIT_COMMIT: commit,
-      // 全套在容器里跑时，沙箱入口代理直接转给容器里的 model-gateway（本机开发时转给宿主机）
-      ...(withServices ? { SANDBOX_INGRESS_UPSTREAM: 'http://model-gateway:4108' } : {}),
-    },
+const compose = [
+  'compose',
+  '--env-file',
+  '.env',
+  '-f',
+  'infra/compose/docker-compose.yml',
+  ...profile,
+];
+const options = {
+  cwd: ROOT,
+  stdio: 'inherit',
+  env: {
+    ...process.env,
+    GIT_COMMIT: commit,
+    // 全套在容器里跑时，沙箱入口代理直接转给容器里的 model-gateway（本机开发时转给宿主机）
+    ...(withServices ? { SANDBOX_INGRESS_UPSTREAM: 'http://model-gateway:4108' } : {}),
   },
-);
+};
+
+// 线上的机器小：十几个镜像同时构建，各自装依赖，会把 CPU 和网络挤到超时（2026-11-19 在 2 核的
+// 服务器上两次都失败在装依赖）。一个一个构建，后面的直接用前面下载好的包；之后的 up 全部命中缓存。
+if (command === 'up' && withServices && online) {
+  const listed = spawnSync('docker', [...compose, 'config', '--services'], {
+    ...options,
+    stdio: 'pipe',
+    encoding: 'utf8',
+  });
+  for (const name of listed.stdout.split(/\r?\n/).filter(Boolean)) {
+    const built = spawnSync('docker', [...compose, 'build', name], options);
+    if (built.status !== 0) process.exit(built.status ?? 1);
+  }
+}
+
+const result = spawnSync('docker', [...compose, ...action, ...extra], options);
 process.exit(result.status ?? 1);
