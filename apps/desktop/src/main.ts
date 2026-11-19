@@ -3,7 +3,7 @@
 // 麦克风（和数字人对话），摄像头等别的一律拒绝。
 // 给页面开放的能力只有 preload 里的几个：把成果同步到用户选的文件夹、截取窗口里的一块画面用于批注、
 // 选 AI 干活的项目文件夹和看这台电脑连没连上（在你的电脑上干活，见 device.ts）。
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DESKTOP_CHANNELS } from '@oasis/contracts/desktop';
@@ -25,7 +25,13 @@ import { createSyncFolder, freePath, type SyncFolder } from './sync-folder.ts';
 const envFile = path.join(import.meta.dirname, '..', '.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
-const webUrl = process.env.OASIS_WEB_URL;
+/** 装好的版本（安装包）：窗口加载哪个网址写在包里的 app.json（打包时定的，见 scripts/dist.mjs） */
+const packaged = app.isPackaged
+  ? (JSON.parse(readFileSync(path.join(import.meta.dirname, 'app.json'), 'utf8')) as {
+      webUrl: string;
+    })
+  : undefined;
+const webUrl = process.env.OASIS_WEB_URL ?? packaged?.webUrl;
 if (!webUrl) {
   process.stderr.write('缺少 OASIS_WEB_URL：请先运行 pnpm env:init，或设置这个环境变量\n');
   process.exit(1);
@@ -214,7 +220,16 @@ function startDevice(): DeviceClient {
       });
       return found ? `${found.name}=${found.value}` : undefined;
     },
-    runtime: createDshRuntime(app.getPath('userData')),
+    // 装好的版本自带 Node 和 dsh（安装目录的 resources/runtime 下）；从源码跑时用电脑上的 Node、现装 dsh
+    runtime: createDshRuntime(
+      app.getPath('userData'),
+      app.isPackaged
+        ? {
+            nodeDir: path.join(process.resourcesPath, 'runtime', 'node'),
+            dshRoot: path.join(process.resourcesPath, 'runtime', 'dsh'),
+          }
+        : undefined,
+    ),
     log: (line) => process.stdout.write(`[在你的电脑上干活] ${line}\n`),
   });
   session.defaultSession.cookies.on('changed', (_event, cookie, cause, removed) => {

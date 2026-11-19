@@ -1,15 +1,16 @@
 {
   "name": "@oasis/desktop",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
-  "description": "Oasis 桌面端：加载 Web 外壳的 Electron 窗口，可以把成果同步到电脑上的文件夹（安装包在后续阶段）",
+  "description": "Oasis 桌面端：加载 Web 外壳的 Electron 窗口，可以把成果同步到电脑上的文件夹、在这台电脑上干活；pnpm desktop:dist 打 Windows 安装包",
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "start": "tsc -p tsconfig.build.json && electron .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dist": "pnpm --filter @oasis/contracts build && node scripts/dist.mjs"
   },
   "dependencies": {
     "@oasis/contracts": "workspace:*",
@@ -22,6 +23,8 @@
     "@types/tar-stream": "3.1.5",
     "@types/ws": "catalog:",
     "electron": "44.9.1",
+    "electron-builder": "26.18.0",
+    "esbuild": "0.28.2",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

@@ -163,6 +163,7 @@ describe('连上 Oasis 接活', () => {
               command: process.execPath,
               args: [script],
               env: { DSH_TELEMETRY_DISABLED: '1' },
+              path: [],
             };
           },
         },

@@ -16,6 +16,8 @@ export default defineConfig(
     ignores: [
       '**/node_modules/**',
       '**/dist/**',
+      '**/build/**',
+      '**/release/**',
       '**/.turbo/**',
       '**/coverage/**',
       '**/.tmp/**',
@@ -53,7 +55,12 @@ export default defineConfig(
     languageOptions: { globals: globals.browser },
   },
   {
-    files: ['scripts/**', '**/*.config.{js,mjs,cjs,ts}', '.dependency-cruiser.cjs'],
+    files: [
+      'scripts/**',
+      'apps/*/scripts/**',
+      '**/*.config.{js,mjs,cjs,ts}',
+      '.dependency-cruiser.cjs',
+    ],
     languageOptions: { globals: globals.node },
     rules: { 'no-console': 'off' },
   },

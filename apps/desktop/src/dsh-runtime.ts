@@ -1,6 +1,7 @@
-// 在你的电脑上跑 dsh：用电脑上装的 Node（dsh 要 22.19 以上的 22 版或 24 以上；桌面版自带的 Electron 跑不了
-// dsh 的原生模块）。第一次干活时在桌面版自己的数据目录里装固定版本的 dsh（约 3 分钟），每个会话的家目录里
-// 先生成 dsh 的基础组合（Oasis 的组合文件随后由 harness 放进来、盖在上面），再放 oasis-tool、oasis-op 两个命令。
+// 在你的电脑上跑 dsh：dsh 要真正的 Node（22.19 以上的 22 版或 24 以上；Electron 跑不了它的原生模块）。
+// 装好的版本（安装包）自带 Node 和装好的 dsh，直接用；从源码跑（pnpm desktop）时用电脑上装的 Node，第一次干活
+// 时在桌面版自己的数据目录里装固定版本的 dsh（约 3 分钟）。每个会话的家目录里先生成 dsh 的基础组合
+// （Oasis 的组合文件随后由 harness 放进来、盖在上面），再放 oasis-tool、oasis-op 两个命令。
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
@@ -12,6 +13,14 @@ interface DshCommand {
   args: string[];
   /** 起 dsh 时另加的环境变量（dsh 包在哪、不发遥测）；命令所在的 bin/ 由调用方加进 PATH */
   env: Record<string, string>;
+  /** 另外要放进 PATH 的目录：安装包自带的 Node（AI 跑的命令、oasis-tool 都用它） */
+  path: string[];
+}
+
+/** 安装包里自带的运行环境：Node 发行包的目录，和装好了 dsh 的目录（里面有 node_modules） */
+export interface BundledRuntime {
+  nodeDir: string;
+  dshRoot: string;
 }
 
 export interface DshRuntime {
@@ -87,8 +96,9 @@ async function writeCommands(home: string) {
   }
 }
 
-export function createDshRuntime(dataDir: string): DshRuntime {
-  const root = path.join(dataDir, 'runtime', `dsh-${DSH_VERSION}`);
+export function createDshRuntime(dataDir: string, bundled?: BundledRuntime): DshRuntime {
+  const root = bundled?.dshRoot ?? path.join(dataDir, 'runtime', `dsh-${DSH_VERSION}`);
+  const node = bundled ? path.join(bundled.nodeDir, 'node.exe') : 'node';
   const pkg = path.join(root, 'node_modules', '@deepseek-ai', 'dsh');
   const bin = path.join(pkg, 'lib', 'bin.js');
   /** 装完才写，装到一半退出的下次重装 */
@@ -110,6 +120,7 @@ export function createDshRuntime(dataDir: string): DshRuntime {
 
   return {
     problem() {
+      if (bundled) return null;
       if (problem === undefined) {
         const result = spawnSync('node', ['--version'], {
           encoding: 'utf8',
@@ -122,7 +133,7 @@ export function createDshRuntime(dataDir: string): DshRuntime {
     },
 
     async prepare(home, onStatus) {
-      if (!existsSync(marker) || !existsSync(bin)) {
+      if (!bundled && (!existsSync(marker) || !existsSync(bin))) {
         onStatus('installing_dsh');
         installing ??= install().finally(() => (installing = undefined));
         await installing;
@@ -131,7 +142,7 @@ export function createDshRuntime(dataDir: string): DshRuntime {
       // dsh 的基础组合（从它自带的 sdk 模板复制出 oasis）；Oasis 的组合文件随后由 harness 放进来
       if (!existsSync(path.join(home, 'profiles', 'oasis', 'package.json'))) {
         await mkdir(home, { recursive: true });
-        await run('node', [bin, 'oasis', '--from-default-profile', 'sdk', '--dump-config'], home, {
+        await run(node, [bin, 'oasis', '--from-default-profile', 'sdk', '--dump-config'], home, {
           ...process.env,
           ...env,
           DSH_HOME: home,
@@ -139,9 +150,10 @@ export function createDshRuntime(dataDir: string): DshRuntime {
       }
       await writeCommands(home);
       return {
-        command: 'node',
+        command: node,
         args: [bin, '--profile', 'oasis'],
         env: { ...env, OASIS_DSH_PACKAGE: path.join(pkg, 'package.json') },
+        path: bundled ? [bundled.nodeDir] : [],
       };
     },
   };

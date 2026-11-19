@@ -158,9 +158,9 @@ export function createDeviceClient(deps: {
       if (ENV_PREFIXES.some((prefix) => key.startsWith(prefix)))
         env[key] = resolvePlace(value, place);
     Object.assign(env, dsh.env, { DSH_HOME: place.home });
-    // oasis-tool、oasis-op 在这个会话家目录的 bin/ 里（Windows 上环境变量名是 Path）
+    // oasis-tool、oasis-op 在这个会话家目录的 bin/ 里；安装包自带的 Node 也放进去（Windows 上环境变量名是 Path）
     const pathKey = Object.keys(env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
-    env[pathKey] = [path.join(place.home, 'bin'), env[pathKey]]
+    env[pathKey] = [path.join(place.home, 'bin'), ...dsh.path, env[pathKey]]
       .filter(Boolean)
       .join(path.delimiter);
 

@@ -22,6 +22,15 @@ pnpm desktop        # 另开一个终端，打开 Electron 桌面窗口（产品
 
 > 第一次运行 `pnpm desktop` 会下载 Electron 程序（约 100 MB，下载后会校验 SHA-256）。如果从 GitHub 下载很慢，可以临时用镜像：PowerShell 里先执行 `$env:ELECTRON_MIRROR='https://npmmirror.com/mirrors/electron/'` 再运行。
 
+### 打 Windows 安装包
+
+```powershell
+$env:OASIS_RELEASE_WEB_URL = 'https://<线上的网址>'   # 装好的桌面版打开的网址，写进安装包里
+pnpm desktop:dist                                       # 只能在 Windows 上跑；安装包在 apps/desktop/release/
+```
+
+安装包（NSIS，约 200 MB，装好约 900 MB、两万五千个文件，安装要三四分钟）装到当前用户名下，不要管理员权限；自带 Node 和 dsh，「在我的电脑上干活」不用用户另装东西。没有签名（安装时 Windows 会提示「未知发布者」），不带自动更新。第一次打包要下载 Node（校验 SHA-256）、装 dsh（约 2 分钟），每次打包压缩约 10 分钟；下载慢时可以设 `OASIS_NODE_DIST`、`ELECTRON_BUILDER_BINARIES_MIRROR` 指到镜像站。
+
 ### 登录与接入模型
 
 - **登录**：打开 Web 端，输入任意邮箱获取验证码。本地不会真的发邮件，验证码在 Mailpit 收件箱 http://127.0.0.1:8025 里看。新邮箱第一次登录即注册，几秒内到账 $30 额度。

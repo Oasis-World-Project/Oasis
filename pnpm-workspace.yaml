@@ -33,6 +33,9 @@ catalog:
 allowBuilds:
   # Electron 的程序文件在第一次启动时才下载（pnpm desktop），安装阶段不需要跑它的脚本
   electron: false
+  # electron-builder 带进来的 Squirrel 安装器（我们用的是 NSIS，用不到它）；esbuild 的安装脚本只是自检
+  electron-winstaller: false
+  esbuild: false
   lefthook: true
 
 # vitest 也依赖 vite：统一成 catalog 里的同一个版本，避免一个仓库里出现两个 vite
