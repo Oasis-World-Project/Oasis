@@ -11,6 +11,8 @@ export interface SandboxSpec {
   workspaceId: string;
   /** 接着原会话或接管：持久工作目录必须已经在，不能新建空目录冒充恢复 */
   restore?: boolean;
+  /** 谁的缓存卷（付钱的人）：下载下来的包和工具链，他的每个沙箱都挂上；用户电脑上的沙箱没有 */
+  cacheId?: string;
   /** 沙箱里的环境变量（含临时 Key，不得写进日志） */
   env: Record<string, string>;
   /** 启动前解到沙箱里的文件：目录 → tar 包 */
@@ -30,6 +32,8 @@ export interface Sandbox {
   readArchive(path: string): Promise<Readable | undefined>;
   /** 在沙箱里跑一条命令（沙箱要在运行，没暂停）并等它结束；退出码不是 0 就报错 */
   exec(cmd: string[]): Promise<void>;
+  /** 同上，但不管退出码，拿回它的标准输出（开工前的 oasis-setup.sh）；用户电脑上的沙箱没有 */
+  run?(cmd: string[]): Promise<string>;
   /** 运行中往沙箱的某个目录里再解一包文件（群里别的 AI 刚交的群文件）；用户电脑上的沙箱没有 */
   put?(dir: string, tar: Buffer | Readable): Promise<void>;
   /** 销毁沙箱（运行中也立即结束）；可重复调用 */
@@ -57,6 +61,28 @@ const volumeNames = (id: string) => {
   if (!/^[\w-]+$/.test(id)) throw new Error('工作目录身份不合法');
   return [`oasis-workspace-${id}`, `oasis-sessions-${id}`];
 };
+const cacheVolume = (id: string) => {
+  if (!/^[\w-]+$/.test(id)) throw new Error('缓存卷身份不合法');
+  return `oasis-cache-${id}`;
+};
+/**
+ * 在沙箱里清缓存卷（参数：目录、上限 KB）。按「工具 / 条目」这两层目录算：大小是里面文件的合计，最近用到的
+ * 时间是里面文件最晚的一次读取（目录自己的时间不准：量大小时会被碰到）。整卷没超就不动；超了从最久没用的
+ * 删起，删到上限的八成。bin/ 里只是连到工具链的链接，不删。一遍 find 走完，卷大时也只要一两秒。
+ */
+const TRIM_CACHE = `const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
+const [root,max]=[process.argv[1],Number(process.argv[2])];
+const found=spawnSync('find',[root,'-type','f','-printf','%A@\\t%k\\t%P\\n'],{encoding:'utf8',maxBuffer:1<<28}).stdout;
+const groups=new Map();let total=0;
+for(const line of found.split('\\n')){
+  const [at,kb,file]=line.split('\\t');if(!file)continue;
+  const key=file.split('/').slice(0,2).join('/');const group=groups.get(key)||{at:0,kb:0};
+  group.at=Math.max(group.at,Number(at));group.kb+=Number(kb);groups.set(key,group);total+=Number(kb);
+}
+if(total>max){
+  const oldest=[...groups].filter(([key])=>key.split('/')[0]!=='bin').sort((a,b)=>a[1].at-b[1].at);
+  for(const [key,group] of oldest){if(total<=max*0.8)break;fs.rmSync(path.join(root,key),{recursive:true,force:true});total-=group.kb}
+}`;
 
 export function createDockerExecutor(deps: {
   docker: DockerApi;
@@ -68,6 +94,8 @@ export function createDockerExecutor(deps: {
   /** 沙箱里的工作目录，启动前确保 files 里的目录都在它下面 */
   workdir: string;
   sessionsDir?: string;
+  /** 每个用户一块的缓存卷挂在沙箱里哪个目录、最多占多少；不给就不挂 */
+  cache?: { dir: string; maxMb: number };
 }): Executor {
   const { docker } = deps;
   const instanceId = randomUUID();
@@ -153,6 +181,15 @@ export function createDockerExecutor(deps: {
           Target: index === 0 ? deps.workdir : deps.sessionsDir!,
         });
       }
+      if (deps.cache && spec.cacheId) {
+        const name = cacheVolume(spec.cacheId);
+        if (!(await docker.volume(name)))
+          await docker.createVolume(name, {
+            'oasis.component': 'harness-cache',
+            'oasis.owner-id': spec.cacheId,
+          });
+        mounts.push({ Type: 'volume', Source: name, Target: deps.cache.dir });
+      }
       for (const previous of await docker.listContainers(LABEL_COMPONENT)) {
         if (previous.Labels[LABEL_RUN] !== spec.runId) continue;
         const { State } = await docker.inspectContainer(previous.Id);
@@ -193,6 +230,15 @@ export function createDockerExecutor(deps: {
         const code = (await docker.inspectExec(started.id)).ExitCode;
         if (code !== 0) throw new Error(`沙箱里的命令没成功（退出码 ${code}）`);
       };
+      /** 跑一条命令并等它结束，不管退出码，拿回标准输出 */
+      const run = async (cmd: string[]) => {
+        const started = await docker.exec(id, cmd);
+        const output = new PassThrough();
+        const errors = new PassThrough();
+        errors.resume();
+        demultiplex(started.stream, output, errors);
+        return Buffer.concat(await output.toArray()).toString('utf8');
+      };
       try {
         for (const file of spec.files) await docker.putArchive(id, file.dir, file.tar);
         const connection = await docker.attach(id);
@@ -209,12 +255,22 @@ export function createDockerExecutor(deps: {
           ]).catch((cause: unknown) => {
             throw new Error('恢复会话锁清理失败', { cause });
           });
+        // 缓存卷超过上限：从最久没用的删起。清不成不挡这一轮（下一轮再清）
+        if (deps.cache && spec.cacheId)
+          await exec([
+            'node',
+            '-e',
+            TRIM_CACHE,
+            deps.cache.dir,
+            String(deps.cache.maxMb * 1024),
+          ]).catch(() => undefined);
         return {
           id,
           stdin: connection,
           stdout,
           stderr,
           exec,
+          run,
           put: (dir, tar) => docker.putArchive(id, dir, tar),
           readArchive: (path) => docker.getArchive(id, path),
           pause: () => docker.pauseContainer(id),

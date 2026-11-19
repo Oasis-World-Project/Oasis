@@ -142,7 +142,7 @@ services:
       timeout: 3s
       retries: 20
 
-  # 沙箱出口代理：沙箱装软件包时经它出去，只放行白名单里的软件包仓库（域名），其余一律拒绝。
+  # 沙箱出口代理：沙箱装软件包、克隆公开仓库时经它出去，只放行白名单里的域名，其余一律拒绝。
   # 开发机在国内，默认用国内镜像站；部署到海外后在 .env 里换回官方源（见根目录 .env.example）。
   sandbox-egress:
     image: oasis/sandbox-egress:1.11.2
@@ -150,6 +150,8 @@ services:
     pull_policy: build
     environment:
       SANDBOX_EGRESS_ALLOW_HOSTS: ${SANDBOX_EGRESS_ALLOW_HOSTS:-registry.npmjs.org,pypi.org,files.pythonhosted.org}
+      # 代码托管和各语言的包仓库（镜像里的 project-hosts，用户导入自己的项目时用）；填 off 就只放行上面那几个
+      SANDBOX_EGRESS_PROJECT_HOSTS: ${SANDBOX_EGRESS_PROJECT_HOSTS:-on}
     networks: [default, sandbox]
     healthcheck:
       test: ['CMD-SHELL', 'nc -z 127.0.0.1 8888']

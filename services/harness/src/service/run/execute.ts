@@ -16,6 +16,7 @@ import {
 import type { Sandbox } from '../../executor/executor.ts';
 import type { Run, RunOutcome } from '../../repo/runs-repo.ts';
 import { startRunLease } from '../run-lease.ts';
+import { setupNote } from './setup.ts';
 import { KEEP_FILE, savedOutcome, StopRun, type LiveRun, type RunContext } from './shared.ts';
 
 /** 服务重启接管时交给 AI 的话：原会话和工作目录已恢复，接着做 */
@@ -48,6 +49,8 @@ export function createExecution(
     stopped: () => void;
     stderr: () => string;
   }): Promise<{ agent: AgentConnection; failure: string | undefined }> {
+    // 这一轮是新起的沙箱：项目里有 oasis-setup.sh 就先执行，结果接在交给 AI 的话后面
+    const setup = await setupNote(input.sandbox, SANDBOX_PATHS.workdir, deps.setupSeconds ?? 300);
     const { row, run, sandbox, recovering, stopped } = input;
     const id = row.id;
     const agent = connectAgent({
@@ -81,7 +84,7 @@ export function createExecution(
     if (row.continueFrom || (recovering && !fresh)) await agent.resume();
     run.prompts += 1;
     run.opening = 'sent';
-    await agent.prompt(recovering && !fresh ? RECOVERED : row.prompt);
+    await agent.prompt((recovering && !fresh ? RECOVERED : row.prompt) + setup);
     // 插话排在开头那句后面：AI 还没开始时先到的按顺序送完，之后来的直接送
     while (run.queued.length) {
       run.prompts += 1;
@@ -229,6 +232,7 @@ export function createExecution(
           workspaceId: row.sessionId ?? id,
           // 接管或接着原会话：持久卷必须已经在，不能从空目录假装恢复
           restore: recovering || Boolean(row.continueFrom),
+          cacheId: row.payerId,
           env: {
             ...deps.batchEnv,
             OASIS_TOOL_SCOPE: row.sessionId ?? id,

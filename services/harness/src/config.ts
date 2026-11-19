@@ -35,6 +35,10 @@ export const harnessEnv = {
   SANDBOX_CPUS: z.coerce.number().positive().max(64).default(2),
   SANDBOX_MEMORY_MB: positiveInt.default(2048),
   SANDBOX_PIDS_LIMIT: positiveInt.default(512),
+  /** 每个用户一块的缓存卷（下载下来的包、用时再装的工具链）最多占多少；超了开沙箱时从最久没用的删起 */
+  SANDBOX_CACHE_MAX_MB: positiveInt.default(5120),
+  /** 项目里的 oasis-setup.sh（每轮开工前执行）最多跑多少秒 */
+  SANDBOX_SETUP_SECONDS: positiveInt.max(3600).default(300),
   OASIS_BATCH_CONCURRENCY: positiveInt.max(16).default(4),
   OASIS_BATCH_MAX_INPUT_BYTES: positiveInt.max(20 * 1024 * 1024).default(5 * 1024 * 1024),
 

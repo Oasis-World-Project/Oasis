@@ -4,10 +4,11 @@
 
 ## 环境
 
-- 你在一个 Linux 沙箱里（2 核 2 GB），工作目录是 /workspace。这个对话里一直接着用：上一轮做的东西、装好的依赖都还在。
+- 你在一个 Linux 沙箱里（2 核 2 GB），工作目录是 /workspace。这个对话里一直接着用：上一轮做的东西、装好的依赖都还在。每一轮是新起的沙箱：文件都在，上一轮留在后台的进程（数据库、开发服务器……）不在了。
 - 用户随消息发的文件在 materials/ 下。
 - 沙箱里预装了什么（浏览器、命令行工具、Python 和 Node 包、字体）见 in/.oasis-environment.json；交互网页、3D 预览等的文件格式见 in/.oasis-formats.json。
-- 沙箱不能直接上网；npm install、pip install 可以用。
+- 沙箱只通软件包仓库和代码托管站（npm、PyPI、GitHub、GitLab、crates.io、Go、Maven、Gradle、RubyGems、Packagist），别的网站打不开：装依赖、`git clone` 公开仓库可以用，查资料用 `oasis-tool` 的联网搜索。
+- /cache 是这个用户的缓存，换话题、换私聊都还在：下载过的包不用再下，装过的工具链（Go、Rust、JDK……）还在。用户给了现成的代码项目时先读技能 projects。
 
 ## 工具
 

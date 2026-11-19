@@ -46,6 +46,8 @@ export interface RunDeps {
   keyTtlSeconds?: number;
   /** 沙箱的 CPU 核数（算力按 时长 × 核数 计费） */
   cores: number;
+  /** 开工前的 oasis-setup.sh 最多跑多少秒 */
+  setupSeconds?: number;
   outputMaxBytes?: number;
   serviceName: string;
   logger: Logger;

@@ -66,6 +66,7 @@ await startService({
       pidsLimit: config.SANDBOX_PIDS_LIMIT,
       workdir: SANDBOX_PATHS.workdir,
       sessionsDir: SANDBOX_PATHS.sessions,
+      cache: { dir: SANDBOX_PATHS.cache, maxMb: config.SANDBOX_CACHE_MAX_MB },
     });
     // 就绪 = Docker 可用、沙箱镜像和网络都在；关闭时先让进行中的运行收尾
     const sandboxes: ServiceResource = {
@@ -111,6 +112,7 @@ await startService({
       leaseMs: config.RUN_LEASE_MS,
       keyTtlSeconds: config.RUN_KEY_TTL_SECONDS,
       cores: config.SANDBOX_CPUS,
+      setupSeconds: config.SANDBOX_SETUP_SECONDS,
       outputMaxBytes: config.OUTPUT_MAX_BYTES,
       serviceName: name,
       logger,

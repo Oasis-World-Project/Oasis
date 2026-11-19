@@ -22,6 +22,8 @@ export const SANDBOX_PATHS = {
   sessions: '/home/node/.dsh/sessions',
   /** Oasis 自己的命令（oasis-tool、oasis-op）：每轮开沙箱时放进当前版本，改了不用重建镜像 */
   tools: '/opt/oasis',
+  /** 这个人的缓存卷：下载下来的包、用时再装的工具链，换话题、换私聊都还在（镜像里把 bin 目录放进了 PATH） */
+  cache: '/cache',
 } as const;
 
 /**
@@ -172,6 +174,18 @@ export function sandboxEnv(input: {
     // 交付目录写成绝对路径：AI 在别的目录里跑 oasis-tool，生成的文件也只能存进 out/（做好一个就进画布）
     OASIS_OUT_DIR: SANDBOX_PATHS.outputs,
     OASIS_TOOL_STATE_DIR: `${SANDBOX_PATHS.outputs}/.oasis-tools`,
+    // 各语言下载下来的包都放进这个人的缓存卷：同一个包只下一次
+    npm_config_cache: `${SANDBOX_PATHS.cache}/npm`,
+    PIP_CACHE_DIR: `${SANDBOX_PATHS.cache}/pip`,
+    UV_CACHE_DIR: `${SANDBOX_PATHS.cache}/uv`,
+    CARGO_HOME: `${SANDBOX_PATHS.cache}/cargo`,
+    RUSTUP_HOME: `${SANDBOX_PATHS.cache}/rustup`,
+    GOPATH: `${SANDBOX_PATHS.cache}/go`,
+    GOCACHE: `${SANDBOX_PATHS.cache}/go-build`,
+    GRADLE_USER_HOME: `${SANDBOX_PATHS.cache}/gradle`,
+    MAVEN_OPTS: `-Dmaven.repo.local=${SANDBOX_PATHS.cache}/m2`,
+    BUNDLE_PATH: `${SANDBOX_PATHS.cache}/bundle`,
+    COMPOSER_HOME: `${SANDBOX_PATHS.cache}/composer`,
     ...(egressProxy
       ? {
           HTTP_PROXY: egressProxy,

@@ -290,6 +290,20 @@ try {
   if (!keep) {
     await stack.stopAll();
     await provider?.close();
+    // 测试账号的缓存卷（harness 给每个用过云端沙箱的人建一块）：产品里还没有删账号，这里直接把卷删掉
+    const mine = new Set(
+      query('identity', `select id from users where email like 'e2e-%@example.test'`).map(
+        (user) => `oasis-cache-${user.id}`,
+      ),
+    );
+    const volumes = spawnSync(
+      'docker',
+      ['volume', 'ls', '-q', '--filter', 'label=oasis.component=harness-cache'],
+      { encoding: 'utf8' },
+    )
+      .stdout.split(/\s+/)
+      .filter((name) => mine.has(name));
+    if (volumes.length) spawnSync('docker', ['volume', 'rm', ...volumes], { stdio: 'ignore' });
   }
 }
 

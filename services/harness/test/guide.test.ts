@@ -20,6 +20,7 @@ describe('给主 AI 的说明和技能', () => {
       'documents',
       'images',
       'marketing',
+      'projects',
       'synthetic-data',
       'video',
       'web-apps',

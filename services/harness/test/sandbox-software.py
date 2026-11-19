@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
@@ -265,6 +266,42 @@ console.log(JSON.stringify({ state, errors }));
         if value
     )
     print(f"PASS: browser drives a local page (keys, page state, WebGL, screenshot); {usage}", flush=True)
+    # 数据库程序：以普通用户在一个目录里建库、起服务、连上去查一句，再停掉（技能 projects 里写的就是这几条命令）
+    pg = root / "pg"
+    run("initdb", "-D", str(pg), "-U", "app", "--auth=trust", "-E", "UTF8")
+    run("pg_ctl", "-D", str(pg), "-l", str(root / "pg.log"), "-o", "-k /tmp -p 5544 -c listen_addresses=127.0.0.1", "-w", "start")
+    assert run("psql", "-h", "/tmp", "-p", "5544", "-U", "app", "-d", "postgres", "-Atc", "select 1+1").strip() == "2"
+    run("pg_ctl", "-D", str(pg), "-m", "fast", "-w", "stop")
+    maria = root / "maria"
+    run("mariadb-install-db", "--no-defaults", f"--datadir={maria}", "--auth-root-authentication-method=normal")
+    mariadbd = subprocess.Popen(
+        ["mariadbd", "--no-defaults", f"--datadir={maria}", "--socket=/tmp/mariadb.sock", "--port=3344",
+         "--bind-address=127.0.0.1", f"--pid-file={root / 'maria.pid'}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        run("mariadb-admin", "--no-defaults", "--socket=/tmp/mariadb.sock", "-uroot", "--wait=30", "ping")
+        assert run("mariadb", "--no-defaults", "--socket=/tmp/mariadb.sock", "-uroot", "-Ne", "select 1+1").strip() == "2"
+    finally:
+        mariadbd.terminate()
+        mariadbd.wait(timeout=30)
+    valkey = subprocess.Popen(
+        ["valkey-server", "--port", "6388", "--bind", "127.0.0.1", "--dir", str(root), "--save", ""],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        for _ in range(50):
+            if subprocess.run(["valkey-cli", "-p", "6388", "ping"], capture_output=True, text=True).stdout.strip() == "PONG":
+                break
+            time.sleep(0.2)
+        assert run("valkey-cli", "-p", "6388", "ping").strip() == "PONG"
+    finally:
+        valkey.terminate()
+        valkey.wait(timeout=30)
+    cache = Path("/cache/.oasis-check")
+    cache.write_text("ok")
+    cache.unlink()
+    print("PASS: PostgreSQL, MariaDB and Valkey start as the sandbox user; /cache is writable", flush=True)
     generated_bytes = sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
 
 print(f"PASS: all software checks completed; {generated_bytes} bytes of generated files removed", flush=True)

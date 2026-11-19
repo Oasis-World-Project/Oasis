@@ -1,0 +1,41 @@
+# 用户导入自己的项目时沙箱要到的站：代码托管和各语言的包仓库、工具链下载（HTTPS，整个域名精确匹配）。
+# npm、PyPI 的镜像站写在 SANDBOX_EGRESS_ALLOW_HOSTS 里；这份名单在 SANDBOX_EGRESS_PROJECT_HOSTS=off 时不放行。
+# 代码托管：克隆公开仓库、下载源码包和发布包
+github.com
+codeload.github.com
+api.github.com
+objects.githubusercontent.com
+raw.githubusercontent.com
+release-assets.githubusercontent.com
+gitlab.com
+# Node、Python 的官方源（项目里写死官方地址时用得上）；nodejs.org 是编译原生模块要的头文件
+registry.npmjs.org
+nodejs.org
+pypi.org
+files.pythonhosted.org
+# Go：模块代理、校验、工具链
+proxy.golang.org
+sum.golang.org
+go.dev
+dl.google.com
+# Rust：crates.io 和 rustup
+crates.io
+index.crates.io
+static.crates.io
+static.rust-lang.org
+sh.rustup.rs
+# Java / Kotlin：Maven 中央仓库、Gradle、JDK（Temurin）
+repo.maven.apache.org
+repo1.maven.org
+plugins.gradle.org
+plugins-artifacts.gradle.org
+services.gradle.org
+downloads.gradle.org
+api.adoptium.net
+# Ruby
+rubygems.org
+index.rubygems.org
+# PHP
+packagist.org
+repo.packagist.org
+getcomposer.org

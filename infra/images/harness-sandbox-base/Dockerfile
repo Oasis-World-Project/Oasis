@@ -40,6 +40,9 @@ RUN sed -i \
  && apt-get -o Acquire::https::Verify-Peer=false -o Acquire::https::Verify-Host=false update \
  && apt-get -o Acquire::https::Verify-Peer=false -o Acquire::https::Verify-Host=false install -y --no-install-recommends ca-certificates \
  && apt-get update \
+ # PostgreSQL 的程序装上就行：不要它在安装时自己建一个归 postgres 用户的库（AI 以普通用户在工作目录里另起）
+ && mkdir -p /etc/postgresql-common \
+ && printf 'create_main_cluster = false\n' > /etc/postgresql-common/createcluster.conf \
  && attempt=0 \
  && until apt-get -o Acquire::Retries=${APT_RETRIES} install -y --no-install-recommends python3 python3-pip python3-venv fonts-noto-cjk \
     libreoffice-writer libreoffice-calc libreoffice-impress \
@@ -48,11 +51,16 @@ RUN sed -i \
     chromium fonts-noto-color-emoji fonts-unifont \
     pandoc sqlite3 jq imagemagick \
     sox git ripgrep zip unzip \
+    postgresql mariadb-server valkey-server \
+    curl xz-utils pkg-config libssl-dev libpq-dev python3-dev \
     make g++; do \
       attempt=$((attempt + 1)); \
       if [ "$attempt" -ge "$APT_RETRIES" ]; then exit 1; fi; \
     done \
  && rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/00-oasis-mirror.sources \
+ # 用户导入的项目要数据库时，AI 以普通用户在工作目录里起一个（技能 projects 里写了怎么起）；这里只装程序、不启动。
+ # Debian 把 initdb、pg_ctl、postgres 放在带版本号的目录里，连到 PATH 上
+ && for tool in initdb pg_ctl postgres; do ln -s "$(ls -d /usr/lib/postgresql/*/bin)/$tool" "/usr/local/bin/$tool"; done \
  # 沙箱以非 root、无特权、/dev/shm 只有 64 MB 运行，也没有显卡：这三项写成 Chromium 的默认参数，命令行和 playwright-core 都用得上
  && printf 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage --enable-unsafe-swiftshader"\n' > /etc/chromium.d/oasis
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -72,7 +80,9 @@ RUN --mount=type=secret,id=pip_index \
  && chown -R node:node /home/node/.config \
  && printf '系统软件（无界面）：\n' > /opt/oasis/software.txt \
  && dpkg-query -W -f='${Package} ${Version}\n' libreoffice-writer libreoffice-calc libreoffice-impress ffmpeg poppler-utils fonts-noto-cjk melt frei0r-plugins \
-    chromium fonts-noto-color-emoji fonts-unifont pandoc sqlite3 jq imagemagick sox git ripgrep zip unzip make g++ >> /opt/oasis/software.txt \
+    chromium fonts-noto-color-emoji fonts-unifont pandoc sqlite3 jq imagemagick sox git ripgrep zip unzip make g++ curl xz-utils pkg-config libssl-dev libpq-dev python3-dev >> /opt/oasis/software.txt \
+ && printf '\n数据库程序（不自动启动；要用时以普通用户在工作目录里起，见技能 projects）：\n' >> /opt/oasis/software.txt \
+ && dpkg-query -W -f='${Package} ${Version}\n' 'postgresql-[0-9][0-9]' mariadb-server valkey-server >> /opt/oasis/software.txt \
  # 成果里要内嵌字体时用这里的（沙箱不通外网）。Unifont 是点阵字体：真实对比里做像素风小游戏的 AI 没有现成的像素字体，
  # 自己一笔一笔画了几十个汉字，占掉三分之一的步骤
  && printf '\n字体（在 /usr/share/fonts 下，可以拷进成果或取子集后内嵌，都是 OFL 许可）：\nNoto Sans CJK、Noto Serif CJK（中日韩）\nNoto Color Emoji\nUnifont（16×16 点阵像素字体，含中文）%s\n' "$(fc-list Unifont file | grep -m1 -E '/unifont\.(otf|ttf)' | cut -d: -f1 | sed 's/^/：/')" >> /opt/oasis/software.txt \
@@ -88,8 +98,9 @@ RUN --mount=type=secret,id=npm_registry \
       if [ "$attempt" -ge "$NPM_RETRIES" ]; then exit 1; fi; \
     done \
  && npm cache clean --force \
- && mkdir -p /workspace/in /workspace/out \
- && chown -R node:node /workspace
+ && mkdir -p /workspace/in /workspace/out /cache \
+ # /cache：每个用户一块的缓存卷挂在这里（下载下来的包和工具链，见 harness 的 executor），先建好并交给沙箱用户
+ && chown -R node:node /workspace /cache
 # 预装的 Node 包从根目录的 /node_modules 找得到：Node 找包时一路往上找，任何目录下的脚本都能直接 import / require，
 # 工作目录里自己装的同名包优先。包装在 /opt/oasis/node 再连过去（npm 不能在根目录下安装）。
 # playwright-core 不自带浏览器，用上面 apt 装的 Chromium。
@@ -115,9 +126,10 @@ RUN --mount=type=secret,id=npm_registry \
  && cd /opt/oasis \
  && node --input-type=module -e 'import { mkdirSync, symlinkSync } from "node:fs"; import path from "node:path"; import { chromium } from "playwright-core"; for (let i = 0; i < 4; i += 1) { try { const browser = await chromium.launch(); const page = await browser.newPage(); await page.setContent("<p id=ok>ok</p>"); const text = await page.textContent("#ok"); await browser.close(); if (text !== "ok") throw new Error("page did not render"); console.log("playwright-core launches the system chromium"); process.exit(0); } catch (error) { const missing = /Executable doesn.t exist at (\S+)/.exec(String(error && error.message)); if (!missing) throw error; mkdirSync(path.dirname(missing[1]), { recursive: true }); symlinkSync("/usr/bin/chromium", missing[1]); } } throw new Error("could not link playwright-core to the system chromium");'
 USER node
+# 不设 NODE_ENV：这里的环境变量 AI 跑的每条命令都会继承，设成 production 的话 npm 默认不装 devDependencies，
+# 接手现成项目时测试工具装不上（2026-11-19 真模型验收时碰到）。
 ENV DSH_HOME=/home/node/.dsh \
-    DSH_PERMISSION_MODE=danger-full-access \
-    NODE_ENV=production
+    DSH_PERMISSION_MODE=danger-full-access
 # 从 dsh 自带的 sdk 模板复制出 oasis profile，再叠上 Oasis 的组合（关掉用不上的插件、模型指向 model-gateway）
 RUN dsh oasis --from-default-profile sdk --dump-config > /dev/null
 RUN mkdir -p /home/node/.dsh/sessions
@@ -136,5 +148,7 @@ RUN printf '#!/bin/sh\nexec node --no-warnings /opt/oasis/oasis-tool.ts "$@"\n' 
  && printf '#!/bin/sh\nexec node --no-warnings /opt/oasis/services/harness/sandbox/oasis-op.ts "$@"\n' > /usr/local/bin/oasis-op \
  && chmod 755 /usr/local/bin/oasis-tool /usr/local/bin/oasis-media /usr/local/bin/oasis-op
 USER node
+# 用时再装的工具链（Go、Rust、JDK……）装在缓存卷 /cache 里：命令放在这几个目录下就直接能用
+ENV PATH="/cache/bin:/cache/cargo/bin:/cache/go/bin:${PATH}"
 WORKDIR /workspace
 ENTRYPOINT ["dsh", "--profile", "oasis"]
