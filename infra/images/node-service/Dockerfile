@@ -18,7 +18,8 @@ COPY . .
 RUN --mount=type=cache,id=oasis-pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --ignore-scripts --store-dir=/pnpm/store --filter "@oasis/${SERVICE}..."
 RUN pnpm --filter "@oasis/${SERVICE}..." run build
-# 把服务和它依赖的工作区包（service-kit、contracts）连同运行时依赖一起复制到 /out，不再依赖 /repo
+# 把服务（package.json 的 files 里列的：dist、migrations 和运行时要读的文件）和它依赖的工作区包
+# （service-kit、contracts）连同运行时依赖一起复制到 /out
 RUN --mount=type=cache,id=oasis-pnpm-store,target=/pnpm/store \
     pnpm --filter "@oasis/${SERVICE}" --config.inject-workspace-packages=true \
       deploy --prod --ignore-scripts --store-dir=/pnpm/store /out
@@ -32,8 +33,11 @@ ENV NODE_ENV=production \
     GIT_COMMIT=${GIT_COMMIT}
 LABEL org.opencontainers.image.title="oasis/${SERVICE}" \
       org.opencontainers.image.revision="${GIT_COMMIT}"
-WORKDIR /app
+# 和仓库里同一个位置：服务按相对位置找仓库根目录（harness 每轮把自己的 guide、sandbox 和下面两个
+# 契约源文件现读出来放进沙箱）
+WORKDIR /repo/services/${SERVICE}
 COPY --from=build --chown=node:node /out ./
+COPY --from=build --chown=node:node /repo/packages/contracts/src/ops.ts /repo/packages/contracts/src/tool-args.ts /repo/packages/contracts/src/
 USER node
 STOPSIGNAL SIGTERM
 CMD ["node", "dist/main.js"]
