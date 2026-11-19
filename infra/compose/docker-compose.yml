@@ -1,7 +1,9 @@
-# Oasis 本地编排。统一通过 scripts/compose.mjs 调用：
+# Oasis 的编排，本地和线上是同一份。统一通过 scripts/compose.mjs 调用：
 #   pnpm infra:up   只起中间件（日常开发：服务在本机进程里跑，热重载）
-#   pnpm stack:up   中间件 + 10 个服务全部在容器里跑（集成验证）
+#   pnpm stack:up   中间件 + 10 个服务全部在容器里跑（集成验证；线上就是这样跑的）
 #   pnpm infra:down 全部停掉
+# 线上和本地的差别都来自根目录 .env（见 .env.example「线上」一节、docs/ops/部署.md）：填了 OASIS_DOMAIN，
+# stack:up 就连入口（profile online）一起起、不起 Mailpit（profile dev）。
 #
 # 镜像命名规则（AGENTS.md B.10）：本项目运行的每个镜像都叫 oasis/<组件>:<标签>，没有例外。
 # 中间件用 infra/images/<组件>/Dockerfile 薄包装官方镜像（上游版本在 Dockerfile 里锁定）。
@@ -74,6 +76,7 @@ services:
       timeout: 3s
       retries: 20
     stop_grace_period: 30s
+    restart: ${OASIS_RESTART:-no}
 
   nats:
     image: oasis/nats:2.15.1
@@ -93,6 +96,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: ${OASIS_RESTART:-no}
 
   seaweedfs:
     image: oasis/seaweedfs:4.47
@@ -110,11 +114,14 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
+    restart: ${OASIS_RESTART:-no}
 
+  # 本地收验证码邮件的假邮箱；线上发真邮件，不起它
   mailpit:
     image: oasis/mailpit:1.31.6
     build: ../images/mailpit
     pull_policy: build
+    profiles: [dev]
     ports:
       - 127.0.0.1:${MAILPIT_SMTP_HOST_PORT:-1025}:1025
       - 127.0.0.1:${MAILPIT_UI_HOST_PORT:-8025}:8025
@@ -141,6 +148,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: ${OASIS_RESTART:-no}
 
   # 沙箱出口代理：沙箱装软件包、克隆公开仓库时经它出去，只放行白名单里的域名，其余一律拒绝。
   # 开发机在国内，默认用国内镜像站；部署到海外后在 .env 里换回官方源（见根目录 .env.example）。
@@ -158,9 +166,33 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: ${OASIS_RESTART:-no}
+
+  # ---------- 线上的入口（profile: online）----------
+  # 线上唯一对公网开端口的容器：HTTPS、网页的静态文件、/api 转给 gateway
+  entry:
+    image: oasis/entry:2.11.9
+    build:
+      context: ../..
+      dockerfile: infra/images/entry/Dockerfile
+    pull_policy: build
+    profiles: [online]
+    restart: unless-stopped
+    environment:
+      OASIS_DOMAIN: ${OASIS_DOMAIN:-localhost}
+    ports:
+      - 80:80
+      - 443:443
+      - 443:443/udp
+    volumes:
+      - entry-data:/data
+      - entry-config:/config
+    depends_on:
+      gateway:
+        condition: service_healthy
 
   # ---------- 服务（profile: services）----------
-  # 唯一对外的服务；不依赖上游先启动，某个上游挂了只影响它自己的路由
+  # 页面只和它打交道；不依赖上游先启动，某个上游挂了只影响它自己的路由
   gateway:
     <<: *node-service
     image: oasis/gateway:${OASIS_IMAGE_TAG:-local}
@@ -180,7 +212,7 @@ services:
       # 在用户电脑上干活：桌面版连 harness、电脑上的 dsh 调模型和工具
       HARNESS_URL: http://harness:4107
       MODEL_GATEWAY_URL: http://model-gateway:4108
-      GATEWAY_ALLOWED_ORIGINS: http://127.0.0.1:5173,http://localhost:5173
+      GATEWAY_ALLOWED_ORIGINS: ${GATEWAY_ALLOWED_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173}
     ports:
       - 127.0.0.1:${GATEWAY_HOST_PORT:-8080}:8080
 
@@ -196,11 +228,12 @@ services:
       <<: [*runtime-env, *nats-env]
       PORT: 4101
       DATABASE_URL: postgres://svc_identity:${IDENTITY_DB_PASSWORD:?}@postgres:5432/identity?sslmode=disable
-      SMTP_URL: smtp://mailpit:1025
-      MAIL_FROM: Oasis <no-reply@oasis.local>
+      # 本地发到 Mailpit；线上在 .env 里填真的发信服务
+      SMTP_URL: ${SMTP_URL:-smtp://mailpit:1025}
+      MAIL_FROM: ${MAIL_FROM:-Oasis <no-reply@oasis.local>}
       AUTH_CODE_PEPPER: ${AUTH_CODE_PEPPER:?}
-      # 本地是 http，会话 Cookie 不能要求 HTTPS
-      COOKIE_SECURE: 'false'
+      # 本地是 http，会话 Cookie 不能要求 HTTPS；线上填 true
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     depends_on: *data-deps
 
   billing:
@@ -293,6 +326,8 @@ services:
       DOCKER_SOCKET: /var/run/docker.sock
       SANDBOX_NPM_REGISTRY: ${SANDBOX_NPM_REGISTRY:-https://registry.npmjs.org/}
       SANDBOX_PIP_INDEX_URL: ${SANDBOX_PIP_INDEX_URL:-https://pypi.org/simple}
+      # 同时最多跑几个沙箱（每个最多 2 核 2 GB）；机器小就在 .env 里调小
+      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-4}
     # harness 要通过宿主机的 Docker 起沙箱容器（权限较大，只给 harness 和 inspector）。
     # socket 的属组在 Linux 上一般是 docker 组，用 DOCKER_SOCKET_GID 指定；Docker Desktop 上是 0。
     volumes:
@@ -366,3 +401,6 @@ volumes:
   postgres-data:
   nats-data:
   seaweedfs-data:
+  # 入口申请到的证书
+  entry-data:
+  entry-config:

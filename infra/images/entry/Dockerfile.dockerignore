@@ -1,0 +1,17 @@
+# 入口镜像要构建网页：上下文里要有 apps/web 和 packages，不要服务和桌面版
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.tmp
+.claude
+.vscode
+docs
+services
+apps/desktop
+infra
+!infra/images/entry/Caddyfile

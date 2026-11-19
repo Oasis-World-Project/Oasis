@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// 本地编排的统一入口：固定 env 文件、compose 文件和 profile，并把当前 git 提交号注入镜像。
+// 编排的统一入口（本地和线上都用它）：固定 env 文件、compose 文件和 profile，并把当前 git 提交号注入镜像。
 // 用法：node scripts/compose.mjs up [--services] | down [-v] | ps | logs [服务名…]
+// 根目录 .env 里填了 OASIS_DOMAIN 就是线上：up --services 连入口一起起，不起本地的假邮箱。
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -24,8 +25,14 @@ const commit =
     encoding: 'utf8',
   }).stdout?.trim() || 'unknown';
 
-// up 默认只起中间件；down / ps / logs 总是带上服务，保证能看到、停掉全部容器
-const profile = command !== 'up' || withServices ? ['--profile', 'services'] : [];
+const online = /^OASIS_DOMAIN=\S/m.test(readFileSync(path.join(ROOT, '.env'), 'utf8'));
+// up 默认只起中间件；down / ps / logs 总是带上全部 profile，保证能看到、停掉全部容器
+const all = command !== 'up';
+const profile = [
+  ...(all || withServices ? ['services'] : []),
+  ...(all || !online ? ['dev'] : []),
+  ...(all || (online && withServices) ? ['online'] : []),
+].flatMap((name) => ['--profile', name]);
 const action =
   command === 'up' ? ['up', '-d', '--wait', ...(withServices ? ['--build'] : [])] : [command];
 

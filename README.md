@@ -75,7 +75,7 @@ pnpm browser:smoke
 - 检查容器的算力记在发起它的那一轮上（model-gateway 冻结、按 inspector 报回的实际用时结算）。容器用完即删，inspector 断开时检查浏览器跟着退出。
 - 外站测试只访问 inspector 的 `WEBSITE_TEST_ORIGINS` 里放行的 HTTPS 来源，默认为空（关闭）。
 
-需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 9 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。
+需要在容器里跑全套做集成验证时：`pnpm stack:up`（构建 9 个服务镜像并启动，全部健康才返回），`pnpm infra:down` 全部停掉。线上就是这样跑的，再加一个入口容器，见 `docs/ops/部署.md`。
 
 ## 服务
 
