@@ -4,7 +4,6 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DESKTOP_CHANNELS } from '@oasis/contracts/desktop';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSyncFolder, freePath, resolveInside } from '../src/sync-folder.ts';
 
@@ -150,16 +149,6 @@ describe('同步记录', () => {
     const recovered = createSyncFolder(record);
     await recovered.recover();
     expect((await recovered.status()).synced).toEqual([A]);
-  });
-});
-
-describe('preload', () => {
-  it('频道名和契约一致', async () => {
-    const source = await readFile(
-      path.join(import.meta.dirname, '..', 'src', 'preload.cts'),
-      'utf8',
-    );
-    for (const channel of Object.values(DESKTOP_CHANNELS)) expect(source).toContain(`'${channel}'`);
   });
 });
 

@@ -114,7 +114,7 @@ async function execReport(
  * 和 harness 存的 outputs.tar 一样）。默认放进所有音视频和工程素材，keep 可以只挑一部分。
  * 容器只活 lifetimeMs：调用方意外退出时它自己结束、被 Docker 自动删掉，不留孤儿。
  */
-export async function runMediaCheck(
+async function runMediaCheck(
   docker: DockerApi,
   box: MediaBox,
   snapshot: Readable,

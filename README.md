@@ -90,7 +90,7 @@ pnpm browser:smoke
 | harness | 4107 | 私聊 AI 的运行时：每一轮在沙箱或用户的电脑上跑 dsh（唯一接触 DeepSeek Harness） | 仅内部（桌面版经 gateway 连上来） |
 | model-gateway | 4108 | 所有模型调用的唯一出口，计量上报 billing | 仅内部 |
 | inspector | 4109 | 检查成果：文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览（不调别的服务、不存东西） | 仅内部 |
-| model-gateway（数字人入口） | 4118 | 只有 `/avatar/v1/chat/completions`，给 LiveAvatar 回调大模型；开发期经 `pnpm avatar:tunnel` 和服务器 nginx 暴露为 `https://oasis-dev.elysiumgrid.space/avatar/v1` | 只这一条路径公网可达 |
+| model-gateway（数字人入口） | 4118 | 只有 `/avatar/v1/chat/completions`，给 LiveAvatar 回调大模型；线上由入口容器暴露为 `https://<域名>/avatar/v1`（开发机没有公网入口，真实的数字人对话只能在线上试） | 只这一条路径公网可达 |
 
 每个服务都有 `/health`（进程存活）、`/ready`（依赖可用）、`/v1/meta`（服务名、版本、提交号）。业务接口放在 `/v1/*`，只给服务之间调用的放在 `/internal/*`（gateway 不转发）。
 
@@ -139,6 +139,4 @@ docs/       工程方向、现在是怎么做的（design）、回归测试
 | `pnpm sandbox:build` | 构建 agent 沙箱镜像（dsh 版本锁定在镜像标签里） |
 | `pnpm sandbox:check` | 在断网、2 核、2 GB 临时容器中验收文档转换、公式重算和软件清单，不调用模型 |
 | `pnpm sandbox:check:ops` | 离线验收沙箱里的本地操作 `oasis-op`（拼接、截取、抽帧、配音轨、转格式），不调用模型 |
-| `pnpm media:smoke` / `pnpm video:smoke` | 免费验证大文件传输 / 视频剪辑、MLT 渲染、工程移动与打包；均不调用模型供应商 |
-| `pnpm model:smoke` | 免费验证真实 WebGL、图片/视频降级和生产 Electron 壳；自动构建相关服务，使用内存数据与隔离配置，不调用云。需已有沙箱基础镜像；`--serve` 留下本地 Web 验证页 |
 | `pnpm stack:up` / `pnpm stack:logs` | 容器里跑全套 / 看日志 |

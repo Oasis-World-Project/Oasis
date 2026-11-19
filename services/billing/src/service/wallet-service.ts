@@ -16,7 +16,7 @@ export function applyMultiplier(costMicro: number, multiplier: number): number {
 }
 
 /** 本月 1 日 0 点（UTC）。 */
-export function monthStart(now: Date): Date {
+function monthStart(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 

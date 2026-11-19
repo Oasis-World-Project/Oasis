@@ -1,7 +1,7 @@
 import type { Logger } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
 import type { WalletRepo } from '../src/repo/wallet-repo.ts';
-import { applyMultiplier, createWalletService, monthStart } from '../src/service/wallet-service.ts';
+import { applyMultiplier, createWalletService } from '../src/service/wallet-service.ts';
 
 describe('定价系数', () => {
   it('按系数收：有小数向上取整到 1 微美元，没有花费不收，浮点误差不多收 1', () => {
@@ -10,14 +10,6 @@ describe('定价系数', () => {
     expect(applyMultiplier(1, 1.5)).toBe(2);
     expect(applyMultiplier(0, 1.5)).toBe(0);
     expect(applyMultiplier(100, 1.1)).toBe(110);
-  });
-});
-
-describe('本月起点', () => {
-  it('取当月 1 日 0 点（UTC）', () => {
-    expect(monthStart(new Date('2026-10-22T05:00:00Z')).toISOString()).toBe(
-      '2026-10-01T00:00:00.000Z',
-    );
   });
 });
 

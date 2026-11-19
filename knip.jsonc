@@ -5,8 +5,6 @@
   "workspaces": {
     ".": {
       "entry": ["scripts/*.mjs"],
-      // 媒体烟测用 createRequire 加载 canvas 已声明的 fflate；根包不重复安装。
-      "ignoreDependencies": ["fflate"],
     },
     // 只有 JSON 配置，没有源码入口
     "packages/tsconfig": {
@@ -26,7 +24,6 @@
         "sandbox/oasis-op.ts",
         "src/adapter/profile/node-goal.mjs",
         "src/adapter/profile/approval.mjs",
-        "src/adapter/test/native-provider.mjs",
       ],
     },
     // 解析 worker 由 Worker URL 按源码/编译后扩展名加载；解码脚本读成文本放进检查容器执行；
@@ -45,13 +42,9 @@
     },
     // preload 由 Electron 按路径加载（BrowserWindow 的 webPreferences.preload），不经 import
     "apps/desktop": {
-      "entry": ["src/main.ts", "src/preload.cts", "test/model-preview-smoke.cjs"],
+      "entry": ["src/main.ts", "src/preload.cts"],
       // Windows 自带的命令：给项目文件夹加上自己的完全控制（dsh 的沙箱要）
       "ignoreBinaries": ["icacls"],
-    },
-    // model:smoke 通过 Vite HTML 动态挂载的测试页面，不进入产品入口。
-    "apps/web": {
-      "entry": ["test/model-preview-host.tsx"],
     },
     // exports 用了 "./*" 通配，knip 推不出对应的源码入口
     "packages/contracts": {
