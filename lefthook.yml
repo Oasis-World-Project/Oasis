@@ -1,4 +1,4 @@
-# Git 钩子：项目不上 CI，规则靠钩子兜底（工程规范 §7）。
+# Git 钩子：提交前、推送前先在本地拦一道；推上去以后 CI（.github/workflows/ci.yml）再跑一遍检查和测试（工程规范 §7）。
 pre-commit:
   parallel: true
   commands:

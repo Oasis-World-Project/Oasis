@@ -1,0 +1,65 @@
+# 只做两件事：
+#   - 每次推上来：跑检查和测试（和本地 pre-push 钩子、`pnpm test` 是同一套命令）；
+#   - 手动点（Actions 页 → CI → Run workflow）并填了网址：再打一个 Windows 安装包，打好的在这次运行的 Artifacts 里。
+# 不在这里做的：要连数据库、要 Docker 镜像的测试和 `pnpm e2e`（本地跑）；部署（服务器上拉代码构建，见 docs/ops/）。
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      web_url:
+        description: 打 Windows 安装包：装好的桌面版打开的网址（留空就只跑检查）
+        required: false
+        type: string
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: 检查和测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm check:engineering
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  installer:
+    name: Windows 安装包
+    if: github.event_name == 'workflow_dispatch' && inputs.web_url != ''
+    needs: check
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm desktop:dist
+        env:
+          OASIS_RELEASE_WEB_URL: ${{ inputs.web_url }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: oasis-windows-installer
+          path: apps/desktop/release/*.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

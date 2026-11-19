@@ -115,6 +115,15 @@ scripts/    工程检查、清理、环境初始化
 docs/       工程方向、现在是怎么做的（design）、回归测试
 ```
 
+## CI
+
+`.github/workflows/ci.yml`（GitHub Actions）只做两件事：
+
+- 每次推上去：`pnpm format:check`、`pnpm lint`、`pnpm check:engineering`、`pnpm typecheck`、`pnpm test`。要连数据库、要 Docker 镜像的测试在 CI 里自动跳过，`pnpm e2e` 也不在 CI 里，这些在本地跑。
+- 手动点（GitHub 的 Actions 页 → CI → Run workflow，填上线上的网址）：检查过了以后再打一个 Windows 安装包，在这次运行的 Artifacts 里下载（留 14 天）。
+
+部署不在 CI 里：在服务器上拉代码、构建镜像，见 `docs/ops/`。
+
 ## 常用命令
 
 | 命令 | 作用 |
