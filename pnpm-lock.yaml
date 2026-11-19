@@ -507,6 +507,9 @@ importers:
       '@fastify/http-proxy':
         specifier: 'catalog:'
         version: 11.6.5
+      '@oasis/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@oasis/service-kit':
         specifier: workspace:*
         version: link:../../packages/service-kit
@@ -514,9 +517,6 @@ importers:
         specifier: 'catalog:'
         version: 4.6.7
     devDependencies:
-      '@oasis/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@oasis/tsconfig':
         specifier: workspace:*
         version: link:../../packages/tsconfig

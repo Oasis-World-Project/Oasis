@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@fastify/http-proxy": "catalog:",
+    "@oasis/contracts": "workspace:*",
     "@oasis/service-kit": "workspace:*",
     "zod": "catalog:"
   },
@@ -24,7 +25,6 @@
     "@types/node": "catalog:",
     "@types/ws": "catalog:",
     "typescript": "catalog:",
-    "@oasis/contracts": "workspace:*",
     "fastify": "catalog:",
     "vitest": "catalog:",
     "ws": "catalog:"
