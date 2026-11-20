@@ -1,7 +1,11 @@
 # MODEL_GATEWAY_UPSTREAM 由环境变量注入（nginx 镜像启动时用 envsubst 替换）
 # 网关短暂重启后应立即允许下一次原生重试；不能把地址摘除 10 秒并耗尽原生重试。
+# 地址按名字定时重新查（Docker 自带的 DNS，10 秒）：model-gateway 换了容器就换了 IP，
+# 只在启动时查一次的话会一直连旧地址（2026-11-20 线上更新后沙箱里的回合全部 502）。
+resolver 127.0.0.11 valid=10s ipv6=off;
 upstream oasis_model_gateway {
-  server ${MODEL_GATEWAY_ADDRESS} max_fails=0;
+  zone oasis_model_gateway 64k;
+  server ${MODEL_GATEWAY_ADDRESS} max_fails=0 resolve;
 }
 
 server {
