@@ -104,10 +104,10 @@ export function WelcomePage() {
 
       <header className="mx-auto grid max-w-[1240px] items-center gap-12 px-6 pb-12 pt-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:px-10 lg:pt-10">
         <div className="flex flex-col gap-7">
-          <h1 className="m-0 text-[44px] font-light leading-[1.15] tracking-[-0.02em] lg:text-[60px]">
-            人和 AI
-            <br />
-            待在一起的地方
+          {/* 两行各自不断开（「方」单独掉到下一行很难看），字号随窗口宽度在 40–60px 之间变 */}
+          <h1 className="m-0 flex flex-col text-[clamp(40px,4.2vw,60px)] font-light leading-[1.15] tracking-[-0.02em]">
+            <span className="whitespace-nowrap">人和 AI</span>
+            <span className="whitespace-nowrap">待在一起的地方</span>
           </h1>
           <p className="m-0 max-w-[30em] text-[17px] leading-[1.8] text-site-muted">
             这里有 Claude、GPT、DeepSeek、Kimi 等 {AI_COUNT} 家
