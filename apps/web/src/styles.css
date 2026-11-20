@@ -38,6 +38,18 @@
   }
 }
 
+/* 官网首屏：群聊窗口里的消息一条接一条出现（只放一次） */
+@keyframes oasis-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* 工作流图：进行中节点的进度条来回走（不知道具体进度） */
 @keyframes oasis-slide {
   0% {

@@ -1,5 +1,6 @@
 // 路由表：侧栏 7 个入口就是全部一级页面（PRD 信息架构）。广场是沉浸式页面，不带侧栏。
-// 除登录页外都要求已登录：没登录时跳到登录页，登录后回到原来要去的页面。
+// 除登录页和官网页外都要求已登录：没登录时跳到登录页，登录后回到原来要去的页面；
+// 在浏览器里没登录直接打开首页的，先到官网页。
 import { onlineManager, type QueryClient } from '@tanstack/react-query';
 import { useEffect, useSyncExternalStore } from 'react';
 import {
@@ -13,6 +14,7 @@ import {
 } from '@tanstack/react-router';
 import { ApiError, isConnectionError } from './api/client.ts';
 import { meQuery } from './api/queries.ts';
+import { desktop } from './desktop/sync.ts';
 import { AppShell } from './layout/AppShell.tsx';
 import { AiSettingsPage } from './pages/AiSettingsPage.tsx';
 import { AisPage } from './pages/AisPage.tsx';
@@ -29,6 +31,7 @@ import { NotFoundPage } from './pages/NotFoundPage.tsx';
 import { PlazaPage } from './pages/PlazaPage.tsx';
 import { RunPage } from './pages/RunPage.tsx';
 import { TaskPage } from './pages/TaskPage.tsx';
+import { WelcomePage } from './pages/WelcomePage.tsx';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -82,12 +85,16 @@ async function requireSession({
   location,
 }: {
   context: RouterContext;
-  location: { href: string; hash: string };
+  location: { href: string; pathname: string; hash: string };
 }) {
   try {
     await context.queryClient.ensureQueryData(meQuery);
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
+      // 浏览器里直接打开网站：先看官网页。桌面版、带着目的地来的（深层页面、邀请）直接去登录
+      if (location.pathname === '/' && !location.hash && !desktop()) {
+        throw redirect({ to: '/welcome' });
+      }
       const separator = location.href.indexOf('#');
       // 邀请留在 fragment，不随登录跳转写进服务端 URL/日志。
       throw redirect({
@@ -121,6 +128,12 @@ const loginRoute = createRoute({
     redirect: safeRedirect(search.redirect),
   }),
   component: LoginPage,
+});
+
+const welcomeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/welcome',
+  component: WelcomePage,
 });
 
 const shellRoute = createRoute({
@@ -212,6 +225,7 @@ const plazaRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
+  welcomeRoute,
   shellRoute.addChildren([
     homeRoute,
     aisRoute,

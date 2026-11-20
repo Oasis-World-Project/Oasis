@@ -143,3 +143,16 @@
   --oasis-plaza-gold-edge: inset 0 0 0 1px rgb(216 180 106 / 0.55);
   --oasis-font-serif: 'Cinzel', 'Noto Serif SC', 'Songti SC', serif;
 }
+
+/* 官网页（/welcome）：清晨的芦苇灰绿底 + 湖水深青。产品本身的样子（珍珠雾面、各家 AI 的光）
+   只出现在首屏那扇群聊窗口里，整页其余部分保持安静 */
+[data-theme='site'] {
+  --oasis-site-ground: #edf1ee;
+  --oasis-site-ink: #15302e;
+  --oasis-site-muted: #4f625f;
+  --oasis-site-line: rgb(21 48 46 / 0.14);
+  --oasis-site-deep: #123836;
+  --oasis-site-on-deep: #e6f0eb;
+  --oasis-site-on-deep-muted: rgb(230 240 235 / 0.74);
+  --oasis-site-shadow: 0 40px 100px rgb(18 56 54 / 0.18);
+}

@@ -32,6 +32,13 @@
   --color-plaza-night: var(--oasis-plaza-night);
   --color-plaza-gold: var(--oasis-plaza-gold);
   --color-plaza-parchment: var(--oasis-plaza-parchment);
+  --color-site-ground: var(--oasis-site-ground);
+  --color-site-ink: var(--oasis-site-ink);
+  --color-site-muted: var(--oasis-site-muted);
+  --color-site-line: var(--oasis-site-line);
+  --color-site-deep: var(--oasis-site-deep);
+  --color-site-on-deep: var(--oasis-site-on-deep);
+  --color-site-on-deep-muted: var(--oasis-site-on-deep-muted);
 
   --font-sans: var(--oasis-font-sans);
   --font-display: var(--oasis-font-display);
@@ -56,6 +63,7 @@
   --shadow-bubble-edge: var(--oasis-bubble-edge);
   --shadow-accent: var(--oasis-shadow-accent);
   --shadow-dialog: var(--oasis-glass-edge-strong), var(--oasis-shadow-dialog);
+  --shadow-site: var(--oasis-site-shadow);
 }
 
 /* 应用底色：浅灰丁香 + 四团柔光；在 [data-light] 下随群换光 */

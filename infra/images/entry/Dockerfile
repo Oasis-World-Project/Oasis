@@ -1,6 +1,6 @@
 # oasis/entry：线上唯一对外的入口（官方 Caddy + 构建好的网页）。
 #   - HTTPS 证书自动申请和续期（Let's Encrypt），证书存在 /data 卷里；
-#   - 发网页的静态文件；/api 转给 gateway；/avatar/v1 转给 model-gateway 的数字人入口。
+#   - 发网页的静态文件和桌面版安装包（/download）；/api 转给 gateway；/avatar/v1 转给 model-gateway 的数字人入口。
 # 用法（在仓库根目录）：填了 OASIS_DOMAIN 以后 pnpm stack:up 会构建并启动它，见 docs/ops/部署.md。
 ARG NODE_IMAGE=node:24.21.0-trixie-slim
 

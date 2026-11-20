@@ -31,3 +31,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .claude/settings.local.json
+
+# 线上放桌面版安装包的目录（入口容器从 /download/ 发出去）
+/downloads/

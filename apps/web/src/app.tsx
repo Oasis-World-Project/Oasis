@@ -1,8 +1,10 @@
-// 应用的组装：查询缓存 + 路由。会话过期（任何请求返回 401）时清空缓存并回到登录页。
+// 应用的组装：查询缓存 + 路由。会话过期（登录着的时候任何请求返回 401）时清空缓存并回到登录页；
+// 本来就没登录的，去哪由路由决定（router.tsx 的 requireSession）。
 import { onlineManager, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, type RouterHistory } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { ApiError, isConnectionError } from './api/client.ts';
+import { meQuery } from './api/queries.ts';
 import { createAppRouter } from './router.tsx';
 
 export function createApp(options: { history?: RouterHistory } = {}) {
@@ -11,7 +13,13 @@ export function createApp(options: { history?: RouterHistory } = {}) {
     queryCache: new QueryCache({
       onError: (error) => {
         const { pathname, searchStr, hash } = router.state.location;
-        if (error instanceof ApiError && error.status === 401 && pathname !== '/login') {
+        const signedIn = queryClient.getQueryData(meQuery.queryKey) !== undefined;
+        if (
+          error instanceof ApiError &&
+          error.status === 401 &&
+          signedIn &&
+          pathname !== '/login'
+        ) {
           queryClient.clear();
           // 连同查询参数记住（如进度页的 ?conversation=），登录后回到同一页
           void router.navigate({

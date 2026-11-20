@@ -16,6 +16,13 @@
 		}
 	}
 
+	# 桌面版安装包：服务器上 /opt/oasis/downloads 里的文件（见 docs/ops/部署.md「发安装包」）
+	handle_path /download/* {
+		root * /downloads
+		header Cache-Control "no-cache"
+		file_server
+	}
+
 	# 网页：带内容指纹的文件长期缓存；其余路径都交给 index.html（前端自己认路由），它每次都重新取
 	handle {
 		root * /srv

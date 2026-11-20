@@ -34,6 +34,21 @@ describe('登录', () => {
     expect(router.state.location.search).toEqual({ redirect: '/canvas' });
   });
 
+  it('浏览器里没登录直接打开首页：先到官网页，能下载桌面版、进网页版；桌面版里直接去登录', async () => {
+    installFakeApi({ signedIn: false });
+    const router = await renderAt('/');
+    expect(router.state.location.pathname).toBe('/welcome');
+    for (const link of screen.getAllByRole('link', { name: '下载 Windows 版' }))
+      expect(link.getAttribute('href')).toBe('/download/Oasis-Setup-x64.exe');
+    fireEvent.click(screen.getAllByRole('link', { name: '进入网页版' })[0]!);
+    expect(await screen.findByRole('heading', { name: '登录 Oasis' })).toBeTruthy();
+    cleanup();
+
+    vi.stubGlobal('oasisDesktop', {});
+    await renderAt('/');
+    expect(await screen.findByRole('heading', { name: '登录 Oasis' })).toBeTruthy();
+  });
+
   it('邮箱 → 验证码 → 登录后回到原页面', async () => {
     const api = installFakeApi({ signedIn: false });
     const router = await renderAt('/ais');

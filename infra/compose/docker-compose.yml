@@ -187,6 +187,8 @@ services:
     volumes:
       - entry-data:/data
       - entry-config:/config
+      # 桌面版安装包放在仓库根目录的 downloads/（不进版本库），入口从 /download/ 发出去
+      - ../../downloads:/downloads:ro
     depends_on:
       gateway:
         condition: service_healthy

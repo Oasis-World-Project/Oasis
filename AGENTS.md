@@ -53,7 +53,7 @@
 12. **前端约定**：
     - **以桌面端为准（用户 2026-11-07）**：产品面向 Electron 桌面窗口；功能设计、实现和验收都以桌面端为准。用浏览器直接打开只需能用，不为浏览器单独做降级、兼容或专门功能，也不把「浏览器里做不到」当成限制。
     - 颜色、阴影、圆角、字体一律来自 `@oasis/design-tokens`（CSS 变量 + Tailwind 主题），`apps/web/src` 里不写裸色值（`#xxx`、`rgb()` 等）；缺少的令牌先加进 `packages/design-tokens`。`pnpm check:engineering` 的 tokens 检查和 pre-commit 钩子会拦截。
-    - 应用主体是「珍珠雾面」，广场和游戏是「午夜蓝 + 金线」（`data-theme="plaza"`），群主题光用 `data-light="coral|mint|sky|honey"`。
+    - 应用主体是「珍珠雾面」，广场和游戏是「午夜蓝 + 金线」（`data-theme="plaza"`），官网页是「清晨湖水」（`data-theme="site"`），群主题光用 `data-light="coral|mint|sky|honey"`。
     - 侧栏 7 个入口就是全部一级页面；群聊、私聊不显示未读数字或红点（PRD G-02）。
     - 前端只通过 gateway 的 `/api/*` 访问后端；开发时由 Vite 转发。
     - 新依赖在第一次真正用到时才装（TanStack Query、Zustand、Radix 等），不预装。
