@@ -40,7 +40,7 @@ pnpm desktop:dist                                       # 只能在 Windows 上�
 
 ### Agent 运行（harness）
 
-私聊里的每一轮，harness 都会通过本机 Docker 起一个沙箱容器，里面跑精确锁定版本的 DeepSeek Harness（dsh）。第一次用之前先构建沙箱镜像（含 Python 文档/数据处理库、LibreOffice、ffmpeg、PDF 工具、中文字体，Chromium 和 playwright-core，以及 git、pandoc、sqlite3、jq、ImageMagick、sox、ripgrep、esbuild、TypeScript 等命令行工具；需要能访问 npm、Debian 和配置的 Python 软件源）：
+私聊里干活时，harness 通过本机 Docker 给每份会话起一个沙箱容器，里面跑精确锁定版本的 DeepSeek Harness（dsh）；一轮做完容器空着留一会儿等下一轮。第一次用之前先构建沙箱镜像（含 Python 文档/数据处理库、LibreOffice、ffmpeg、PDF 工具、中文字体，Chromium 和 playwright-core，以及 git、pandoc、sqlite3、jq、ImageMagick、sox、ripgrep、esbuild、TypeScript 等命令行工具；需要能访问 npm、Debian 和配置的 Python 软件源）：
 
 ```bash
 pnpm sandbox:build

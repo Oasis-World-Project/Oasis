@@ -7,8 +7,18 @@ import { marker } from '../fake-provider.mjs';
 
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-/** 模拟持久卷被清掉（docker volume prune、换了机器）：删掉这个会话的工作目录和 dsh 会话 */
+/**
+ * 模拟持久卷被清掉（docker volume prune、换了机器）：删掉这个会话的工作目录和 dsh 会话。
+ * 一轮做完沙箱会空着留一会儿、还挂着卷，先连它一起删掉
+ */
 export function dropWorkspace(sessionId) {
+  const listed = spawnSync(
+    'docker',
+    ['ps', '-aq', '--filter', `label=oasis.session-id=${sessionId}`],
+    { encoding: 'utf8' },
+  );
+  const containers = listed.stdout.split('\n').filter(Boolean);
+  if (containers.length) spawnSync('docker', ['rm', '-f', ...containers], { stdio: 'ignore' });
   for (const name of [`oasis-workspace-${sessionId}`, `oasis-sessions-${sessionId}`]) {
     const result = spawnSync('docker', ['volume', 'rm', name], { encoding: 'utf8' });
     if (result.status !== 0) throw new Error(`删不掉持久卷 ${name}：${result.stderr.trim()}`);

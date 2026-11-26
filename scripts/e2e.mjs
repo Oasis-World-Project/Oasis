@@ -119,6 +119,8 @@ const env = {
     SANDBOX_CPUS: '1',
     MAX_CONCURRENT_RUNS: '4',
     RECOVERY_INTERVAL_MS: '5000',
+    // 做完的沙箱留 15 秒等下一轮：场景里紧跟着的下一轮接着用同一个 dsh，又不让空着的沙箱攒一堆占内存
+    SANDBOX_IDLE_SECONDS: '15',
   },
   // AI 自查 app.check 开的检查浏览器
   'model-gateway': { BROWSER_CHECK_CPUS: '1' },

@@ -79,7 +79,7 @@ async function archiveOf(path: string, workspaceId: string) {
 
 export const executor: Executor = {
   check: async () => {},
-  readWorkspace: (place, path) => archiveOf(path, place.workspaceId),
+  readWorkspace: (workspaceId, path) => archiveOf(path, workspaceId),
   workspaceExists: async (id) => workspaces.has(id),
   suspend: async () => ({ endedAt: new Date(), cores: 2 }),
   purgeWorkspace: async (id) => {
@@ -276,6 +276,12 @@ modelGateway.post('/internal/run-keys/:id/renew', async (_request, reply) => {
         .send({ error: { code: 'renew_failed', message: '续租失败', requestId: 'lease' } })
     : reply.code(204).send();
 });
+/** 接着用空着的 dsh 时，它手里的 Key 改归到了哪一轮 */
+export const rebound: string[] = [];
+modelGateway.post('/internal/run-keys/:id/rebind', async (request, reply) => {
+  rebound.push((request.body as { runId: string }).runId);
+  return reply.code(204).send();
+});
 modelGateway.post('/internal/run-keys', async (request, reply) => {
   issued.push(request.body as Record<string, unknown>);
   return reply.code(201).send({
@@ -383,6 +389,8 @@ export const buildService = (override: Partial<Parameters<typeof createRunServic
     modelGateway: createServiceClient('model-gateway', url),
     canvas: createServiceClient('canvas', url),
     materialsMaxBytes: 1024,
+    // 做完就收（接着用空着的 dsh 另有一条测试）
+    idleMs: { cloud: 0, device: 0 },
     modelBaseUrl: 'http://sandbox-ingress:8080/v1',
     packages: {
       egressProxy: 'http://sandbox-egress:8888',
@@ -419,7 +427,18 @@ beforeEach(() => {
   fake.noNativeSession = false;
   lifecycle.length = 0;
   fake.pauseFails = false;
-  for (const list of [started, destroyed, events, finishes, issued, revoked, methods, compute])
+  for (const list of [
+    started,
+    destroyed,
+    events,
+    finishes,
+    issued,
+    revoked,
+    rebound,
+    methods,
+    compute,
+    puts,
+  ])
     list.length = 0;
   rows.clear();
   stored.clear();

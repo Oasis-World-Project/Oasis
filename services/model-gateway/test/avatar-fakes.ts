@@ -44,6 +44,14 @@ export function memoryRunKeys(): RunKeysRepo & {
       if (row) row.expiresAt = expiresAt;
       return Boolean(row);
     },
+    async rebind(id, now, next) {
+      const row = rows.find((r) => r.id === id && !r.revokedAt && r.expiresAt > now);
+      if (!row) return false;
+      if (row.runId !== next.runId)
+        for (const c of pending(row.runId)) Object.assign(c, { status: 'cancelled' });
+      Object.assign(row, next);
+      return true;
+    },
     async revoke(id, now) {
       const row = rows.find((r) => r.id === id && !r.revokedAt);
       if (row) row.revokedAt = now;

@@ -37,7 +37,13 @@ export const harnessEnv = {
   SANDBOX_PIDS_LIMIT: positiveInt.default(512),
   /** 每个用户一块的缓存卷（下载下来的包、用时再装的工具链）最多占多少；超了开沙箱时从最久没用的删起 */
   SANDBOX_CACHE_MAX_MB: positiveInt.default(5120),
-  /** 项目里的 oasis-setup.sh（每轮开工前执行）最多跑多少秒 */
+  /**
+   * 一轮做完后，沙箱和里面的 dsh 空着留多少秒等同一份会话的下一轮（接着用就不用再起沙箱、起 dsh、读会话）；
+   * 0 是做完就销毁。用户电脑上的另算：那边不占平台的机器
+   */
+  SANDBOX_IDLE_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+  DEVICE_IDLE_SECONDS: z.coerce.number().int().min(0).max(86_400).default(1800),
+  /** 项目里的 oasis-setup.sh（新起的沙箱开工前执行）最多跑多少秒 */
   SANDBOX_SETUP_SECONDS: positiveInt.max(3600).default(300),
   OASIS_BATCH_CONCURRENCY: positiveInt.max(16).default(4),
   OASIS_BATCH_MAX_INPUT_BYTES: positiveInt.max(20 * 1024 * 1024).default(5 * 1024 * 1024),

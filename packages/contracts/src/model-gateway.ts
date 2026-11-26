@@ -108,6 +108,13 @@ export const CreateRunKeyBody = z.object({
 });
 export type CreateRunKeyBody = z.input<typeof CreateRunKeyBody>;
 
+/**
+ * 同一个 dsh 接着做下一轮：把它手里的 Key 改归到新的一轮（调用记到新的一轮名下、按新一轮的设置问不问、
+ * 有效期重新算）。付钱的人和对话不变。
+ */
+export const RebindRunKeyBody = CreateRunKeyBody.omit({ payerId: true, conversationId: true });
+export type RebindRunKeyBody = z.input<typeof RebindRunKeyBody>;
+
 /** 明文 Key 只在签发时返回这一次；库里只存哈希。 */
 export const RunKeyCreated = z.object({
   keyId: z.uuid(),

@@ -27,6 +27,9 @@ import {
   base,
   tarEntries,
   until,
+  useService,
+  rebound,
+  puts,
 } from './support/run-fixture.ts';
 
 const UPLOADER = '6e6e6e6e-6e6e-4e6e-8e6e-6e6e6e6e6e6e';
@@ -110,6 +113,45 @@ describe('对话里的一轮：输入和产出', () => {
       'status',
     ]);
     expect((await service.events(run.id, -1, 100))[0]?.data).toEqual({ status: 'admitted' });
+  });
+
+  it('同一份会话的下一轮接着用空着的 dsh：不再起沙箱、不再握手，Key 改归新的一轮，带来的文件放进去；设置变了才重起', async () => {
+    useService({ idleMs: { cloud: 60_000, device: 0 } });
+    const first = await service.start({ ...base, prompt: '写' });
+    await finished(first.id);
+    expect(destroyed).toEqual([]);
+    expect(revoked).toEqual([]);
+
+    const next = await service.start({
+      ...base,
+      prompt: '接着写',
+      continueFrom: first.id,
+      materials: [{ uploadId: PHOTO, path: 'materials/照片.jpg' }],
+    });
+    expect(await finished(next.id)).toMatchObject({ status: 'succeeded', summary: '收到：接着写' });
+    expect(started).toHaveLength(1);
+    expect(methods.filter((m) => m === 'initialize')).toHaveLength(1);
+    expect(issued).toHaveLength(1);
+    expect(rebound).toEqual([next.id]);
+    expect(puts.at(-1)?.files.map((f) => f.path)).toEqual(['materials/照片.jpg']);
+    // 算力按每一轮各自用了多久结算
+    expect(compute.map((c) => c.path)).toEqual(['hold', 'settle', 'hold', 'settle']);
+
+    // 换了人设：说明变了，空着的那个收掉，重起一个接上原会话
+    const third = await service.start({
+      ...base,
+      prompt: '再写',
+      continueFrom: next.id,
+      persona: '你换了个性格。',
+    });
+    await finished(third.id);
+    expect(started).toHaveLength(2);
+    expect(destroyed).toEqual([first.id]);
+    expect(methods.filter((m) => m === 'session/resume')).toHaveLength(1);
+    // 服务关闭：空着的都收掉
+    await service.stopAll();
+    expect(destroyed).toEqual([first.id, third.id]);
+    expect(revoked).toHaveLength(2);
   });
 
   it('删对话：这个对话的运行记录和持久工作目录都删掉；还有一轮没结束就先不删；别的对话不动', async () => {
@@ -248,8 +290,8 @@ describe('对话里的一轮：输入和产出', () => {
     // Docker 取单个文件得到的 tar 里只有这个文件
     const asked: string[] = [];
     const original = executor.readWorkspace;
-    executor.readWorkspace = async (place, path) => {
-      expect(place).toEqual({ workspaceId: run.id, runId: run.id });
+    executor.readWorkspace = async (workspaceId, path) => {
+      expect(workspaceId).toBe(run.id);
       asked.push(path);
       if (path.endsWith('missing.png')) return undefined;
       const files = path.endsWith('folder')

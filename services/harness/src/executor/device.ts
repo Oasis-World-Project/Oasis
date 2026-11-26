@@ -1,6 +1,7 @@
 // 用户自己的电脑当执行环境：桌面版经 gateway 连上来（WebSocket，协议见 @oasis/contracts/device），
-// harness 把一轮交给它在用户选的项目文件夹里起 dsh。接口和 Docker 执行器一样：起进程、标准输入输出、
-// 取文件、结束；会话（dsh 的家目录）在那台电脑上，按会话分开放。只用这个人自己连上来的电脑。
+// harness 让它在用户选的项目文件夹里起 dsh。接口和 Docker 执行器一样：起进程、标准输入输出、
+// 放文件取文件、结束；会话（dsh 的家目录）在那台电脑上，按会话分开放。只用这个人自己连上来的电脑。
+// 协议里的 runId 是起这个 dsh 的那一轮：同一份会话后面几轮接着用它，输入输出仍按这个号走。
 // 连接只在这个进程里（多实例部署时要按用户把连接和运行放到同一个实例上）。
 import { randomUUID } from 'node:crypto';
 import { PassThrough, Readable, Writable } from 'node:stream';
@@ -60,6 +61,10 @@ export function createDeviceHub(deps: {
       if (path === from || path.startsWith(`${from}/`)) return to + path.slice(from.length);
     throw new Error(`电脑上没有对应的位置：${path}`);
   }
+
+  /** 交给电脑的文件包：base64 */
+  const encode = async (tar: Buffer | Readable) =>
+    (Buffer.isBuffer(tar) ? tar : await readLimited(tar, FILES_MAX_BYTES)).toString('base64');
 
   function send(connection: Connection, message: HarnessMessage) {
     connection.socket.send(JSON.stringify(message));
@@ -182,9 +187,7 @@ export function createDeviceHub(deps: {
           const files = await Promise.all(
             spec.files.map(async ({ dir, tar }) => ({
               dir: toDevice(dir),
-              tar: (Buffer.isBuffer(tar) ? tar : await readLimited(tar, FILES_MAX_BYTES)).toString(
-                'base64',
-              ),
+              tar: await encode(tar),
             })),
           );
           const reply = await ask(
@@ -226,6 +229,16 @@ export function createDeviceHub(deps: {
           stdout: run.stdout,
           stderr: run.stderr,
           readArchive: (path) => read(connection, folder, spec.workspaceId, path),
+          async put(dir, tar) {
+            const reply = await ask(connection, {
+              type: 'put',
+              id: randomUUID(),
+              folder,
+              workspaceId: spec.workspaceId,
+              files: [{ dir: toDevice(dir), tar: await encode(tar) }],
+            });
+            if (!reply.ok) throw new Error(reply.error ?? '你的电脑没能收下文件');
+          },
           // 用户电脑上不一定装了 LibreOffice：Word、PPT 不配 PDF
           exec: async () => {
             throw new Error('用户电脑上不跑平台的命令');
@@ -242,11 +255,11 @@ export function createDeviceHub(deps: {
         await answer({ type: 'purge', id: randomUUID(), workspaceId: sessionId });
       },
       // 文件就在用户的项目文件夹里：电脑连着就能取，没连上取不到
-      async readWorkspace({ workspaceId }, path) {
+      async readWorkspace(workspaceId, path) {
         const connection = connections.get(keyOf(userId, deviceId));
         return connection ? read(connection, folder, workspaceId, path) : undefined;
       },
-      async listWorkspace({ workspaceId }, path) {
+      async listWorkspace(workspaceId, path) {
         const reply = await ask(connected(), {
           type: 'list',
           id: randomUUID(),

@@ -1,4 +1,5 @@
-// 执行器：为一次运行起一个隔离的沙箱，给出它的 stdin/stdout，并能拷文件进出、销毁。
+// 执行器：为一份会话起一个隔离的沙箱（里面跑 dsh），给出它的 stdin/stdout，并能拷文件进出、销毁。
+// 沙箱由起它的那一轮起，之后同一份会话的几轮接着用（run/hosts.ts），空闲够久才销毁。
 // 两种实现：云端的 Docker（这里），用户自己的电脑（device.ts，桌面版连着 Oasis）；接口一样。
 import { PassThrough, type Readable, type Writable } from 'node:stream';
 import { randomUUID } from 'node:crypto';
@@ -34,8 +35,8 @@ export interface Sandbox {
   exec(cmd: string[]): Promise<void>;
   /** 同上，但不管退出码，拿回它的标准输出（开工前的 oasis-setup.sh）；用户电脑上的沙箱没有 */
   run?(cmd: string[]): Promise<string>;
-  /** 运行中往沙箱的某个目录里再解一包文件（群里别的 AI 刚交的群文件）；用户电脑上的沙箱没有 */
-  put?(dir: string, tar: Buffer | Readable): Promise<void>;
+  /** 往沙箱的某个目录里再解一包文件（接着用时这一轮带来的文件、群里别的 AI 刚交的群文件） */
+  put(dir: string, tar: Buffer | Readable): Promise<void>;
   /** 销毁沙箱（运行中也立即结束）；可重复调用 */
   destroy(): Promise<void>;
 }
@@ -44,10 +45,10 @@ export interface Executor {
   /** 就绪检查：执行环境可用、镜像和网络都在 */
   check(): Promise<void>;
   start(spec: SandboxSpec): Promise<Sandbox>;
-  /** 清理不在 keep 里的沙箱（harness 重启后遗留的），返回清理了几个 */
+  /** 清理不在 keep（会话）里的沙箱（harness 重启后遗留的），返回清理了几个 */
   removeOrphans(keep: ReadonlySet<string>): Promise<number>;
-  /** 接管前停止旧进程，避免两份执行同时写同一目录。返回实际停止时间。 */
-  suspend?(runId: string): Promise<{ endedAt: Date; cores?: number } | undefined>;
+  /** 接管前停止这份会话的旧进程，避免两份执行同时写同一目录。返回实际停止时间。 */
+  suspend?(sessionId: string): Promise<{ endedAt: Date; cores?: number } | undefined>;
   /** 会话的持久工作目录还在（接着原会话做的唯一依据） */
   workspaceExists(sessionId: string): Promise<boolean>;
   purgeWorkspace(sessionId: string): Promise<void>;
@@ -56,19 +57,14 @@ export interface Executor {
    * 把这个会话工作目录里的一个路径打成 tar 流取出，这一轮在不在跑都能取；取不到（路径不在、工作目录
    * 不在了）返回 undefined
    */
-  readWorkspace(place: WorkspaceRef, path: string): Promise<Readable | undefined>;
+  readWorkspace(sessionId: string, path: string): Promise<Readable | undefined>;
   /**
    * 列出工作目录里一个目录下的文件和摘要（路径相对这个目录）。文件不在平台这边的地方（用户电脑）自己列，
    * 内容不用搬过来；没有这一项的由调用方取出来扫一遍
    */
-  listWorkspace?(place: WorkspaceRef, path: string): Promise<WorkspaceFile[]>;
+  listWorkspace?(sessionId: string, path: string): Promise<WorkspaceFile[]>;
 }
 
-/** 哪个会话的工作目录；runId 是最近在里面干活的那一轮（它的沙箱还在就直接从沙箱里读） */
-interface WorkspaceRef {
-  workspaceId: string;
-  runId: string;
-}
 export interface WorkspaceFile {
   path: string;
   size: number;
@@ -76,7 +72,7 @@ export interface WorkspaceFile {
 }
 
 const LABEL_COMPONENT = 'oasis.component=harness-sandbox';
-const LABEL_RUN = 'oasis.run-id';
+const LABEL_SESSION = 'oasis.session-id';
 /** 一轮结束后读工作目录用的临时容器（只读挂着这个会话的卷，不启动） */
 const LABEL_READER = 'oasis.component=harness-reader';
 const volumeNames = (id: string) => {
@@ -214,16 +210,14 @@ export function createDockerExecutor(deps: {
           });
         mounts.push({ Type: 'volume', Source: name, Target: deps.cache.dir });
       }
-      for (const previous of await docker.listContainers(LABEL_COMPONENT)) {
-        if (previous.Labels[LABEL_RUN] !== spec.runId) continue;
-        const { State } = await docker.inspectContainer(previous.Id);
-        if (State.Running) throw new Error('原运行沙箱尚未停止，不能并发接管');
-        await docker.removeContainer(previous.Id);
-      }
+      // 这份会话留下的旧沙箱（服务重启前起的；要接着用的不会走到这里）：先删掉，不让两个 dsh 写同一份会话
+      for (const previous of await docker.listContainers(LABEL_COMPONENT))
+        if (previous.Labels[LABEL_SESSION] === spec.workspaceId)
+          await docker.removeContainer(previous.Id);
       const { Id: id } = await docker.createContainer(`oasis-run-${spec.runId}`, {
         Image: deps.image,
         Env: Object.entries(spec.env).map(([key, value]) => `${key}=${value}`),
-        Labels: { 'oasis.component': 'harness-sandbox', [LABEL_RUN]: spec.runId },
+        Labels: { 'oasis.component': 'harness-sandbox', [LABEL_SESSION]: spec.workspaceId },
         WorkingDir: deps.workdir,
         AttachStdin: true,
         AttachStdout: true,
@@ -306,9 +300,9 @@ export function createDockerExecutor(deps: {
       }
     },
 
-    async suspend(runId) {
+    async suspend(sessionId) {
       const containers = await docker.listContainers(LABEL_COMPONENT);
-      const targets = containers.filter((c) => c.Labels[LABEL_RUN] === runId);
+      const targets = containers.filter((c) => c.Labels[LABEL_SESSION] === sessionId);
       if (targets.length === 0) return undefined;
       let ended = new Date();
       let cores: number | undefined;
@@ -322,12 +316,12 @@ export function createDockerExecutor(deps: {
       }
       return { endedAt: ended, ...(cores ? { cores } : {}) };
     },
-    async readWorkspace({ workspaceId, runId }, path) {
+    async readWorkspace(workspaceId, path) {
       const box = (await docker.listContainers(LABEL_COMPONENT)).find(
-        (c) => c.Labels[LABEL_RUN] === runId,
+        (c) => c.Labels[LABEL_SESSION] === workspaceId,
       );
       if (box) return docker.getArchive(box.Id, path);
-      // 这一轮的沙箱已经销毁，文件在这个会话的卷里：建一个不启动的容器只读挂上卷来取，取完就删
+      // 沙箱已经销毁，文件在这个会话的卷里：建一个不启动的容器只读挂上卷来取，取完就删
       const [name] = volumeNames(workspaceId);
       if ((await docker.volume(name!))?.Labels?.['oasis.session-id'] !== workspaceId)
         return undefined;
@@ -336,7 +330,7 @@ export function createDockerExecutor(deps: {
         Labels: {
           'oasis.component': 'harness-reader',
           'oasis.instance-id': instanceId,
-          'oasis.session-id': workspaceId,
+          [LABEL_SESSION]: workspaceId,
         },
         HostConfig: {
           Mounts: [{ Type: 'volume', Source: name!, Target: deps.workdir, ReadOnly: true }],
@@ -363,8 +357,7 @@ export function createDockerExecutor(deps: {
     async purgeWorkspace(sessionId) {
       // 正在读这个卷的临时容器（读的人还没读完或刚读完）先删掉，不然卷删不了
       for (const reader of await docker.listContainers(LABEL_READER))
-        if (reader.Labels['oasis.session-id'] === sessionId)
-          await docker.removeContainer(reader.Id);
+        if (reader.Labels[LABEL_SESSION] === sessionId) await docker.removeContainer(reader.Id);
       await Promise.all(dropping);
       for (const name of volumeNames(sessionId)) {
         const volume = await docker.volume(name);
@@ -374,7 +367,7 @@ export function createDockerExecutor(deps: {
 
     async removeOrphans(keep) {
       const containers = await docker.listContainers(LABEL_COMPONENT);
-      const orphans = containers.filter((c) => !keep.has(c.Labels[LABEL_RUN] ?? ''));
+      const orphans = containers.filter((c) => !keep.has(c.Labels[LABEL_SESSION] ?? ''));
       for (const label of ['oasis.component=harness-probe', LABEL_READER])
         orphans.push(
           ...(await docker.listContainers(label)).filter(

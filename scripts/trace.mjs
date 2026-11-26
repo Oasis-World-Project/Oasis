@@ -65,15 +65,15 @@ try {
       '--filter',
       'label=oasis.component=harness-sandbox',
       '--format',
-      '{{.ID}} {{.Label "oasis.run-id"}}',
+      '{{.ID}} {{.Label "oasis.session-id"}}',
     ],
     { encoding: 'utf8', windowsHide: true },
   )
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [id, run] = line.split(' ');
-      return { id, run };
+      const [id, session] = line.split(' ');
+      return { id, session };
     });
 } catch {
   // Docker 不可用：容器检查跳过
@@ -156,10 +156,18 @@ if (openHolds.length)
 const ended = runs.filter((r) =>
   ['succeeded', 'failed', 'cancelled', 'stopped'].includes(r.status),
 );
-const leftover = containers.filter((c) => ended.some((r) => r.id === c.run));
+// 一轮做完，沙箱会空着留一会儿等同一份会话的下一轮（SANDBOX_IDLE_SECONDS，默认 60 秒）；留太久才算遗留
+const LEFTOVER_MS = 5 * 60_000;
+const sessionOf = (run) => String(run.session_id ?? run.id);
+const leftover = containers.filter((c) => {
+  const last = runs.filter((r) => sessionOf(r) === c.session).at(-1);
+  return (
+    last && ended.includes(last) && Date.now() - new Date(last.finished_at).getTime() > LEFTOVER_MS
+  );
+});
 if (leftover.length)
   anomalies.push(
-    `一轮已结束但容器还在：${leftover.map((c) => `${c.id}（运行 ${c.run.slice(0, 8)}）`).join('、')}`,
+    `会话的最后一轮结束 5 分钟了沙箱还在：${leftover.map((c) => `${c.id}（会话 ${c.session.slice(0, 8)}）`).join('、')}`,
   );
 for (const row of recorded) {
   const charged = chargedOf(byRun(row.run_id));

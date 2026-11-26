@@ -2,9 +2,10 @@
 // 服务重启后单实例接管：先停旧进程，再恢复原身份和原工作目录，不发布中间失败。
 import { StartRunBody as StartRunSchema } from '@oasis/contracts/harness';
 import type { DurableRunRequest, Run } from '../../repo/runs-repo.ts';
+import type { Hosts } from './hosts.ts';
 import { isPrivateOutput, newLiveRun, requestOf, StopRun, type RunContext } from './shared.ts';
 
-export function createControl(ctx: RunContext) {
+export function createControl(ctx: RunContext, hosts: Hosts) {
   const { deps, state } = ctx;
   const { repo, logger } = deps;
   let recoveringRuns = false;
@@ -98,7 +99,7 @@ export function createControl(ctx: RunContext) {
     );
     if (unready && !state.controlRequests.has(row.id) && !(await repo.control(row.id)))
       throw unready;
-    const suspended = await executor.suspend?.(row.id);
+    const suspended = await executor.suspend?.(row.sessionId ?? row.id);
     const savedStop = !suspended ? await repo.suspension?.(row.id) : undefined;
     const checkpoint =
       savedStop && (row.status === 'queued' || savedStop.keyId === row.runKeyId)
@@ -186,9 +187,11 @@ export function createControl(ctx: RunContext) {
             logger.warn({ err, runId: row.id }, '接管依赖暂未恢复，保留原进度');
           }
         }
+        // 留着的：正在跑的、等接管的、空着等下一轮的这几份会话的沙箱
         const keep = new Set([
-          ...state.live.keys(),
-          ...(await repo.listUnfinished()).map((r) => r.id),
+          ...[...state.live.entries()].map(([id, run]) => run.sessionId ?? id),
+          ...(await repo.listUnfinished()).map((r) => r.sessionId ?? r.id),
+          ...hosts.parked(),
         ]);
         const removed = await deps.executor.removeOrphans(keep);
         if (removed > 0) logger.info({ removed }, '清理了遗留的沙箱容器');
@@ -210,6 +213,7 @@ export function createControl(ctx: RunContext) {
         run.abort.abort(new StopRun('stopped', '执行服务关闭，进度保留待接管'));
       }
       await Promise.all(runs.map((run) => run.done));
+      await hosts.closeAll();
     },
   };
 }

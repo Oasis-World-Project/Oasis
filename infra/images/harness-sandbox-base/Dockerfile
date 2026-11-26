@@ -1,5 +1,5 @@
 # harness 的沙箱基础镜像：Node 24 + Python 3 + 精确锁定版本的 dsh + Oasis 自己的 dsh 组合（oasis profile）+ oasis-tool。
-# 每次 agent 运行起一个这个镜像的容器，容器里只跑 dsh，经 stdin/stdout 说 JSON-RPC。
+# 每份会话起一个这个镜像的容器，容器里只跑 dsh，经 stdin/stdout 说 JSON-RPC。
 # dsh 版本只在这里锁定；升级时同时改镜像标签（harness 和 scripts/sandbox.mjs 的 SANDBOX_IMAGE 默认值）。
 # 构建（在仓库根目录）：pnpm sandbox:build
 # 基础镜像连摘要一起锁：同一个标签以后被重新构建也不影响我们

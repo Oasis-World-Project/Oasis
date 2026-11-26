@@ -6,6 +6,7 @@ import {
   ComputeHoldBody,
   ComputeSettleBody,
   CreateRunKeyBody,
+  RebindRunKeyBody,
   DecideConfirmationBody,
   DecisionRequest,
   type ModelCapabilities,
@@ -289,6 +290,12 @@ export function registerRoutes(
   app.post('/internal/run-keys/:keyId/revoke', async (request, reply) => {
     const { keyId } = parseWith(KeyIdParams, request.params);
     await runKeys.revoke(keyId);
+    return reply.code(204).send();
+  });
+  /** 同一个 dsh 接着做下一轮：它手里的 Key 改归到新的一轮 */
+  app.post('/internal/run-keys/:keyId/rebind', async (request, reply) => {
+    const { keyId } = parseWith(KeyIdParams, request.params);
+    await runKeys.rebind(keyId, parseWith(RebindRunKeyBody, request.body));
     return reply.code(204).send();
   });
   app.post('/internal/run-keys/:keyId/renew', async (request, reply) => {

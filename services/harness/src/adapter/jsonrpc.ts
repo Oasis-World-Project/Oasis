@@ -34,5 +34,6 @@ export function createJsonRpcClient(io: {
     abort(error: Error) {
       fail(error);
     },
+    alive: () => !closed,
   };
 }

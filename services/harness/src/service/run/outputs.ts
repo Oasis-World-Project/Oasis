@@ -20,10 +20,7 @@ export function createOutputs(ctx: RunContext) {
   async function workFile(row: Row, path: string, maxBytes: number) {
     const live = await ctx
       .executorOf(row)
-      .readWorkspace(
-        { workspaceId: row.sessionId ?? row.id, runId: row.id },
-        `${SANDBOX_PATHS.workdir}/${path}`,
-      )
+      .readWorkspace(row.sessionId ?? row.id, `${SANDBOX_PATHS.workdir}/${path}`)
       .catch(() => undefined);
     if (!live) return undefined;
     const file = await onlyFile(live, maxBytes).catch((err: unknown) => {

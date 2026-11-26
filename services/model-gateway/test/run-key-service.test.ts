@@ -81,6 +81,25 @@ it('运行可跨凭证租约续期；已撤销或已过期的凭证不能复活'
   });
 });
 
+it('同一个 dsh 接着做下一轮：Key 改归到新的一轮，「以后都允许」留着；作废了的不能改', async () => {
+  const NEXT = '6f6f6f6f-6f6f-4f6f-8f6f-6f6f6f6f6f6f';
+  const issued = await service.issue({ payerId: PAYER, runId: RUN, ttlSeconds: 60 });
+  const card = await service.ask(await service.authenticate(`Bearer ${issued.key}`), '装依赖');
+  await service.decide(card.id, RUN, 'always');
+  clock = new Date(clock.getTime() + 50_000);
+  await service.rebind(issued.keyId, { runId: NEXT, askPaid: true, ttlSeconds: 60 });
+  clock = new Date(clock.getTime() + 50_000);
+  await expect(service.authenticate(`Bearer ${issued.key}`)).resolves.toMatchObject({
+    runId: NEXT,
+    askPaid: true,
+    autoAllow: ['command'],
+  });
+  await service.revoke(issued.keyId);
+  await expect(service.rebind(issued.keyId, { runId: RUN, ttlSeconds: 60 })).rejects.toMatchObject({
+    code: 'run_key_not_active',
+  });
+});
+
 describe('确认卡', () => {
   const caller = async (askPaid = false) => {
     const { key } = await service.issue({

@@ -33,10 +33,10 @@ export function createStorage(ctx: RunContext): Pick<RunContext, 'save' | 'mater
           deps.logger.warn({ runId: row.id, err }, '给 Word/PPT 配 PDF 没做完，照常记产出'),
         );
       const executor = ctx.executorOf(row);
-      const place = { workspaceId: row.sessionId ?? row.id, runId: row.id };
+      const workspaceId = row.sessionId ?? row.id;
       if (executor.listWorkspace)
-        return { outputs: await executor.listWorkspace(place, SANDBOX_PATHS.outputs) };
-      const archive = await executor.readWorkspace(place, SANDBOX_PATHS.outputs);
+        return { outputs: await executor.listWorkspace(workspaceId, SANDBOX_PATHS.outputs) };
+      const archive = await executor.readWorkspace(workspaceId, SANDBOX_PATHS.outputs);
       return { outputs: archive ? await scanArchive(archive, deps.outputMaxBytes) : [] };
     },
 

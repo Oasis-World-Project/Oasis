@@ -114,6 +114,10 @@ await startService({
       cores: config.SANDBOX_CPUS,
       setupSeconds: config.SANDBOX_SETUP_SECONDS,
       outputMaxBytes: config.OUTPUT_MAX_BYTES,
+      idleMs: {
+        cloud: config.SANDBOX_IDLE_SECONDS * 1000,
+        device: config.DEVICE_IDLE_SECONDS * 1000,
+      },
       serviceName: name,
       logger,
     });

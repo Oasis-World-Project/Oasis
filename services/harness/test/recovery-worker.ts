@@ -54,7 +54,7 @@ const docked = createDockerExecutor({
     listContainers: async (label) =>
       (
         await docker.listContainers(label.replace('harness-sandbox', 'harness-recovery-test'))
-      ).filter((box) => box.Labels['oasis.run-id'] === process.env.OASIS_TEST_RUN),
+      ).filter((box) => box.Labels['oasis.session-id'] === process.env.OASIS_TEST_RUN),
     createContainer: (name, spec) =>
       docker.createContainer(
         name,
@@ -111,6 +111,7 @@ const service = createRunService({
   store,
   modelGateway: client,
   canvas: client,
+  idleMs: { cloud: 0, device: 0 },
   modelBaseUrl: 'http://offline.invalid/v1',
   packages: {
     egressProxy: undefined,

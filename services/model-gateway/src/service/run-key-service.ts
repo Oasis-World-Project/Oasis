@@ -87,6 +87,26 @@ export function createRunKeyService(deps: {
       }
     },
 
+    /** 同一个 dsh 接着做下一轮：Key 改归到这一轮。已作废或过期的不能改（调用方重起 dsh、另发一把） */
+    async rebind(
+      keyId: string,
+      input: Pick<Caller, 'domesticOnly' | 'askPaid' | 'noWeb'> & {
+        runId: string;
+        ttlSeconds: number;
+      },
+    ): Promise<void> {
+      const at = now();
+      const rebound = await repo.rebind(keyId, at, {
+        runId: input.runId,
+        domesticOnly: input.domesticOnly ?? false,
+        askPaid: input.askPaid ?? false,
+        noWeb: input.noWeb ?? false,
+        expiresAt: new Date(at.getTime() + input.ttlSeconds * 1000),
+      });
+      if (!rebound)
+        throw new HttpError(409, 'run_key_not_active', '运行凭证已停止或过期，不能改归');
+    },
+
     /** AI 要做超出权限的事：登记一张确认卡；用户这一轮点过「以后都允许」的直接记成允许 */
     async ask(caller: Caller, text: string, callId?: string): Promise<Confirmation> {
       const always = caller.autoAllow?.includes('command');

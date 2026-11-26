@@ -1,7 +1,7 @@
 // 对话里主 AI 的一轮 = 一次运行。完整生命周期：
-// 排队 → 签发临时 Key → 起沙箱（挂上这个会话的持久工作目录）、放入说明和用户发的文件 → dsh 握手、
-// 接着原会话、交用户的话 → 记录事件 → 等这一轮做完（期间可插话）→ 记下 out/ 的清单
-// → 销毁沙箱、作废 Key → 写结局。
+// 排队 → 找这份会话干活的地方：空着的 dsh 接着用，没有就签发临时 Key、起沙箱（挂上这个会话的持久工作
+// 目录）、放入说明、dsh 握手、接着原会话 → 交用户的话 → 记录事件 → 等这一轮做完（期间可插话）
+// → 记下 out/ 的清单 → 写结局。做完的沙箱和 dsh 留一会儿等下一轮（run/hosts.ts）。
 // 工作目录和 dsh 会话在持久卷里，沙箱销毁后还在：下一轮用 continueFrom 接着原会话做，AI 记得之前的事。
 // 产出的文件留在工作目录里，这一轮上只记清单；画布登记成果时从工作目录现取（run/outputs.ts）。
 // 持久卷不在了就接不上（409 workspace_unavailable），由调用方开新会话。
@@ -22,6 +22,7 @@ import {
   type RunContext,
   type RunDeps,
 } from './run/shared.ts';
+import { createHosts } from './run/hosts.ts';
 import { createStorage } from './run/storage.ts';
 
 export function createRunService(deps: RunDeps) {
@@ -34,6 +35,8 @@ export function createRunService(deps: RunDeps) {
     closing: false,
     gate: createGate(deps.maxConcurrent),
   };
+  /** 各份会话干活的地方（沙箱和里面的 dsh）：一轮做完留着等下一轮 */
+  const hosts = createHosts(deps);
   async function owned(id: string): Promise<Run> {
     const row = await repo.get(id);
     if (!row) throw new HttpError(404, 'run_not_found', '没有这次运行');
@@ -56,8 +59,8 @@ export function createRunService(deps: RunDeps) {
         Boolean(row.workplace) || (await deps.executor.workspaceExists(row.sessionId ?? row.id)),
       ),
   } as RunContext;
-  Object.assign(ctx, createStorage(ctx), createExecution(ctx));
-  const control = createControl(ctx);
+  Object.assign(ctx, createStorage(ctx), createExecution(ctx, hosts));
+  const control = createControl(ctx, hosts);
   ctx.recover = control.recover;
   const { live, sessions } = state;
 
@@ -171,13 +174,16 @@ export function createRunService(deps: RunDeps) {
       // 2026-11-26 以前的一轮在对象存储里有一份产出包，一起删
       for (const row of rows) if (row.outputKey) await store.delete(row.outputKey);
       const bySession = new Map(rows.map((r) => [r.sessionId ?? r.id, r]));
-      for (const [sessionId, row] of bySession)
+      for (const [sessionId, row] of bySession) {
+        // 这份会话空着留用的 dsh 先收掉，再删工作目录
+        await hosts.drop(sessionId);
         await executorOf(row)
           .purgeWorkspace(sessionId)
           .catch((err: unknown) => {
             if (!row.workplace) throw err;
             logger.warn({ err, conversationId, sessionId }, '用户电脑没连上，那边的会话没删');
           });
+      }
       await repo.removeMany(rows.map((row) => row.id));
       if (rows.length)
         logger.info({ conversationId, runs: rows.length }, '对话的运行和工作目录已清理');

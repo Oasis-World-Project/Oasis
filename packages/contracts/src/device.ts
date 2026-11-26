@@ -19,7 +19,10 @@ const Name = z.string().regex(/^[\w-]{1,64}$/);
 
 /** harness → 桌面版 */
 export const HarnessMessage = z.discriminatedUnion('type', [
-  /** 起 dsh：先把文件放好（dir 带 {project} 或 {home}），再按 env 起进程；起好了回 reply */
+  /**
+   * 起 dsh：先把文件放好（dir 带 {project} 或 {home}），再按 env 起进程；起好了回 reply。runId 是起它的
+   * 这一轮，之后这个进程的输入输出都按这个号走——同一份会话后面几轮接着用它，直到 stop
+   */
   z.object({
     type: z.literal('start'),
     id: z.string(),
@@ -27,6 +30,14 @@ export const HarnessMessage = z.discriminatedUnion('type', [
     folder: z.string().min(1).max(1000),
     workspaceId: Name,
     env: z.record(z.string(), z.string()),
+    files: z.array(z.object({ dir: z.string(), tar: z.string() })),
+  }),
+  /** 往已经在跑的 dsh 那边再放文件（接着用时这一轮带来的文件）；放好了回 reply */
+  z.object({
+    type: z.literal('put'),
+    id: z.string(),
+    folder: z.string().min(1).max(1000),
+    workspaceId: Name,
     files: z.array(z.object({ dir: z.string(), tar: z.string() })),
   }),
   /** 交给 dsh 的标准输入（JSON-RPC 的一行或几行） */
@@ -74,7 +85,7 @@ export const DeviceMessage = z.discriminatedUnion('type', [
   z.object({ type: z.literal('exit'), runId: RunId, code: z.number().int().nullable() }),
   /** 准备中的进展（第一次装 dsh 要几分钟），harness 记进这一轮的进度 */
   z.object({ type: z.literal('progress'), runId: RunId, status: z.string().max(100) }),
-  /** 对 start、read、list、exists、purge 的回答 */
+  /** 对 start、put、read、list、exists、purge 的回答 */
   z.object({
     type: z.literal('reply'),
     id: z.string(),

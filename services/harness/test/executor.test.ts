@@ -46,8 +46,8 @@ describe('Docker 接管停止证据', () => {
       docker: {
         ...createDockerApi(defaultDockerSocket()),
         listContainers: async () => [
-          { Id: 'other', Labels: { 'oasis.run-id': 'other' } },
-          ...(exists ? [{ Id: 'ours', Labels: { 'oasis.run-id': 'ours' } }] : []),
+          { Id: 'other', Labels: { 'oasis.session-id': 'other' } },
+          ...(exists ? [{ Id: 'ours', Labels: { 'oasis.session-id': 'ours' } }] : []),
         ],
         stopContainer,
         inspectContainer,

@@ -17,6 +17,12 @@ export interface RunKeysRepo {
   /** 作废；返回是否真的作废了一个原本有效的 Key（这一轮还没点的确认卡一起收回） */
   revoke(id: string, now: Date): Promise<boolean>;
   renew(id: string, now: Date, expiresAt: Date): Promise<boolean>;
+  /** 仍然有效的 Key 改归到新的一轮；原来那一轮还没点的确认卡收回。Key 已作废或过期返回 false */
+  rebind(
+    id: string,
+    now: Date,
+    next: Pick<RunKey, 'runId' | 'domesticOnly' | 'askPaid' | 'noWeb' | 'expiresAt'>,
+  ): Promise<boolean>;
   /** 这一轮里这一类确认以后都允许 */
   allowAlways(runId: string, kind: Kind): Promise<void>;
   addConfirmation(
@@ -75,6 +81,18 @@ export function createRunKeysRepo(pool: pg.Pool): RunKeysRepo {
         .set({ expiresAt })
         .where(and(eq(runKeys.id, id), isNull(runKeys.revokedAt), gt(runKeys.expiresAt, now)))
         .returning({ id: runKeys.id });
+      return rows.length > 0;
+    },
+    async rebind(id, now, next) {
+      const active = and(eq(runKeys.id, id), isNull(runKeys.revokedAt), gt(runKeys.expiresAt, now));
+      const [before] = await db.select({ runId: runKeys.runId }).from(runKeys).where(active);
+      if (!before) return false;
+      const rows = await db.update(runKeys).set(next).where(active).returning({ id: runKeys.id });
+      if (rows.length && before.runId !== next.runId)
+        await db
+          .update(confirmations)
+          .set({ status: 'cancelled', decidedAt: now })
+          .where(pendingOf(before.runId));
       return rows.length > 0;
     },
     async allowAlways(runId, kind) {

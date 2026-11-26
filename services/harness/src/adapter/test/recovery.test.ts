@@ -177,7 +177,7 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_UR
           await Promise.all(exited);
           await clean.suspend?.(runId);
           for (const box of await docker.listContainers('oasis.component=harness-recovery-test'))
-            if (box.Labels['oasis.run-id'] === runId) await docker.removeContainer(box.Id);
+            if (box.Labels['oasis.session-id'] === runId) await docker.removeContainer(box.Id);
           await clean.purgeWorkspace?.(runId);
           await pool.query(`drop schema if exists ${schema} cascade`);
           await pool.end();

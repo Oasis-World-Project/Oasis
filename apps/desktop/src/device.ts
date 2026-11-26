@@ -204,6 +204,12 @@ export function createDeviceClient(deps: {
     switch (message.type) {
       case 'start':
         return reply(message.id, () => start(message));
+      case 'put':
+        return reply(message.id, async () => {
+          const place = placeOf(message.folder, message.workspaceId);
+          for (const { dir, tar } of message.files)
+            await extractTar(placePath(dir, place), Buffer.from(tar, 'base64'));
+        });
       case 'stdin':
         runs.get(message.runId)?.stdin?.write(message.data);
         return;

@@ -49,6 +49,8 @@ export interface RunDeps {
   /** 开工前的 oasis-setup.sh 最多跑多少秒 */
   setupSeconds?: number;
   outputMaxBytes?: number;
+  /** 一轮做完后，干活的地方空着留多久等下一轮（毫秒）；0 是做完就收 */
+  idleMs: { cloud: number; device: number };
   serviceName: string;
   logger: Logger;
 }

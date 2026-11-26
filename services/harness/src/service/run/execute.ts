@@ -1,29 +1,22 @@
-// 执行一轮：排队 → 签发临时 Key、冻结算力 → 起沙箱（挂上这个会话的持久工作目录）、放入平台说明、
-// 技能和用户发的文件 → dsh 握手、接着原会话、交用户的话 → 记录事件 → 等这一轮做完（期间可插话）
-// → 给 Word/PPT 配 PDF、记下 out/ 的清单 → 销毁沙箱、作废 Key、结算算力 → 写结局。
+// 执行一轮：排队 → 找这份会话干活的地方（hosts.ts）：空着的还能用就接着用（Key 改归这一轮、放进这一轮
+// 带来的文件）；不然签发临时 Key、起沙箱（挂上这个会话的持久工作目录）、放入平台说明、技能和用户发的
+// 文件、dsh 握手、接着原会话 → 交用户的话 → 记录事件 → 等这一轮做完（期间可插话）→ 给 Word/PPT 配 PDF、
+// 记下 out/ 的清单 → 结算算力 → 写结局。做完的地方留着等下一轮；停下、出错的收掉（销毁沙箱、作废 Key）。
 // 依赖暂时不可用时保存原会话，等接管（control.ts）。
 import { ExecutionModels, RunKeyCreated } from '@oasis/contracts/model-gateway';
-import { HttpError, packFiles, packStreams, scanArchive } from '@oasis/service-kit';
-import {
-  connectAgent,
-  guideFiles,
-  isSessionArchive,
-  runtimeFiles,
-  SANDBOX_PATHS,
-  sandboxEnv,
-  type AgentConnection,
-} from '../../adapter/dsh.ts';
-import type { Sandbox } from '../../executor/executor.ts';
-import type { Run, RunOutcome } from '../../repo/runs-repo.ts';
+import { HttpError, packStreams } from '@oasis/service-kit';
+import { SANDBOX_PATHS, type AgentConnection } from '../../adapter/dsh.ts';
+import type { RunOutcome } from '../../repo/runs-repo.ts';
 import { startRunLease } from '../run-lease.ts';
-import { setupNote } from './setup.ts';
-import { KEEP_FILE, savedOutcome, StopRun, type LiveRun, type RunContext } from './shared.ts';
+import type { Host, Hosts, Relay } from './hosts.ts';
+import { savedOutcome, StopRun, type LiveRun, type RunContext } from './shared.ts';
 
 /** 服务重启接管时交给 AI 的话：原会话和工作目录已恢复，接着做 */
 const RECOVERED = '服务连接中断后已恢复原工作目录和原会话。请从未完成处继续，不重做已有工作。';
 
 export function createExecution(
   ctx: RunContext,
+  hosts: Hosts,
 ): Pick<RunContext, 'admit' | 'record' | 'execute' | 'finish'> {
   const { deps, state } = ctx;
   const { repo, logger } = deps;
@@ -38,60 +31,6 @@ export function createExecution(
     } while (run.prompts !== seen && !run.abort.signal.aborted);
     run.closing = true;
     return failure;
-  }
-
-  /** 起 dsh、交用户的话（接着上一轮或接管时先恢复原会话），等这一轮做完；返回连接（收尾时关）和失败原因 */
-  async function driveAgent(input: {
-    row: Run;
-    run: LiveRun;
-    sandbox: Sandbox;
-    recovering: boolean;
-    stopped: () => void;
-    stderr: () => string;
-  }): Promise<{ agent: AgentConnection; failure: string | undefined }> {
-    // 这一轮是新起的沙箱：项目里有 oasis-setup.sh 就先执行，结果接在交给 AI 的话后面
-    const setup = await setupNote(input.sandbox, SANDBOX_PATHS.workdir, deps.setupSeconds ?? 300);
-    const { row, run, sandbox, recovering, stopped } = input;
-    const id = row.id;
-    const agent = connectAgent({
-      stdin: sandbox.stdin,
-      stdout: sandbox.stdout,
-      sessionId: row.sessionId ?? id,
-      onEvent: (event) => ctx.record(id, run, event.kind, event.data),
-    });
-    run.abort.signal.addEventListener('abort', () => agent.abort(new Error('运行已中止')), {
-      once: true,
-    });
-    try {
-      // 用户电脑上工作目录是用户选的项目文件夹
-      await agent.initialize(row.model, row.workplace?.folder ?? SANDBOX_PATHS.workdir);
-    } catch (err) {
-      stopped();
-      throw new Error(`dsh 启动失败：${String(err)}；stderr：${input.stderr()}`, { cause: err });
-    }
-    let fresh = false;
-    if (recovering) {
-      const source = await sandbox.readArchive(SANDBOX_PATHS.sessions);
-      const paths = source
-        ? (await scanArchive(source, deps.outputMaxBytes)).map((f) => f.path)
-        : [];
-      if (!paths.some((p) => isSessionArchive(p, row.sessionId ?? id))) {
-        if (paths.some((p) => isSessionArchive(p)) || (await repo.hasRootPrompt(id)))
-          throw new Error('原生根会话缺失，不能丢弃已有历史');
-        fresh = true; // 原进程尚未创建原生会话，原子保存的请求仍可首次派发。
-      }
-    }
-    if (row.continueFrom || (recovering && !fresh)) await agent.resume();
-    run.prompts += 1;
-    run.opening = 'sent';
-    await agent.prompt((recovering && !fresh ? RECOVERED : row.prompt) + setup);
-    // 插话排在开头那句后面：AI 还没开始时先到的按顺序送完，之后来的直接送
-    while (run.queued.length) {
-      run.prompts += 1;
-      await agent.prompt(run.queued.shift()!);
-    }
-    run.agent = agent;
-    return { agent, failure: await settle(run, agent) };
   }
 
   return {
@@ -140,17 +79,18 @@ export function createExecution(
 
     async execute(row, request, run, catalog, recovering = false) {
       const { id } = row;
-      const { models, environment } = catalog;
+      const workspaceId = row.sessionId ?? id;
       // 在用户电脑上跑的不占云端沙箱的名额、不收算力钱
       const device = request.workplace.kind === 'device';
+      const idleMs = device ? deps.idleMs.device : deps.idleMs.cloud;
       const executor = ctx.executorOf({ payerId: row.payerId, workplace: request.workplace });
       const release = device ? () => undefined : await state.gate.acquire();
-      let sandbox: Sandbox | undefined;
+      let host: Host | undefined;
       let keyId: string | undefined;
       let keyRevoked = false;
       let checkpointFailed = false;
       let sandboxEndedAt: number | undefined;
-      // 算力计费：开沙箱前冻结，销毁后按沙箱实际存在的时长结算（单价为 0 时没有 callId）
+      // 算力计费：开沙箱前冻结，按这一轮用了多久结算（单价为 0 时没有 callId）
       let lease: Awaited<ReturnType<typeof startRunLease>> | undefined;
       const timer = deps.timeoutMs
         ? setTimeout(
@@ -181,6 +121,11 @@ export function createExecution(
         logger.warn({ err: error, runId: id }, '依赖中断，保存原会话等待接管');
         run.abort.abort(new StopRun('stopped', '执行依赖暂不可用，进度保留待接管'));
       };
+      const revoke = (key: string) =>
+        deps.modelGateway.json('POST', `/internal/run-keys/${key}/revoke`, {
+          body: {},
+          requestId: id,
+        });
       try {
         const stopped = () => {
           const reason: unknown = run.abort.signal.reason;
@@ -190,20 +135,44 @@ export function createExecution(
         stopped();
         await repo.update(id, { status: 'starting', error: null });
 
-        const key = await deps.modelGateway.json('POST', '/internal/run-keys', {
-          body: {
-            runId: id,
-            payerId: row.payerId,
-            conversationId: row.conversationId,
-            domesticOnly: request.domesticOnly,
-            askPaid: request.permissions.paidTools === 'ask',
-            noWeb: request.permissions.web === false,
-            ttlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
-          },
-          requestId: id,
-          schema: RunKeyCreated,
-        });
-        keyId = key.keyId;
+        const settings = {
+          runId: id,
+          domesticOnly: request.domesticOnly,
+          askPaid: request.permissions.paidTools === 'ask',
+          noWeb: request.permissions.web === false,
+          ttlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
+        };
+        const fixed = await hosts.fixture(row, request, catalog, recovering);
+        // 接管的一轮不接着用：服务重启后原来的 dsh 已经不在了
+        host = recovering ? undefined : await hosts.take(workspaceId, fixed.signature);
+        if (host) {
+          // 接着用：它手里的 Key 改归这一轮；Key 已经过期就收掉，重起一个
+          const rebound = await deps.modelGateway
+            .json('POST', `/internal/run-keys/${host.keyId}/rebind`, {
+              body: settings,
+              requestId: id,
+            })
+            .then(
+              () => true,
+              (err: unknown) => {
+                if (err instanceof HttpError && err.statusCode === 409) return false;
+                throw err;
+              },
+            );
+          if (!rebound) {
+            await hosts.close(host);
+            host = undefined;
+          }
+        }
+        const key = host
+          ? undefined
+          : await deps.modelGateway.json('POST', '/internal/run-keys', {
+              body: { ...settings, payerId: row.payerId, conversationId: row.conversationId },
+              requestId: id,
+              schema: RunKeyCreated,
+            });
+        keyId = host?.keyId ?? key?.keyId;
+        if (!keyId) throw new Error('没有拿到临时 Key');
         await repo.update(id, { runKeyId: keyId });
         lease = await startRunLease({
           client: deps.modelGateway,
@@ -221,69 +190,36 @@ export function createExecution(
         });
         stopped();
 
-        const files = [
-          ...runtimeFiles({ models, sessionId: row.sessionId ?? id, recovering, environment }),
-          // 保证 out/ 目录存在且属于沙箱用户
-          { path: `out/${KEEP_FILE}`, content: Buffer.alloc(0) },
-        ];
-        sandbox = await executor.start({
-          runId: id,
-          workspaceId: row.sessionId ?? id,
-          // 接管或接着原会话：持久卷必须已经在，不能从空目录假装恢复
-          restore: recovering || Boolean(row.continueFrom),
-          cacheId: row.payerId,
-          env: {
-            ...deps.batchEnv,
-            OASIS_TOOL_SCOPE: row.sessionId ?? id,
-            ...sandboxEnv({
-              runKey: key.key,
-              model: row.model,
-              place: device
-                ? { permissions: request.permissions }
-                : { modelBaseUrl: deps.modelBaseUrl, packages: deps.packages },
-            }),
-          },
-          notify: (status) => ctx.record(id, run, 'status', { status }),
-          files: [
-            { dir: SANDBOX_PATHS.workdir, tar: await packFiles(files) },
-            // 平台说明（带这个 AI 的人设）和技能每轮现放：改了说明，下一轮就用上
-            {
-              dir: SANDBOX_PATHS.dshHome,
-              tar: await packFiles(
-                guideFiles(
-                  await deps.guide(),
-                  request.persona,
-                  request.workplace,
-                  request.scene,
-                  request.permissions.web !== false,
-                ),
-              ),
-            },
-            // oasis-tool 这些命令和 dsh 组合也每轮现放：改了，下一轮就用上，不用重建镜像
-            ...(deps.sandboxFiles
-              ? await Promise.all(
-                  (await deps.sandboxFiles()).map(async ({ dir, files }) => ({
-                    dir,
-                    tar: await packFiles(files),
-                  })),
-                )
-              : []),
-            ...(recovering
-              ? []
-              : [
-                  {
-                    dir: SANDBOX_PATHS.workdir,
-                    tar: packStreams(await ctx.materialFiles(request.materials, id, row.payerId)),
-                  },
-                ]),
-          ],
-        });
-        const box = sandbox;
-        const { put } = box;
-        if (put) run.put = (tar) => put.call(box, SANDBOX_PATHS.workdir, tar);
+        const materials = recovering
+          ? undefined
+          : await ctx.materialFiles(request.materials, id, row.payerId);
+        const record: Relay['to'] = (kind, data) => ctx.record(id, run, kind, data);
+        let greeting: { setup: string; unsaid: boolean } | undefined;
+        let stderr = () => '';
+        const reused = Boolean(host);
+        if (host) {
+          host.relay.to = record;
+          if (materials?.length)
+            await host.sandbox.put(SANDBOX_PATHS.workdir, packStreams(materials));
+        } else if (key) {
+          const opened = await hosts.open({
+            row,
+            executor,
+            fixed,
+            key,
+            restore: recovering || Boolean(row.continueFrom),
+            ...(materials ? { materials } : {}),
+            relay: { to: record },
+          });
+          ({ host, stderr } = opened);
+        }
+        if (!host) throw new Error('没有干活的地方');
+        const { sandbox: box, agent } = host;
+        run.put = (tar) => box.put(SANDBOX_PATHS.workdir, tar);
         run.abort.signal.addEventListener(
           'abort',
           () => {
+            agent.abort(new Error('运行已中止'));
             const reason: unknown = run.abort.signal.reason;
             if (reason instanceof StopRun && reason.status !== 'cancelled') {
               // 停止：先记下已经做出来的东西，再销毁沙箱
@@ -300,33 +236,30 @@ export function createExecution(
           },
           { once: true },
         );
-        // 沙箱启动期间就被取消或停止了：上面的监听来不及收到，这里补上（finally 会销毁沙箱）
+        // 沙箱启动期间就被取消或停止了：上面的监听来不及收到，这里补上（finally 会收掉这个地方）
         stopped();
         await repo.update(id, {
-          containerId: sandbox.id,
+          containerId: box.id,
           status: 'running',
           startedAt: row.startedAt ?? new Date(),
         });
 
-        let stderrTail = '';
-        sandbox.stderr.setEncoding('utf8');
-        sandbox.stderr.on('data', (text: string) => {
-          stderrTail = (stderrTail + text).slice(-2000);
-        });
-
-        const stderr = () => stderrTail;
-        const { agent, failure } = await driveAgent({
-          row,
-          run,
-          sandbox,
-          recovering,
-          stopped,
-          stderr,
-        });
+        if (!reused) greeting = await hosts.greet({ row, host, recovering, stopped, stderr });
+        run.prompts += 1;
+        run.opening = 'sent';
+        await agent.prompt(
+          (recovering && !greeting?.unsaid ? RECOVERED : row.prompt) + (greeting?.setup ?? ''),
+        );
+        // 插话排在开头那句后面：AI 还没开始时先到的按顺序送完，之后来的直接送
+        while (run.queued.length) {
+          run.prompts += 1;
+          await agent.prompt(run.queued.shift()!);
+        }
+        run.agent = agent;
+        const failure = await settle(run, agent);
         stopped();
 
-        const saved = await ctx.save(row, sandbox);
-        await agent.shutdown().catch(() => undefined);
+        const saved = await ctx.save(row, box);
         Object.assign(outcome, {
           status: failure ? 'failed' : 'succeeded',
           error: failure ?? null,
@@ -351,8 +284,8 @@ export function createExecution(
           outcome.error = err instanceof Error ? err.message : String(err);
         }
       } finally {
-        if (sandbox && outcome.status === 'failed' && !run.abort.signal.aborted) {
-          const box = sandbox;
+        if (host && outcome.status === 'failed' && !run.abort.signal.aborted) {
+          const box = host.sandbox;
           await box
             .pause()
             .then(() => ctx.save(row))
@@ -362,12 +295,16 @@ export function createExecution(
         clearTimeout(timer);
         run.closing = true;
         outcome.summary = run.lastText ?? null;
-        await sandbox
-          ?.destroy()
-          .then(() => {
-            sandboxEndedAt ??= Date.now();
-          })
-          .catch((err: unknown) => logger.warn({ err, runId: id }, '销毁沙箱失败'));
+        // 做完了、dsh 还好好的：留着等这份会话的下一轮；别的情况（停下、出错、等接管）收掉
+        const parked = Boolean(
+          host &&
+          idleMs > 0 &&
+          outcome.status === 'succeeded' &&
+          !run.abort.signal.aborted &&
+          host.agent.alive(),
+        );
+        if (host && parked) hosts.park(host, idleMs);
+        else if (host && (await hosts.stop(host))) sandboxEndedAt ??= Date.now();
         const endedAt = sandboxEndedAt ?? Date.now();
         if (run.suspended && sandboxEndedAt !== undefined)
           ctx.record(id, run, 'status', {
@@ -377,7 +314,7 @@ export function createExecution(
             keyId: keyId ?? null,
           });
         const settlement = lease
-          ?.close(endedAt, !sandbox || sandboxEndedAt !== undefined)
+          ?.close(endedAt, !host || parked || sandboxEndedAt !== undefined)
           .catch((err: unknown) => logger.warn({ err, runId: id }, '算力租约结算失败'));
         if (outcome.status !== 'succeeded' && !run.suspended) {
           await deps.modelGateway
@@ -390,9 +327,8 @@ export function createExecution(
               logger.warn({ err, runId: id }, '长任务取消意图写入失败，费用仍需核对'),
             );
         }
-        if (keyId) {
-          await deps.modelGateway
-            .json('POST', `/internal/run-keys/${keyId}/revoke`, { body: {}, requestId: id })
+        if (keyId && !parked) {
+          await revoke(keyId)
             .then(() => {
               keyRevoked = true;
             })

@@ -382,6 +382,8 @@ export function connectAgent(io: {
       }
     },
     shutdown: () => rpc.request('shutdown', undefined, 10_000),
+    /** 和 dsh 的连接还在（进程没退出、没被中止） */
+    alive: () => rpc.alive(),
     abort: (error: Error) => {
       lastError = error.message;
       rpc.abort(error);
