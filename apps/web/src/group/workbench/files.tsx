@@ -1,8 +1,8 @@
 // 群文件在界面上几处都要用的东西：是谁做的（头像、名字）、卡片上的那句话、预览用的地址、
 // 聊天里的文件胶囊。
-import type { FileAuthor, GroupFile } from '@oasis/contracts/group';
+import type { FileAuthor, GroupFile, GroupSnapshot } from '@oasis/contracts/group';
 import { useEffect, useState } from 'react';
-import { groupFileUrl } from '../../api/queries.ts';
+import { artifactContentUrl, groupFileUrl } from '../../api/queries.ts';
 import { badgeOf, baseName } from '../../chat/files.ts';
 import type { PreviewFile } from '../../chat/files.ts';
 import { AiAvatar } from '../../ui/Avatar.tsx';
@@ -78,8 +78,19 @@ export function fileNote(room: Pick<Room, 'group' | 'models'>, file: GroupFile, 
   return same ? `${origin}，${agoText(file.updatedAt, now)}` : `${origin}，${changed} 改过`;
 }
 
-/** 预览这个群文件：网页带上同一目录下它可能引用的文件；Word、PPT 用同名的 PDF 预览 */
-export function previewOf(groupId: string, file: GroupFile, files: GroupFile[]): PreviewFile {
+/**
+ * 预览工作台里的一个文件：网页带上同一目录下它可能引用的文件；Word、PPT 用同名的 PDF 预览。
+ * 群里读群文件；和 AI 的私聊里是任务交的成果，读画布里的那一份。
+ */
+export function previewOf(
+  group: Pick<GroupSnapshot, 'id' | 'kind'>,
+  file: GroupFile,
+  files: GroupFile[],
+): PreviewFile {
+  const urlOf = (item: GroupFile, download?: boolean) =>
+    group.kind === 'dm'
+      ? artifactContentUrl(item.id, download)
+      : groupFileUrl(group.id, item, download);
   const dir = file.path.slice(0, file.path.lastIndexOf('/') + 1);
   const pdf = /\.(pptx?|docx?)$/i.test(file.path)
     ? files.find((f) => f.path === file.path.replace(/\.(pptx?|docx?)$/i, '.pdf'))
@@ -87,20 +98,20 @@ export function previewOf(groupId: string, file: GroupFile, files: GroupFile[]):
   return {
     path: file.path,
     size: file.size,
-    url: groupFileUrl(groupId, file),
-    downloadUrl: groupFileUrl(groupId, file, true),
-    ...(pdf ? { pdfUrl: groupFileUrl(groupId, pdf) } : {}),
+    url: urlOf(file),
+    downloadUrl: urlOf(file, true),
+    ...(pdf ? { pdfUrl: urlOf(pdf) } : {}),
     ...(/\.html?$/i.test(file.path)
       ? {
           assets: files
             .filter((f) => f.id !== file.id && f.path.startsWith(dir))
-            .map((f) => ({ path: f.path, url: groupFileUrl(groupId, f) })),
+            .map((f) => ({ path: f.path, url: urlOf(f) })),
         }
       : {}),
   };
 }
 
-/** 聊天里的文件胶囊：格式标记加文件名，点开在工作台预览；已经不在群文件里的点不了。照原型 ② */
+/** 文件胶囊（聊天里话带的文件、任务交的成果）：格式标记加文件名，点开在工作台预览；已经不在了的点不了。照原型 ② */
 export function FilePill({ path, name }: { path: string; name?: string }) {
   const { bench } = useRoom();
   const file = bench.files.find((item) => item.path === path);
@@ -109,8 +120,8 @@ export function FilePill({ path, name }: { path: string; name?: string }) {
     <button
       type="button"
       disabled={!file}
-      title={file ? undefined : '这个文件已经不在群文件里'}
-      aria-label={file ? `在工作台打开 ${label}` : `${label}（已经不在群文件里）`}
+      title={file ? undefined : '这个文件已经不在了'}
+      aria-label={file ? `在工作台打开 ${label}` : `${label}（已经不在了）`}
       onClick={() => bench.openFile(path)}
       className="flex h-[42px] max-w-full cursor-pointer items-center gap-2.5 self-start rounded-full border-0 bg-glass-active py-0 pl-1.5 pr-4 text-ink shadow-edge-strong disabled:cursor-not-allowed disabled:opacity-55"
     >

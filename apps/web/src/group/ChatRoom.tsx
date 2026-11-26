@@ -1,5 +1,5 @@
 // 聊天页：群、和一个好友的私聊、和一个 AI 的私聊是同一页。左边聊天窗（页头、消息、输入框），右边工作台
-// （收起、展开、拉宽；只有群有）。群里整屏是这个群的光。照原型 ②。
+// （收起、展开、拉宽；和好友的私聊没有）。整屏是这个群的光。点开一个任务弹出它的窗。照原型 ②。
 import type { Mention } from '@oasis/contracts/conversation';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -15,6 +15,7 @@ import { RoomMessages } from './RoomMessages.tsx';
 import { RoomContext, type Bench, type Room } from './room.ts';
 import { Stage } from './Stage.tsx';
 import { useGroupRoom } from './use-group-room.ts';
+import { TaskDialog } from './workbench/TaskDialog.tsx';
 import { useWorkbench } from './workbench/use-workbench.ts';
 import { Workbench } from './workbench/Workbench.tsx';
 
@@ -58,16 +59,18 @@ export function ChatRoom({
   /** 输入框里引用着的群文件（路径） */
   const [refs, setRefs] = useState<string[]>([]);
   const workbench = useWorkbench(group, task);
-  const { files, openFile, openTasks } = workbench;
+  const { files, tasks, openFile, openTasks } = workbench;
   const bench = useMemo<Bench>(
     () => ({
       files,
+      tasks,
       openFile,
       openTasks,
       quote: (path) => setRefs((list) => (list.includes(path) ? list : [...list, path])),
     }),
-    [files, openFile, openTasks],
+    [files, tasks, openFile, openTasks],
   );
+  const focused = tasks.find((item) => item.runId === workbench.focus);
   const myId = me.data?.id;
   const { online, busy, sending, act, send } = state;
   const input = useRef<HTMLTextAreaElement>(null);
@@ -137,7 +140,7 @@ export function ChatRoom({
   const chat = room && (
     <section
       aria-label="聊天"
-      className={`${WINDOW} relative ${CHAT_WIDTH[scene === 'group' ? workbench.mode : 'collapsed']} ${
+      className={`${WINDOW} relative ${CHAT_WIDTH[scene === 'direct' ? 'collapsed' : workbench.mode]} ${
         dragging ? 'outline-2 -outline-offset-8 outline-dashed outline-accent' : ''
       }`}
       {...dropProps}
@@ -184,7 +187,14 @@ export function ChatRoom({
           ) : (
             chat
           )}
-          {scene === 'group' && <Workbench bench={workbench} />}
+          {scene !== 'direct' && <Workbench bench={workbench} />}
+          {focused && (
+            <TaskDialog
+              task={focused}
+              onClose={() => workbench.setFocus(undefined)}
+              onFile={openFile}
+            />
+          )}
         </RoomContext.Provider>
       ) : (
         <section

@@ -3,6 +3,7 @@ import type { ModelEntry } from '@oasis/contracts/agent';
 import type { Mention } from '@oasis/contracts/conversation';
 import type { GroupFile, GroupSnapshot } from '@oasis/contracts/group';
 import { createContext, useContext } from 'react';
+import type { RoomTask } from './workbench/tasks.ts';
 
 /** 随一句话发的文件（已经传到 canvas 的 id）和引用的群文件（路径） */
 export interface SendFiles {
@@ -14,11 +15,13 @@ export interface SendFiles {
 
 /** 聊天里能对工作台做的事 */
 export interface Bench {
-  /** 群文件，新改的在前（和好友的私聊没有） */
+  /** 工作台里的文件，新改的在前：群里是群文件，和 AI 的私聊里是任务交的成果（和好友的私聊没有） */
   files: GroupFile[];
+  /** 工作台上的任务 */
+  tasks: RoomTask[];
   /** 在工作台里打开一个群文件的预览 */
   openFile: (path: string) => void;
-  /** 去工作台看任务；给了哪一轮就展开它的过程 */
+  /** 去工作台看任务；给了哪一个就弹出它的窗 */
   openTasks: (runId?: string) => void;
   /** 把一个群文件引用进输入框 */
   quote: (path: string) => void;

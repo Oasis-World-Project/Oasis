@@ -90,7 +90,10 @@ function Rail({ bench }: { bench: State }) {
 }
 
 export function Workbench({ bench }: { bench: State }) {
+  const { group } = useRoom();
   if (bench.mode === 'collapsed') return <Rail bench={bench} />;
+  // 和 AI 的私聊没有大家传的文件：只有预览和任务
+  const tabs = group.kind === 'group' ? TABS : TABS.filter((tab) => tab.id !== 'files');
   const wide = bench.mode === 'wide';
   return (
     <section
@@ -103,7 +106,7 @@ export function Workbench({ bench }: { bench: State }) {
           aria-label="工作台视图"
           className="flex gap-0.5 rounded-full bg-well p-1"
         >
-          {TABS.map((tab) => {
+          {tabs.map((tab) => {
             const on = bench.tab === tab.id;
             return (
               <button

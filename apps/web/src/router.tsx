@@ -28,7 +28,6 @@ import { LoginPage } from './pages/LoginPage.tsx';
 import { MePage } from './pages/MePage.tsx';
 import { NotFoundPage } from './pages/NotFoundPage.tsx';
 import { PlazaPage } from './pages/PlazaPage.tsx';
-import { RunPage } from './pages/RunPage.tsx';
 import { TaskPage } from './pages/TaskPage.tsx';
 import { WelcomePage } from './pages/WelcomePage.tsx';
 
@@ -176,14 +175,8 @@ const artifactRoute = createRoute({
   staticData: { fixedHeight: true },
   component: ArtifactPage,
 });
-/** 一轮的进度（任务卡上的「看进度」）：?conversation= 是这一轮所在的私聊 */
-const runRoute = createRoute({
-  getParentRoute: () => shellRoute,
-  path: '/canvas/runs/$runId',
-  validateSearch: (search: Record<string, unknown>): { conversation?: string | undefined } => ({
-    conversation: typeof search.conversation === 'string' ? search.conversation : undefined,
-  }),
-  component: RunPage,
+const taskSearch = (search: Record<string, unknown>): { task?: string | undefined } => ({
+  task: typeof search.task === 'string' ? search.task : undefined,
 });
 const groupsRoute = createRoute({
   getParentRoute: () => shellRoute,
@@ -193,10 +186,8 @@ const groupsRoute = createRoute({
 const groupRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/groups/$groupId',
-  // ?task= 进来就在工作台里展开这个任务的过程（画布里群任务的「看过程」）
-  validateSearch: (search: Record<string, unknown>): { task?: string | undefined } => ({
-    task: typeof search.task === 'string' ? search.task : undefined,
-  }),
+  // ?task= 进来就弹出这个任务的窗（画布里群任务的「看过程」）
+  validateSearch: taskSearch,
   staticData: { fixedHeight: true },
   component: ChatPage,
 });
@@ -208,6 +199,8 @@ const dmsRoute = createRoute({
 const dmRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/dms/$conversationId',
+  // ?task= 进来就弹出这个任务的窗（画布里任务的「看过程」）
+  validateSearch: taskSearch,
   staticData: { fixedHeight: true },
   component: ChatPage,
 });
@@ -236,7 +229,6 @@ const routeTree = rootRoute.addChildren([
     canvasRoute,
     taskRoute,
     artifactRoute,
-    runRoute,
     groupsRoute,
     groupRoute,
     dmsRoute,

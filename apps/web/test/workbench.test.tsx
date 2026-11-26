@@ -249,34 +249,36 @@ describe('分工单在工作台和聊天里', () => {
 });
 
 describe('工作台', () => {
-  it('收起时是一条；展开后「文件」里一格一个，写着谁做的谁改过；点开在「预览」里看，能发到群里', async () => {
+  it('收起时是一条；展开后「文件」里只有大家自己传的，一格一个；点开在「预览」里看，能发到群里', async () => {
     const state = api();
     await room(group());
     const rail = screen.getByRole('region', { name: '工作台（收起）' });
     fireEvent.click(within(rail).getByRole('button', { name: '展开工作台' }));
     const bench = screen.getByRole('region', { name: '工作台' });
+    fireEvent.click(within(bench).getByRole('tab', { name: '文件' }));
+    // AI 做的（流程.md）不在这里，在任务里找
     const files = await within(bench).findByRole('list', { name: '群文件' });
-    expect(within(files).getAllByRole('listitem')).toHaveLength(2);
-    expect(within(files).getByText(/^Claude 做的，/)).toBeTruthy();
+    expect(within(files).getAllByRole('listitem')).toHaveLength(1);
     expect(within(files).getByText('阿杰 传的，Claude 改过')).toBeTruthy();
-    fireEvent.click(within(files).getByRole('button', { name: /^流程\.md/ }));
+    fireEvent.click(within(files).getByRole('button', { name: /^嘉宾名单\.csv/ }));
     // 换到「预览」：上面一排是打开的文件，下面是内容
     expect(within(bench).getByRole('tab', { name: '预览' }).getAttribute('aria-selected')).toBe(
       'true',
     );
-    const preview = within(bench).getByRole('article', { name: '预览 流程.md' });
-    expect(await within(preview).findByText('19:00 签到')).toBeTruthy();
-    expect(state.requests.some((r) => r.includes(`/files/${uuid(1)}/content`))).toBe(true);
+    const preview = within(bench).getByRole('article', { name: '预览 嘉宾名单.csv' });
+    await waitFor(() =>
+      expect(state.requests.some((r) => r.includes(`/files/${uuid(2)}/content`))).toBe(true),
+    );
     // 「发到群里」：引用进输入框；发出去的话带着它
     fireEvent.click(within(preview).getByRole('button', { name: '发到群里' }));
     expect(
-      within(screen.getByRole('list', { name: '引用的群文件' })).getByText('流程.md'),
+      within(screen.getByRole('list', { name: '引用的群文件' })).getByText('嘉宾名单.csv'),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() =>
       expect(state.bodies.find((b) => b.path.endsWith('/messages'))?.body).toMatchObject({
         content: '',
-        refs: ['流程.md'],
+        refs: ['嘉宾名单.csv'],
         attachments: [],
       }),
     );
@@ -289,7 +291,7 @@ describe('工作台', () => {
     expect(screen.getByRole('region', { name: '工作台（收起）' })).toBeTruthy();
   });
 
-  it('聊天里不放过程：点「正在干活」那一行去「任务」看这一轮的步骤和待办；任务卡上的文件点开预览', async () => {
+  it('过程、任务只画一处：聊天里过程收成一行，任务是一条（和工作台里同一条），点开弹出它的窗；交的文件点开预览', async () => {
     const working = aiSays(
       3,
       run,
@@ -308,33 +310,32 @@ describe('工作台', () => {
         messages: [card(2, oldRun), working],
       }),
     );
-    // 聊天里：任务卡、它开工前说的话、一行「做到第几步」；没有步骤
+    // 聊天里：它开工前说的话、收成一行的过程（点开才看得到步骤）
     const log = screen.getByRole('log', { name: '消息记录' });
-    expect(within(log).queryByText('第 1 步')).toBeNull();
-    fireEvent.click(await within(log).findByRole('button', { name: /正在干活，做到第 2 步/ }));
+    const steps = await within(log).findByRole('list', { name: '步骤', hidden: true });
+    expect(steps.closest('details')!.open).toBe(false);
+    // 聊天里的任务就是工作台上那一条：点开弹出它的窗，过程里有边做边说的话
+    fireEvent.click(within(log).getByRole('button', { name: 'Claude：排发布会流程' }));
+    const finished = screen.getByRole('dialog', { name: '排发布会流程' });
+    expect(await within(finished).findByText('边做边说的话')).toBeTruthy();
+    fireEvent.click(within(finished).getByRole('button', { name: '关闭' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // 点开任务时工作台跟着展开到「任务」：在做的那一轮在「进行中」，点它弹出的窗里两步、第二步还在做，能停下
     const bench = screen.getByRole('region', { name: '工作台' });
     expect(within(bench).getByRole('tab', { name: '任务' }).getAttribute('aria-selected')).toBe(
       'true',
     );
-    const doing = within(bench).getByRole('region', { name: '进行中' });
-    expect(within(doing).getByRole('button', { name: 'Claude：排发布会流程' })).toBeTruthy();
-    const done = await within(bench).findByRole('region', { name: '已完成' });
+    const done = within(bench).getByRole('region', { name: '已完成' });
     await waitFor(() => expect(within(done).getAllByRole('button')).toHaveLength(1));
-    // 弹出来的是点的那一轮：两步，第二步还在做；能停下
+    const doing = within(bench).getByRole('region', { name: '进行中' });
+    fireEvent.click(within(doing).getByRole('button', { name: 'Claude：排发布会流程' }));
     const process = screen.getByRole('dialog', { name: '排发布会流程' });
     expect(within(process).getAllByText(/第 \d 步/)).toHaveLength(2);
     expect(within(process).getByRole('button', { name: '停下' })).toBeTruthy();
     fireEvent.click(within(process).getByRole('button', { name: '关闭' }));
-    expect(screen.queryByRole('dialog')).toBeNull();
-    // 点做完的那一条：过程里有边做边说的话
-    fireEvent.click(within(done).getByRole('button'));
-    expect(within(screen.getByRole('dialog')).getByText('边做边说的话')).toBeTruthy();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '关闭' }));
-    // 聊天里任务卡上的文件：点开在工作台预览；「看过程」回到任务
+    // 聊天里任务交的文件：点开在工作台预览
     fireEvent.click(within(log).getByRole('button', { name: '在工作台打开 流程.md' }));
     expect(await within(bench).findByRole('article', { name: '预览 流程.md' })).toBeTruthy();
-    fireEvent.click(within(log).getByRole('button', { name: '看过程' }));
-    expect(screen.getByRole('dialog')).toBeTruthy();
     // 输入框上面那一行也能去工作台
     expect(screen.getByRole('button', { name: /1 个 AI 在工作台忙/ })).toBeTruthy();
   });
@@ -380,7 +381,7 @@ describe('工作台', () => {
     expect(
       (
         within(log).getByRole('button', {
-          name: /没了\.txt（已经不在群文件里）/,
+          name: /没了\.txt（已经不在了）/,
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);

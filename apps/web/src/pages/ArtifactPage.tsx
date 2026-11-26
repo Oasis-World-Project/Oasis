@@ -251,9 +251,9 @@ export function ArtifactPage() {
           任务「{artifact.task}」 · {new Date(artifact.createdAt).toLocaleString('zh-CN')} 放进画布
           ·{' '}
           <Link
-            to="/canvas/runs/$runId"
-            params={{ runId: artifact.runId }}
-            search={{ conversation: artifact.conversationId }}
+            to="/dms/$conversationId"
+            params={{ conversationId: artifact.conversationId }}
+            search={{ task: artifact.runId }}
             className="text-ink-muted"
           >
             看过程

@@ -1,6 +1,6 @@
 // AI 在一轮里的一段消息里的内容：它开工前说的话、干活的过程、收工后说的话（话里的问卷、任务单画成卡片），
-// 下面是结局（出错、已停下）和这一轮的花费。过程不整段铺在聊天里：私聊收成一行、点开才看；
-// 群里只写做到第几步，过程在工作台看。头像和排版在 group/RoomMessages.tsx。
+// 下面是结局（出错、已停下）和这一轮的花费。过程不整段铺在聊天里：收成一行、点开才看（私聊和群里一样）。
+// 头像和排版在 group/RoomMessages.tsx。
 import type { MessageBody, MessagePart } from '@oasis/contracts/conversation';
 import { Info } from 'lucide-react';
 import { Fragment, type CSSProperties } from 'react';
@@ -77,14 +77,11 @@ export function AiBody({
   message,
   latest,
   bubble,
-  onProcess,
 }: {
   message: TextMessage;
   /** 是最新的一条（后面没有新的话）：问卷能答、任务单能确认、出错了能「继续」 */
   latest: boolean;
   bubble: Bubble;
-  /** 群里：过程不放在聊天里，只写一行做到第几步，点它去工作台看这一轮的过程 */
-  onProcess?: (() => void) | undefined;
 }) {
   const actions = useChatActions();
   const { parts = [], todos, stopped, spentMicro } = message.data;
@@ -115,22 +112,8 @@ export function AiBody({
     <>
       {said(before, 0)}
       {parts.length === 0 && live && <span className="text-ink-muted">正在想…</span>}
-      {steps > 0 &&
-        (onProcess ? (
-          <button
-            type="button"
-            onClick={onProcess}
-            aria-label={`${live ? `正在干活，做到第 ${steps} 步` : `做了 ${steps} 步`}，看过程`}
-            className="cursor-pointer self-start border-0 bg-transparent p-0 text-left text-[13px] text-ink-muted underline decoration-hairline underline-offset-4"
-          >
-            {live ? `正在干活，做到第 ${steps} 步…` : `做了 ${steps} 步`}
-          </button>
-        ) : (
-          <ProcessFold parts={process} todos={todos} live={live} />
-        ))}
-      {!onProcess && steps === 0 && todos && todos.length > 0 && (
-        <Todos items={todos} live={live} />
-      )}
+      {steps > 0 && <ProcessFold parts={process} todos={todos} live={live} />}
+      {steps === 0 && todos && todos.length > 0 && <Todos items={todos} live={live} />}
       {said(after, before.length + process.length)}
       {message.status === 'failed' && (
         <p role="alert" className="m-0 text-[13px] text-accent">

@@ -14,7 +14,6 @@ import {
   ConversationBody,
   ConversationList,
   MessageBody,
-  MessageList,
   SendResult,
   type Mention,
   SetupResult,
@@ -31,7 +30,7 @@ import { Confirmation, type ConfirmDecision } from '@oasis/contracts/model-gatew
 import { FriendChat, FriendRequestResult, FriendsBody } from '@oasis/contracts/social';
 import { keepPreviousData, queryOptions } from '@tanstack/react-query';
 import { z } from 'zod';
-import { api, ApiError, apiVoid, isConnectionError } from './client.ts';
+import { api, ApiError, apiVoid } from './client.ts';
 
 export const meQuery = queryOptions({
   queryKey: ['me'],
@@ -228,22 +227,6 @@ export const deleteDm = (conversationId: string) =>
 const conversationPath = (conversationId: string) =>
   `/conversation/v1/conversations/${conversationId}`;
 
-/**
- * 消息和正在进行的一轮：有一轮在进行时每秒刷新（AI 说的话、做的步骤一段段出来）；没有时每 5 秒看一次，
- * 别的窗口、桌面版发进这段私聊的话和 AI 的回复才会自己出现（页面在后台时不刷新，切回来时刷新一次）。
- * 连不上时和别的查询一样每 5 秒重试；别的错（比如这段私聊已经删了）不再重试。
- */
-export const messagesQuery = (conversationId: string) =>
-  queryOptions({
-    queryKey: ['messages', conversationId],
-    queryFn: ({ signal }) =>
-      api(`${conversationPath(conversationId)}/messages`, MessageList, { signal }),
-    refetchInterval: (query) => {
-      if (query.state.data?.turn) return 1_000;
-      return query.state.error && !isConnectionError(query.state.error) ? false : 5_000;
-    },
-  });
-
 /** 发一条消息：没有一轮在进行就开一轮，有就先排队（这一轮做完接着做）；可以带文件、带要改的画布成果 */
 export const sendMessage = (
   conversationId: string,
@@ -264,16 +247,6 @@ export const unqueueMessage = (conversationId: string, messageId: string) =>
 /** 停下正在进行的一轮：已经做出来的存下，下一轮接着做 */
 export const stopTurn = (conversationId: string) =>
   apiVoid(`${conversationPath(conversationId)}/stop`, { method: 'POST', body: {} });
-
-/**
- * 某一轮工作目录里的一个文件（进度页预览这一轮做出的东西）：一轮还在做时从沙箱读，结束后只剩 out/ 里的。
- * version（那一步结束的时间）让同一路径重新生成后不用旧的缓存。
- */
-export const runFileUrl = (conversationId: string, runId: string, path: string, version = '') =>
-  `/api${conversationPath(conversationId)}/runs/${runId}/files/${path
-    .split('/')
-    .map(encodeURIComponent)
-    .join('/')}${version ? `?v=${encodeURIComponent(version)}` : ''}`;
 
 /** 开新话题：AI 从这里起不记得之前的事，返回分隔消息 */
 export const newTopic = (conversationId: string) =>

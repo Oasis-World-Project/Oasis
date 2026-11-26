@@ -8,7 +8,7 @@ import { ApiError } from '../api/client.ts';
 import { deleteGroupTask, dmsQuery, taskArchiveUrl, tasksQuery } from '../api/queries.ts';
 import { aiName, useModelMap } from '../api/use-model-map.ts';
 import { ConfirmButton, StatusTag } from '../chat/parts.tsx';
-import { elapsedText, taskStatus } from '../chat/TaskCard.tsx';
+import { elapsedText, taskStatus } from '../chat/task-status.ts';
 import { aiLook } from '../group/people.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
@@ -123,9 +123,9 @@ export function TaskPanel({ group, maker, now }: { group: TaskGroup; maker?: Mak
             </Link>
           ) : (
             <Link
-              to="/canvas/runs/$runId"
-              params={{ runId: group.runId }}
-              search={{ conversation: group.conversationId }}
+              to="/dms/$conversationId"
+              params={{ conversationId: group.conversationId }}
+              search={{ task: group.runId }}
               className={processButton}
             >
               {process}

@@ -1,5 +1,5 @@
-// 工作台的「文件」页签：群文件一格一个——格式、是谁的（正在改时头像发光）、文件名、谁做的谁改过。
-// 点开在「预览」里看。照原型 ②。
+// 工作台的「文件」页签：只放大家自己传的文件（AI 做的在任务里找），一格一个——格式、谁传的（AI 正在改时
+// 头像发光）、文件名、谁改过。点开在「预览」里看。照原型 ㉖。
 import { badgeOf } from '../../chat/files.ts';
 import { formatBytes } from '../../ui/format.ts';
 import { useRoom } from '../room.ts';
@@ -9,12 +9,13 @@ import type { Workbench } from './use-workbench.ts';
 export function FilesTab({ bench }: { bench: Workbench }) {
   const room = useRoom();
   const now = useClock();
-  if (!bench.files.length)
+  const files = bench.files.filter((file) => file.madeBy.kind === 'user');
+  if (!files.length)
     return (
       <p className="m-0 flex flex-1 items-center justify-center px-6 text-center text-[13px] leading-relaxed text-ink-muted">
-        还没有群文件。
+        还没有人传文件。
         <br />
-        AI 交的文件、大家用输入框的「＋」传的文件都在这里。
+        大家用输入框的「＋」传的文件都在这里；AI 做的在「任务」里找。
       </p>
     );
   return (
@@ -23,7 +24,7 @@ export function FilesTab({ bench }: { bench: Workbench }) {
         aria-label="群文件"
         className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3 p-0"
       >
-        {bench.files.map((file) => {
+        {files.map((file) => {
           const note = fileNote(room, file, now);
           return (
             <li key={file.id}>

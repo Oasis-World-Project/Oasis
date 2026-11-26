@@ -227,7 +227,7 @@ describe('群页里的 AI', () => {
     expect(await screen.findByText('改到周六')).toBeTruthy();
     expect(screen.getByText('场地定在 B 栋天台')).toBeTruthy();
   });
-  it('群聊里不放干活的过程：只留开工前和收工后说的话，在做时一行写做到第几步；群主能换成「看情况」', async () => {
+  it('干活的过程在群聊里收成一行：开工前和收工后说的话在外面，步骤和边做边说的话点开才看；群主能换成「看情况」', async () => {
     const step = (id: string, status: string) => ({
       type: 'step',
       id,
@@ -252,9 +252,9 @@ describe('群页里的 AI', () => {
       }),
     );
     expect(await screen.findByText('好，我来做海报。')).toBeTruthy();
-    expect(screen.getByText('正在干活，做到第 2 步…')).toBeTruthy();
-    expect(screen.queryByText('先看看素材')).toBeNull();
-    expect(screen.queryByText(/做了 \d+ 步/)).toBeNull();
+    const fold = screen.getByText('做到 2 步').closest('details')!;
+    expect(fold.open).toBe(false);
+    expect(fold.contains(screen.getByText('先看看素材'))).toBe(true);
     act(() =>
       push(stream, {
         ...group(),
@@ -268,8 +268,7 @@ describe('群页里的 AI', () => {
       }),
     );
     expect(await screen.findByText('海报做好了。')).toBeTruthy();
-    expect(screen.queryByText('先看看素材')).toBeNull();
-    expect(screen.queryByText(/正在干活/)).toBeNull();
+    expect(screen.getByText('做了 2 步').closest('details')!.open).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: '群设置' }));
     fireEvent.click(screen.getByText('看情况'));

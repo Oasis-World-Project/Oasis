@@ -1,6 +1,6 @@
 // 工作台的状态：收起 / 展开 / 拉宽，在看哪个页签，预览里打开了哪些文件，展开了哪个任务；
 // 群文件和任务从服务端读（群文件变了、有任务开始或结束时重新读）。
-import type { GroupFile, GroupSnapshot } from '@oasis/contracts/group';
+import type { GroupFile, GroupMessage, GroupSnapshot } from '@oasis/contracts/group';
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { groupFilesQuery, groupWorkQuery } from '../../api/queries.ts';
@@ -49,12 +49,39 @@ export interface Workbench {
 
 const EMPTY: never[] = [];
 
+/**
+ * 和 AI 的私聊没有群文件：能在工作台里看的是任务交的成果，按任务卡拼成和群文件一样的形状
+ * （同一个路径后交的算数，新的在前）。
+ */
+function deliveredFiles(messages: GroupMessage[]): GroupFile[] {
+  const files = new Map<string, GroupFile>();
+  for (const message of messages) {
+    if (message.kind !== 'task') continue;
+    const author = { kind: 'ai' as const, id: message.authorId };
+    for (const file of message.data.files) {
+      files.delete(file.path);
+      files.set(file.path, {
+        id: file.artifactId,
+        artifactId: file.artifactId,
+        path: file.path,
+        name: file.name,
+        size: file.size,
+        madeBy: author,
+        changedBy: author,
+        runId: message.data.runId,
+        updatedAt: message.data.finishedAt ?? message.data.startedAt,
+      });
+    }
+  }
+  return [...files.values()].reverse();
+}
+
 /** task：进来就展开这个任务的过程（工作台收着也先展开，不改记住的收放） */
 export function useWorkbench(group: GroupSnapshot | null, task?: string): Workbench {
   const [mode, setModeState] = useState<BenchMode>(() =>
     task && storedMode() === 'collapsed' ? 'open' : storedMode(),
   );
-  const [tab, setTab] = useState<BenchTab>(task ? 'tasks' : 'files');
+  const [tab, setTab] = useState<BenchTab>('tasks');
   const [openedPaths, setOpened] = useState<string[]>([]);
   const [currentPath, setCurrent] = useState<string>();
   const [focus, setFocus] = useState(task);
@@ -64,7 +91,11 @@ export function useWorkbench(group: GroupSnapshot | null, task?: string): Workbe
   const filesQuery = useQuery({ ...groupFilesQuery(id, group?.filesRev ?? 0), enabled });
   const mark = useMemo(() => workMark(messages), [messages]);
   const workQuery = useQuery({ ...groupWorkQuery(id, mark), enabled });
-  const files = filesQuery.data ?? EMPTY;
+  const delivered = useMemo(
+    () => (group?.kind === 'dm' ? deliveredFiles(messages) : EMPTY),
+    [group?.kind, messages],
+  );
+  const files = group?.kind === 'dm' ? delivered : (filesQuery.data ?? EMPTY);
   const work = workQuery.data ?? EMPTY;
   const tasks = useMemo(() => tasksOf([...work, ...messages]), [work, messages]);
 

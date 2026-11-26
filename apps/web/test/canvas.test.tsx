@@ -154,7 +154,7 @@ describe('画布', () => {
     expect(within(home).getByRole('heading', { name: /素材/ }).textContent).toContain('1');
     expect(within(home).getAllByRole('article')).toHaveLength(3);
     expect(within(home).getByRole('link', { name: '看过程' }).getAttribute('href')).toBe(
-      `/canvas/runs/${RUN}?conversation=${CONV}`,
+      `/dms/${CONV}?task=${RUN}`,
     );
     expect(within(home).getByRole('link', { name: '回到私聊' }).getAttribute('href')).toBe(
       `/dms/${CONV}`,
@@ -262,7 +262,7 @@ describe('画布', () => {
     );
     expect(screen.getByText(/任务「民宿首页」/)).toBeTruthy();
     expect(screen.getByRole('link', { name: '看过程' }).getAttribute('href')).toBe(
-      `/canvas/runs/${RUN}?conversation=${CONV}`,
+      `/dms/${CONV}?task=${RUN}`,
     );
     expect(screen.queryByRole('button', { name: /让 AI 改|删除|批准/ })).toBeNull();
   });

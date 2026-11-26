@@ -7,7 +7,7 @@ import { useMemo } from 'react';
 import { artifactsQuery, tasksQuery } from '../api/queries.ts';
 import { groupTasks } from '../canvas/task-groups.ts';
 import { TaskPanel, useMakerOf } from '../canvas/TaskPanel.tsx';
-import { useNow } from '../chat/TaskCard.tsx';
+import { useNow } from '../chat/task-status.ts';
 import { EmptyHint } from '../ui/Panel.tsx';
 
 const route = getRouteApi('/shell/canvas/tasks/$runId');

@@ -9,13 +9,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { Paperclip, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client.ts';
-import {
-  dmsQuery,
-  groupFiles,
-  messagesQuery,
-  sendGroupMessage,
-  sendMessage,
-} from '../api/queries.ts';
+import { dmsQuery, groupFiles, sendGroupMessage, sendMessage } from '../api/queries.ts';
 import { uploadFile } from '../api/upload.ts';
 import { PendingFiles } from '../chat/Attachments.tsx';
 import { useAttachments } from '../chat/use-attachments.ts';
@@ -108,12 +102,7 @@ export function RevisePanel({
         await navigate({ to: '/groups/$groupId', params: { groupId: group.id } });
         return;
       }
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: messagesQuery(artifact.conversationId).queryKey,
-        }),
-        queryClient.invalidateQueries({ queryKey: dmsQuery.queryKey }),
-      ]);
+      await queryClient.invalidateQueries({ queryKey: dmsQuery.queryKey });
       onClose();
       await navigate({
         to: '/dms/$conversationId',

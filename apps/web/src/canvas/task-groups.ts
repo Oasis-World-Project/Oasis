@@ -2,7 +2,9 @@
 // 成品和素材（out/素材/ 里的）分开；应用目录里的文件归在应用下面，不单独列。最近的任务在前。
 import type { ArtifactBody, ArtifactCategory } from '@oasis/contracts/canvas';
 import type { TaskSummary } from '@oasis/contracts/conversation';
-import { MATERIALS } from '../chat/run-progress.ts';
+
+/** 素材放在 out/素材/ 下（成品直接放 out/） */
+const MATERIALS = '素材/';
 
 export interface TaskGroup {
   runId: string;

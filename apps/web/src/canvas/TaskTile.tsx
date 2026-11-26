@@ -3,7 +3,7 @@
 import { Link } from '@tanstack/react-router';
 import { FolderOpen } from 'lucide-react';
 import { StatusTag } from '../chat/parts.tsx';
-import { elapsedText, taskStatus } from '../chat/TaskCard.tsx';
+import { elapsedText, taskStatus } from '../chat/task-status.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { Thumb } from './ArtifactCard.tsx';

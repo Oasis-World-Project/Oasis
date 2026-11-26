@@ -1,41 +1,5 @@
-// 卡片共用的外框和按钮。卡片都是 AI 发的，左边带 AI 头像；材质统一是磨砂玻璃。
+// 卡片（问卷、任务单）和几处按钮共用的小东西：标题行、状态标签、按钮、点了再问一句的按钮。
 import { useState, type ReactNode } from 'react';
-import { AiAvatar } from '../ui/Avatar.tsx';
-
-export interface Speaker {
-  mono: string;
-  glow: string;
-}
-
-export function CardFrame({
-  speaker,
-  label,
-  glowing = false,
-  dim = false,
-  children,
-}: {
-  speaker: Speaker;
-  /** 卡片的无障碍名称，如「问题卡」 */
-  label: string;
-  glowing?: boolean;
-  /** 已经过去的卡片（被替换、取消）淡一些 */
-  dim?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex items-start gap-2.5">
-      <AiAvatar mono={speaker.mono} glow={speaker.glow} size={30} glowing={glowing} />
-      <section
-        aria-label={label}
-        className={`flex w-full max-w-[560px] flex-col gap-3.5 rounded-card bg-glass-strong px-5 py-4 shadow-edge-strong ${
-          dim ? 'opacity-60' : ''
-        }`}
-      >
-        {children}
-      </section>
-    </div>
-  );
-}
 
 /** 卡片顶上的小标题行：左边类别，右边状态 */
 export function CardHeading({

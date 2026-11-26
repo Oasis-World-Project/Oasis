@@ -1,13 +1,8 @@
 // 聊天里的消息（群、好友、和 AI 的私聊同一套）。照原型 ②：每句话都有头像和名字，别人的在左、我的在右；
-// 时间分隔、话带的文件、AI 的话（气泡带它的光色）、任务卡。群里干活的过程不放在这里，只写做到第几步，点它去
-// 工作台看；@ 了的 AI 还在忙时，话下面写着它忙完就看，可以「现在告诉它」。和 AI 的私聊里过程收成一行、点开看，
-// 排着队还没交给它的话不在这里（在输入框上面），开新话题的地方有一条分隔。
-import type {
-  Mention,
-  MessageArtifact,
-  MessageAttachment,
-  TaskCard as TaskData,
-} from '@oasis/contracts/conversation';
+// 时间分隔、话带的文件、AI 的话（气泡带它的光色；干活的过程收成一行，点开看）、任务（和工作台里是同一条）。
+// 群里 @ 了的 AI 还在忙时，话下面写着它忙完就看，可以「现在告诉它」。和 AI 的私聊里排着队还没交给它的话
+// 不在这里（在输入框上面），开新话题的地方有一条分隔。
+import type { Mention, MessageArtifact, MessageAttachment } from '@oasis/contracts/conversation';
 import type { GroupAi, GroupMessage } from '@oasis/contracts/group';
 import { Link } from '@tanstack/react-router';
 import { PencilLine } from 'lucide-react';
@@ -18,8 +13,6 @@ import { AiBody } from '../chat/AiMessage.tsx';
 import { FileChip } from '../chat/FileChip.tsx';
 import { FilePreview, type PreviewFile } from '../chat/FilePreview.tsx';
 import { MessageText } from '../chat/MessageText.tsx';
-import { CardButton, CardFrame, CardHeading, StatusTag } from '../chat/parts.tsx';
-import { TaskCard, taskStatus, TaskFacts } from '../chat/TaskCard.tsx';
 import { ChatActionsContext } from '../chat/use-chat-actions.ts';
 import { useStickToBottom } from '../chat/use-stick-to-bottom.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
@@ -29,6 +22,8 @@ import { MemberAvatar } from './Members.tsx';
 import { aiLook, DIVIDER_GAP_MS, dividerText } from './people.ts';
 import { mentionText, uploadPath, useRoom } from './room.ts';
 import { FilePill } from './workbench/files.tsx';
+import { tasksOf } from './workbench/tasks.ts';
+import { TaskRow } from './workbench/TasksTab.tsx';
 
 type TextMessage = Extract<GroupMessage, { kind: 'text' }>;
 
@@ -223,8 +218,7 @@ function UserMessage({ message, unseen }: { message: TextMessage; unseen: boolea
 }
 
 function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) {
-  const { group, models, bench } = useRoom();
-  const { runId } = message.data;
+  const { models } = useRoom();
   const look = aiLook(models, message.authorId, message.displayName);
   return (
     <Row
@@ -242,8 +236,6 @@ function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) 
         <AiBody
           message={message}
           latest={latest}
-          // 群里过程在工作台看；和 AI 的私聊里收成一行、点开看
-          onProcess={group.kind === 'group' ? () => bench.openTasks(runId) : undefined}
           bubble={{
             className: 'bubble-in shadow-bubble-edge',
             style: { background: `color-mix(in srgb, ${look.glow} 14%, transparent)` },
@@ -254,22 +246,25 @@ function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) 
   );
 }
 
-/** 群里一个 AI 这一轮的任务卡：任务名、状态、用时、花费、交了哪些文件（点开在工作台看），过程去工作台看 */
-function RoomTask({ card, authorId, name }: { card: TaskData; authorId: string; name: string }) {
-  const { models, bench } = useRoom();
-  const status = taskStatus(card);
+/**
+ * 聊天里的一个任务：和工作台「任务」里是同一条（点开弹出它的窗：成果、过程），下面是它交的文件（点开在
+ * 工作台预览）。
+ */
+function TaskStrip({ message }: { message: Extract<GroupMessage, { kind: 'task' }> }) {
+  const { bench } = useRoom();
+  const card = message.data;
+  // 工作台上已经有这个任务就用那一条（带着过程）；太早的任务工作台没读到，就按这张卡拼
+  const task = useMemo(
+    () => bench.tasks.find((item) => item.runId === card.runId) ?? tasksOf([message])[0],
+    [bench.tasks, card.runId, message],
+  );
   return (
-    <CardFrame
-      speaker={aiLook(models, authorId, name)}
-      label="任务"
-      glowing={card.status === 'running'}
-    >
-      <CardHeading
-        kind={`${aiLook(models, authorId, name).name} 的任务`}
-        title={card.title}
-        status={<StatusTag tone={status.tone}>{status.label}</StatusTag>}
-      />
-      <TaskFacts card={card} />
+    <div className="flex flex-col gap-2 pl-10">
+      {task && (
+        <div className="max-w-[min(520px,100%)]">
+          <TaskRow task={task} onOpen={() => bench.openTasks(card.runId)} />
+        </div>
+      )}
       {card.files.length > 0 && (
         <ul aria-label="交出的文件" className="m-0 flex list-none flex-wrap gap-1.5 p-0">
           {card.files.map((file) => (
@@ -279,16 +274,13 @@ function RoomTask({ card, authorId, name }: { card: TaskData; authorId: string; 
           ))}
         </ul>
       )}
-      <div>
-        <CardButton onClick={() => bench.openTasks(card.runId)}>看过程</CardButton>
-      </div>
-    </CardFrame>
+    </div>
   );
 }
 
 export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder: () => void }) {
   const room = useRoom();
-  const { group, busy, models } = room;
+  const { group, busy } = room;
   // 私聊里排着队、还没交给 AI 的话不在聊天里（在输入框上面），交给它时才进来
   const messages = useMemo(
     () => group.messages.filter((m) => !(m.kind === 'text' && m.data.pending)),
@@ -383,18 +375,7 @@ export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder
                   <span className="h-px flex-1 bg-hairline" />
                 </div>
               ) : message.kind === 'task' ? (
-                group.kind === 'group' ? (
-                  <RoomTask
-                    card={message.data}
-                    authorId={message.authorId}
-                    name={message.displayName}
-                  />
-                ) : (
-                  <TaskCard
-                    card={message.data}
-                    speaker={aiLook(models, message.authorId, message.displayName)}
-                  />
-                )
+                <TaskStrip message={message} />
               ) : message.kind === 'assign' ? (
                 <AssignProgress
                   card={message.data}

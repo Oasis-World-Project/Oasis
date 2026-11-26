@@ -11,7 +11,7 @@ import { artifactsQuery, dmsQuery, tasksQuery } from '../api/queries.ts';
 import { groupTasks } from '../canvas/task-groups.ts';
 import { useMakerOf } from '../canvas/TaskPanel.tsx';
 import { TaskTile } from '../canvas/TaskTile.tsx';
-import { useNow } from '../chat/TaskCard.tsx';
+import { useNow } from '../chat/task-status.ts';
 import { DesktopSyncBar } from '../desktop/DesktopSync.tsx';
 import { EmptyHint } from '../ui/Panel.tsx';
 

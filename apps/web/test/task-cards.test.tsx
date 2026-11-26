@@ -267,8 +267,8 @@ describe('问卷卡和任务单卡', () => {
   });
 });
 
-describe('任务卡', () => {
-  it('进行中：显示用时和花费，可以停下', async () => {
+describe('聊天里的任务', () => {
+  it('进行中：聊天里是一条，点开弹出它的窗，写着用时和花费，可以停下', async () => {
     const card = message('task', {
       runId: RUN,
       status: 'running',
@@ -285,17 +285,18 @@ describe('任务卡', () => {
           : undefined,
     });
     await openChat();
-    const region = await screen.findByRole('region', { name: '任务' });
-    expect(within(region).getByText('进行中')).toBeTruthy();
-    expect(region.textContent).toMatch(/用时 1 分 \d+ 秒/);
-    expect(region.textContent).toContain('$0.0400');
-    fireEvent.click(within(region).getByRole('button', { name: '停下' }));
+    const row = await screen.findByRole('button', { name: 'Claude：任务' });
+    expect(row.textContent).toContain('$0.0400');
+    fireEvent.click(row);
+    const dialog = screen.getByRole('dialog', { name: '任务' });
+    expect(dialog.textContent).toMatch(/用时 1 分 \d+ 秒/);
+    fireEvent.click(within(dialog).getByRole('button', { name: '停下' }));
     await waitFor(() =>
       expect(api.requests).toContain(`POST /conversation/v1/conversations/${CONV}/stop`),
     );
   });
 
-  it('做完：写上任务名、用时、花费和成品（素材只说几个）；成品能预览、下载，能去画布看这个私聊的成果', async () => {
+  it('做完：一条任务（任务名、交了几个文件、花费）和它交的文件；文件点开在工作台预览、能下载、能去画布；弹出的窗里写着用时', async () => {
     const PAGE = '00000000-0000-4000-8000-0000000000d1';
     const card = message('task', {
       runId: RUN,
@@ -323,26 +324,27 @@ describe('任务卡', () => {
     });
     fakeChat([user('做个网页'), ai([say('做好了')], { spentMicro: 120_000 }), card]);
     await openChat();
-    const region = await screen.findByRole('region', { name: '任务' });
-    expect(within(region).getByRole('heading', { name: '民宿首页' })).toBeTruthy();
-    expect(within(region).getByText('已完成')).toBeTruthy();
-    expect(region.textContent).toContain('用时 3 分 20 秒');
-    expect(region.textContent).toContain('素材 1 个');
-    expect(within(region).queryByRole('button', { name: '预览 首屏.png' })).toBeNull();
-    expect(within(region).getByRole('link', { name: '下载 index.html' }).getAttribute('href')).toBe(
-      `/api/canvas/v1/artifacts/${PAGE}/content?download=1`,
+    const row = await screen.findByRole('button', { name: 'Claude：民宿首页' });
+    expect(row.textContent).toContain('交了 2 个文件');
+    expect(row.textContent).toContain('$0.1200');
+    // 交的文件点开在工作台预览（和 AI 的私聊也有工作台）
+    fireEvent.click(screen.getByRole('button', { name: '在工作台打开 index.html' }));
+    const preview = await screen.findByRole('article', { name: '预览 index.html' });
+    expect(
+      within(preview).getByRole('link', { name: '下载 index.html' }).getAttribute('href'),
+    ).toBe(`/api/canvas/v1/artifacts/${PAGE}/content?download=1`);
+    expect(within(preview).getByRole('link', { name: '在画布里打开' }).getAttribute('href')).toBe(
+      `/canvas/artifacts/${PAGE}`,
     );
-    expect(
-      within(region)
-        .getByRole('link', { name: /在画布里看/ })
-        .getAttribute('href'),
-    ).toBe(`/canvas?conversation=${CONV}`);
-    expect(
-      within(region)
-        .getByRole('link', { name: /看进度/ })
-        .getAttribute('href'),
-    ).toBe(`/canvas/runs/${RUN}?conversation=${CONV}`);
-    expect(within(region).queryByRole('button', { name: '停下' })).toBeNull();
+    expect(within(preview).queryByRole('button', { name: '发到群里' })).toBeNull();
+    const bench = screen.getByRole('region', { name: '工作台' });
+    expect(within(bench).queryByRole('tab', { name: '文件' })).toBeNull();
+    // 点开这条任务：用时、成果；做完了不能停下
+    fireEvent.click(row);
+    const dialog = screen.getByRole('dialog', { name: '民宿首页' });
+    expect(dialog.textContent).toContain('用时 3 分 20 秒');
+    expect(within(dialog).getByRole('region', { name: '成果' })).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: '停下' })).toBeNull();
   });
 });
 

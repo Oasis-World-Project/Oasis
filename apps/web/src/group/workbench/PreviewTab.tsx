@@ -19,12 +19,12 @@ export function PreviewTab({ bench }: { bench: Workbench }) {
   if (!file)
     return (
       <p className="m-0 flex flex-1 items-center justify-center px-6 text-center text-[13px] leading-relaxed text-ink-muted">
-        在「文件」里点一个文件，或者点聊天里的文件，在这里预览。
+        点聊天里、任务里的文件，在这里预览。
       </p>
     );
   // 传这个文件的人和群主可以删，AI 交的只有群主可以
   const canDelete = owner || (file.madeBy.kind === 'user' && file.madeBy.id === me);
-  const preview = previewOf(group.id, file, bench.files);
+  const preview = previewOf(group, file, bench.files);
   return (
     <>
       <div
@@ -88,13 +88,15 @@ export function PreviewTab({ bench }: { bench: Workbench }) {
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => room.bench.quote(file.path)}
-              className="h-9 cursor-pointer rounded-full border-0 bg-solid px-3.5 text-[12.5px] font-medium text-on-solid"
-            >
-              发到群里
-            </button>
+            {group.kind === 'group' && (
+              <button
+                type="button"
+                onClick={() => room.bench.quote(file.path)}
+                className="h-9 cursor-pointer rounded-full border-0 bg-solid px-3.5 text-[12.5px] font-medium text-on-solid"
+              >
+                发到群里
+              </button>
+            )}
             {file.artifactId && (
               <Link
                 to="/canvas/artifacts/$artifactId"
@@ -112,7 +114,7 @@ export function PreviewTab({ bench }: { bench: Workbench }) {
             >
               <Download size={15} aria-hidden="true" />
             </a>
-            {canDelete && (
+            {group.kind === 'group' && canDelete && (
               <ConfirmButton
                 label="删除"
                 question="从群文件里删掉？"

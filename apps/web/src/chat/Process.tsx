@@ -1,11 +1,11 @@
 // 干活的过程：按发生的顺序列出步骤、边做边说的话、系统提示，下面是待办。
-// 聊天里不整段铺开：私聊里收成一行、点开才看（ProcessFold）；群里在工作台的任务卡上看。
+// 聊天里不整段铺开：收成一行、点开才看（ProcessFold）；点开一个任务弹出的窗里是同一份（ProcessBody）。
 import type { MessagePart, StepPart, TodoItem } from '@oasis/contracts/conversation';
 import { Check, Info, LoaderCircle, X } from 'lucide-react';
 import { Markdown } from './Markdown.tsx';
 
 /** 一步的状态图标。label：读屏时念出来的状态（「完成」「没成」）；不给就只是装饰 */
-export function StepIcon({ status, label }: { status: StepPart['status']; label?: string }) {
+function StepIcon({ status, label }: { status: StepPart['status']; label?: string }) {
   const named = label ? ({ role: 'img', 'aria-label': label } as const) : { 'aria-hidden': true };
   if (status === 'running')
     return <LoaderCircle size={13} {...named} className="animate-spin text-accent" />;
@@ -115,7 +115,7 @@ export function ProcessBody({
   );
 }
 
-/** 私聊里的过程：收成一行（正在做的那一步，或一共做了几步），点开才看 */
+/** 聊天里的过程：收成一行（正在做的那一步，或一共做了几步），点开才看 */
 export function ProcessFold({
   parts,
   todos,
