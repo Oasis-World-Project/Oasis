@@ -384,7 +384,7 @@ afterEach(() => turns.close());
 
 export const send = (
   content: string,
-  extra: { attachments?: string[]; artifacts?: string[] } = {},
+  extra: { attachments?: string[]; artifacts?: string[]; task?: boolean; seat?: string } = {},
 ) =>
   dms.sendMessage({
     ownerId: OWNER,
@@ -392,6 +392,8 @@ export const send = (
     content,
     attachments: extra.attachments ?? [],
     artifacts: extra.artifacts ?? [],
+    ...(extra.task ? { task: true } : {}),
+    ...(extra.seat ? { seat: extra.seat } : {}),
     requestId: 'r',
   });
 /** 用户说过的这句话的消息 id */

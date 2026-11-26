@@ -35,7 +35,8 @@ export function CanvasPage() {
     isPending,
     isError,
   } = useQuery({
-    ...artifactsQuery(conversation ? { conversationId: conversation } : {}),
+    // 只看一个私聊的：它派到云端的任务另有会话，成果先都读来，再按任务在哪个私聊挑（task-groups.ts）
+    ...artifactsQuery(),
     // 有任务在做：做好一个就登记进画布，跟着刷新
     refetchInterval: running ? 3_000 : false,
   });

@@ -241,10 +241,21 @@ export const deleteDm = (conversationId: string) =>
 const conversationPath = (conversationId: string) =>
   `/conversation/v1/conversations/${conversationId}`;
 
-/** 发一条消息：没有一轮在进行就开一轮，有就先排队（这一轮做完接着做）；可以带文件、带要改的画布成果 */
+/**
+ * 发一条消息：没有一轮在进行就开一轮，有就先排队（这一轮做完接着做）；可以带文件、带要改的画布成果。
+ * 派到云端的（task、seat）不排队
+ */
 export const sendMessage = (
   conversationId: string,
-  body: { content: string; attachments?: string[]; artifacts?: string[] },
+  body: {
+    content: string;
+    attachments?: string[];
+    artifacts?: string[];
+    /** 在云端做：单独派到云端 */
+    task?: boolean;
+    /** 接着做、改一个云端任务：那个任务的会话 */
+    seat?: string;
+  },
 ) => api(`${conversationPath(conversationId)}/messages`, SendResult, { method: 'POST', body });
 
 /** 「引导」：排着队的一句现在交给 AI（插话进正在进行的这一轮，它做完手上这一步就看到） */

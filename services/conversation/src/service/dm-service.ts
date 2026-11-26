@@ -25,6 +25,7 @@ import {
   type ConversationRepo,
   type Message,
 } from '../repo/conversation-repo.ts';
+import { createDmCloud } from './dm-cloud.ts';
 import type { Purge } from './purge.ts';
 import type { Turns } from './turns.ts';
 
@@ -97,6 +98,7 @@ export function createDmService(deps: {
   logger: Logger;
 }) {
   const { repo, turns } = deps;
+  const cloud = createDmCloud({ repo, turns });
 
   async function owned(conversationId: string, ownerId: string): Promise<Conversation> {
     const conversation = await repo.findOwned(conversationId, ownerId);
@@ -234,13 +236,20 @@ export function createDmService(deps: {
       attachments: string[];
       /** 「让 AI 改」：画布里要改的成果 id */
       artifacts: string[];
+      /** 「在云端做」：单独派到云端 */
+      task?: boolean;
+      /** 点名的云端任务的会话：接着它做 */
+      seat?: string | undefined;
       requestId: string;
     }): Promise<SendResult> {
       const conversation = await owned(input.conversationId, input.ownerId);
+      // 交给云端的（新派一个任务，或接着点名的那个任务做）不占私聊自己那一轮，也不排队
+      const task = await cloud.target(conversation, input.seat);
+      const toCloud = input.task === true || task !== undefined;
       return withMessageLock(conversation.id, async (store) => {
         const latest = (await store.find(conversation.id))!;
         // 文件只能在一轮开始时放进工作目录
-        if (latest.turn && (input.attachments.length || input.artifacts.length))
+        if (!toCloud && latest.turn && (input.attachments.length || input.artifacts.length))
           throw new HttpError(
             409,
             'turn_active',
@@ -263,11 +272,14 @@ export function createDmService(deps: {
           data: {
             ...(attachments.length ? { attachments } : {}),
             ...(artifacts.length ? { artifacts } : {}),
-            ...(latest.turn ? { pending: true } : {}),
+            ...(toCloud ? { task: true } : latest.turn ? { pending: true } : {}),
           },
         });
         let added: Message[];
-        if (latest.turn) {
+        if (toCloud) {
+          const replies = await cloud.begin(conversation, task, user, input.requestId);
+          added = [(await store.findMessage(conversation.id, user.id)) ?? user, ...replies];
+        } else if (latest.turn) {
           turns.follow(conversation.id);
           added = [user];
         } else {
@@ -445,6 +457,11 @@ export function createDmService(deps: {
       await deps.purge.cancelTurn(conversation);
       await withMessageLock(conversation.id, async (store) => {
         const id = conversation.id;
+        // 派到云端的任务各有一份会话：一起取消、清掉（那几行随私聊删掉）
+        for (const task of await store.tasksOf(id)) {
+          await deps.purge.cancelTurn(task);
+          await deps.purge.remote(task.id, ownerId, requestId);
+        }
         await deps.purge.remote(id, ownerId, requestId);
         // 先删文件再删对话：删文件失败时对话还在，用户重试即可（删除都是幂等的）
         const files = await store.attachmentIds(id);

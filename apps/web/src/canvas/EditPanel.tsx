@@ -28,6 +28,7 @@ export function EditPanel({
   overallHint,
   maker,
   group,
+  home,
   busy,
 }: {
   artifact: ArtifactBody;
@@ -46,6 +47,8 @@ export function EditPanel({
   maker: string | undefined;
   /** 群里的 AI 做的：发进这个群，@ 做它的那个 AI；seat 是做它的那份会话（云端任务的就接着它改） */
   group?: { id: string; title: string; key: string; seat?: string } | undefined;
+  /** 私聊里的 AI 做的：发进这个私聊；seat 是派到云端的那个任务的会话（接着它改） */
+  home: { id: string; seat?: string };
   /** 做它的 AI 正在做一轮：做完之前不能再让它改 */
   busy: boolean;
 }) {
@@ -68,10 +71,11 @@ export function EditPanel({
         parameters,
       );
       if (!group)
-        return sendMessage(artifact.conversationId, {
+        return sendMessage(home.id, {
           content,
           attachments: [],
           artifacts: [artifact.id],
+          ...(home.seat ? { seat: home.seat } : {}),
         });
       // 引用群文件里现在就是这份成果的那一个（已经被别的 AI 换成新版的不引用）
       const refs = (await groupFiles(group.id))
@@ -90,7 +94,7 @@ export function EditPanel({
       await queryClient.invalidateQueries({ queryKey: dmsQuery.queryKey });
       return navigate({
         to: '/dms/$conversationId',
-        params: { conversationId: artifact.conversationId },
+        params: { conversationId: home.id },
       });
     },
   });

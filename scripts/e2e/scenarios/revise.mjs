@@ -1,4 +1,5 @@
-// 回归场景（docs/engineering/回归测试.md）：让 AI 改、插话、停下后继续、开新话题、持久工作目录丢了。
+// 回归场景（docs/engineering/回归测试.md）：让 AI 改、在云端做、插话、停下后继续、开新话题、持久工作目录丢了。
+import { literal, query } from '../db.mjs';
 import { marker, writeFiles } from '../fake-provider.mjs';
 import { aiOf, cardOf, dropWorkspace, runsOf, start, workspaceExists } from './shared.mjs';
 
@@ -21,7 +22,8 @@ const fromCopy =
 const NOTE = { steps: [{ bash: writeFiles({ 'out/笔记.md': '# 笔记\n第一版。\n' }) }] };
 
 // ---------- 4. 让 AI 改：在画布里挑一样成果让 AI 改；它还在这个会话的工作目录里，
-// AI 接着原会话直接改，画布里原地换新（ID 不变、不多出一份），任务卡还是原来那张 ----------
+// AI 接着原会话直接改，画布里原地换新（ID 不变、不多出一份），任务卡还是原来那张。
+// 再「在云端做」一件事：单独派出去，有自己的会话；点名这个任务让它改，接着它的会话 ----------
 export const revise = {
   says: {
     1: {
@@ -47,6 +49,14 @@ export const revise = {
             : { text: `没说要改的成果在哪：${seg.text.slice(0, 200)}` },
       ],
       reply: '标题改成冬日市集了。',
+    },
+    3: {
+      steps: [{ bash: writeFiles({ 'out/邀请函.md': '# 邀请函\n周六见。\n' }) }],
+      reply: '邀请函写好了。',
+    },
+    4: {
+      steps: [{ bash: `sed -i 's/周六/周日/' out/邀请函.md && cat out/邀请函.md` }],
+      reply: '改成周日了。',
     },
   },
   async run(t) {
@@ -98,6 +108,60 @@ export const revise = {
         card.data.files.some((file) => file.artifactId === sheet.id),
       `让 AI 改应算在原来那张任务卡上（一张卡、两轮、改了 1 次、成果还是那 2 个）：${JSON.stringify(cards.map((m) => m.data))}`,
     );
+
+    // ---- 在云端做：这件事单独派出去，开一份自己的会话（不接着私聊的），花自己的钱包 ----
+    const sent = await t.user.say(id, `另外写一份邀请函 ${marker('revise', 3)}`, { task: true });
+    t.check(
+      sent.messages[0]?.data.task === true && !sent.messages[0].data.pending,
+      `在云端做的那句话应记成派出去的任务、不排队：${JSON.stringify(sent.messages[0]?.data ?? null)}`,
+    );
+    /** 等云端任务那张卡做完（它不占私聊自己那一轮） */
+    const cloudCard = async (label, done) => {
+      for (let i = 0; i < 120; i += 1) {
+        const found = (await t.user.messages(id)).messages.findLast(
+          (m) => m.kind === 'task' && m.data.seat,
+        );
+        if (found?.data.status === 'done' && done(found.data)) return found;
+        await sleep(1_000);
+      }
+      throw new Error(`等「${label}」超时`);
+    };
+    const made = await cloudCard('云端任务做完', () => true);
+    const seat = made.data.seat;
+    const tasks = query(
+      'conversation',
+      `select id, kind from conversations where parent_id = ${literal(id)}`,
+    );
+    const cloudRuns = runsOf(seat);
+    t.check(
+      tasks.length === 1 && tasks[0].kind === 'task' && tasks[0].id === seat,
+      `在云端做应开一份自己的会话（挂在私聊下面的一行）：${JSON.stringify(tasks)}`,
+    );
+    t.check(
+      cloudRuns.length === 1 &&
+        !cloudRuns[0].continue_from &&
+        cloudRuns[0].session_id !== runs[0].session_id &&
+        runsOf(id).length === 2,
+      `云端任务应是新的会话、不占私聊自己那几轮：${JSON.stringify(cloudRuns)}`,
+    );
+    const invite = (await t.user.artifacts(seat)).find((a) => a.path === '邀请函.md');
+    t.check(
+      made.data.files.some((file) => file.artifactId === invite?.id),
+      `云端任务交的文件应在它那张任务卡上：${JSON.stringify(made.data.files)}`,
+    );
+    // 点名这个任务让它改：接着它自己的会话，算在它那张卡上
+    await t.user.say(id, `改成周日 ${marker('revise', 4)}`, { seat });
+    const fixed = await cloudCard('云端任务改好', (data) => data.revision === 1);
+    const after4 = runsOf(seat);
+    t.check(
+      after4.length === 2 &&
+        after4[1].continue_from === after4[0].id &&
+        fixed.data.runs?.join() === after4.map((run) => run.id).join() &&
+        runsOf(id).length === 2,
+      `点名云端任务应接着它的会话改、算在它那张卡上：${JSON.stringify(after4)}`,
+    );
+    const sunday = await t.user.waitContent(seat, '邀请函.md', (text) => text.includes('周日'));
+    t.check(sunday.includes('周日见'), `云端任务的邀请函没改成周日：${sunday}`);
   },
 };
 

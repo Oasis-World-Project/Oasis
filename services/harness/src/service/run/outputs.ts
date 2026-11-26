@@ -1,5 +1,6 @@
 // 读运行的产出和过程：运行事件（对话里一轮的进度）、单个产出文件（画布登记成果时复制）、工作目录里的
 // 一个文件（进度页预览这一轮做出的中间产物）。文件都从这个会话的工作目录里现读，平台不另存一份。
+import { Readable } from 'node:stream';
 import type { RunEventBody } from '@oasis/contracts/harness';
 import { contentTypeOf, HttpError, onlyFile } from '@oasis/service-kit';
 import { SANDBOX_PATHS } from '../../adapter/dsh.ts';
@@ -9,6 +10,30 @@ import { isPrivateOutput, type RunContext } from './shared.ts';
 const PREVIEW_MAX_BYTES = 64 * 1024 * 1024;
 /** 登记进画布的文件最大多少（和画布收的上限一样） */
 const FILE_MAX_BYTES = 512 * 1024 * 1024;
+
+/**
+ * 读工作目录里的文件时多久没有数据就算卡住。文件正被改写的那一刻去读，Docker 给的流可能既不出数据也不结束
+ * （2026-11-27 回归里遇到：画布登记一张正在重写的图，等了 5 分钟才超时）；断掉以后调用方会重试。
+ */
+const STALL_MS = 30_000;
+
+/** 给读文件的流加上「卡住就断」：照样一块块往外给，STALL_MS 没有数据就带着错误结束 */
+export function unstalled(source: Readable, stallMs = STALL_MS): Readable {
+  const timer = setTimeout(() => source.destroy(new Error('读文件卡住了')), stallMs);
+  return Readable.from(
+    (async function* () {
+      try {
+        for await (const chunk of source) {
+          timer.refresh();
+          yield chunk as Buffer;
+        }
+      } finally {
+        clearTimeout(timer);
+        source.destroy();
+      }
+    })(),
+  );
+}
 
 export function createOutputs(ctx: RunContext) {
   const { deps, owned } = ctx;
@@ -23,7 +48,7 @@ export function createOutputs(ctx: RunContext) {
       .readWorkspace(row.sessionId ?? row.id, `${SANDBOX_PATHS.workdir}/${path}`)
       .catch(() => undefined);
     if (!live) return undefined;
-    const file = await onlyFile(live, maxBytes).catch((err: unknown) => {
+    const file = await onlyFile(unstalled(live), maxBytes).catch((err: unknown) => {
       throw new HttpError(422, 'file_unreadable', `读不了：${String(err)}`);
     });
     return { ...file, contentType: contentTypeOf(path) };

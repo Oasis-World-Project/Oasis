@@ -8,7 +8,10 @@ const MATERIALS = '素材/';
 
 export interface TaskGroup {
   runId: string;
+  /** 做它的那份会话（成果上记的也是它）：私聊自己，或派到云端的任务、群里的席位那一行 */
   conversationId: string;
+  /** 聊天在哪：私聊或群的 ID */
+  room: string;
   title: string;
   /** 任务卡（状态、用时、花费）；以前登记的成果没有 */
   task?: TaskSummary;
@@ -35,10 +38,14 @@ export function groupTasks(input: {
   matching: ArtifactBody[];
 } {
   const { category, keyword } = input;
-  const mine = <T extends { conversationId: string }>(list: T[]) =>
-    input.conversation ? list.filter((item) => item.conversationId === input.conversation) : list;
-  const all = mine(input.artifacts);
-  const tasks = mine(input.tasks);
+  // 这个私聊的：它自己做的，和它派到云端的任务做的（各有一份会话）
+  const roomOf = new Map(input.tasks.map((task) => [task.conversationId, task.room]));
+  const here = (conversationId: string) =>
+    !input.conversation || (roomOf.get(conversationId) ?? conversationId) === input.conversation;
+  const all = input.artifacts.filter((item) => here(item.conversationId));
+  const tasks = input.tasks.filter(
+    (task) => !input.conversation || task.room === input.conversation,
+  );
   const apps = all.filter((item) => item.application);
   const parentOf = (item: ArtifactBody) =>
     apps.find(
@@ -72,6 +79,7 @@ export function groupTasks(input: {
     groups.set(task.runId, {
       runId: task.runId,
       conversationId: task.conversationId,
+      room: task.room,
       title: task.title ?? '',
       task,
       finals: [],
@@ -84,6 +92,7 @@ export function groupTasks(input: {
       group = {
         runId: item.runId,
         conversationId: item.conversationId,
+        room: roomOf.get(item.conversationId) ?? item.conversationId,
         title: '',
         finals: [],
         materials: [],

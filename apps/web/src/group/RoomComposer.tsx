@@ -2,7 +2,7 @@
 // 和输入，下面一排是「＋」「@」、这段对话在哪干活、手动 / 自动、联网搜索，最右是发送。
 // 群里：上面一行是谁在忙（点它去工作台看）；「＋」里作为任务发布、上传文件、引用工作台里的文件；「@」弹出
 // 「召唤谁来回答」。和 AI 的私聊：上面是等你点的确认卡和排着队的话；它在干活、框里没字时，发送键就是停下。
-// 和好友的私聊：没有「@」，「＋」就是发文件。
+// 和好友的私聊：没有「@」，「＋」就是发文件。和 AI 的私聊：「＋」里是「在云端做」和上传文件。
 import type { Mention } from '@oasis/contracts/conversation';
 import { ArrowUp, AtSign, Plus, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
@@ -123,7 +123,7 @@ export function RoomComposer({
     !attachments.failed &&
     // 和 AI 的私聊：一句话要有字；文件只能在一轮开始时交给它
     (scene === 'dm'
-      ? hasText && !(turnActive && hasFiles)
+      ? hasText && !(turnActive && hasFiles && !task)
       : hasText || attachments.ids.length > 0 || refs.length > 0);
   const home: Home | undefined =
     scene === 'dm' && group.home
@@ -256,7 +256,7 @@ export function RoomComposer({
         <div className="flex min-h-8 flex-wrap items-center gap-1.5">
           {task && (
             <span className="h-7 shrink-0 rounded-full bg-solid px-2.5 text-[12.5px] font-medium leading-7 text-on-solid">
-              任务
+              {scene === 'dm' ? '在云端做' : '任务'}
             </span>
           )}
           {mentions.map((mention, index) => (
@@ -307,11 +307,11 @@ export function RoomComposer({
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            aria-label={scene === 'group' ? '更多' : '发文件'}
-            aria-expanded={scene === 'group' ? open === 'plus' : undefined}
+            aria-label={scene === 'direct' ? '发文件' : '更多'}
+            aria-expanded={scene === 'direct' ? undefined : open === 'plus'}
             disabled={locked}
             onClick={() =>
-              scene === 'group' ? setOpen(open === 'plus' ? null : 'plus') : upload()
+              scene === 'direct' ? upload() : setOpen(open === 'plus' ? null : 'plus')
             }
             className={`${ROUND} ${open === 'plus' ? 'bg-glass-active' : 'bg-transparent'}`}
           >
@@ -345,7 +345,7 @@ export function RoomComposer({
           ) : (
             <button
               type="button"
-              aria-label={task ? '发布任务' : '发送'}
+              aria-label={task ? (scene === 'dm' ? '派到云端' : '发布任务') : '发送'}
               disabled={!canSend}
               onClick={() => void send()}
               className="flex size-11 cursor-pointer items-center justify-center rounded-full border-0 bg-accent text-on-accent shadow-accent disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"

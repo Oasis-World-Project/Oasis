@@ -12,7 +12,10 @@ export const ROUND =
 const MENU_ITEM =
   'h-11 cursor-pointer rounded-[20px] border-0 bg-transparent px-3 text-left text-sm font-medium text-ink hover:bg-glass-active disabled:cursor-not-allowed disabled:opacity-45';
 
-/** 「＋」弹出的菜单：上传文件、引用工作台里的文件（再点开是群文件的单子） */
+/**
+ * 「＋」弹出的菜单。群里：作为任务发布、上传文件、引用工作台里的文件（再点开是群文件的单子）；
+ * 和 AI 的私聊里：在云端做、上传文件
+ */
 export function PlusMenu({
   anchor,
   refs,
@@ -24,7 +27,7 @@ export function PlusMenu({
 }: {
   anchor: string;
   refs: string[];
-  /** 这句话是不是作为任务发布 */
+  /** 这句话是不是单独派出去的任务：群里是作为任务发布，和 AI 的私聊里是在云端做 */
   task: boolean;
   onTask: (next: boolean) => void;
   onUpload: () => void;
@@ -32,6 +35,7 @@ export function PlusMenu({
   onClose: () => void;
 }) {
   const room = useRoom();
+  const dm = room.group.kind === 'dm';
   const [listing, setListing] = useState(false);
   const now = useClock();
   const files = room.bench.files.filter((file) => !refs.includes(file.path));
@@ -73,9 +77,11 @@ export function PlusMenu({
             className="flex cursor-pointer items-center gap-2.5 rounded-[20px] border-0 bg-transparent px-3 py-2.5 text-left text-ink hover:bg-glass-active"
           >
             <span className="flex flex-1 flex-col">
-              <span className="text-sm font-medium">作为任务发布</span>
+              <span className="text-sm font-medium">{dm ? '在云端做' : '作为任务发布'}</span>
               <span className="text-xs text-ink-muted">
-                没 @ 谁时挑最对口的 AI 出来负责，它可以把一部分交给别的 AI
+                {dm
+                  ? '单独派到云端做，和这边的对话互不耽误；带过去的只有这句话和文件'
+                  : '没 @ 谁时挑最对口的 AI 出来负责，它可以把一部分交给别的 AI'}
               </span>
             </span>
             <span
@@ -90,16 +96,18 @@ export function PlusMenu({
           <button type="button" role="menuitem" onClick={onUpload} className={MENU_ITEM}>
             上传文件
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!room.bench.files.length || refs.length >= MAX_FILE_REFS}
-            title={room.bench.files.length ? undefined : '还没有群文件'}
-            onClick={() => setListing(true)}
-            className={MENU_ITEM}
-          >
-            引用工作台里的文件
-          </button>
+          {!dm && (
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!room.bench.files.length || refs.length >= MAX_FILE_REFS}
+              title={room.bench.files.length ? undefined : '还没有群文件'}
+              onClick={() => setListing(true)}
+              className={MENU_ITEM}
+            >
+              引用工作台里的文件
+            </button>
+          )}
         </>
       )}
     </Popover>

@@ -245,7 +245,7 @@ export const MessageBody = z.discriminatedUnion('kind', [
       pending: z.boolean().optional(),
       /** 群里，用户：这句 @ 了谁 */
       mentions: z.array(Mention).optional(),
-      /** 群里，用户：这句是作为任务发到群里的 */
+      /** 用户：这句是单独派出去的任务——群里是作为任务发到群里，私聊里是「在云端做」 */
       task: z.boolean().optional(),
       /** 群里，用户：@ 了全体或作为任务发布时，挑中先出来负责的那个 AI（它的 key） */
       lead: z.string().optional(),
@@ -285,6 +285,10 @@ export const SendMessageBody = z.object({
   attachments: z.array(z.uuid()).max(MAX_ATTACHMENTS).default([]),
   /** 「让 AI 改」：画布里要改的成果 id（画布里批注后点「让 AI 改」时带上） */
   artifacts: z.array(z.uuid()).max(MAX_ATTACHMENTS).default([]),
+  /** 「在云端做」：这件事单独派到云端，开一份自己的会话，和私聊自己那一轮互不挡 */
+  task: z.boolean().default(false),
+  /** 这句话是让 AI 接着做、改它的一个云端任务：那个任务的会话（任务卡上的 seat） */
+  seat: z.uuid().optional(),
 });
 
 /** 发消息的结果：这次新增的消息（用户的话，开了新一轮时还有 AI 的消息）和正在进行的一轮 */

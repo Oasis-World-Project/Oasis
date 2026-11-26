@@ -29,7 +29,7 @@ export function useMakerOf(): (group: TaskGroup) => Maker | undefined {
   return (group) => {
     const key = group.task?.group?.key;
     if (key) return aiLook(models, key);
-    const dm = dms.find((d) => d.id === group.conversationId);
+    const dm = dms.find((d) => d.id === group.room);
     const model = dm?.modelKey ? models.get(dm.modelKey) : undefined;
     return dm && model
       ? { mono: model.mono, glow: model.glow, name: aiName(models, dm) }
@@ -124,7 +124,7 @@ export function TaskPanel({ group, maker, now }: { group: TaskGroup; maker?: Mak
           ) : (
             <Link
               to="/dms/$conversationId"
-              params={{ conversationId: group.conversationId }}
+              params={{ conversationId: group.room }}
               search={{ task: group.runId }}
               className={processButton}
             >
@@ -139,7 +139,7 @@ export function TaskPanel({ group, maker, now }: { group: TaskGroup; maker?: Mak
           ) : (
             <Link
               to="/dms/$conversationId"
-              params={{ conversationId: group.conversationId }}
+              params={{ conversationId: group.room }}
               className={button}
             >
               <MessageCircle size={14} aria-hidden="true" />

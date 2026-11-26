@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 import { extractFiles, packFiles } from '@oasis/service-kit';
 import { describe, expect, it } from 'vitest';
 import { SANDBOX_PATHS } from '../src/adapter/dsh.ts';
+import { unstalled } from '../src/service/run/outputs.ts';
 import {
   executor,
   PAYER,
@@ -339,5 +340,24 @@ describe('对话里的一轮：输入和产出', () => {
     } finally {
       executor.readWorkspace = original;
     }
+  });
+});
+
+describe('读工作目录里的文件', () => {
+  it('卡住就断：一直没有数据的流到时间带着错误结束；正常的流原样给出来', async () => {
+    const stuck = new Readable({ read: () => undefined });
+    stuck.push(Buffer.from('半截'));
+    const chunks: Buffer[] = [];
+    await expect(
+      (async () => {
+        for await (const chunk of unstalled(stuck, 50)) chunks.push(chunk as Buffer);
+      })(),
+    ).rejects.toThrow('读文件卡住了');
+    expect(Buffer.concat(chunks).toString()).toBe('半截');
+    expect(stuck.destroyed).toBe(true);
+    const whole: Buffer[] = [];
+    for await (const chunk of unstalled(Readable.from([Buffer.from('好'), Buffer.from('的')]), 50))
+      whole.push(chunk as Buffer);
+    expect(Buffer.concat(whole).toString()).toBe('好的');
   });
 });

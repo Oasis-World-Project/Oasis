@@ -181,11 +181,17 @@ export function useGroupRoom(id: string, gone = '这个群已解散，或你已�
         files.attachments ?? [],
         files.refs ?? [],
         files.task,
+        files.seat,
       ]);
       if (pending.current?.draft !== draft) pending.current = { draft, id: crypto.randomUUID() };
       try {
         if (latest.current?.kind === 'dm') {
-          await sendMessage(id, { content, attachments: files.attachments ?? [] });
+          await sendMessage(id, {
+            content,
+            attachments: files.attachments ?? [],
+            ...(files.task ? { task: true } : {}),
+            ...(files.seat ? { seat: files.seat } : {}),
+          });
           await refresh();
         } else apply(await sendGroupMessage(id, content, pending.current.id, mentions, files));
         pending.current = null;

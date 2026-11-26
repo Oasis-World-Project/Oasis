@@ -155,7 +155,7 @@ function UserMessage({ message, unseen }: { message: TextMessage; unseen: boolea
   const note = (task || lead || interjection) && (
     <span>
       {[
-        task ? '任务' : '',
+        task ? (group.kind === 'dm' ? '在云端做' : '任务') : '',
         lead ? `由 ${aiLook(models, lead).name} 先出来负责` : '',
         // 私聊里的插话：送进去了，AI 做完手上这一步才看
         interjection ? (unseen ? '插话 · AI 做完手上这一步就会看到' : '插话') : '',

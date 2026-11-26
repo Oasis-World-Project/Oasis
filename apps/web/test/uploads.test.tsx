@@ -158,4 +158,25 @@ describe('上传素材', () => {
     fireEvent.click(await screen.findByRole('button', { name: '移除 民宿照片.jpg' }));
     expect(screen.queryByRole('list', { name: '要发送的文件' })).toBeNull();
   });
+
+  it('在云端做：「＋」里打开，这句话单独派到云端；发出去后开关回到关', async () => {
+    const api = chat();
+    await openChat();
+    fireEvent.click(await screen.findByRole('button', { name: '更多' }));
+    const menu = screen.getByRole('menu', { name: '更多' });
+    // 私聊里没有「引用工作台里的文件」
+    expect(within(menu).queryByRole('menuitem', { name: '引用工作台里的文件' })).toBeNull();
+    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /在云端做/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: '消息' }), {
+      target: { value: '做一张海报' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '派到云端' }));
+    await waitFor(() =>
+      expect(api.bodies.at(-1)).toEqual({
+        path: `/conversation/v1/conversations/${CONV}/messages`,
+        body: { content: '做一张海报', attachments: [], task: true },
+      }),
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).not.toBeNull());
+  });
 });

@@ -194,8 +194,10 @@ export function TaskDialog({
               type="button"
               disabled={busy || room.sending}
               onClick={() =>
-                void (task.seat && group.kind === 'group'
-                  ? room.send('继续', [{ kind: 'ai', key: task.key }], { seat: task.seat })
+                void (task.seat
+                  ? room.send('继续', group.kind === 'dm' ? [] : [{ kind: 'ai', key: task.key }], {
+                      seat: task.seat,
+                    })
                   : actions.say('continue', '继续'))
               }
               className="h-9 cursor-pointer rounded-full border-0 bg-accent px-3.5 text-[12.5px] font-medium text-on-accent disabled:opacity-45"

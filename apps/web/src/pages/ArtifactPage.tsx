@@ -133,12 +133,15 @@ export function ArtifactPage() {
     enabled: !!artifact,
   });
   const { data: dms = [] } = useQuery({ ...dmsQuery, refetchInterval: 5_000 });
-  const dm = artifact ? dms.find((item) => item.id === artifact.conversationId) : undefined;
   // 群里的 AI 做的（自己是群主）：「让 AI 改」发进那个群，@ 做它的 AI
   const { data: tasks = [] } = useQuery(tasksQuery);
   const task = artifact
     ? tasks.find((item) => item.runId === artifact.runId || item.runs?.includes(artifact.runId))
     : undefined;
+  // 聊天在哪个私聊：成果上记的是做它的那份会话，派到云端的任务另有一份（任务上的 room 才是私聊）
+  const roomId = task?.room ?? artifact?.conversationId;
+  const dm = dms.find((item) => item.id === roomId);
+  const seat = artifact && roomId !== artifact.conversationId ? artifact.conversationId : undefined;
   const from = task?.group ? { ...task.group, seat: task.conversationId } : undefined;
   const makerKey = from?.key ?? dm?.modelKey ?? undefined;
   const maker = makerKey ? models.get(makerKey) : undefined;
@@ -311,7 +314,7 @@ export function ArtifactPage() {
         ) : (
           <Link
             to="/dms/$conversationId"
-            params={{ conversationId: artifact.conversationId }}
+            params={{ conversationId: roomId ?? artifact.conversationId }}
             search={{ task: artifact.runId }}
             className={`${PILL} bg-glass-active text-ink shadow-edge-strong`}
           >
@@ -440,7 +443,8 @@ export function ArtifactPage() {
             overallHint={OVERALL[surface] ?? '比如：整体再口语一点'}
             maker={makerKey}
             group={from}
-            busy={Boolean(dm?.turn)}
+            home={{ id: roomId ?? artifact.conversationId, ...(seat ? { seat } : {}) }}
+            busy={seat ? task?.status === 'running' : Boolean(dm?.turn)}
           />
         )}
       </div>
