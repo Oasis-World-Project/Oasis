@@ -4,6 +4,7 @@ import {
   estimateHoldMicro,
   estimateInputTokens,
   MEDIA_TOKENS,
+  promptFellShort,
   videoCatalogRate,
   videoSecondRate,
 } from '../src/service/pricing.ts';
@@ -61,6 +62,19 @@ describe('冻结金额估算', () => {
   });
   it('再便宜也至少冻结 1 微美元', () => {
     expect(estimateHoldMicro({ prompt: 0, completion: 0 }, messages, 10)).toBe(1);
+  });
+});
+
+describe('供应商报回的输入 token 对不对得上发出去的字符数', () => {
+  it('平均每个 token 超过 6 个字符就是少得不可能；输入太短、没报 token 数的不判', () => {
+    // 2026-11-26 那一轮第 83 次调用：发出去三十多万字符，Bedrock 报 14,259 个 token
+    expect(promptFellShort(330_000, 14_259)).toBe(true);
+    // 同一天各家实测：代码每个 token 2 到 2.8 个字符
+    expect(promptFellShort(330_000, 110_000)).toBe(false);
+    expect(promptFellShort(30_000, 5_001)).toBe(false);
+    expect(promptFellShort(30_000, 4_999)).toBe(true);
+    expect(promptFellShort(9_759, 119)).toBe(false);
+    expect(promptFellShort(330_000, undefined)).toBe(false);
   });
 });
 

@@ -7,6 +7,7 @@ import { createOpenRouterClient } from '../../src/adapters/openrouter.ts';
 import type { CallOutcome, CallsRepo } from '../../src/repo/calls-repo.ts';
 import { createChatService } from '../../src/service/chat-service.ts';
 import { createMeter } from '../../src/service/metering.ts';
+import { createProviderHealth } from '../../src/service/provider-health.ts';
 
 /** 测试里会改的开关和计数（ES 模块导出的变量在别的文件里不能赋值，所以集中放在一个对象里） */
 export const fake = {
@@ -17,6 +18,8 @@ export const fake = {
   upstreamBodies: [] as Record<string, unknown>[],
   /** 只走 DeepSeek 官方的请求（provider.only）回的状态 */
   officialStatus: 200,
+  /** 这个型号只有这一家在跑：请求里避开它（provider.ignore）就没人接，回 404 */
+  soleProvider: undefined as string | undefined,
 };
 
 export const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
@@ -45,17 +48,19 @@ billing.post('/internal/holds/:id/release', async (_request, reply) => {
 
 const openrouter = Fastify({ bodyLimit: 4 * 1024 ** 2 });
 openrouter.post('/chat/completions', async (request, reply) => {
-  const body = request.body as { provider?: { only?: string[] } };
+  const body = request.body as { provider?: { only?: string[]; ignore?: string[] } };
   fake.upstreamBodies.push(body);
   const status = body.provider?.only?.includes('deepseek')
     ? fake.officialStatus
-    : fake.upstreamStatus;
+    : fake.soleProvider && body.provider?.ignore?.includes(fake.soleProvider)
+      ? 404
+      : fake.upstreamStatus;
   if (status !== 200) return reply.code(status).send({ error: { message: fake.upstreamMessage } });
   reply.header('content-type', 'text/event-stream');
   return [
     ': OPENROUTER PROCESSING\n\n',
-    `data: ${JSON.stringify({ choices: [{ delta: { content: '你好' } }] })}\n\n`,
-    `data: ${JSON.stringify({ choices: [{ delta: { content: '呀' } }] })}\n\n`,
+    `data: ${JSON.stringify({ provider: 'Fake Provider', choices: [{ delta: { content: '你好' } }] })}\n\n`,
+    `data: ${JSON.stringify({ provider: 'Fake Provider', choices: [{ delta: { content: '呀' } }] })}\n\n`,
     `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 8, cache_write_tokens: 0 }, cost: 0.000042 } })}\n\n`,
     'data: [DONE]\n\n',
   ].join('');
@@ -84,6 +89,7 @@ export const repo: CallsRepo = {
   measured: async () => new Map(),
   runSpend: async () => ({ spentMicro: 0, tools: [] }),
   runningTools: async () => new Map(),
+  promptShortfalls: async () => [],
   finish: async (_id, outcome) => void finished.push(outcome),
 };
 export const silent = pino({ level: 'silent' });
@@ -103,6 +109,7 @@ beforeAll(async () => {
       repo,
       logger: silent,
     }),
+    health: createProviderHealth({ repo, logger: silent }),
     prices: () =>
       new Map([
         ['vendor/model', { prompt: 0.0000001, completion: 0.0000005 }],
@@ -128,6 +135,7 @@ beforeEach(() => {
   fake.upstreamStatus = 200;
   fake.upstreamMessage = 'boom';
   fake.officialStatus = 200;
+  fake.soleProvider = undefined;
   fake.balanceEnough = true;
 });
 

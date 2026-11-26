@@ -31,6 +31,10 @@ export const calls = pgTable('calls', {
   completionTokens: integer('completion_tokens'),
   cachedTokens: integer('cached_tokens'),
   cacheWriteTokens: integer('cache_write_tokens'),
+  /** OpenRouter 把这次请求转给了哪家（它回的名字，如 Amazon Bedrock） */
+  provider: text('provider'),
+  /** 发出去的消息有多少字符（不含工具定义和多媒体）：对着 prompt_tokens 看供应商有没有丢内容 */
+  inputChars: integer('input_chars'),
   upstreamCostMicro: bigint('upstream_cost_micro', { mode: 'number' }),
   chargedMicro: bigint('charged_micro', { mode: 'number' }),
   costSource: text('cost_source', { enum: ['provider', 'tokens', 'estimate'] }),

@@ -52,12 +52,11 @@ function messageSize(message: ChatMessage): { chars: number; media: number } {
   return { chars: parts.chars + (toolCalls ? measure(toolCalls).chars : 0), media: parts.media };
 }
 
-/**
- * 输入 token 数的保守估计：文字按 1.5 个字符 1 个 token 算（中文接近 1:1，英文约 4:1，宁可多冻结），
- * 每条消息再加 8 个 token 的格式开销，每个图片等多媒体片段按 MEDIA_TOKENS。
- * extraChars 是消息以外也要发给模型的内容（如工具定义）。
- */
-export function estimateInputTokens(messages: readonly ChatMessage[], extraChars = 0): number {
+/** 发给模型的输入有多少字符（多媒体不计字符）、几个多媒体片段。extraChars 是消息以外也要发的内容（如工具定义）。 */
+export function inputSize(
+  messages: readonly ChatMessage[],
+  extraChars = 0,
+): { chars: number; media: number } {
   let chars = extraChars;
   let media = 0;
   for (const message of messages) {
@@ -65,7 +64,32 @@ export function estimateInputTokens(messages: readonly ChatMessage[], extraChars
     chars += size.chars;
     media += size.media;
   }
+  return { chars, media };
+}
+
+/**
+ * 输入 token 数的保守估计：文字按 1.5 个字符 1 个 token 算（中文接近 1:1，英文约 4:1，宁可多冻结），
+ * 每条消息再加 8 个 token 的格式开销，每个图片等多媒体片段按 MEDIA_TOKENS。
+ */
+export function estimateInputTokens(messages: readonly ChatMessage[], extraChars = 0): number {
+  const { chars, media } = inputSize(messages, extraChars);
   return Math.ceil(chars / 1.5) + messages.length * 8 + media * MEDIA_TOKENS;
+}
+
+/**
+ * 供应商报回的输入 token 少得不可能：发出去的消息字符数除以它，平均每个 token 超过 6 个字符。
+ * 代码和英文大约 3 到 5 个字符一个 token，中文 1 到 2 个，报回的 token 里还含着工具定义，整份平均到不了 6；
+ * 到了就是有内容没送到模型（2026-11-26：Kimi K2.5 在 Amazon Bedrock 上，9,000 多字符的工具结果只算了
+ * 36 个 token，模型说文件是空的）。消息太短时比例不稳，不判。
+ */
+export const PROMPT_SHORTFALL = { minChars: 20_000, charsPerToken: 6 } as const;
+
+export function promptFellShort(inputChars: number, promptTokens: number | undefined): boolean {
+  return (
+    typeof promptTokens === 'number' &&
+    inputChars >= PROMPT_SHORTFALL.minChars &&
+    promptTokens * PROMPT_SHORTFALL.charsPerToken < inputChars
+  );
 }
 
 /** 最多可能花多少：全部输入 + 输出写满 max_tokens。至少 1 微美元。 */

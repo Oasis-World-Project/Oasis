@@ -255,12 +255,13 @@ export function createMeter(deps: {
       return response;
     },
 
-    /** 按实际花费结算（多冻结的部分退回），并记下用量和花费来源。 */
+    /** 按实际花费结算（多冻结的部分退回），并记下用量和花费来源；模型调用还记下是哪家答的、发出去多少字符。 */
     async settle(
       call: MeteredCall,
       cost: { costMicro: number; source: CostSource },
       usage: Usage | undefined,
       error?: string,
+      sent?: { provider?: string; inputChars?: number },
     ): Promise<boolean> {
       const previous = await repo.get(call.id);
       if (previous?.chargedMicro !== null && previous?.chargedMicro !== undefined)
@@ -288,6 +289,8 @@ export function createMeter(deps: {
         completionTokens: usage?.completion_tokens ?? null,
         cachedTokens: usage?.prompt_tokens_details?.cached_tokens ?? null,
         cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens ?? null,
+        provider: sent?.provider ?? null,
+        inputChars: sent?.inputChars ?? null,
         upstreamCostMicro: cost.costMicro,
         chargedMicro,
         costSource: cost.source,

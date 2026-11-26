@@ -7,6 +7,7 @@ import type { CallOutcome, CallsRepo } from '../src/repo/calls-repo.ts';
 import { createDecisionService } from '../src/service/decision-service.ts';
 import { createChatService } from '../src/service/chat-service.ts';
 import { createMeter } from '../src/service/metering.ts';
+import { createProviderHealth } from '../src/service/provider-health.ts';
 
 const PAYER = '7d0c2f1e-1b2a-4c3d-8e4f-5a6b7c8d9e0f';
 const HOLD = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
@@ -77,6 +78,7 @@ const repo: CallsRepo = {
   typicalUsage: async () => ({ tools: new Map() }),
   measured: async () => new Map(),
   runningTools: async () => new Map(),
+  promptShortfalls: async () => [],
   async finish(_id, outcome) {
     finished.push(outcome);
   },
@@ -121,7 +123,12 @@ beforeAll(async () => {
     ...common,
     fallback: {
       model: 'test/fallback',
-      chat: createChatService({ ...common, defaultMaxTokens: 16384, maxOutputTokens: 131_072 }),
+      chat: createChatService({
+        ...common,
+        health: createProviderHealth({ repo, logger: pino({ level: 'silent' }) }),
+        defaultMaxTokens: 16384,
+        maxOutputTokens: 131_072,
+      }),
     },
   });
 });

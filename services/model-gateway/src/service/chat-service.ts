@@ -3,7 +3,14 @@ import type { ChatCompletionRequest } from '@oasis/contracts/model-gateway';
 import { createSseParser, HttpError } from '@oasis/service-kit';
 import type { ModelPrice, ProviderClient } from '../adapters/openrouter.ts';
 import type { Caller, MeteredCall, Meter } from './metering.ts';
-import { actualCostMicro, estimateHoldMicro, USD_TO_MICRO, type Usage } from './pricing.ts';
+import {
+  actualCostMicro,
+  estimateHoldMicro,
+  inputSize,
+  USD_TO_MICRO,
+  type Usage,
+} from './pricing.ts';
+import type { ProviderHealth } from './provider-health.ts';
 
 export interface PreparedCall extends MeteredCall {
   /** 发给上游的请求体（调用方没给输出上限时补上 max_tokens） */
@@ -12,6 +19,11 @@ export interface PreparedCall extends MeteredCall {
   maxOutputTokens: number;
   /** 消息之外也要计入输入的字符数（工具定义） */
   extraChars: number;
+  /**
+   * 发出去的消息一共多少字符（多媒体不计）：结束时对着供应商报回的输入 token 看。不算工具定义：各家把
+   * 工具定义排成提示词的办法不一样，而报回的 token 里含着它，这样比只会偏宽，不会冤枉哪一家。
+   */
+  inputChars: number;
   price: ModelPrice | undefined;
   reportCost: boolean;
   /**
@@ -50,6 +62,8 @@ function errorText(error: unknown): string {
 export function createChatService(deps: {
   provider: ProviderClient;
   meter: Meter;
+  /** 哪个型号眼下不送哪家供应商（丢内容的） */
+  health: ProviderHealth;
   prices: () => Map<string, ModelPrice>;
   defaultMaxTokens: number;
   /** 单次回答的输出上限（调用方要得更多时压到这里），见 config 的 MAX_OUTPUT_TOKENS */
@@ -62,7 +76,7 @@ export function createChatService(deps: {
   generationLookupDelaysMs?: readonly number[];
   sleep?: (ms: number) => Promise<void>;
 }) {
-  const { provider, meter } = deps;
+  const { provider, meter, health } = deps;
   // 只在中断时查（正常结束的有用量）：最多多等约 7 秒
   const lookupDelays = deps.generationLookupDelaysMs ?? [1_000, 2_000, 4_000];
   const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -83,6 +97,8 @@ export function createChatService(deps: {
     completionChars: number,
     error?: string,
     generationId?: string,
+    /** OpenRouter 把这次请求转给了哪家 */
+    servedBy?: string,
   ) {
     // 流断了、没拿到用量（多半是用户停下了任务）：先按生成 ID 问供应商实际扣了多少，
     // 问不到才按消息估算（2026-11-08：估算曾把一次 $0.03 的调用记成 $4.11）
@@ -98,7 +114,17 @@ export function createChatService(deps: {
             completionChars,
             extraChars: call.extraChars,
           });
-    await meter.settle(call, cost, usage, error);
+    await meter.settle(call, cost, usage, error, {
+      inputChars: call.inputChars,
+      ...(servedBy ? { provider: servedBy } : {}),
+    });
+    if (servedBy)
+      health.observe({
+        model: call.model,
+        provider: servedBy,
+        inputChars: call.inputChars,
+        ...(typeof usage?.prompt_tokens === 'number' ? { promptTokens: usage.prompt_tokens } : {}),
+      });
     return cost.costMicro;
   }
 
@@ -147,6 +173,7 @@ export function createChatService(deps: {
         body,
         maxOutputTokens,
         extraChars,
+        inputChars: inputSize(body.messages).chars,
         price,
         reportCost: reportCost === true || maxCostMicro !== undefined,
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
@@ -154,7 +181,8 @@ export function createChatService(deps: {
     },
 
     /** 调上游。还没开始返回内容就失败时退回冻结，并抛出给调用方的错误。 */
-    open(call: PreparedCall, signal: AbortSignal): Promise<Response> {
+    async open(call: PreparedCall, signal: AbortSignal): Promise<Response> {
+      const suspects = await health.suspects(call.model);
       return meter.callUpstream(call, () =>
         provider.chatCompletions(
           {
@@ -163,6 +191,7 @@ export function createChatService(deps: {
             ...(call.sessionId ? { session_id: call.sessionId } : {}),
           },
           signal,
+          suspects,
         ),
       );
     },
@@ -179,7 +208,7 @@ export function createChatService(deps: {
       let completed = false;
       /** 供应商在流里报的错（流已经开始后出错只能这样报），记进调用记录，排查时才知道是谁断的 */
       let providerError: string | undefined;
-      /** OpenRouter 把这次请求转给了哪家（每个片段都带着）；断了记进原因，同一型号各家的限制不一样 */
+      /** OpenRouter 把这次请求转给了哪家（每个片段都带着）：记在调用记录上，断了也写进原因 */
       let servedBy: string | undefined;
       /** 供应商给这次生成的 ID（每个片段都带着），中断时凭它查实际花费 */
       let generationId: string | undefined;
@@ -232,7 +261,7 @@ export function createChatService(deps: {
         write(
           `data: ${JSON.stringify({ error: { code: 'stream_interrupted', message: '回复中断了' } })}\n\n`,
         );
-      await settle(call, usage, completionChars, error, generationId);
+      await settle(call, usage, completionChars, error, generationId, servedBy);
       if (!completed && options.transportErrors === 'disconnect')
         throw new HttpError(503, 'stream_interrupted', '模型传输中断，已记录费用');
       if (terminalChunk !== undefined) write(terminalChunk);
@@ -241,6 +270,7 @@ export function createChatService(deps: {
     /** 非流式：等上游完整返回，结算后把结果交给调用方。 */
     async finishJson(call: PreparedCall, response: Response): Promise<unknown> {
       let result: {
+        provider?: unknown;
         usage?: Usage;
         choices?: { message?: Parameters<typeof deltaChars>[0] }[];
       };
@@ -251,7 +281,14 @@ export function createChatService(deps: {
         throw new HttpError(502, 'response_interrupted', '模型响应未完整读取，用量按估算记录');
       }
       const message = result.choices?.[0]?.message;
-      const costMicro = await settle(call, result.usage, message ? deltaChars(message) : 0);
+      const costMicro = await settle(
+        call,
+        result.usage,
+        message ? deltaChars(message) : 0,
+        undefined,
+        undefined,
+        typeof result.provider === 'string' && result.provider ? result.provider : undefined,
+      );
       return call.reportCost ? { ...result, oasis: { costMicro } } : result;
     },
   };

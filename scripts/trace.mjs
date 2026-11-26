@@ -35,7 +35,7 @@ const runs = query(
 const calls = runs.length
   ? query(
       'model_gateway',
-      `select id, kind, model, status, cost_source, charged_micro, run_id, hold_id, error, created_at, finished_at from calls where run_id in (${ids(runs)}) order by created_at`,
+      `select id, kind, model, provider, status, cost_source, charged_micro, run_id, hold_id, error, created_at, finished_at from calls where run_id in (${ids(runs)}) order by created_at`,
     )
   : [];
 const holds = calls.some((c) => c.hold_id)
@@ -98,6 +98,15 @@ function describeCalls(list) {
       .map(([k, n]) => `${k}×${n}`)
       .join(' ')}）`,
   ];
+  // 同一型号在 OpenRouter 上有好几家在跑：这一轮的模型调用各是哪家答的
+  const providers = {};
+  for (const c of list) if (c.provider) providers[c.provider] = (providers[c.provider] ?? 0) + 1;
+  if (Object.keys(providers).length)
+    lines.push(
+      `      哪家答的 ${Object.entries(providers)
+        .map(([k, n]) => `${k}×${n}`)
+        .join(' ')}`,
+    );
   const errors = [...new Set(list.filter((c) => c.error).map((c) => `${c.kind}：${c.error}`))];
   for (const error of errors.slice(0, 3)) lines.push(`      失败的调用 ${error}`);
   if (errors.length > 3) lines.push(`      ……还有 ${errors.length - 3} 种失败`);

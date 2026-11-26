@@ -26,6 +26,7 @@ import { createComputeService } from './service/compute-service.ts';
 import { createDecisionService } from './service/decision-service.ts';
 import { createMeter } from './service/metering.ts';
 import { createModelScope } from './service/model-scope.ts';
+import { createProviderHealth } from './service/provider-health.ts';
 import { createRunKeyService } from './service/run-key-service.ts';
 import { createToolService } from './service/tool-service.ts';
 import { createTavilyClient } from './adapters/tavily.ts';
@@ -213,6 +214,7 @@ await startService({
     app.addHook('onClose', () => tools.close());
     const chat = createChatService({
       ...common,
+      health: createProviderHealth({ repo: callsRepo, logger }),
       defaultMaxTokens: config.DEFAULT_MAX_TOKENS,
       maxOutputTokens: config.MAX_OUTPUT_TOKENS,
     });

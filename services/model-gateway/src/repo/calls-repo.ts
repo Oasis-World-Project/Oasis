@@ -18,6 +18,8 @@ export type CallOutcome = Pick<
   | 'completionTokens'
   | 'cachedTokens'
   | 'cacheWriteTokens'
+  | 'provider'
+  | 'inputChars'
   | 'upstreamCostMicro'
   | 'chargedMicro'
   | 'costSource'
@@ -68,6 +70,14 @@ export interface CallsRepo {
   computeForRun(runId: string, payerId: string): Promise<Call[]>;
   /** 这个人从 since 起开始、还没做完的这些工具的调用，按工具数（同时在做几个） */
   runningTools(payerId: string, tools: string[], since: Date): Promise<Map<string, number>>;
+  /**
+   * 从 since 起，哪个型号在哪家供应商那里报回的输入 token 少得不可能（输入至少 minChars 个字符、
+   * 平均每个 token 超过 charsPerToken 个字符），各有几次
+   */
+  promptShortfalls(
+    since: Date,
+    rule: { minChars: number; charsPerToken: number },
+  ): Promise<{ model: string; provider: string; calls: number }[]>;
 }
 
 export function createCallsRepo(pool: pg.Pool): CallsRepo {
@@ -129,6 +139,16 @@ export function createCallsRepo(pool: pg.Pool): CallsRepo {
         where status = 'failed' and error ilike ${`%${REGION_ERROR}%`}
       `);
       return result.rows.map((r) => r.model);
+    },
+
+    async promptShortfalls(since, rule) {
+      const { rows } = await db.execute<{ model: string; provider: string; calls: string }>(sql`
+        select model, provider, count(*) as calls from calls
+        where kind = 'chat' and created_at >= ${since} and provider is not null
+          and input_chars >= ${rule.minChars} and prompt_tokens * ${rule.charsPerToken} < input_chars
+        group by model, provider
+      `);
+      return rows.map((row) => ({ ...row, calls: Number(row.calls) }));
     },
 
     async typicalUsage() {

@@ -251,6 +251,7 @@ export const repo: CallsRepo = {
         running.set(call.tool!, (running.get(call.tool!) ?? 0) + 1);
     return running;
   },
+  promptShortfalls: async () => [],
   async finish(id, outcome) {
     recordedCalls.set(id, outcome);
     finished.push(outcome);

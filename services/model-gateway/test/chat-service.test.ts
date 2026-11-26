@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createOpenRouterClient } from '../src/adapters/openrouter.ts';
 import { createChatService } from '../src/service/chat-service.ts';
 import { createMeter } from '../src/service/metering.ts';
+import { createProviderHealth } from '../src/service/provider-health.ts';
 import {
   fake,
   PAYER,
@@ -278,6 +279,54 @@ describe('一次模型调用', () => {
     expect(finished.map((call) => call.status)).toEqual(['succeeded', 'succeeded', 'succeeded']);
   });
 
+  it('记下每次是哪家答的；报回的输入 token 少得不可能的那家，出现两次后先避开，只有它一家时照常送；写了不送的哪次都不送（2026-11-26）', async () => {
+    const send = async (model: string, requestId: string, content = '在吗') => {
+      const call = await chat.prepare({
+        caller: { payerId: PAYER, runId: RUN },
+        requestId,
+        body: { ...request, model, messages: [{ role: 'user' as const, content }] },
+      });
+      await chat.pump(call, await chat.open(call, new AbortController().signal), () => {});
+    };
+    // 三万多字符，假的供应商只报 12 个输入 token：内容没送到模型
+    const long = 'const value = compute(1);\n'.repeat(1200);
+    const safe = { data_collection: 'deny' };
+    const avoiding = { ...safe, ignore: ['Fake Provider'] };
+    await send('vendor/leaky', 'leak-1', long);
+    await send('vendor/leaky', 'leak-2', long);
+    expect(finished[0]).toMatchObject({ provider: 'Fake Provider', inputChars: long.length });
+    await send('vendor/leaky', 'leak-3', long);
+    // 这个型号只有它一家：避开后没人接，照常送
+    fake.soleProvider = 'Fake Provider';
+    await send('vendor/leaky', 'leak-4', long);
+    // 别的型号不受影响
+    await send('vendor/model', 'leak-5');
+    await send('moonshotai/kimi-k2.5', 'avoid-1');
+    expect(fake.upstreamBodies.map((body) => body.provider)).toEqual([
+      safe,
+      safe,
+      avoiding,
+      avoiding,
+      safe,
+      safe,
+      { ...safe, ignore: ['amazon-bedrock'] },
+    ]);
+    expect(finished.every((call) => call.status === 'succeeded')).toBe(true);
+
+    // 别的服务实例见到的、重启前见到的，从调用记录里数
+    const health = createProviderHealth({
+      repo: {
+        promptShortfalls: async () => [
+          { model: 'vendor/a', provider: 'Twice', calls: 2 },
+          { model: 'vendor/a', provider: 'Once', calls: 1 },
+        ],
+      },
+      logger: silent,
+    });
+    expect(await health.suspects('vendor/a')).toEqual(['Twice']);
+    expect(await health.suspects('vendor/b')).toEqual([]);
+  });
+
   it('额度不够时返回 402，不会调用上游', async () => {
     fake.balanceEnough = false;
     await expect(
@@ -376,6 +425,7 @@ describe('一次模型调用', () => {
         repo,
         logger: silent,
       }),
+      health: createProviderHealth({ repo, logger: silent }),
       prices: () => new Map(),
       defaultMaxTokens: 1000,
       maxOutputTokens: 100_000,

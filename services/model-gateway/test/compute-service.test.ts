@@ -123,6 +123,8 @@ const repo: CallsRepo = {
       completionTokens: null,
       cachedTokens: null,
       cacheWriteTokens: null,
+      provider: null,
+      inputChars: null,
       upstreamCostMicro: null,
       chargedMicro: null,
       costSource: null,
@@ -153,6 +155,7 @@ const repo: CallsRepo = {
   typicalUsage: async () => ({ tools: new Map() }),
   measured: async () => new Map(),
   runningTools: async () => new Map(),
+  promptShortfalls: async () => [],
 };
 
 let billingUrl = '';

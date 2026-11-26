@@ -53,7 +53,15 @@ export interface ProviderClient {
   listVideoModels(): Promise<VideoModel[]>;
   /** 目录里这个配音型号能用的音色（多数配音型号必须点名一个）；目录里没有它返回空 */
   speechVoices(model: string): Promise<string[]>;
-  chatCompletions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
+  /**
+   * suspects：这个型号眼下丢内容的供应商（见 provider-health.ts），先避开它们；避开后没有别家可走
+   * （这个型号只有它一家）时照常送。
+   */
+  chatCompletions(
+    body: Record<string, unknown>,
+    signal: AbortSignal,
+    suspects?: readonly string[],
+  ): Promise<Response>;
   decisions(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   images(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   speech(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
@@ -67,15 +75,47 @@ export interface ProviderClient {
 }
 
 /**
+ * 不送的供应商：型号 → OpenRouter 上供应商的名字（slug，如 amazon-bedrock；放进 `provider.ignore`）。
+ * 只写实测有问题的，带上日期和现象；那家修好了就删掉。实测办法：发一段带工具结果的对话，看那家报回的
+ * 输入 token 有没有把工具结果算进去、模型答不答得出里面的内容。
+ */
+const PROVIDERS_TO_AVOID: Readonly<Record<string, readonly string[]>> = {
+  // 2026-11-26：不把工具结果交给模型。9,759 个字符的工具结果只算了 36 个 token，模型说「文件是空的」；
+  // 线上一轮因此空转了 83 次调用。同一天 Bedrock 上的 Kimi K3.1 Pro、Grok 4.7 是好的。
+  // 去掉它之后这个型号只剩 SiliconFlow 一家（int4 量化）。
+  'moonshotai/kimi-k2.5': ['amazon-bedrock'],
+};
+
+/**
  * 聊天请求依次试的供应商范围。账号里放开了「会拿请求训练的付费供应商」，只为用 DeepSeek 官方（用户
  * 11-14 定）：DeepSeek 的型号先只走官方，官方出错再换别家；别的型号、换的别家，只走不拿请求训练的。
+ * 写了不送的供应商（PROVIDERS_TO_AVOID）哪个范围都不送；眼下丢内容的（suspects）先避开，
+ * 最后留一个不避开它们的范围：这个型号只有它一家时还能用。
  */
-function routesOf(body: Record<string, unknown>): Record<string, unknown>[] {
+function routesOf(
+  body: Record<string, unknown>,
+  suspects: readonly string[] = [],
+): Record<string, unknown>[] {
+  const model = String(body.model);
   const own = (body.provider ?? {}) as Record<string, unknown>;
-  const safe = { ...own, data_collection: 'deny' };
-  return String(body.model).startsWith('deepseek/')
-    ? [{ ...own, only: ['deepseek'], allow_fallbacks: false }, safe]
-    : [safe];
+  const never = [
+    ...(Array.isArray(own.ignore) ? (own.ignore as string[]) : []),
+    ...(PROVIDERS_TO_AVOID[model] ?? []),
+  ];
+  const within = (scope: Record<string, unknown>, ignore: readonly string[]) => ({
+    ...own,
+    ...scope,
+    ...(ignore.length ? { ignore: [...new Set(ignore)] } : {}),
+  });
+  const safe = { data_collection: 'deny' };
+  const avoiding = [...never, ...suspects];
+  const official =
+    model.startsWith('deepseek/') && !avoiding.some((name) => name.toLowerCase() === 'deepseek');
+  return [
+    ...(official ? [within({ only: ['deepseek'], allow_fallbacks: false }, never)] : []),
+    within(safe, avoiding),
+    ...(suspects.length ? [within(safe, never)] : []),
+  ];
 }
 
 export function createOpenRouterClient(options: {
@@ -204,8 +244,8 @@ export function createOpenRouterClient(options: {
       return prices;
     },
 
-    async chatCompletions(body, signal) {
-      const [first, ...rest] = routesOf(body);
+    async chatCompletions(body, signal, suspects) {
+      const [first, ...rest] = routesOf(body, suspects);
       let response = await post(`${base}/chat/completions`, { ...body, provider: first }, signal);
       // 前一个范围没接（出错、没有可用的供应商）就换下一个；还没开始返回内容，换了不会重复收费
       for (const provider of rest) {
