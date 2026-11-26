@@ -27,6 +27,7 @@
     "sandbox:check:ops": "node scripts/sandbox.mjs check-ops",
     "sandbox:build:3d": "node scripts/sandbox.mjs build-3d",
     "sandbox:check:3d": "node scripts/sandbox.mjs check-3d",
+    "sandbox:e2b": "node scripts/sandbox-e2b.mjs",
     "render:config": "node scripts/render.mjs config",
     "render:build": "node scripts/render.mjs build",
     "render:check": "node scripts/render.mjs check",

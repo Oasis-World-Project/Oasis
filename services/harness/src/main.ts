@@ -1,5 +1,5 @@
 // harness：Agent 运行时。唯一接触 DeepSeek Harness 的服务（只在 src/adapter/ 里），
-// 对话里主 AI 的每一轮起一个沙箱容器跑 dsh（或交给用户电脑上的桌面版跑），模型调用经 model-gateway 计费。
+// 每份会话起一个沙箱跑 dsh（本机 Docker、租的 E2B，或交给用户电脑上的桌面版跑），模型调用经 model-gateway 计费。
 import { fileURLToPath } from 'node:url';
 import {
   createDockerApi,
@@ -15,6 +15,7 @@ import { DEVICE_PATHS, SANDBOX_PATHS } from './adapter/dsh.ts';
 import { registerDevices, registerRoutes } from './api/routes.ts';
 import { harnessEnv } from './config.ts';
 import { createDeviceHub, type DeviceHub } from './executor/device.ts';
+import { createE2bExecutor } from './executor/e2b.ts';
 import { createDockerExecutor, type Executor } from './executor/executor.ts';
 import { createRunsRepo } from './repo/runs-repo.ts';
 import { loadGuide, loadSandboxFiles } from './service/guide.ts';
@@ -57,18 +58,35 @@ await startService({
     await objects.ensureBucket();
     store = objects.store;
 
-    executor = createDockerExecutor({
-      docker: createDockerApi(config.DOCKER_SOCKET ?? defaultDockerSocket()),
-      image: config.SANDBOX_IMAGE,
-      network: config.SANDBOX_NETWORK,
-      cpus: config.SANDBOX_CPUS,
-      memoryMb: config.SANDBOX_MEMORY_MB,
-      pidsLimit: config.SANDBOX_PIDS_LIMIT,
-      workdir: SANDBOX_PATHS.workdir,
-      sessionsDir: SANDBOX_PATHS.sessions,
-      cache: { dir: SANDBOX_PATHS.cache, maxMb: config.SANDBOX_CACHE_MAX_MB },
-    });
-    // 就绪 = Docker 可用、沙箱镜像和网络都在；关闭时先让进行中的运行收尾
+    if (config.CLOUD_EXECUTOR === 'e2b') {
+      if (!config.E2B_API_KEY || !config.E2B_RUN_API_URL)
+        throw new Error('CLOUD_EXECUTOR=e2b 要填 E2B_API_KEY 和 E2B_RUN_API_URL');
+      executor = createE2bExecutor({
+        apiKey: config.E2B_API_KEY,
+        template: config.E2B_TEMPLATE,
+        timeoutMs: config.E2B_TIMEOUT_SECONDS * 1000,
+        allowOut: [
+          new URL(config.E2B_RUN_API_URL).hostname,
+          ...config.E2B_ALLOW_OUT.split(',')
+            .map((host) => host.trim())
+            .filter(Boolean),
+        ],
+        workdir: SANDBOX_PATHS.workdir,
+        logger: ctx.logger,
+      });
+    } else
+      executor = createDockerExecutor({
+        docker: createDockerApi(config.DOCKER_SOCKET ?? defaultDockerSocket()),
+        image: config.SANDBOX_IMAGE,
+        network: config.SANDBOX_NETWORK,
+        cpus: config.SANDBOX_CPUS,
+        memoryMb: config.SANDBOX_MEMORY_MB,
+        pidsLimit: config.SANDBOX_PIDS_LIMIT,
+        workdir: SANDBOX_PATHS.workdir,
+        sessionsDir: SANDBOX_PATHS.sessions,
+        cache: { dir: SANDBOX_PATHS.cache, maxMb: config.SANDBOX_CACHE_MAX_MB },
+      });
+    // 就绪 = 云端沙箱可用（Docker：镜像和网络都在；E2B：Key 能用）；关闭时先让进行中的运行收尾
     const sandboxes: ServiceResource = {
       name: 'sandboxes',
       ready: () => executor.check(),
@@ -95,9 +113,10 @@ await startService({
       canvas: createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 60_000 }),
       materialsMaxBytes: config.MATERIALS_MAX_BYTES,
       transferTimeoutMs: config.FILE_TRANSFER_TIMEOUT_MS,
-      modelBaseUrl: config.SANDBOX_MODEL_BASE_URL,
+      // E2B 的沙箱在公网上：直接调公网的 gateway、直接访问放行的软件包仓库，不经本机的入口和出口代理
+      modelBaseUrl: config.E2B_RUN_API_URL ?? config.SANDBOX_MODEL_BASE_URL,
       packages: {
-        egressProxy: config.SANDBOX_EGRESS_PROXY,
+        egressProxy: config.CLOUD_EXECUTOR === 'e2b' ? undefined : config.SANDBOX_EGRESS_PROXY,
         npmRegistry: config.SANDBOX_NPM_REGISTRY,
         pipIndexUrl: config.SANDBOX_PIP_INDEX_URL,
       },

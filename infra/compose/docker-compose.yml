@@ -328,8 +328,13 @@ services:
       DOCKER_SOCKET: /var/run/docker.sock
       SANDBOX_NPM_REGISTRY: ${SANDBOX_NPM_REGISTRY:-https://registry.npmjs.org/}
       SANDBOX_PIP_INDEX_URL: ${SANDBOX_PIP_INDEX_URL:-https://pypi.org/simple}
-      # 同时最多跑几个沙箱（每个最多 2 核 2 GB）；机器小就在 .env 里调小
+      # 同时最多跑几个沙箱（每个最多 2 核 2 GB）；机器小就在 .env 里调小。用 E2B 时照它的档位填（Hobby 是 10）
       MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-4}
+      # 云端的沙箱开在哪：docker 是这台机器，e2b 是租的 E2B 沙箱（要 E2B_API_KEY，模板先用 pnpm sandbox:e2b 建好）
+      CLOUD_EXECUTOR: ${CLOUD_EXECUTOR:-docker}
+      E2B_API_KEY: ${E2B_API_KEY:-}
+      E2B_TEMPLATE: ${E2B_TEMPLATE:-oasis-harness-sandbox}
+      E2B_RUN_API_URL: ${E2B_RUN_API_URL:-https://${OASIS_DOMAIN:-localhost}/api/run/v1}
     # harness 要通过宿主机的 Docker 起沙箱容器（权限较大，只给 harness 和 inspector）。
     # socket 的属组在 Linux 上一般是 docker 组，用 DOCKER_SOCKET_GID 指定；Docker Desktop 上是 0。
     volumes:

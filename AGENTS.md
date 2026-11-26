@@ -19,7 +19,7 @@
 | `pnpm dev` | 9 个服务 + Web（Vite，http://127.0.0.1:5173）在本机运行，改代码自动重启 / 热更新 |
 | `pnpm desktop` | 打开 Electron 桌面窗口（加载上面的 Web 地址，需先 `pnpm dev`） |
 | `pnpm stack:up` / `stack:logs` | 中间件 + 9 个服务全部在容器里跑（集成验证）/ 看日志 |
-| `pnpm sandbox:build` · `sandbox:check:ops` | 构建 agent 沙箱镜像 `oasis/harness-sandbox-base:<dsh 版本>`；离线验收镜像里的本地操作 `oasis-op` |
+| `pnpm sandbox:build` · `sandbox:check:ops` · `sandbox:e2b` | 构建 agent 沙箱镜像 `oasis/harness-sandbox-base:<dsh 版本>`；离线验收镜像里的本地操作 `oasis-op`；照同一份配方在 E2B 上建线上用的沙箱模板 |
 | `pnpm browser:build` · `browser:smoke` | 构建 inspector 的检查浏览器镜像 `oasis/inspector-browser:<Playwright 版本>`；本机烟测（静态网页、Node 应用按检查一轮产出的路子各查一遍，外站测一次） |
 | `pnpm lint` · `pnpm typecheck` · `pnpm test` | 静态检查、类型检查、测试 |
 | `pnpm check:engineering` | 命名、镜像命名、设计令牌、页面不撑出整页滚动条、服务调用无环、依赖方向、死代码、重复率、迁移检查 |
@@ -36,14 +36,14 @@
 1. **微服务边界**：每个服务独占数据库（同一个 PostgreSQL 实例里的独立 database + 独立账号，其他账号连不上）。服务之间只走 HTTP API 或 NATS 事件；跨服务 import 由 dependency-cruiser 拦截。
    - **同步调用只往一个方向走**：conversation → agent、harness、canvas、model-gateway；harness → model-gateway、canvas；model-gateway → inspector、canvas、billing；canvas → inspector。判断成果的检查（文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览）只在 inspector，它不调任何服务、不存东西，检查的内容由调用方给临时下载链接或放在请求里；开容器的检查由付钱的调用方定核数，算力在 model-gateway 冻结、按报回的用量结算。`pnpm check:engineering` 的「服务调用无环」按 `createServiceClient('<对方>')` 画调用图拦截新的环；画布的 canvas → harness（取一轮交出的文件）、canvas → model-gateway（开数字人会话）两条边是已知例外，画布重整时再拆。
 2. **共享包**：`packages/*` 只放契约（contracts）、基础设施库（service-kit）、画布运行网页的组装规则（live-page，画布和检查共用）、设计令牌和 tsconfig，不放业务逻辑。
-3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness 的协议和事件（含 `profile/` 下 Oasis 自己的 dsh 组合）；装 dsh、起 dsh 的只有沙箱镜像和桌面版的 `apps/desktop/src/dsh-runtime.ts`（在用户电脑上干活，桌面版只转发 dsh 的输入输出），dsh 版本精确锁定（`packages/contracts/src/device.ts` 的 `DSH_VERSION` 和沙箱镜像一致）。沙箱只能经入口代理访问 model-gateway 的 `/run/v1/*`，以及经出口代理访问明确放行的软件包仓库；不得直连外网、宿主机或内部服务，不得开放其他网络通路。用户电脑上的 dsh 经 gateway 的 `/api/run/v1/*` 到同一套接口，只认这一轮的临时 Key。
+3. **Harness 隔离**：全仓只有 `services/harness/src/adapter/` 能接触 DeepSeek Harness 的协议和事件（含 `profile/` 下 Oasis 自己的 dsh 组合）；装 dsh、起 dsh 的只有沙箱镜像和桌面版的 `apps/desktop/src/dsh-runtime.ts`（在用户电脑上干活，桌面版只转发 dsh 的输入输出），dsh 版本精确锁定（`packages/contracts/src/device.ts` 的 `DSH_VERSION` 和沙箱镜像一致）。沙箱只能访问 model-gateway 的 `/run/v1/*` 和明确放行的软件包仓库，不得直连别的外网、宿主机或内部服务，不得开放其他网络通路：本机 Docker 的沙箱经入口代理和出口代理；租的 E2B 沙箱（线上，`CLOUD_EXECUTOR=e2b`，用户 2026-11-26 定）出站只放行公网上 gateway 那台主机和软件包仓库的域名（`E2B_ALLOW_OUT`），经 gateway 的 `/api/run/v1/*` 到同一套接口。用户电脑上的 dsh 也走 `/api/run/v1/*`。都只认临时 Key。
 4. **模型调用**：所有模型调用（聊天、Jev、dsh 里的 agent）都经过 `services/model-gateway`，由它计量并上报 billing。
 5. **服务内分层**：`src/api → src/service → src/repo`，禁止反向。全仓库的 TS/JS 文件（含测试和脚本）不超过 500 行，ESLint `max-lines` 拦截（2026-11-08 从四个服务扩到全仓库）；当时已经超长的文件在 `eslint.config.mjs` 的 `LONG_FILES` 里按当时的行数封顶、只许变短，要往里加东西先拆开，拆到 500 行以内就从表里删掉。工具参数的定义只有 `packages/contracts/src/tool-args.ts`、`ops.ts` 一份，网关的工具目录、沙箱里的 `oasis-tool` 和 `oasis-op` 共用。
 6. **配置外置**：配置全部来自环境变量，每个服务提供 `.env.example`；禁止硬编码地址、端口、密钥；禁止 `if (env === 'local')` 一类分支。
 7. **运行时**：结构化 JSON 日志输出到 stdout；每个服务暴露 `/health` 和 `/ready`；收到 SIGTERM 后处理完在途请求再退出。
 8. **数据库迁移**：dbmate 纯 SQL。文件头写 `-- phase: expand|migrate|contract`，必须有 `-- migrate:down`；expand 迁移必须写 `-- contract-plan:`。`pnpm check:engineering` 会检查这几项。
 9. **依赖版本**：一律精确版本（pnpm `saveExact`）；多个工作区共用的依赖写进 `pnpm-workspace.yaml` 的 `catalog`，package.json 里用 `"catalog:"` 引用。
-10. **镜像命名（云渲染 worker 限定例外见下）**：本项目构建和运行的每一个镜像都命名为 `oasis/<组件>:<标签>`，组件名小写（Docker 不允许大写），包括自研服务、中间件、以后 harness 的任务沙箱。
+10. **镜像命名（云渲染 worker 限定例外见下）**：本项目构建和运行的每一个镜像都命名为 `oasis/<组件>:<标签>`，组件名小写（Docker 不允许大写），包括自研服务、中间件、harness 的沙箱。E2B 上的沙箱模板不是 Docker 镜像、名字里不能有 `/`，叫 `oasis-harness-sandbox`，由 `pnpm sandbox:e2b` 照沙箱镜像的同一份 Dockerfile 在 E2B 上建（不推送任何镜像）。
     - 第三方镜像不直接使用：在 `infra/images/<组件>/Dockerfile` 里 `FROM` 官方镜像（锁定版本）做一层薄包装，标签沿用上游版本号，例如 `oasis/postgres:18.6`。
     - compose 里每个服务必须同时写 `image: oasis/...`、`build:` 和 `pull_policy: build`：只在本地构建，绝不从镜像仓库拉取，因为 Docker Hub 上的 `oasis` 命名空间不归我们。
     - 脚本里的 `docker build` 必须带 `-t oasis/<组件>:<标签>`。

@@ -16,6 +16,29 @@ export const harnessEnv = {
     .string()
     .optional()
     .transform((value) => value || undefined),
+  /**
+   * 云端的沙箱开在哪：docker 是这台机器上的 Docker（开发机、回归）；e2b 是租的 E2B 沙箱（线上）——
+   * 一份会话一个，空着就暂停，同时能开多少个看 E2B 的档位（MAX_CONCURRENT_RUNS 照着填）。
+   * 用 e2b 时沙箱里的 dsh 从公网调模型和工具（E2B_RUN_API_URL），装软件包直接访问放行的仓库（E2B_ALLOW_OUT），
+   * 不经 SANDBOX_MODEL_BASE_URL、SANDBOX_EGRESS_PROXY 那两个代理。
+   */
+  CLOUD_EXECUTOR: z.enum(['docker', 'e2b']).default('docker'),
+  E2B_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value || undefined),
+  /** E2B 上的模板名：按沙箱镜像的配方建的（pnpm sandbox:e2b） */
+  E2B_TEMPLATE: z.string().default('oasis-harness-sandbox'),
+  /** E2B 沙箱连续运行多久到点自动暂停（档位上限：Hobby 3600 秒） */
+  E2B_TIMEOUT_SECONDS: positiveInt.max(86_400).default(3600),
+  /** 公网上 gateway 的 /api/run/v1，如 https://oasis.example.com/api/run/v1（和用户电脑上的 dsh 走的是同一条路） */
+  E2B_RUN_API_URL: z
+    .string()
+    .optional()
+    .transform((value) => value || undefined)
+    .pipe(z.url().optional()),
+  /** E2B 沙箱除了 E2B_RUN_API_URL 那台主机，还能访问的域名（逗号分隔）；别的出站一律不通 */
+  E2B_ALLOW_OUT: z.string().default('registry.npmjs.org,pypi.org,files.pythonhosted.org'),
   /** 沙箱镜像（dsh 版本锁定在镜像标签里）。默认带 Blender 的 3D 版：它是基础版的超集，
    *  AI 按需要自己决定要不要建模。 */
   SANDBOX_IMAGE: z.string().default('oasis/harness-sandbox-3d:0.2.1-rc.5-blender4.3.2'),

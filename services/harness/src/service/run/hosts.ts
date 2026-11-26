@@ -38,11 +38,14 @@ export interface Host {
   readonly relay: Relay;
 }
 
+/** 歇着的沙箱（里面的 dsh 还留着）最多留多久：过了就收掉，下一轮重起 dsh、接上原会话 */
+const RETIRE_MS = 24 * 3600_000;
+
 const digest = (content: string | Buffer) => createHash('sha256').update(content).digest('hex');
 
 export function createHosts(deps: RunDeps) {
   const { repo } = deps;
-  const idle = new Map<string, { host: Host; timer: NodeJS.Timeout }>();
+  const idle = new Map<string, { host: Host; timer: NodeJS.Timeout; asleep?: Promise<void> }>();
 
   /**
    * 起 dsh 时定死的东西：环境变量（除了 Key）、平台说明（带这个 AI 的人设）和技能、oasis-tool 这些命令和
@@ -229,25 +232,53 @@ export function createHosts(deps: RunDeps) {
     stop,
     close,
 
-    /** 这份会话空着的那个：还能用就拿走接着用；设置变了或 dsh 已经不在了就收掉，返回 undefined */
+    /** 这份会话空着的那个：还能用就拿走接着用（歇着的先叫醒）；设置变了或 dsh 已经不在了就收掉，返回 undefined */
     async take(workspaceId: string, signature: string): Promise<Host | undefined> {
+      const waiting = idle.get(workspaceId);
       const host = claim(workspaceId);
       if (!host) return undefined;
-      if (host.signature === signature && host.agent.alive()) return host;
+      if (host.signature === signature && host.agent.alive()) {
+        const awake = await (waiting?.asleep ?? Promise.resolve())
+          .then(() => (waiting?.asleep ? host.sandbox.wake?.() : undefined))
+          .then(
+            () => true,
+            (err: unknown) => {
+              deps.logger.warn({ err, workspaceId }, '歇着的沙箱没叫醒，重起一个');
+              return false;
+            },
+          );
+        if (awake && host.agent.alive()) return host;
+      }
       await close(host);
       return undefined;
     },
 
-    /** 这一轮做完了：留着等下一轮，idleMs 之后还没人用就收掉 */
+    /**
+     * 这一轮做完了：留着等下一轮。idleMs 之后还没人用——能歇着的（E2B：暂停，不收运行费，dsh 原样留着）
+     * 就歇着，再过 RETIRE_MS 才收掉；不能的直接收掉
+     */
     park(host: Host, idleMs: number): void {
       host.relay.to = undefined;
-      const timer = setTimeout(() => {
-        if (idle.get(host.workspaceId)?.host !== host) return;
-        idle.delete(host.workspaceId);
+      const { workspaceId } = host;
+      const mine = () => idle.get(workspaceId)?.host === host;
+      const retire = () => {
+        if (!mine()) return;
+        idle.delete(workspaceId);
         void close(host);
+      };
+      const timer = setTimeout(() => {
+        const waiting = idle.get(workspaceId);
+        if (!waiting || waiting.host !== host) return;
+        if (!host.sandbox.sleep) return retire();
+        waiting.asleep = host.sandbox.sleep().catch((err: unknown) => {
+          deps.logger.warn({ err, workspaceId }, '沙箱没能歇下，收掉');
+          retire();
+        });
+        waiting.timer = setTimeout(retire, RETIRE_MS);
+        waiting.timer.unref();
       }, idleMs);
       timer.unref();
-      idle.set(host.workspaceId, { host, timer });
+      idle.set(workspaceId, { host, timer });
     },
 
     /** 删对话、开新话题：这份会话空着的那个马上收掉 */

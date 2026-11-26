@@ -37,6 +37,12 @@ export interface Sandbox {
   run?(cmd: string[]): Promise<string>;
   /** 往沙箱的某个目录里再解一包文件（接着用时这一轮带来的文件、群里别的 AI 刚交的群文件） */
   put(dir: string, tar: Buffer | Readable): Promise<void>;
+  /**
+   * 空着等下一轮时让整个沙箱歇着、不收运行费，里面的进程原样留着（E2B 的暂停）；wake 之后接着用。
+   * 没有这两项的（Docker、用户电脑）空着时进程一直开着
+   */
+  sleep?(): Promise<void>;
+  wake?(): Promise<void>;
   /** 销毁沙箱（运行中也立即结束）；可重复调用 */
   destroy(): Promise<void>;
 }
@@ -102,6 +108,9 @@ if(total>max){
   for(const [key,group] of oldest){if(total<=max*0.8)break;fs.rmSync(path.join(root,key),{recursive:true,force:true});total-=group.kb}
 }`;
 
+/** 在沙箱里探测装了什么软件，输出 JSON（software、capabilities、notes）；Docker 和 E2B 的沙箱都用它 */
+export const PROBE_SCRIPT = `const {spawnSync}=require('node:child_process');const fs=require('node:fs');const software={};for(const [key,bin,args] of [['node','node',['--version']],['python','python3',['--version']],['blender','blender',['--version']],['ffmpeg','ffmpeg',['-version']],['libreoffice','libreoffice',['--version']],['pdf','pdftoppm',['-v']],['browser','chromium',['--version']],['git','git',['--version']],['pandoc','pandoc',['--version']],['sqlite','sqlite3',['--version']],['jq','jq',['--version']],['imagemagick','magick',['-version']],['sox','sox',['--version']],['ripgrep','rg',['--version']],['esbuild','esbuild',['--version']],['typescript','tsc',['--version']]]){const r=spawnSync(bin,args,{encoding:'utf8',timeout:15000});if(r.status===0)software[key]=(r.stdout||r.stderr).split('\\n')[0]}const pixelFont=['/usr/share/fonts/opentype/unifont/unifont.otf','/usr/share/fonts/truetype/unifont/unifont.ttf'].find(p=>fs.existsSync(p));process.stdout.write(JSON.stringify({software,capabilities:Object.keys(software),notes:['沙箱仅经代理访问模型、工具和获准的软件包源。',software.browser?'沙箱里有 Chromium（命令 chromium，没有显卡，3D 画面靠 CPU 画）和 playwright-core（chromium.launch() 直接可用），可以打开自己做的页面操作、读页面状态、截图；沙箱不通外网，打不开外站。':'沙箱里没有浏览器。',...(pixelFont?['预装的字体在 /usr/share/fonts 下，可以拷进成果或取子集后内嵌：Noto CJK（中日韩）、点阵像素字体 Unifont（16×16，含中文，'+pixelFont+'）。']:[]),'可运行应用应交齐 oasis-app.json 与配套文件；oasis-tool app.check --dir out/<应用目录> 按画布的方式打开它跑一遍；外站测试只使用目录中可用的 website.test。','项目依赖应装入 /workspace，例如项目 node_modules 或 .venv，才能随工作目录恢复。']}))`;
+
 export function createDockerExecutor(deps: {
   docker: DockerApi;
   image: string;
@@ -121,11 +130,10 @@ export function createDockerExecutor(deps: {
   /** 正在删的读文件临时容器：删卷前等它们删完 */
   const dropping = new Set<Promise<void>>();
   async function probe(imageId: string): Promise<ExecutionEnvironment> {
-    const script = `const {spawnSync}=require('node:child_process');const fs=require('node:fs');const software={};for(const [key,bin,args] of [['node','node',['--version']],['python','python3',['--version']],['blender','blender',['--version']],['ffmpeg','ffmpeg',['-version']],['libreoffice','libreoffice',['--version']],['pdf','pdftoppm',['-v']],['browser','chromium',['--version']],['git','git',['--version']],['pandoc','pandoc',['--version']],['sqlite','sqlite3',['--version']],['jq','jq',['--version']],['imagemagick','magick',['-version']],['sox','sox',['--version']],['ripgrep','rg',['--version']],['esbuild','esbuild',['--version']],['typescript','tsc',['--version']]]){const r=spawnSync(bin,args,{encoding:'utf8',timeout:15000});if(r.status===0)software[key]=(r.stdout||r.stderr).split('\\n')[0]}const pixelFont=['/usr/share/fonts/opentype/unifont/unifont.otf','/usr/share/fonts/truetype/unifont/unifont.ttf'].find(p=>fs.existsSync(p));process.stdout.write(JSON.stringify({software,capabilities:Object.keys(software),notes:['沙箱仅经代理访问模型、工具和获准的软件包源。',software.browser?'沙箱里有 Chromium（命令 chromium，没有显卡，3D 画面靠 CPU 画）和 playwright-core（chromium.launch() 直接可用），可以打开自己做的页面操作、读页面状态、截图；沙箱不通外网，打不开外站。':'沙箱里没有浏览器。',...(pixelFont?['预装的字体在 /usr/share/fonts 下，可以拷进成果或取子集后内嵌：Noto CJK（中日韩）、点阵像素字体 Unifont（16×16，含中文，'+pixelFont+'）。']:[]),'可运行应用应交齐 oasis-app.json 与配套文件；oasis-tool app.check --dir out/<应用目录> 按画布的方式打开它跑一遍；外站测试只使用目录中可用的 website.test。','项目依赖应装入 /workspace，例如项目 node_modules 或 .venv，才能随工作目录恢复。']}))`;
     const { Id: id } = await docker.createContainer(`oasis-probe-${randomUUID()}`, {
       Image: imageId,
       Entrypoint: ['node'],
-      Cmd: ['-e', script],
+      Cmd: ['-e', PROBE_SCRIPT],
       Labels: { 'oasis.component': 'harness-probe', 'oasis.instance-id': instanceId },
       AttachStdout: true,
       AttachStderr: true,
