@@ -1,16 +1,17 @@
-// 工作台「任务」页签上的任务：群里 AI 动过手（有步骤）、交过文件，或在等人回答的每一轮是一张卡；
-// 分工单里还没开工的每一项也是一张卡（在「待开始」）。
-// 从群消息里拼出来：这一轮里 AI 的话（带步骤、待办）和它的任务卡（任务名、花费、交的文件）。
+// 工作台「任务」页签上的任务，四栏：待开始、进行中、已完成、修改中。
+// 群里 AI 动过手（有步骤）、交过文件，或在等人回答的每一轮是一条；让 AI 改一个任务的成果，那几轮算在同一条上
+// （改的时候在「修改中」，改完回「已完成」）；分工单里还没开工的每一项也是一条（在「待开始」）。
+// 从群消息里拼出来：AI 的话（带步骤、待办）和它的任务卡（任务名、花费、交的文件、做过的每一轮）。
 import type { AssignItem, MessagePart, TaskFile, TodoItem } from '@oasis/contracts/conversation';
 import type { GroupMessage } from '@oasis/contracts/group';
 import { splitBlocks } from '../../chat/blocks.ts';
 
-export type TaskColumn = 'wait' | 'doing' | 'review' | 'done';
+export type TaskColumn = 'wait' | 'doing' | 'done' | 'fixing';
 export const TASK_COLUMNS: { id: TaskColumn; title: string }[] = [
   { id: 'wait', title: '待开始' },
   { id: 'doing', title: '进行中' },
-  { id: 'review', title: '等你确认' },
-  { id: 'done', title: '完成' },
+  { id: 'done', title: '已完成' },
+  { id: 'fixing', title: '修改中' },
 ];
 
 export interface RoomTask {
@@ -19,8 +20,12 @@ export interface RoomTask {
   key: string;
   title: string;
   column: TaskColumn;
-  /** 卡片上的那句说明：正在做哪一步、在等什么、做了几步 */
+  /** 那句说明：正在做哪一步、在等什么、做了几步 */
   note: string;
+  /** 在等人：回答它的问题、点确认卡（这一条上亮一个红点） */
+  asking?: boolean;
+  /** 出错或停下了，还能让它继续 */
+  resumable?: boolean;
   /** 进行中：待办做完了百分之几（没列待办就没有） */
   percent?: number;
   /** 过程：这一轮按先后的每一段（步骤、边做边说的话、提示） */
@@ -100,6 +105,13 @@ export function tasksOf(messages: GroupMessage[]): RoomTask[] {
   const unique = [...new Map(messages.map((message) => [message.id, message])).values()].sort(
     (a, b) => a.seq - b.seq,
   );
+  const cards = unique.filter((message): message is Card => message.kind === 'task');
+  /** 一轮算在哪个任务上：改过的任务，它做过的每一轮都算在最近那一轮名下 */
+  const taskOf = new Map(
+    cards.flatMap((card) =>
+      (card.data.runs ?? []).map((runId): [string, string] => [runId, card.data.runId]),
+    ),
+  );
   const runs = new Map<string, { texts: Text[]; card?: Card }>();
   const plans: Assign[] = [];
   /** 每个 AI 最新说的那条话：只有它上面的问卷还等着人答，只有它出错、停下了还等着人说「继续」 */
@@ -110,8 +122,9 @@ export function tasksOf(messages: GroupMessage[]): RoomTask[] {
       plans.push(message);
       continue;
     }
-    const runId = message.kind === 'topic' ? undefined : message.data.runId;
-    if (!runId) continue;
+    const own = message.kind === 'topic' ? undefined : message.data.runId;
+    if (!own) continue;
+    const runId = taskOf.get(own) ?? own;
     const run = runs.get(runId) ?? { texts: [] };
     runs.set(runId, run);
     if (message.kind === 'text') {
@@ -125,17 +138,17 @@ export function tasksOf(messages: GroupMessage[]): RoomTask[] {
     const parts = texts.flatMap((message) => message.data.parts ?? []);
     const steps = parts.filter((part) => part.type === 'step');
     const newest = last !== undefined && latest.get(last.authorId) === last.id;
-    const asking = last !== undefined && newest && asks(last);
-    if (!steps.length && !card && !asking) continue;
+    const answering = last !== undefined && newest && asks(last);
+    if (!steps.length && !card && !answering) continue;
     const live = texts.some((message) => message.status === 'streaming');
     const running = live || card?.data.status === 'running';
     const failed = last?.status === 'failed' || card?.data.status === 'failed';
     const stopped = Boolean(last?.data.stopped) || card?.data.status === 'stopped';
-    const column: TaskColumn = running
-      ? 'doing'
-      : asking || (newest && (failed || stopped))
-        ? 'review'
-        : 'done';
+    // 问了人还没等到回答的，这件事还没完：留在进行中
+    const column: TaskColumn =
+      running || answering ? (card?.data.revision ? 'fixing' : 'doing') : 'done';
+    const resumable = !running && newest && (failed || stopped);
+    const asking = answering || Boolean(running && card?.data.asking);
     const todos = texts.findLast((message) => message.data.todos?.length)?.data.todos;
     const doing = steps.findLast((step) => step.status === 'running');
     const files = card?.data.files ?? [];
@@ -145,15 +158,19 @@ export function tasksOf(messages: GroupMessage[]): RoomTask[] {
       key: (last ?? card)!.authorId,
       title: card?.data.title ?? texts.find((message) => message.data.title)?.data.title ?? '任务',
       column,
-      note: running
-        ? (doing?.label ?? '正在想…')
-        : failed
-          ? `出错了${column === 'review' ? '，可以让它继续' : ''}`
-          : stopped
-            ? `停下了${column === 'review' ? '，可以让它继续' : ''}`
-            : asking
-              ? '在等人回答它的问题'
+      note: answering
+        ? '在等人回答它的问题'
+        : running
+          ? card?.data.asking
+            ? '在等确认'
+            : (doing?.label ?? '正在想…')
+          : failed
+            ? `出错了${resumable ? '，可以让它继续' : ''}`
+            : stopped
+              ? `停下了${resumable ? '，可以让它继续' : ''}`
               : did,
+      ...(asking ? { asking } : {}),
+      ...(resumable ? { resumable } : {}),
       ...(running && todos?.length
         ? {
             percent: Math.round(
@@ -189,7 +206,7 @@ export const workMark = (messages: GroupMessage[]) =>
       message.kind === 'assign'
         ? `${message.id}:${message.data.status}:${message.data.items.map((item) => `${item.status}${item.key}${item.task.length}`).join('')}`
         : message.kind === 'task'
-          ? `${message.id}:${message.data.status}`
+          ? `${message.id}:${message.data.status}:${message.data.runId}:${message.data.asking ?? ''}`
           : message.status === 'streaming'
             ? `${message.id}:live`
             : '',

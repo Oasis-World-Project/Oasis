@@ -21,7 +21,7 @@ const fromCopy =
 const NOTE = { steps: [{ bash: writeFiles({ 'out/笔记.md': '# 笔记\n第一版。\n' }) }] };
 
 // ---------- 4. 让 AI 改：在画布里挑一样成果让 AI 改；它还在这个会话的工作目录里，
-// AI 接着原会话直接改，画布里原地换新（ID 不变、不多出一份） ----------
+// AI 接着原会话直接改，画布里原地换新（ID 不变、不多出一份），任务卡还是原来那张 ----------
 export const revise = {
   says: {
     1: {
@@ -86,10 +86,17 @@ export const revise = {
       after.length === 2 && after.some((a) => a.id === sheet.id && a.path === '海报说明.md'),
       `改过的成果应原地换新（还是 2 个、ID 不变）：${after.map((a) => `${a.path}:${a.id.slice(0, 8)}`).join('、')}`,
     );
+    // 改的这一轮算在原来那张任务卡上：还是一张卡，记着前后两轮、改了一次，成果原地换新
+    const cards = messages.filter((m) => m.kind === 'task');
     const card = cardOf(messages, runs[1]?.id);
     t.check(
-      card?.data.files.length === 1 && card.data.files[0].artifactId === sheet.id,
-      `第二轮的任务卡上应只列改过的海报说明：${JSON.stringify(card?.data.files ?? null)}`,
+      cards.length === 1 &&
+        card?.data.status === 'done' &&
+        card.data.revision === 1 &&
+        card.data.runs?.join() === runs.map((run) => run.id).join() &&
+        card.data.files.length === 2 &&
+        card.data.files.some((file) => file.artifactId === sheet.id),
+      `让 AI 改应算在原来那张任务卡上（一张卡、两轮、改了 1 次、成果还是那 2 个）：${JSON.stringify(cards.map((m) => m.data))}`,
     );
   },
 };

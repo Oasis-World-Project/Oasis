@@ -7,88 +7,23 @@ import { GROUP_HISTORY_NOTICE, type GroupMessage } from '@oasis/contracts/group'
 import { createApp } from '../src/app.tsx';
 import { tasksOf } from '../src/group/workbench/tasks.ts';
 import { installFakeApi, json, type ExtraRoute } from './fake-api.ts';
+import {
+  aiSays,
+  at,
+  card,
+  file,
+  friend,
+  id,
+  me,
+  oldRun,
+  plan,
+  run,
+  said,
+  step,
+  uuid,
+} from './group-messages.ts';
 import { Stream } from './group-stream.ts';
 
-const id = '00000000-0000-4000-8000-000000000061',
-  me = '00000000-0000-4000-8000-000000000001',
-  friend = '00000000-0000-4000-8000-000000000002',
-  run = '00000000-0000-4000-8000-000000000071',
-  oldRun = '00000000-0000-4000-8000-000000000072';
-const at = '2026-11-16T02:00:00Z';
-const uuid = (n: number) => `00000000-0000-4000-8000-0000000002${String(n).padStart(2, '0')}`;
-const base = (seq: number, authorId: string, role: 'user' | 'assistant') => ({
-  id: `00000000-0000-4000-8000-0000000001${String(seq).padStart(2, '0')}`,
-  seq,
-  authorId,
-  displayName: authorId === 'claude' ? 'Claude' : authorId === me ? '我' : '阿杰',
-  role,
-  status: 'complete',
-  error: null,
-  createdAt: at,
-});
-const said = (seq: number, authorId: string, content: string, data = {}) =>
-  ({ ...base(seq, authorId, 'user'), content, kind: 'text', data }) as GroupMessage;
-const step = (n: string, status = 'done') => ({
-  type: 'step' as const,
-  id: n,
-  tool: 'bash',
-  label: `第 ${n} 步`,
-  status,
-});
-const aiSays = (seq: number, runId: string, parts: object[], patch = {}) =>
-  ({
-    ...base(seq, 'claude', 'assistant'),
-    content: '',
-    kind: 'text',
-    data: { runId, parts, title: '排发布会流程' },
-    ...patch,
-  }) as GroupMessage;
-const card = (seq: number, runId: string, data = {}) =>
-  ({
-    ...base(seq, 'claude', 'assistant'),
-    content: '任务结束',
-    kind: 'task',
-    data: {
-      runId,
-      title: '排发布会流程',
-      status: 'done',
-      startedAt: at,
-      finishedAt: '2026-11-16T02:03:00Z',
-      spentMicro: 1200,
-      files: [
-        { artifactId: uuid(1), name: '流程.md', path: '流程.md', size: 2048, category: 'doc' },
-      ],
-      ...data,
-    },
-  }) as GroupMessage;
-/** Claude 发的分工单：第 1 项给 GLM（在做，是 run 那一轮），第 2 项给 Kimi（等第 1 项） */
-const plan = (seq: number, items: object[] = []) =>
-  ({
-    ...base(seq, 'claude', 'assistant'),
-    content: '分工单：竞品 A 分析',
-    kind: 'assign',
-    data: {
-      runId: oldRun,
-      title: '竞品 A 分析',
-      status: 'open',
-      items: [
-        { id: '1', key: 'glm', task: '做图表', after: [], status: 'running', runId: run },
-        { id: '2', key: 'kimi', task: '写英文摘要', after: ['1'], status: 'waiting', runId: null },
-        ...items,
-      ],
-    },
-  }) as GroupMessage;
-const file = (n: number, path: string, patch = {}) => ({
-  id: uuid(n),
-  path,
-  name: path.split('/').at(-1),
-  size: 2048,
-  madeBy: { kind: 'ai', id: 'claude' },
-  changedBy: { kind: 'ai', id: 'claude' },
-  runId: null,
-  updatedAt: at,
-  ...patch,
-});
 const group = (patch = {}) => ({
   id,
   kind: 'group',
@@ -170,21 +105,41 @@ describe('工作台上的任务是怎么从消息里拼出来的', () => {
     expect(tasks[1]!.parts).toHaveLength(3);
   });
 
-  it('它最新的话里有没答的问卷、出错了、停下了：在「等你确认」；后面又说了话的旧任务算完成', () => {
+  it('它最新的话里有没答的问卷：还在「进行中」，亮着在等人；出错了、停下了算「已完成」，还能让它继续；后面又说了话的旧任务不再能继续', () => {
     const question =
       '```oasis-questions\n{"questions":[{"id":"a","text":"抽奖放哪","options":["开头","结尾"]}]}\n```';
     const asking = tasksOf([aiSays(1, run, [], { content: question })]);
-    expect(asking.map((task) => [task.column, task.note])).toEqual([
-      ['review', '在等人回答它的问题'],
-    ]);
+    expect(asking).toMatchObject([{ column: 'doing', note: '在等人回答它的问题', asking: true }]);
     const failed = aiSays(1, oldRun, [step('1')], { status: 'failed' });
-    expect(tasksOf([failed])[0]).toMatchObject({ column: 'review', note: '出错了，可以让它继续' });
+    expect(tasksOf([failed])[0]).toMatchObject({
+      column: 'done',
+      note: '出错了，可以让它继续',
+      resumable: true,
+    });
     // 之后它又开了一轮：旧的那轮不再等人
     const later = tasksOf([failed, aiSays(2, run, [step('1')])]);
-    expect(later.map((task) => [task.column, task.note])).toEqual([
-      ['done', '做了 1 步'],
-      ['done', '出错了'],
+    expect(later.map((task) => [task.column, task.note, task.resumable])).toEqual([
+      ['done', '做了 1 步', undefined],
+      ['done', '出错了', undefined],
     ]);
+  });
+
+  it('让 AI 改一个做完的任务：前后几轮算同一条，改的时候在「修改中」，改完回「已完成」；在等确认时亮红点', () => {
+    const first = aiSays(1, oldRun, [step('1')]);
+    const fixing = aiSays(3, run, [step('1', 'running')], { status: 'streaming' });
+    const revised = (status: 'running' | 'done', extra: object = {}) => {
+      const base = card(2, run);
+      return {
+        ...base,
+        data: { ...base.data, status, runs: [oldRun, run], revision: 1, ...extra },
+      } as GroupMessage;
+    };
+    const during = tasksOf([first, revised('running', { asking: true }), fixing]);
+    expect(during).toHaveLength(1);
+    expect(during[0]).toMatchObject({ column: 'fixing', asking: true, note: '在等确认' });
+    expect(during[0]?.parts).toHaveLength(2);
+    const after = tasksOf([first, revised('done'), aiSays(3, run, [step('1')])]);
+    expect(after.map((task) => task.column)).toEqual(['done']);
   });
 });
 
@@ -362,25 +317,24 @@ describe('工作台', () => {
       'true',
     );
     const doing = within(bench).getByRole('region', { name: '进行中' });
-    expect(within(doing).getByRole('article', { name: 'Claude：排发布会流程' })).toBeTruthy();
-    const done = await within(bench).findByRole('region', { name: '完成' });
-    await waitFor(() => expect(within(done).getAllByRole('article')).toHaveLength(1));
-    // 展开的是点的那一轮：两步，第二步还在做；能停下
-    const process = within(bench).getByRole('region', { name: 'Claude 的过程' });
+    expect(within(doing).getByRole('button', { name: 'Claude：排发布会流程' })).toBeTruthy();
+    const done = await within(bench).findByRole('region', { name: '已完成' });
+    await waitFor(() => expect(within(done).getAllByRole('button')).toHaveLength(1));
+    // 弹出来的是点的那一轮：两步，第二步还在做；能停下
+    const process = screen.getByRole('dialog', { name: '排发布会流程' });
     expect(within(process).getAllByText(/第 \d 步/)).toHaveLength(2);
     expect(within(process).getByRole('button', { name: '停下' })).toBeTruthy();
-    // 点做完的那张：过程里有边做边说的话
-    fireEvent.click(within(done).getByRole('button', { expanded: false }));
-    expect(
-      within(within(bench).getByRole('region', { name: 'Claude 的过程' })).getByText(
-        '边做边说的话',
-      ),
-    ).toBeTruthy();
+    fireEvent.click(within(process).getByRole('button', { name: '关闭' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // 点做完的那一条：过程里有边做边说的话
+    fireEvent.click(within(done).getByRole('button'));
+    expect(within(screen.getByRole('dialog')).getByText('边做边说的话')).toBeTruthy();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '关闭' }));
     // 聊天里任务卡上的文件：点开在工作台预览；「看过程」回到任务
     fireEvent.click(within(log).getByRole('button', { name: '在工作台打开 流程.md' }));
     expect(await within(bench).findByRole('article', { name: '预览 流程.md' })).toBeTruthy();
     fireEvent.click(within(log).getByRole('button', { name: '看过程' }));
-    expect(within(bench).getByRole('region', { name: 'Claude 的过程' })).toBeTruthy();
+    expect(screen.getByRole('dialog')).toBeTruthy();
     // 输入框上面那一行也能去工作台
     expect(screen.getByRole('button', { name: /1 个 AI 在工作台忙/ })).toBeTruthy();
   });

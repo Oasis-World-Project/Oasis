@@ -45,6 +45,13 @@ export function groupTasks(input: {
         app.sessionId === item.sessionId &&
         item.path.startsWith(`${app.application!.root}/`),
     );
+  /** 成果上记的那一轮算在哪个任务上：改过的任务，它做过的每一轮都算在最近那一轮名下 */
+  const taskRun = new Map(
+    tasks.flatMap((task) =>
+      (task.runs ?? []).map((runId): [string, string] => [runId, task.runId]),
+    ),
+  );
+  const runOf = (item: ArtifactBody) => taskRun.get(item.runId) ?? item.runId;
   const titleOf = new Map(tasks.map((task) => [task.runId, task.title]));
   const matching = all.filter((item) => {
     if (parentOf(item)) return false;
@@ -52,7 +59,7 @@ export function groupTasks(input: {
     const members = item.application
       ? all.filter((file) => parentOf(file)?.id === item.id).map((file) => file.path)
       : [];
-    return [item.name, titleOf.get(item.runId) ?? item.task, ...members].some((text) =>
+    return [item.name, titleOf.get(runOf(item)) ?? item.task, ...members].some((text) =>
       text.toLowerCase().includes(keyword),
     );
   });
@@ -70,7 +77,7 @@ export function groupTasks(input: {
       at: Date.parse(task.startedAt),
     });
   for (const item of shown) {
-    let group = groups.get(item.runId);
+    let group = groups.get(runOf(item));
     if (!group) {
       group = {
         runId: item.runId,

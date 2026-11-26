@@ -3,7 +3,7 @@
 import { Link } from '@tanstack/react-router';
 import { FolderOpen } from 'lucide-react';
 import { StatusTag } from '../chat/parts.tsx';
-import { elapsedText, TASK_STATUS } from '../chat/TaskCard.tsx';
+import { elapsedText, taskStatus } from '../chat/TaskCard.tsx';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { Thumb } from './ArtifactCard.tsx';
@@ -13,7 +13,7 @@ import { when, type Maker } from './TaskPanel.tsx';
 export function TaskTile({ group, maker, now }: { group: TaskGroup; maker?: Maker; now: number }) {
   const { task } = group;
   const running = task?.status === 'running';
-  const status = task ? TASK_STATUS[task.status] : undefined;
+  const status = task ? taskStatus(task) : undefined;
   const covers = [...group.finals, ...group.materials].slice(0, 4);
   const at = task ? Date.parse(task.startedAt) : group.at;
   return (

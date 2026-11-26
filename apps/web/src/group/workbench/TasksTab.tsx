@@ -1,8 +1,9 @@
-// 工作台的「任务」页签：每个 AI 的每个任务一张卡，分待开始、进行中、等你确认、完成四栏。聊天里不放干活的
-// 过程，过程在这里看：点一张卡，下面展开它的步骤、待办、用时和花费。照原型 ⑥。
-// 分工单里的一项还能在这里改：改派、改要求、撤掉，或整份全部停下（原型里没有，照这里已有按钮的样子做）。
+// 工作台的「任务」页签：待开始、进行中、已完成、修改中四个框一样大；任务是扁扁的一条一条，多了在框里滚，
+// 不把框撑长。聊天里不放干活的过程，过程在这里看：点一条，弹出它的成果、步骤、待办、用时和花费。照原型 ⑥ ㉕。
+// 分工单里的一项还能在弹出来的窗里改：改派、改要求、撤掉，或整份全部停下。
 import type { AssignEditBody } from '@oasis/contracts/group';
-import { useState } from 'react';
+import { X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { editAssign, stopGroupAi } from '../../api/queries.ts';
 import { ProcessBody } from '../../chat/Process.tsx';
 import { elapsedText, useNow } from '../../chat/TaskCard.tsx';
@@ -13,63 +14,44 @@ import { useRoom } from '../room.ts';
 import { TASK_COLUMNS, type RoomTask } from './tasks.ts';
 import type { Workbench } from './use-workbench.ts';
 
-function TaskCard({
-  task,
-  on,
-  onPick,
-  onFile,
-}: {
-  task: RoomTask;
-  on: boolean;
-  onPick: () => void;
-  onFile: (path: string) => void;
-}) {
+/** 一个任务一条：谁做、叫什么、做到哪了；在等人时亮一个红点，在做时底下一条进度 */
+function TaskRow({ task, onOpen }: { task: RoomTask; onOpen: () => void }) {
   const { models } = useRoom();
   const look = aiLook(models, task.key);
+  const meta = [task.note, task.spentMicro > 0 ? formatCost(task.spentMicro) : '']
+    .filter(Boolean)
+    .join(' · ');
   return (
-    <article
-      aria-label={`${look.name}：${task.title}`}
-      className={`flex flex-col gap-2.5 rounded-bubble bg-bubble p-3.5 ${
-        on ? 'shadow-[inset_0_0_0_1.5px_var(--oasis-ink)]' : 'shadow-edge-bright'
-      }`}
+    <button
+      type="button"
+      aria-label={`${look.name}：${task.title}${task.asking ? '，在等人' : ''}`}
+      onClick={onOpen}
+      className="relative flex min-h-[52px] w-full flex-none cursor-pointer items-center gap-2 overflow-hidden rounded-2xl border-0 bg-bubble px-2.5 py-2 text-left text-ink shadow-edge-bright [font:inherit]"
     >
-      <button
-        type="button"
-        aria-expanded={on}
-        onClick={onPick}
-        className="flex cursor-pointer flex-col gap-2.5 border-0 bg-transparent p-0 text-left text-ink [font:inherit]"
-      >
-        <span className="flex items-start gap-2.5">
-          <span className="line-clamp-3 min-w-0 flex-1 break-words text-sm font-medium leading-[1.4]">
-            {task.title}
-          </span>
-          <AiAvatar mono={look.mono} glow={look.glow} size={28} glowing={task.live} />
-        </span>
-        <span className="break-words text-[12.5px] leading-normal text-ink-muted">{task.note}</span>
-        {task.percent !== undefined && (
-          <span aria-hidden="true" className="h-1 overflow-hidden rounded-full bg-track">
-            <span
-              className="block h-full rounded-full bg-accent"
-              style={{ width: `${task.percent}%` }}
-            />
-          </span>
-        )}
-      </button>
-      {task.files.length > 0 && (
-        <span className="flex flex-wrap gap-1.5">
-          {task.files.map((file) => (
-            <button
-              key={file.artifactId}
-              type="button"
-              onClick={() => onFile(file.path)}
-              className="h-[30px] max-w-full cursor-pointer truncate rounded-full border-0 bg-well px-3 text-xs font-medium text-ink"
-            >
-              {file.name}
-            </button>
-          ))}
+      <AiAvatar mono={look.mono} glow={look.glow} size={28} glowing={task.live} />
+      <span className="flex min-w-0 flex-1 flex-col gap-px">
+        <span className="truncate text-[13.5px] font-medium">{task.title}</span>
+        <span className="truncate text-[11.5px] text-ink-muted">{meta}</span>
+      </span>
+      {task.asking && (
+        <span
+          role="img"
+          aria-label="在等人"
+          className="size-2.5 flex-none rounded-full bg-accent shadow-[0_0_0_4px_var(--oasis-accent-tint)]"
+        />
+      )}
+      {task.live && task.percent !== undefined && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-x-2.5 bottom-[3px] h-[3px] overflow-hidden rounded-full bg-track"
+        >
+          <span
+            className="block h-full rounded-full bg-accent"
+            style={{ width: `${task.percent}%` }}
+          />
         </span>
       )}
-    </article>
+    </button>
   );
 }
 
@@ -183,8 +165,16 @@ function PlanActions({ plan }: { plan: NonNullable<RoomTask['plan']> }) {
   );
 }
 
-/** 展开的那个任务：用时、花费、停下或让它继续，是分工单里的一项还能改它；下面是过程 */
-function TaskProcess({ task }: { task: RoomTask }) {
+/** 点开的那个任务：谁负责、用时、花费，停下或让它继续，是分工单里的一项还能改它；成果在上，过程在下 */
+function TaskDialog({
+  task,
+  onClose,
+  onFile,
+}: {
+  task: RoomTask;
+  onClose: () => void;
+  onFile: (path: string) => void;
+}) {
   const room = useRoom();
   const { group, me, owner, models, busy, act } = room;
   const look = aiLook(models, task.key);
@@ -197,59 +187,105 @@ function TaskProcess({ task }: { task: RoomTask }) {
     plan?.open &&
     (plan.item.status === 'waiting' || plan.item.status === 'running') &&
     (owner || plan.callers.includes(me));
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const facts = [
+    `${look.name} 负责`,
+    task.live || ended !== undefined
+      ? `用时 ${elapsedText((ended ?? now) - Date.parse(task.startedAt))}`
+      : '',
+    task.spentMicro > 0 ? formatCost(task.spentMicro) : '还没花钱',
+  ].filter(Boolean);
   return (
-    <section
-      aria-label={`${look.name} 的过程`}
-      className="flex flex-col gap-3 rounded-pop bg-bubble p-5 shadow-edge-bright"
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-veil p-6 backdrop-blur-sm"
+      onPointerDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <AiAvatar mono={look.mono} glow={look.glow} size={30} glowing={task.live} />
-        <div className="flex min-w-0 flex-[1_1_160px] flex-col">
-          <h3 className="m-0 break-words text-[15px] font-medium leading-snug">{task.title}</h3>
-          <span className="text-xs text-ink-muted">
-            {look.name}
-            {(task.live || ended !== undefined) && (
-              <>
-                {' · 用时 '}
-                {elapsedText((ended ?? now) - Date.parse(task.startedAt))}
-              </>
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={task.title}
+        className="box-border flex max-h-full w-[760px] max-w-full flex-col gap-[18px] rounded-dialog bg-glass-active p-6 shadow-dialog"
+      >
+        <header className="flex items-start gap-3.5">
+          <AiAvatar mono={look.mono} glow={look.glow} size={48} glowing={task.live} />
+          <div className="min-w-0 flex-1">
+            <h2 className="m-0 break-words text-[28px] font-light leading-[1.2]">{task.title}</h2>
+            <p className="m-0 mt-1.5 text-[13px] text-ink-muted">{facts.join(' · ')}</p>
+          </div>
+          {canStop && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void act(() => stopGroupAi(group.id, task.key))}
+              className={QUIET}
+            >
+              停下
+            </button>
+          )}
+          {task.resumable && !ai?.runId && (
+            <button
+              type="button"
+              disabled={busy || room.sending}
+              onClick={() => void room.send('继续', [{ kind: 'ai', key: task.key }])}
+              className="h-9 cursor-pointer rounded-full border-0 bg-accent px-3.5 text-[12.5px] font-medium text-on-accent disabled:opacity-45"
+            >
+              让它继续
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="关闭"
+            onClick={onClose}
+            className="flex size-9 flex-none cursor-pointer items-center justify-center rounded-full border-0 bg-well text-ink"
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </header>
+        {task.asking && (
+          <p className="m-0 rounded-bubble bg-accent-tint px-4 py-3 text-[13.5px] text-accent-ink">
+            <span className="font-medium">在等人：</span>
+            {task.note}。到聊天里回它。
+          </p>
+        )}
+        <div className="scroll-quiet flex min-h-0 flex-col gap-[18px] overflow-y-auto">
+          {task.files.length > 0 && (
+            <section aria-label="成果" className="flex flex-col gap-2.5">
+              <h3 className="m-0 text-sm font-medium">成果</h3>
+              <span className="flex flex-wrap gap-1.5">
+                {task.files.map((file) => (
+                  <button
+                    key={file.artifactId}
+                    type="button"
+                    onClick={() => {
+                      onFile(file.path);
+                      onClose();
+                    }}
+                    className="h-[30px] max-w-full cursor-pointer truncate rounded-full border-0 bg-well px-3 text-xs font-medium text-ink"
+                  >
+                    {file.name}
+                  </button>
+                ))}
+              </span>
+            </section>
+          )}
+          {plan && editable && (
+            <PlanActions key={`${plan.messageId}:${plan.item.id}`} plan={plan} />
+          )}
+          <section aria-label="过程" className="flex flex-col gap-2.5">
+            <h3 className="m-0 text-sm font-medium">过程</h3>
+            {task.parts.length > 0 || task.todos?.length ? (
+              <ProcessBody parts={task.parts} todos={task.todos} live={task.live} />
+            ) : (
+              <p className="m-0 text-[13px] text-ink-muted">{task.note}。还没有可以看的步骤。</p>
             )}
-            {task.spentMicro > 0 && (
-              <>
-                {' · 花费 '}
-                <span className="font-display">{formatCost(task.spentMicro)}</span>
-              </>
-            )}
-          </span>
+          </section>
         </div>
-        {canStop && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void act(() => stopGroupAi(group.id, task.key))}
-            className={QUIET}
-          >
-            停下
-          </button>
-        )}
-        {task.column === 'review' && !ai?.runId && (
-          <button
-            type="button"
-            disabled={busy || room.sending}
-            onClick={() => void room.send('继续', [{ kind: 'ai', key: task.key }])}
-            className="h-9 cursor-pointer rounded-full border-0 bg-accent px-3.5 text-[12.5px] font-medium text-on-accent disabled:opacity-45"
-          >
-            让它继续
-          </button>
-        )}
-      </header>
-      {plan && editable && <PlanActions key={`${plan.messageId}:${plan.item.id}`} plan={plan} />}
-      {task.parts.length > 0 || task.todos?.length ? (
-        <ProcessBody parts={task.parts} todos={task.todos} live={task.live} />
-      ) : (
-        <p className="m-0 text-[13px] text-ink-muted">{task.note}。还没有可以看的步骤。</p>
-      )}
-    </section>
+      </section>
+    </div>
   );
 }
 
@@ -263,15 +299,19 @@ export function TasksTab({ bench }: { bench: Workbench }) {
       </p>
     );
   return (
-    <div className="scroll-quiet flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-      <div className="flex flex-wrap content-start gap-3">
+    <>
+      <div
+        className={`grid min-h-0 flex-1 gap-3 ${
+          bench.mode === 'wide' ? 'grid-cols-4 grid-rows-1' : 'grid-cols-2 grid-rows-2'
+        }`}
+      >
         {TASK_COLUMNS.map((column) => {
           const tasks = bench.tasks.filter((task) => task.column === column.id);
           return (
             <section
               key={column.id}
               aria-label={column.title}
-              className="flex min-w-0 flex-[1_1_180px] flex-col gap-2.5 rounded-pop bg-well px-2.5 pb-2.5 pt-3.5"
+              className="box-border flex min-h-0 min-w-0 flex-col gap-2 rounded-3xl bg-well px-2 pb-2 pt-3"
             >
               <h3 className="m-0 mx-2 flex items-baseline gap-2 text-sm font-medium leading-[1.3]">
                 {column.title}
@@ -279,20 +319,22 @@ export function TasksTab({ bench }: { bench: Workbench }) {
                   {tasks.length}
                 </span>
               </h3>
-              {tasks.map((task) => (
-                <TaskCard
-                  key={task.runId}
-                  task={task}
-                  on={task.runId === bench.focus}
-                  onPick={() => bench.setFocus(task.runId === bench.focus ? undefined : task.runId)}
-                  onFile={bench.openFile}
-                />
-              ))}
+              <div className="scroll-quiet flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-0.5 pb-0.5">
+                {tasks.map((task) => (
+                  <TaskRow key={task.runId} task={task} onOpen={() => bench.setFocus(task.runId)} />
+                ))}
+              </div>
             </section>
           );
         })}
       </div>
-      {focused && <TaskProcess task={focused} />}
-    </div>
+      {focused && (
+        <TaskDialog
+          task={focused}
+          onClose={() => bench.setFocus(undefined)}
+          onFile={bench.openFile}
+        />
+      )}
+    </>
   );
 }

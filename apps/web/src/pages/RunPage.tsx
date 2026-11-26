@@ -17,7 +17,7 @@ import { StatusTag, type Speaker } from '../chat/parts.tsx';
 import { runProgress, type RunProgress } from '../chat/run-progress.ts';
 import { RunOutputs } from '../chat/RunOutputs.tsx';
 import { RunStages } from '../chat/RunStages.tsx';
-import { elapsedText, TASK_STATUS, useNow } from '../chat/TaskCard.tsx';
+import { elapsedText, taskStatus, useNow } from '../chat/TaskCard.tsx';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 
@@ -164,7 +164,7 @@ function LeadCard({
   onStop: () => void;
 }) {
   const running = progress.status === 'running';
-  const status = TASK_STATUS[progress.status];
+  const status = taskStatus({ status: progress.status, revision: progress.card?.revision });
   const started = progress.startedAt ? Date.parse(progress.startedAt) : now;
   const ended = progress.finishedAt ? Date.parse(progress.finishedAt) : now;
   return (

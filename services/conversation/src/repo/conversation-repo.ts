@@ -56,6 +56,8 @@ export interface ConversationRepo {
    */
   listTasks(ownerId: string, limit: number): Promise<TaskRow[]>;
   findMessage(conversationId: string, id: string): Promise<Message | undefined>;
+  /** 这段对话里交过这些成果之一的那张任务卡（最近的一张） */
+  findTaskCard(conversationId: string, artifactIds: string[]): Promise<Message | undefined>;
   /** AI 干活时用户发来、还排着队的话（这一轮做完接着开下一轮），按发的先后 */
   pendingMessages(conversationId: string): Promise<Message[]>;
   /** 排着队的话交给 AI 时挪到最后：聊天里按交给 AI 的先后排。消息不在了返回 undefined */
@@ -263,6 +265,28 @@ export function createConversationRepo(
         .select()
         .from(messages)
         .where(and(eq(messages.id, id), eq(messages.conversationId, conversationId)));
+      return row;
+    },
+
+    async findTaskCard(conversationId, artifactIds) {
+      if (!artifactIds.length) return undefined;
+      const [row] = await db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, conversationId),
+            eq(messages.kind, 'task'),
+            or(
+              ...artifactIds.map(
+                (id) =>
+                  sql`${messages.data}->'files' @> ${JSON.stringify([{ artifactId: id }])}::jsonb`,
+              ),
+            ),
+          ),
+        )
+        .orderBy(desc(messages.createdAt))
+        .limit(1);
       return row;
     },
 

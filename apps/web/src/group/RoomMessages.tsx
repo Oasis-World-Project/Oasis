@@ -13,7 +13,7 @@ import { AiBody } from '../chat/AiMessage.tsx';
 import { FileChip } from '../chat/FileChip.tsx';
 import { FilePreview, type PreviewFile } from '../chat/FilePreview.tsx';
 import { CardButton, CardFrame, CardHeading, StatusTag } from '../chat/parts.tsx';
-import { TASK_STATUS, TaskFacts } from '../chat/TaskCard.tsx';
+import { taskStatus, TaskFacts } from '../chat/TaskCard.tsx';
 import { ChatActionsContext, type ChatActions } from '../chat/use-chat-actions.ts';
 import { useStickToBottom } from '../chat/use-stick-to-bottom.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
@@ -220,7 +220,7 @@ function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) 
 /** 群里一个 AI 这一轮的任务卡：任务名、状态、用时、花费、交了哪些文件（点开在工作台看），过程去工作台看 */
 function RoomTask({ card, authorId, name }: { card: TaskCard; authorId: string; name: string }) {
   const { models, bench } = useRoom();
-  const status = TASK_STATUS[card.status];
+  const status = taskStatus(card);
   return (
     <CardFrame
       speaker={aiLook(models, authorId, name)}

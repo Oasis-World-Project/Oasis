@@ -1,6 +1,6 @@
 // 任务卡：调用了生图、视频、配音这类工具，或交了文件的那一轮。顶上是任务名；进行中显示用时和花费（跟着消息
 // 每秒刷新），可以停下、看进度；成品（做好一个进一个）点开预览，素材只说有几个；也可以去画布看这个对话的全部成果。
-import type { TaskCard as TaskData, TaskFile } from '@oasis/contracts/conversation';
+import { taskPhase, type TaskCard as TaskData, type TaskFile } from '@oasis/contracts/conversation';
 import { Link } from '@tanstack/react-router';
 import { Activity, Images } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -19,15 +19,15 @@ import {
 import { MATERIALS } from './run-progress.ts';
 import { useChatActions } from './use-chat-actions.ts';
 
-export const TASK_STATUS: Record<
-  TaskData['status'],
-  { label: string; tone: 'muted' | 'accent' | 'solid' }
-> = {
+const STATUS: Record<TaskData['status'], { label: string; tone: 'muted' | 'accent' | 'solid' }> = {
   running: { label: '进行中', tone: 'accent' },
   done: { label: '已完成', tone: 'solid' },
   stopped: { label: '已停下', tone: 'muted' },
   failed: { label: '出错了', tone: 'accent' },
 };
+/** 任务卡上的状态：改一个做完过的任务时是「修改中」 */
+export const taskStatus = (card: Pick<TaskData, 'status' | 'revision'>) =>
+  taskPhase(card) === 'fixing' ? { label: '修改中', tone: 'accent' as const } : STATUS[card.status];
 
 /** 用时：几小时几分、几分几秒 */
 export function elapsedText(ms: number): string {
@@ -79,7 +79,7 @@ export function TaskCard({ card, speaker }: { card: TaskData; speaker: Speaker }
   const actions = useChatActions();
   const running = card.status === 'running';
   const [preview, setPreview] = useState<PreviewFile | null>(null);
-  const status = TASK_STATUS[card.status];
+  const status = taskStatus(card);
   const finals = card.files.filter((file) => !file.path.startsWith(MATERIALS));
   const materials = card.files.length - finals.length;
 

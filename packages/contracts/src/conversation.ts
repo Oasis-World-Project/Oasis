@@ -139,9 +139,18 @@ export type TaskFile = z.infer<typeof TaskFile>;
 /**
  * 任务卡：调用了生图、视频、配音这类工具，或交了文件的那一轮。进行中实时更新状态、花费和登记进画布的
  * 成果（做好一个进一个），结束时写上用时、花费和全部成果。
+ * 一个任务不止一轮：用户让 AI 改这个任务的成果，那一轮也算在这张卡上（runs 多一轮、revision 加一），
+ * 卡回到进行中，做完成果原地换新，花费累加。
  */
 export const TaskCard = z.object({
+  /** 最近的一轮（看过程看的是它） */
   runId: z.uuid(),
+  /** 这个任务的每一轮，先后顺序：第一次做、之后每次修改（没改过的任务卡没有） */
+  runs: z.array(z.uuid()).optional(),
+  /** 改过几次（包括正在改的这一次） */
+  revision: z.number().int().positive().optional(),
+  /** 这一轮正等着用户点确认卡 */
+  asking: z.boolean().optional(),
   /** 任务名：任务单的标题，没有就是用户要求的开头（以前的任务卡没有） */
   title: z.string().optional(),
   status: z.enum(['running', 'done', 'stopped', 'failed']),
@@ -151,6 +160,11 @@ export const TaskCard = z.object({
   files: z.array(TaskFile),
 });
 export type TaskCard = z.infer<typeof TaskCard>;
+
+/** 任务现在在哪一栏：进行中、修改中（做完过、正在改）、已完成（做完、停下、出错都算）。待开始的还没有卡 */
+export type TaskPhase = 'doing' | 'fixing' | 'done';
+export const taskPhase = (card: Pick<TaskCard, 'status' | 'revision'>): TaskPhase =>
+  card.status !== 'running' ? 'done' : card.revision ? 'fixing' : 'doing';
 
 /**
  * 画布上的一个任务：任务卡，加上它在哪段对话（成果上记的也是这个 ID）。私聊里的是那个私聊；

@@ -5,6 +5,9 @@ import { describe, expect, it } from 'vitest';
 import {
   OWNER,
   SESSION,
+  ARTIFACT,
+  activity,
+  until,
   fake,
   run,
   deletedUploads,
@@ -58,6 +61,67 @@ describe('让 AI 改画布里的成果', () => {
         '（要改的成果是之前的话题做的，已经连同它用到的文件拷进工作目录：materials/canvas/旧话题/web/index.html、materials/canvas/旧话题/poster.png；改好的放进 out/）',
       ].join('\n'),
     );
+  });
+
+  it('要改的成果是一个任务交的：这一轮算在原来那张任务卡上——回到进行中（修改中），做完原地换新、花费累加，不另出一张卡', async () => {
+    continuing();
+    const file = (artifactId: string, path: string) => ({
+      artifactId,
+      name: path.split('/').at(-1)!,
+      path,
+      size: 10,
+      category: 'app',
+    });
+    const [page, old] = [file(PAGE, 'site/home.html'), file(ARTIFACT, 'site/index.html')];
+    const card = await repo.insertMessage({
+      conversationId: conversation.id,
+      authorKind: 'ai',
+      authorId: 'deepseek',
+      content: '任务结束',
+      status: 'complete',
+      kind: 'task',
+      data: {
+        runId: PREVIOUS,
+        title: '做个网页',
+        status: 'done',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        spentMicro: 300,
+        files: [page, old],
+      },
+    });
+    const cardNow = () => repo.messages.find((m) => m.id === card.id)!.data;
+    activity.spentMicro = 50;
+    const runId = (await send('标题改成蓝色', { artifacts: [PAGE] })).turn!.runId;
+    await until(() => (cardNow().status === 'running' ? true : undefined));
+    expect(cardNow()).toMatchObject({
+      runId,
+      runs: [PREVIOUS, runId],
+      revision: 1,
+      title: '做个网页',
+      spentMicro: 350,
+      files: [page, old],
+    });
+    // 改好了：site/index.html 在画布里原地换新（编号不变），另外多交了一个
+    fake.runs.set(
+      runId,
+      run(runId, {
+        status: 'succeeded',
+        finishedAt: new Date().toISOString(),
+        outputs: [
+          { path: 'site/index.html', size: 120 },
+          { path: 'site/about.html', size: 120 },
+        ],
+      }),
+    );
+    await finished();
+    expect(repo.messages.filter((m) => m.kind === 'task')).toHaveLength(1);
+    expect(cardNow()).toMatchObject({ status: 'done', revision: 1, spentMicro: 350 });
+    expect(cardNow().files).toMatchObject([
+      page,
+      { artifactId: ARTIFACT, path: 'site/index.html', size: 120 },
+      { path: 'site/about.html' },
+    ]);
   });
 
   it('接不上原会话：这一轮开新会话，成果改成拷进来', async () => {

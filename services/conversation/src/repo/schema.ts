@@ -1,5 +1,5 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
-import type { TaskFile } from '@oasis/contracts/conversation';
+import type { TaskCard, TaskFile } from '@oasis/contracts/conversation';
 import type { Permissions, Workplace } from '@oasis/contracts/harness';
 import type { Confirmation } from '@oasis/contracts/model-gateway';
 import { bigint, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
@@ -18,8 +18,13 @@ export interface Turn {
   segmentId: string;
   /** 送进这一轮、AI 还没看到的插话条数 */
   unheard?: number;
-  /** 任务卡消息：这一轮用了生图、视频这类工具或交了文件才有 */
+  /** 任务卡消息：这一轮用了生图、视频这类工具或交了文件才有；改一个任务的那一轮一开始就是那个任务的卡 */
   cardId?: string;
+  /** 这一轮是在改一个已有的任务：那张卡在这一轮之前的样子（名字、做过的每一轮、成果、已经花的） */
+  revises?: Pick<TaskCard, 'title' | 'spentMicro' | 'files'> & {
+    runs: string[];
+    revision: number;
+  };
   /** 这一轮在等用户点的确认卡（跟进时从 model-gateway 拿来） */
   confirmations?: Confirmation[];
   /** 做好了、还没登记进画布的文件（out/ 下，相对工作目录）：跟进时登记，做好一个进一个 */

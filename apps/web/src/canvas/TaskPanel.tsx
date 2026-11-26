@@ -8,7 +8,7 @@ import { ApiError } from '../api/client.ts';
 import { deleteGroupTask, dmsQuery, taskArchiveUrl, tasksQuery } from '../api/queries.ts';
 import { aiName, useModelMap } from '../api/use-model-map.ts';
 import { ConfirmButton, StatusTag } from '../chat/parts.tsx';
-import { elapsedText, TASK_STATUS } from '../chat/TaskCard.tsx';
+import { elapsedText, taskStatus } from '../chat/TaskCard.tsx';
 import { aiLook } from '../group/people.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
@@ -52,7 +52,7 @@ export const when = (at: number) =>
 export function TaskPanel({ group, maker, now }: { group: TaskGroup; maker?: Maker; now: number }) {
   const { task } = group;
   const running = task?.status === 'running';
-  const status = task ? TASK_STATUS[task.status] : undefined;
+  const status = task ? taskStatus(task) : undefined;
   const count = group.finals.length + group.materials.length;
   /** 群里的任务：哪个群 */
   const from = task?.group;

@@ -1,5 +1,6 @@
 // 任务卡和成果：这一轮用了生图、视频这类工具或交了文件就是一个任务，出任务卡（任务名、状态、花费、
 // 成果）。做好的文件一个个登记进画布（做好一个进一个），写到任务卡上；结束时按产出清单再登记一遍。
+// 用户让 AI 改一个任务的成果：那一轮算在原来那张卡上（修改中），做完原地换新。
 import { isDeepStrictEqual } from 'node:util';
 import { ArtifactBody, type RegisterRunArtifactsBody } from '@oasis/contracts/canvas';
 import { OASIS_HEADERS } from '@oasis/contracts/common';
@@ -29,7 +30,34 @@ export function createTaskCards(deps: {
       schema: RunActivity,
     });
 
-  /** 任务卡：有就更新，没有就建 */
+  /**
+   * 要改的成果是哪个任务交的：找到了，这一轮就算在那个任务上（那张卡回到进行中，做完原地换新），
+   * 返回要记在这一轮上的东西；没找到（成果不是任务交的）就是一轮新的
+   */
+  async function revised(
+    store: ConversationRepo,
+    conversation: Conversation,
+    artifactIds: string[],
+  ): Promise<Pick<Turn, 'cardId' | 'revises'> | undefined> {
+    const card = await store.findTaskCard(roomOf(conversation), artifactIds);
+    // 群里只认这个 AI 自己交的任务
+    if (!card || (conversation.kind === 'seat' && card.authorId !== conversation.modelKey))
+      return undefined;
+    const before = card.data as TaskCard;
+    if (before.status === 'running') return undefined;
+    return {
+      cardId: card.id,
+      revises: {
+        ...(before.title ? { title: before.title } : {}),
+        runs: before.runs ?? [before.runId],
+        revision: (before.revision ?? 0) + 1,
+        spentMicro: before.spentMicro,
+        files: before.files,
+      },
+    };
+  }
+
+  /** 任务卡：有就更新，没有就建。改一个任务的那一轮：接在那个任务原来的名字、成果和花费上 */
   async function save(
     store: ConversationRepo,
     conversation: Conversation,
@@ -37,7 +65,26 @@ export function createTaskCards(deps: {
     card: TaskCard,
   ) {
     const content = card.status === 'running' ? '任务进行中' : '任务结束';
-    if (turn.cardId && (await store.updateMessage(turn.cardId, { content, data: card }))) return;
+    const before = turn.revises;
+    const data: TaskCard = before
+      ? {
+          ...card,
+          ...(before.title ? { title: before.title } : {}),
+          runs: [...before.runs, card.runId],
+          revision: before.revision,
+          spentMicro: before.spentMicro + card.spentMicro,
+          // 改过的成果在画布里是原地换新、编号不变：原来的顺序留着，新交的排在后面
+          files: [
+            ...before.files.map(
+              (old) => card.files.find((file) => file.artifactId === old.artifactId) ?? old,
+            ),
+            ...card.files.filter(
+              (file) => !before.files.some((old) => old.artifactId === file.artifactId),
+            ),
+          ],
+        }
+      : card;
+    if (turn.cardId && (await store.updateMessage(turn.cardId, { content, data }))) return;
     const created = await store.insertMessage({
       conversationId: roomOf(conversation),
       authorKind: 'ai',
@@ -45,7 +92,7 @@ export function createTaskCards(deps: {
       content,
       status: 'complete',
       kind: 'task',
-      data: card,
+      data,
     });
     await store.updateTurn(conversation.id, turn.runId, { cardId: created.id });
     turn.cardId = created.id;
@@ -142,6 +189,7 @@ export function createTaskCards(deps: {
     await save(store, conversation, turn, {
       runId: turn.runId,
       ...(turn.title ? { title: turn.title } : {}),
+      ...(spend.confirmations.length ? { asking: true } : {}),
       status: 'running',
       startedAt: turn.startedAt,
       finishedAt: null,
@@ -150,5 +198,5 @@ export function createTaskCards(deps: {
     });
   }
 
-  return { activityOf, save, register, live };
+  return { activityOf, revised, save, register, live };
 }

@@ -111,6 +111,17 @@ export function memoryRepo(): ConversationRepo & {
       const row = messages.find((m) => m.id === id && m.conversationId === conversationId);
       return row ? structuredClone(row) : undefined;
     },
+    findTaskCard: async (conversationId, artifactIds) => {
+      const row = messages.findLast(
+        (m) =>
+          m.conversationId === conversationId &&
+          m.kind === 'task' &&
+          ((m.data.files ?? []) as { artifactId: string }[]).some((file) =>
+            artifactIds.includes(file.artifactId),
+          ),
+      );
+      return row ? structuredClone(row) : undefined;
+    },
     pendingMessages: async (conversationId) =>
       structuredClone(
         messages.filter(

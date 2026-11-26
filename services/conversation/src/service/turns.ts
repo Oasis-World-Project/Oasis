@@ -349,6 +349,7 @@ export function createTurns(deps: TurnDeps) {
       cursor: -1,
       segmentId: segment.id,
       ...(brief ? { callers: brief.callers } : {}),
+      ...(await cards.revised(store, conversation, revisingIds)),
     };
     if (!(await store.startTurn(conversation.id, turn))) {
       await store.deleteMessage(segment.id);
