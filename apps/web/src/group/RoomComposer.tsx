@@ -1,19 +1,23 @@
-// 群页的输入框：上面一行是谁在忙（点它去工作台看）；框里先是要发的文件、引用的群文件、「@谁」胶囊和输入，
-// 下面是「＋」「@」和发送。「＋」里上传文件、引用工作台里的文件；「@」弹出「召唤谁来回答」。照原型 ②③。
-// 和好友的私聊也用它：没有「@」，「＋」就是发文件。
+// 聊天页的输入框（群、好友、和 AI 的私聊同一个）。照原型 ②③：框里先是要发的文件、引用的群文件、「@谁」胶囊
+// 和输入，下面一排是「＋」「@」、这段对话在哪干活、手动 / 自动、联网搜索，最右是发送。
+// 群里：上面一行是谁在忙（点它去工作台看）；「＋」里作为任务发布、上传文件、引用工作台里的文件；「@」弹出
+// 「召唤谁来回答」。和 AI 的私聊：上面是等你点的确认卡和排着队的话；它在干活、框里没字时，发送键就是停下。
+// 和好友的私聊：没有「@」，「＋」就是发文件。
 import type { Mention } from '@oasis/contracts/conversation';
-import { MAX_FILE_REFS } from '@oasis/contracts/group';
-import { ArrowUp, AtSign, Plus, X } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { ArrowUp, AtSign, Plus, Square, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { PendingFiles } from '../chat/Attachments.tsx';
+import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
 import { badgeOf, baseName } from '../chat/files.ts';
-import { useAttachments } from '../chat/use-attachments.ts';
-import { AiAvatar } from '../ui/Avatar.tsx';
+import { HomeBar, type Home } from '../chat/HomeBar.tsx';
+import { QueuedMessages } from '../chat/QueuedMessages.tsx';
+import type { useAttachments } from '../chat/use-attachments.ts';
+import { useChatActions } from '../chat/use-chat-actions.ts';
+import { WebToggle } from '../chat/WebToggle.tsx';
+import { BusyLine, PlusMenu, ROUND } from './ComposerMenus.tsx';
 import { MentionPicker } from './MentionPicker.tsx';
 import { aiLook } from './people.ts';
-import { Popover } from './RoomHeader.tsx';
 import { mentionText, useRoom } from './room.ts';
-import { fileNote, useClock } from './workbench/files.tsx';
 
 const sameMention = (a: Mention, b: Mention) =>
   a.kind === b.kind &&
@@ -29,143 +33,62 @@ export function addMention(list: Mention[], mention: Mention): Mention[] {
   return [...list, mention];
 }
 
-const ROUND =
-  'flex size-10 cursor-pointer items-center justify-center rounded-full border-0 text-ink shadow-[inset_0_0_0_1px_var(--oasis-track)] disabled:cursor-not-allowed disabled:opacity-45';
-const MENU_ITEM =
-  'h-11 cursor-pointer rounded-[20px] border-0 bg-transparent px-3 text-left text-sm font-medium text-ink hover:bg-glass-active disabled:cursor-not-allowed disabled:opacity-45';
-
-/** 「＋」弹出的菜单：上传文件、引用工作台里的文件（再点开是群文件的单子） */
-function PlusMenu({
-  anchor,
-  refs,
-  task,
-  onTask,
-  onUpload,
-  onRef,
-  onClose,
-}: {
-  anchor: string;
-  refs: string[];
-  /** 这句话是不是作为任务发布 */
-  task: boolean;
-  onTask: (next: boolean) => void;
-  onUpload: () => void;
-  onRef: (path: string) => void;
-  onClose: () => void;
-}) {
+/** 和 AI 的私聊，输入框上面：等你点的确认卡、排着队的话（拿回来改的放回输入框） */
+function DmQueue({ onEdit }: { onEdit: (text: string) => void }) {
   const room = useRoom();
-  const [listing, setListing] = useState(false);
-  const now = useClock();
-  const files = room.bench.files.filter((file) => !refs.includes(file.path));
+  const { group } = room;
+  const queued = useMemo(
+    () => group.messages.filter((m) => m.kind === 'text' && m.data.pending),
+    [group.messages],
+  );
+  if (!group.confirmations.length && !queued.length) return null;
   return (
-    <Popover
-      label="更多"
-      role="menu"
-      onClose={onClose}
-      className={`${anchor} left-[18px] w-[280px] gap-0.5 rounded-pop p-2`}
-    >
-      {listing ? (
-        <>
-          <span className="px-3 pb-1 pt-2 text-[12.5px] text-ink-muted">引用哪个文件</span>
-          <div className="scroll-quiet flex max-h-[40vh] flex-col gap-0.5 overflow-y-auto">
-            {files.map((file) => (
-              <button
-                key={file.id}
-                type="button"
-                role="menuitem"
-                onClick={() => onRef(file.path)}
-                className="flex cursor-pointer flex-col gap-px rounded-[20px] border-0 bg-transparent px-3 py-2 text-left text-ink hover:bg-glass-active"
-              >
-                <span className="truncate text-sm font-medium">{file.name}</span>
-                <span className="truncate text-xs text-ink-muted">{fileNote(room, file, now)}</span>
-              </button>
-            ))}
-            {files.length === 0 && (
-              <span className="px-3 py-2 text-[13px] text-ink-muted">没有别的群文件了。</span>
-            )}
-          </div>
-        </>
-      ) : (
-        <>
-          <button
-            type="button"
-            role="menuitemcheckbox"
-            aria-checked={task}
-            onClick={() => onTask(!task)}
-            className="flex cursor-pointer items-center gap-2.5 rounded-[20px] border-0 bg-transparent px-3 py-2.5 text-left text-ink hover:bg-glass-active"
-          >
-            <span className="flex flex-1 flex-col">
-              <span className="text-sm font-medium">作为任务发布</span>
-              <span className="text-xs text-ink-muted">
-                没 @ 谁时挑最对口的 AI 出来负责，它可以把一部分交给别的 AI
-              </span>
-            </span>
-            <span
-              aria-hidden="true"
-              className={`relative h-[22px] w-[38px] shrink-0 rounded-full ${task ? 'bg-accent' : 'bg-dot-idle'}`}
-            >
-              <span
-                className={`absolute top-[3px] size-4 rounded-full bg-on-solid shadow-raised ${task ? 'left-[19px]' : 'left-[3px]'}`}
-              />
-            </span>
-          </button>
-          <button type="button" role="menuitem" onClick={onUpload} className={MENU_ITEM}>
-            上传文件
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!room.bench.files.length || refs.length >= MAX_FILE_REFS}
-            title={room.bench.files.length ? undefined : '还没有群文件'}
-            onClick={() => setListing(true)}
-            className={MENU_ITEM}
-          >
-            引用工作台里的文件
-          </button>
-        </>
-      )}
-    </Popover>
+    <div className="mb-2 flex flex-col gap-2">
+      <ConfirmationCards
+        conversationId={group.id}
+        cards={group.confirmations}
+        messages={group.messages}
+        onDecided={() => void room.refresh()}
+      />
+      <QueuedMessages messages={queued} onEdit={onEdit} />
+    </div>
   );
 }
 
-/** 输入框上面那行：几个 AI 在忙，谁在旁听；点它去工作台看它们在做什么 */
-function BusyLine() {
-  const { group, models, bench } = useRoom();
-  const busy = group.ais.filter((ai) => ai.runId);
-  const idle = group.ais.filter((ai) => !ai.runId);
-  if (!busy.length) return null;
-  const names = idle.map((ai) => aiLook(models, ai.key).name);
+/** 和 AI 的私聊：它在干活、框里没字时，发送键换成停下 */
+function StopButton() {
+  const actions = useChatActions();
   return (
     <button
       type="button"
-      onClick={() => bench.openTasks()}
-      className="mx-auto mb-2.5 flex h-[30px] cursor-pointer items-center gap-2 rounded-full border-0 bg-transparent py-0 pl-1.5 pr-3 text-[12.5px] text-ink-muted"
+      aria-label="停下"
+      title="停下这一轮：已经做出来的留着，说「继续」接着做"
+      disabled={actions.busy !== null}
+      onClick={() => void actions.stop()}
+      className="flex size-11 cursor-pointer items-center justify-center rounded-full border-0 bg-solid text-on-solid disabled:cursor-not-allowed disabled:opacity-45"
     >
-      <span
-        aria-hidden="true"
-        className="relative h-5 shrink-0"
-        style={{ width: (busy.length - 1) * 14 + 20 }}
-      >
-        {busy.map((ai, index) => {
-          const look = aiLook(models, ai.key);
-          return (
-            <span key={ai.key} className="absolute top-0" style={{ left: index * 14 }}>
-              <AiAvatar mono={look.mono} glow={look.glow} size={20} />
-            </span>
-          );
-        })}
-      </span>
-      {busy.length} 个 AI 在工作台忙{names.length ? `，${names.join('、')} 在旁听` : ''}
+      <Square size={15} fill="currentColor" aria-hidden="true" />
     </button>
   );
 }
 
 export function RoomComposer({
+  inputRef,
+  hint,
+  onSent,
+  attachments,
   mentions,
   onMentions,
   refs,
   onRefs,
 }: {
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  /** 卡片要求的提示（如「说说要改哪里」） */
+  hint: string | null;
+  /** 发出去了：提示清掉 */
+  onSent: () => void;
+  /** 要发的文件（拖进聊天窗的也加在这里） */
+  attachments: ReturnType<typeof useAttachments>;
   mentions: Mention[];
   onMentions: (next: Mention[]) => void;
   /** 引用着的群文件（路径） */
@@ -173,34 +96,45 @@ export function RoomComposer({
   onRefs: (next: string[]) => void;
 }) {
   const room = useRoom();
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // @ 上谁、引用了文件以后（从弹层里挑的、舞台卡片和工作台上点的）光标回到输入框
   useEffect(() => {
     if (mentions.length || refs.length) inputRef.current?.focus();
-  }, [mentions, refs]);
+  }, [mentions, refs, inputRef]);
   const { group, online, sending } = room;
-  const direct = group.kind === 'direct';
-  const attachments = useAttachments();
+  const scene = group.kind;
+  const ai = scene === 'dm' ? group.ais[0] : undefined;
+  const turnActive = Boolean(ai?.runId);
   const [draft, setDraft] = useState('');
   const [task, setTask] = useState(false);
   const [open, setOpen] = useState<'mention' | 'plus' | null>(null);
   const locked = !online || sending;
   // 弹层贴着输入框的上沿：上面有「谁在忙」那一行时盖住它，没有时就在输入框上面
-  const anchor = group.ais.some((ai) => ai.runId)
-    ? 'bottom-[calc(100%-34px)]'
-    : 'bottom-[calc(100%+4px)]';
+  const anchor =
+    scene === 'group' && group.ais.some((item) => item.runId)
+      ? 'bottom-[calc(100%-34px)]'
+      : 'bottom-[calc(100%+4px)]';
+  const hasFiles = attachments.ids.length > 0 || attachments.files.length > 0;
+  const hasText = draft.trim().length > 0;
   const canSend =
     !locked &&
     !attachments.uploading &&
     !attachments.failed &&
-    (draft.trim().length > 0 || attachments.ids.length > 0 || refs.length > 0);
+    // 和 AI 的私聊：一句话要有字；文件只能在一轮开始时交给它
+    (scene === 'dm'
+      ? hasText && !(turnActive && hasFiles)
+      : hasText || attachments.ids.length > 0 || refs.length > 0);
+  const home: Home | undefined =
+    scene === 'dm' && group.home
+      ? { id: group.id, setup: group.home, onSaved: () => void room.refresh() }
+      : undefined;
 
   async function send() {
     if (!canSend) return;
     if (await room.send(draft.trim(), mentions, { attachments: attachments.ids, refs, task })) {
       setDraft('');
       setTask(false);
+      onSent();
       onMentions([]);
       onRefs([]);
       attachments.clear();
@@ -225,15 +159,33 @@ export function RoomComposer({
     ? '发送中…'
     : task
       ? '说说要做成什么样'
-      : mentions.length
-        ? '说说要它做什么'
-        : group.ais.length
-          ? '说点什么，或者 @ 一个 AI'
-          : '说点什么';
+      : hint
+        ? hint
+        : mentions.length
+          ? '说说要它做什么'
+          : scene === 'dm'
+            ? turnActive
+              ? hasFiles
+                ? '带文件的话等它做完再发，或者先停下这一轮'
+                : '它在做：你说的话先排着'
+              : hasFiles
+                ? '说说要拿这些文件做什么'
+                : '说点什么'
+            : group.ais.length
+              ? '说点什么，或者 @ 一个 AI'
+              : '说点什么';
 
   return (
     <footer className="relative flex flex-col px-[18px] pb-[18px] pt-1">
-      <BusyLine />
+      {scene === 'group' && <BusyLine />}
+      {scene === 'dm' && (
+        <DmQueue
+          onEdit={(text) => {
+            setDraft((current) => (current.trim() ? `${text}\n${current}` : text));
+            inputRef.current?.focus();
+          }}
+        />
+      )}
       {open === 'mention' && (
         <MentionPicker anchor={anchor} onPick={pick} onClose={() => setOpen(null)} />
       )}
@@ -326,15 +278,22 @@ export function RoomComposer({
             ref={inputRef}
             rows={1}
             value={draft}
-            maxLength={4000}
+            maxLength={scene === 'dm' ? 8000 : 4000}
             disabled={locked}
             autoFocus
             placeholder={placeholder}
             onKeyDown={onKeyDown}
+            onPaste={(event) => {
+              // 粘贴进来的文件（截图、复制的文件）加到要发的文件里
+              if (event.clipboardData.files.length > 0) {
+                event.preventDefault();
+                attachments.add(event.clipboardData.files);
+              }
+            }}
             onChange={(event) => {
               const value = event.target.value;
               // 打一个 @ 就弹出「召唤谁来回答」
-              if (!direct && value.endsWith('@') && value.length === draft.length + 1) {
+              if (scene === 'group' && value.endsWith('@') && value.length === draft.length + 1) {
                 setOpen('mention');
                 return;
               }
@@ -346,15 +305,17 @@ export function RoomComposer({
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            aria-label={direct ? '发文件' : '更多'}
-            aria-expanded={direct ? undefined : open === 'plus'}
+            aria-label={scene === 'group' ? '更多' : '发文件'}
+            aria-expanded={scene === 'group' ? open === 'plus' : undefined}
             disabled={locked}
-            onClick={() => (direct ? upload() : setOpen(open === 'plus' ? null : 'plus'))}
+            onClick={() =>
+              scene === 'group' ? setOpen(open === 'plus' ? null : 'plus') : upload()
+            }
             className={`${ROUND} ${open === 'plus' ? 'bg-glass-active' : 'bg-transparent'}`}
           >
             <Plus size={18} strokeWidth={1.9} aria-hidden="true" />
           </button>
-          {!direct && (
+          {scene === 'group' && (
             <button
               type="button"
               aria-label="召唤某个 AI 或某人"
@@ -365,16 +326,31 @@ export function RoomComposer({
               <AtSign size={19} strokeWidth={1.8} aria-hidden="true" />
             </button>
           )}
+          {home && ai && (
+            <>
+              <WebToggle home={home} />
+              <HomeBar
+                home={home}
+                name={aiLook(room.models, ai.key, group.title).name}
+                fresh={group.messages.length === 0 && !turnActive}
+                turnActive={turnActive}
+              />
+            </>
+          )}
           <span className="flex-1" />
-          <button
-            type="button"
-            aria-label={task ? '发布任务' : '发送'}
-            disabled={!canSend}
-            onClick={() => void send()}
-            className="flex size-11 cursor-pointer items-center justify-center rounded-full border-0 bg-accent text-on-accent shadow-accent disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"
-          >
-            <ArrowUp size={19} strokeWidth={2.2} aria-hidden="true" />
-          </button>
+          {scene === 'dm' && turnActive && !hasText ? (
+            <StopButton />
+          ) : (
+            <button
+              type="button"
+              aria-label={task ? '发布任务' : '发送'}
+              disabled={!canSend}
+              onClick={() => void send()}
+              className="flex size-11 cursor-pointer items-center justify-center rounded-full border-0 bg-accent text-on-accent shadow-accent disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"
+            >
+              <ArrowUp size={19} strokeWidth={2.2} aria-hidden="true" />
+            </button>
+          )}
         </div>
       </div>
     </footer>

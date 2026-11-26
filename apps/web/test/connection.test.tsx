@@ -112,9 +112,9 @@ describe('中断后的消息恢复', () => {
           : undefined,
     });
     await open();
-    await screen.findByRole('button', { name: '重试加载消息' });
+    // 读不到时写着「连接中…」，不当成一段空的私聊
+    await screen.findByText('连接中…');
     expect(screen.queryByText(/打个招呼/)).toBeNull();
-    expect(screen.queryByText('正在加载消息…')).toBeNull();
     available = true;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_001);
@@ -132,7 +132,7 @@ describe('中断后的消息恢复', () => {
     });
     await open();
     await screen.findByText('已有消息');
-    const input = screen.getByPlaceholderText('发消息…');
+    const input = screen.getByPlaceholderText('说点什么');
     fireEvent.change(input, { target: { value: '尚未发送的草稿' } });
     await act(async () => {
       onlineManager.setOnline(false);
@@ -206,7 +206,7 @@ describe('中断后的消息恢复', () => {
     await expect(api('/broken-body', z.unknown())).rejects.toMatchObject({ code: 'network_error' });
   });
 
-  it('已有消息后台读取失败仍可见，点击重试恢复', async () => {
+  it('已有消息后来读不到了仍可见，页头写着连接中；服务恢复后自己接上', async () => {
     let broken = false;
     installFakeApi({
       signedIn: true,
@@ -217,17 +217,13 @@ describe('中断后的消息恢复', () => {
             : json(200, { messages: [message], turn: null })
           : undefined,
     });
-    const app = await open();
+    await open();
     await screen.findByText('已有消息');
     broken = true;
-    await act(async () => {
-      await app.queryClient.invalidateQueries({ queryKey: ['messages', ID] });
-    });
-    await screen.findByRole('button', { name: '重试加载消息' });
+    await screen.findByText(/连接中…/);
     expect(screen.getByText('已有消息')).toBeTruthy();
     broken = false;
-    fireEvent.click(screen.getByRole('button', { name: '重试加载消息' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: '重试加载消息' })).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/连接中…/)).toBeNull());
   });
 });
 
@@ -293,9 +289,9 @@ describe('停下、出错后的「继续」', () => {
         }),
       );
       // 这一轮在做：「继续」不见了，发的话先排着，也可以停下
-      const stop = await screen.findByRole('button', { name: '停下这一轮' });
+      const stop = await screen.findByRole('button', { name: '停下' });
       expect(screen.queryByRole('button', { name: '继续' })).toBeNull();
-      expect(screen.getByPlaceholderText('AI 正在做，发的话先排着，做完接着做…')).toBeTruthy();
+      expect(screen.getByPlaceholderText('它在做：你说的话先排着')).toBeTruthy();
       fireEvent.click(stop);
       await waitFor(() =>
         expect(fake.requests).toContain(`POST /conversation/v1/conversations/${ID}/stop`),

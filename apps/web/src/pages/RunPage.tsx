@@ -129,6 +129,11 @@ function RunView({ runId, conversationId }: { runId: string; conversationId: str
               conversationId={conversationId}
               cards={messages.data.turn.confirmations}
               messages={messages.data.messages}
+              onDecided={() =>
+                void queryClient.invalidateQueries({
+                  queryKey: messagesQuery(conversationId).queryKey,
+                })
+              }
             />
           )}
           <RunOutputs

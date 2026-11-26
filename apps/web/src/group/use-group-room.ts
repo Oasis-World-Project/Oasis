@@ -1,21 +1,16 @@
-// 群页的数据：连着群的推送（成员、AI、消息），发消息，各种操作。
+// 聊天页的数据（群、和好友的私聊、和 AI 的私聊是同一套）：连着推送（成员、AI、消息），发消息，各种操作。
 // AI 的消息是原地更新的（序号不变）：推送里的 live 是还在变的和刚变完的，按 id 换新；gone 是不在了的。
+// 和 AI 的私聊只有读和推送走群的接口，发话走私聊自己的接口（它不回房间的样子，发完重新读一遍）。
 import type { Mention } from '@oasis/contracts/conversation';
-import { GroupStreamEvent, type GroupMessage, type GroupSnapshot } from '@oasis/contracts/group';
+import { GroupStreamEvent, inFlux, type GroupSnapshot } from '@oasis/contracts/group';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client.ts';
-import { groupSnapshot, sendGroupMessage } from '../api/queries.ts';
+import { groupSnapshot, sendGroupMessage, sendMessage } from '../api/queries.ts';
 import type { SendFiles } from './room.ts';
 
 /** 推送连接彻底关了（EventSource.CLOSED）：浏览器不会再自己重连 */
 const CLOSED = 2;
-
-/** 还在变的消息：AI 正在写的话、进行中的任务卡、没关上的分工单 */
-const inFlux = (message: GroupMessage) =>
-  message.status === 'streaming' ||
-  (message.kind === 'task' && message.data.status === 'running') ||
-  (message.kind === 'assign' && message.data.status === 'open');
 
 /** 新来的一份并进手上的：消息按 id 换新、按序号排，不在了的去掉 */
 function mergeSnapshot(previous: GroupSnapshot | null, next: GroupSnapshot): GroupSnapshot {
@@ -147,6 +142,13 @@ export function useGroupRoom(id: string, gone = '这个群已解散，或你已�
     };
   }, [id, client, gone]);
 
+  /** 重新读最近一页对一下：私聊的写接口（发话、引导、停下、从队里删）做完后用；手上还在变、读回来没有的就是不在了 */
+  const refresh = useCallback(async () => {
+    const fetched = await groupSnapshot(id);
+    if (!revoked.current)
+      setGroup((current) => (current ? reconcile(current, fetched) : mergeSnapshot(null, fetched)));
+  }, [id]);
+
   /** 做一件事（改设置、加减 AI、移除成员……）：同一时间只做一件，出错写在页面上；返回做成了没有 */
   const act = useCallback(
     async (work: () => Promise<GroupSnapshot | void>): Promise<boolean> => {
@@ -182,7 +184,10 @@ export function useGroupRoom(id: string, gone = '这个群已解散，或你已�
       ]);
       if (pending.current?.draft !== draft) pending.current = { draft, id: crypto.randomUUID() };
       try {
-        apply(await sendGroupMessage(id, content, pending.current.id, mentions, files));
+        if (latest.current?.kind === 'dm') {
+          await sendMessage(id, { content, attachments: files.attachments ?? [] });
+          await refresh();
+        } else apply(await sendGroupMessage(id, content, pending.current.id, mentions, files));
         pending.current = null;
         return true;
       } catch (err) {
@@ -192,7 +197,7 @@ export function useGroupRoom(id: string, gone = '这个群已解散，或你已�
         setSending(false);
       }
     },
-    [apply, id, sending],
+    [apply, id, refresh, sending],
   );
 
   const loadOlder = useCallback(async () => {
@@ -224,6 +229,7 @@ export function useGroupRoom(id: string, gone = '这个群已解散，或你已�
     busy,
     hasOlder: older && Boolean(group?.messages[0] && group.messages[0].seq > 1),
     apply,
+    refresh,
     act,
     send,
     loadOlder,

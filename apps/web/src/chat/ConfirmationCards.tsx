@@ -1,11 +1,12 @@
 // 一轮进行中，AI 要做超出权限的事、要用花钱的工具时，输入框上面出确认卡：允许一次 / 以后都允许 / 拒绝。
 // 卡来自这一轮的状态（model-gateway 登记，conversation 跟进时放进来）；点了马上收起，AI 接着做。
-import type { MessageBody, MessageList } from '@oasis/contracts/conversation';
+import type { MessageBody } from '@oasis/contracts/conversation';
 import type { Confirmation, ConfirmDecision } from '@oasis/contracts/model-gateway';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { Coins, ShieldAlert } from 'lucide-react';
+import { useState } from 'react';
 import { ApiError } from '../api/client.ts';
-import { confirmTurn, dmsQuery, messagesQuery } from '../api/queries.ts';
+import { confirmTurn } from '../api/queries.ts';
 
 const DECISIONS: { decision: ConfirmDecision; label: string }[] = [
   { decision: 'once', label: '允许一次' },
@@ -27,37 +28,33 @@ export function ConfirmationCards({
   conversationId,
   cards,
   messages,
+  onDecided,
 }: {
   conversationId: string;
   cards: Confirmation[];
   messages: MessageBody[];
+  /** 点完了：调用方重新读一遍这一轮的状态（「以后都允许」还改了这段私聊的权限） */
+  onDecided: () => void;
 }) {
-  const queryClient = useQueryClient();
+  // 点过的马上收起（「以后都允许」连同类的一起），不等下一次读回来
+  const [gone, setGone] = useState<{ ids: string[]; kinds: Confirmation['kind'][] }>({
+    ids: [],
+    kinds: [],
+  });
   const decide = useMutation({
     mutationFn: ({ id, decision }: { id: string; decision: ConfirmDecision }) =>
       confirmTurn(conversationId, id, decision),
-    onSuccess: (decided, { decision }) => {
-      // 马上收起（「以后都允许」连同类的一起），不等下一次刷新
-      const always = decision === 'always' && decided.status === 'allowed';
-      queryClient.setQueryData(
-        messagesQuery(conversationId).queryKey,
-        (old: MessageList | undefined) =>
-          old?.turn
-            ? {
-                ...old,
-                turn: {
-                  ...old.turn,
-                  confirmations: old.turn.confirmations.filter(
-                    (card) => card.id !== decided.id && !(always && card.kind === decided.kind),
-                  ),
-                },
-              }
-            : old,
-      );
-    },
-    // 「以后都允许」改了这个私聊的权限
-    onSettled: () => queryClient.invalidateQueries({ queryKey: dmsQuery.queryKey }),
+    onSuccess: (decided, { decision }) =>
+      setGone((old) => ({
+        ids: [...old.ids, decided.id],
+        kinds:
+          decision === 'always' && decided.status === 'allowed'
+            ? [...old.kinds, decided.kind]
+            : old.kinds,
+      })),
+    onSettled: onDecided,
   });
+  cards = cards.filter((card) => !gone.ids.includes(card.id) && !gone.kinds.includes(card.kind));
   if (cards.length === 0) return null;
   return (
     <div role="group" aria-label="等你确认" className="flex flex-col gap-2">

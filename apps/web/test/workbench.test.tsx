@@ -189,7 +189,7 @@ describe('分工单在工作台和聊天里', () => {
       within(within(bench).getByRole('region', { name: '进行中' })).getByText('做图表'),
     ).toBeTruthy();
     fireEvent.click(within(waiting).getByRole('button', { name: /写英文摘要/ }));
-    const actions = within(bench).getByRole('group', { name: '改这一项' });
+    const actions = within(screen.getByRole('dialog')).getByRole('group', { name: '改这一项' });
     expect(within(actions).getByRole('button', { name: '改要求' })).toBeTruthy();
     fireEvent.click(within(actions).getByRole('button', { name: '撤掉' }));
     await waitFor(() => expect(edits).toEqual([{ op: 'drop', item: '2' }]));
@@ -309,7 +309,7 @@ describe('工作台', () => {
       }),
     );
     // 聊天里：任务卡、它开工前说的话、一行「做到第几步」；没有步骤
-    const log = screen.getByRole('log', { name: '群消息记录' });
+    const log = screen.getByRole('log', { name: '消息记录' });
     expect(within(log).queryByText('第 1 步')).toBeNull();
     fireEvent.click(await within(log).findByRole('button', { name: /正在干活，做到第 2 步/ }));
     const bench = screen.getByRole('region', { name: '工作台' });
@@ -372,7 +372,7 @@ describe('工作台', () => {
         ],
       }),
     );
-    const log = screen.getByRole('log', { name: '群消息记录' });
+    const log = screen.getByRole('log', { name: '消息记录' });
     // 只发了文件的那句没有空气泡；文件还在群文件里的能点开，不在了的点不了
     expect(
       await within(log).findByRole('button', { name: '在工作台打开 嘉宾名单.csv' }),

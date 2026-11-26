@@ -1,13 +1,21 @@
-// 群页顶上：群名、几个人几个 AI、真人头像叠放（点开是成员）、「⋯」群设置。照原型 ②。
-// 和一个好友的私聊：页头是对方的头像和名字。
+// 聊天页顶上。群：群名、几个人几个 AI、真人头像叠放（点开是成员）、「⋯」群设置。照原型 ②。
+// 和一个好友的私聊：页头是对方的头像和名字。和一个 AI 的私聊：它的头像和名字、在哪干活，「开新话题」、删除。
 import type { GroupSpeak } from '@oasis/contracts/group';
 import { Ellipsis } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
-import { deleteGroup, removeGroupMember, setGroupOptions } from '../api/queries.ts';
+import {
+  deleteDm,
+  deleteGroup,
+  newTopic,
+  removeGroupMember,
+  setGroupOptions,
+} from '../api/queries.ts';
+import { placeLabel } from '../chat/HomeBar.tsx';
 import { ConfirmButton } from '../chat/parts.tsx';
+import { AiAvatar } from '../ui/Avatar.tsx';
 import { MemberAvatar, MyNickname, PullFriends } from './Members.tsx';
-import { headcount } from './people.ts';
-import { useRoom } from './room.ts';
+import { aiLook, headcount } from './people.ts';
+import { dmAct, useRoom } from './room.ts';
 
 /** 没人被 @ 的时候 AI 们怎么办（后两种按概率开口，见《群聊》§3） */
 const SPEAK: { id: GroupSpeak; label: string; desc: string }[] = [
@@ -186,9 +194,62 @@ function DirectHeader() {
   );
 }
 
+/**
+ * 和一个 AI 的私聊：页头是它。「开新话题」：AI 从这里起不记得之前的事（它的记忆和工作目录清掉，聊天记录和
+ * 成果都留着）。删除是真删除：消息、成果、AI 的记忆和工作目录都删掉，再点开这个 AI 是全新的空白私聊。
+ */
+function DmHeader({ onLeft }: { onLeft: () => void }) {
+  const room = useRoom();
+  const { group, models, online, busy } = room;
+  const ai = group.ais[0];
+  const look = aiLook(models, ai?.key ?? '', group.title);
+  const working = Boolean(ai?.runId);
+  const place = group.home
+    ? group.home.workplace.kind === 'device'
+      ? `在我的电脑上 · ${group.home.workplace.folder}`
+      : `在${placeLabel(group.home)}`
+    : '';
+  return (
+    <header className="flex items-center gap-3.5 px-7 pb-3 pt-6">
+      <AiAvatar mono={look.mono} glow={look.glow} size={46} glowing={working} />
+      <div className="min-w-0 flex-1">
+        <h1 className="m-0 truncate text-[26px] font-light leading-[1.2] tracking-[0.02em]">
+          {look.name}
+        </h1>
+        <p className="mb-0 mt-0.5 truncate text-[13px] text-ink-muted" title={place}>
+          {working ? '正在做… · ' : ''}
+          {place}
+          {!online && ' · 连接中…'}
+        </p>
+      </div>
+      <ConfirmButton
+        label="开新话题"
+        question="AI 会忘掉之前聊的，成果都还在"
+        confirmLabel="开新话题"
+        disabled={busy || working || group.messages.length === 0}
+        onConfirm={() => void dmAct(room, () => newTopic(group.id))}
+      />
+      <ConfirmButton
+        label="删除私聊"
+        question="聊天、成果和 AI 的记忆都删掉，不能恢复"
+        confirmLabel="删除"
+        disabled={busy}
+        onConfirm={() =>
+          void room
+            .act(() => deleteDm(group.id))
+            .then((done) => {
+              if (done) onLeft();
+            })
+        }
+      />
+    </header>
+  );
+}
+
 export function RoomHeader(props: { onLeft: () => void; children: ReactNode }) {
   const { group } = useRoom();
-  return group.kind === 'direct' ? <DirectHeader /> : <GroupHeader {...props} />;
+  if (group.kind === 'direct') return <DirectHeader />;
+  return group.kind === 'dm' ? <DmHeader onLeft={props.onLeft} /> : <GroupHeader {...props} />;
 }
 
 function GroupHeader({ onLeft, children }: { onLeft: () => void; children: ReactNode }) {

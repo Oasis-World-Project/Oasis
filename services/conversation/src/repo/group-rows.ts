@@ -1,16 +1,23 @@
 // 群的几种行，和几处都要用的查询：群、席位（群里的一个 AI）、消息。
 import type pg from 'pg';
 import type { GroupMessage } from '@oasis/contracts/group';
+import type { Permissions, Workplace } from '@oasis/contracts/harness';
 import type { Turn } from './schema.ts';
 
 export type GroupRow = {
   id: string;
-  /** 群，或两个好友的私聊（消息和推送是同一套） */
-  kind: 'group' | 'direct';
+  /** 群，两个好友的私聊，或和一个 AI 的私聊（读消息和推送是同一套） */
+  kind: 'group' | 'direct' | 'dm';
   title: string;
   owner_id: string;
   created_at: Date;
   options: Record<string, unknown>;
+  /** 下面几样只有和 AI 的私聊用：它自己就是那个 AI 的席位 */
+  model_key: string | null;
+  turn: Turn | null;
+  heard_seq: string;
+  workplace: Workplace | null;
+  permissions: Permissions | null;
 };
 /** 群里一个 AI 的席位 */
 export interface SeatRow {
@@ -48,9 +55,9 @@ export type MessageRow = {
 export const MESSAGE_COLUMNS =
   'id,seq,author_kind,author_id,content,status,error,kind,data,created_at';
 const SEAT_COLUMNS = 'id,model_key,title,options,turn,heard_seq';
-/** 还在变的消息：AI 正在写的话、进行中的任务卡 */
+/** 还在变的消息：AI 正在写的话、进行中的任务卡、没关上的分工单、私聊里排着队还没交给 AI 的话 */
 export const IN_FLUX =
-  "(status='streaming' or (kind='task' and data->>'status'='running') or (kind='assign' and data->>'status'='open'))";
+  "(status='streaming' or (kind='task' and data->>'status'='running') or (kind='assign' and data->>'status'='open') or data->>'pending'='true')";
 
 /** 群里的席位，按进群先后；all：连被移出的也算（解散群时要清它们留下的成果） */
 export async function seatsOf(db: pg.Pool | pg.PoolClient, groupId: string, all = false) {

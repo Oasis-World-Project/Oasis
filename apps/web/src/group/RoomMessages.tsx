@@ -1,29 +1,65 @@
-// 群里的消息：时间分隔、别人的话（左，头像加名字）、我的话（右，墨色）、AI 的话（左，气泡带它的光色；
-// 干活的过程不放在这里，只写做到第几步，点它去工作台看）、任务卡、话带的文件。@ 了的 AI 还在忙时，话下面写着它忙完就看，可以「现在告诉它」。照原型 ②。
+// 聊天里的消息（群、好友、和 AI 的私聊同一套）。照原型 ②：每句话都有头像和名字，别人的在左、我的在右；
+// 时间分隔、话带的文件、AI 的话（气泡带它的光色）、任务卡。群里干活的过程不放在这里，只写做到第几步，点它去
+// 工作台看；@ 了的 AI 还在忙时，话下面写着它忙完就看，可以「现在告诉它」。和 AI 的私聊里过程收成一行、点开看，
+// 排着队还没交给它的话不在这里（在输入框上面），开新话题的地方有一条分隔。
 import type {
-  AssignCard,
   Mention,
+  MessageArtifact,
   MessageAttachment,
-  TaskCard,
+  TaskCard as TaskData,
 } from '@oasis/contracts/conversation';
 import type { GroupAi, GroupMessage } from '@oasis/contracts/group';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { groupAttachmentUrl, steerGroupMessage, stopGroupAi } from '../api/queries.ts';
+import { Link } from '@tanstack/react-router';
+import { PencilLine } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { groupAttachmentUrl, steerGroupMessage } from '../api/queries.ts';
+import { uploadUrl } from '../api/upload.ts';
 import { AiBody } from '../chat/AiMessage.tsx';
 import { FileChip } from '../chat/FileChip.tsx';
 import { FilePreview, type PreviewFile } from '../chat/FilePreview.tsx';
+import { MessageText } from '../chat/MessageText.tsx';
 import { CardButton, CardFrame, CardHeading, StatusTag } from '../chat/parts.tsx';
-import { taskStatus, TaskFacts } from '../chat/TaskCard.tsx';
-import { ChatActionsContext, type ChatActions } from '../chat/use-chat-actions.ts';
+import { TaskCard, taskStatus, TaskFacts } from '../chat/TaskCard.tsx';
+import { ChatActionsContext } from '../chat/use-chat-actions.ts';
 import { useStickToBottom } from '../chat/use-stick-to-bottom.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
+import { actionsFor } from './ai-actions.ts';
+import { AssignProgress } from './AssignProgress.tsx';
 import { MemberAvatar } from './Members.tsx';
 import { aiLook, DIVIDER_GAP_MS, dividerText } from './people.ts';
-import { mentionText, uploadPath, useRoom, type Room } from './room.ts';
+import { mentionText, uploadPath, useRoom } from './room.ts';
 import { FilePill } from './workbench/files.tsx';
-import { itemNote } from './workbench/tasks.ts';
 
 type TextMessage = Extract<GroupMessage, { kind: 'text' }>;
+
+/** 一句话的排版：头像在上角，旁边一行名字，下面是内容；我的靠右 */
+function Row({
+  mine = false,
+  avatar,
+  name,
+  note,
+  children,
+}: {
+  mine?: boolean;
+  avatar: ReactNode;
+  name: string;
+  /** 名字旁边的小字（插话、任务） */
+  note?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`flex items-start gap-2.5 ${mine ? 'flex-row-reverse' : ''}`}>
+      {avatar}
+      <div className={`flex min-w-0 flex-1 flex-col gap-1.5 ${mine ? 'items-end' : 'items-start'}`}>
+        <span className="flex items-center gap-2 px-1 text-xs text-ink-muted">
+          <span className="font-medium text-ink">{name}</span>
+          {note}
+        </span>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 /** 这句话 @ 了的 AI 里，还在忙、没看到这句的 */
 function waitingFor(message: TextMessage, ais: GroupAi[]): GroupAi[] {
@@ -47,7 +83,7 @@ function Mentions({ mentions, mine }: { mentions: Mention[]; mine: boolean }) {
 
 /**
  * 一句话带的文件、引用的群文件。群里发的文件就是群文件，点开在工作台看（看到的是现在最新的那一版）；
- * 和好友的私聊里文件只跟着这条消息，点开弹出预览。
+ * 私聊里文件只跟着这条消息，点开弹出预览。
  */
 function MessageFiles({ message, mine }: { message: TextMessage; mine: boolean }) {
   const { group } = useRoom();
@@ -55,19 +91,22 @@ function MessageFiles({ message, mine }: { message: TextMessage; mine: boolean }
   const attachments = message.data.attachments ?? [];
   const refs = message.data.refs ?? [];
   if (!attachments.length && !refs.length) return null;
+  // 和好友的私聊里文件跟着这个聊天，和 AI 的私聊里是我自己传的
+  const urlOf = (id: string, download?: boolean) =>
+    group.kind === 'direct' ? groupAttachmentUrl(group.id, id, download) : uploadUrl(id, download);
   const toPreview = (file: MessageAttachment): PreviewFile => ({
     path: file.name,
     size: file.size,
-    url: groupAttachmentUrl(group.id, file.id),
-    downloadUrl: groupAttachmentUrl(group.id, file.id, true),
+    url: urlOf(file.id),
+    downloadUrl: urlOf(file.id, true),
   });
   return (
     <>
       <ul
         aria-label="带的文件"
-        className={`m-0 flex max-w-[320px] list-none flex-col gap-1.5 p-0 ${mine ? 'items-end' : 'items-start'}`}
+        className={`m-0 flex w-full max-w-[320px] list-none flex-col gap-1.5 p-0 ${mine ? 'items-end' : 'items-start'}`}
       >
-        {group.kind === 'direct'
+        {group.kind !== 'group'
           ? attachments.map((file) => (
               <FileChip
                 key={file.id}
@@ -89,7 +128,27 @@ function MessageFiles({ message, mine }: { message: TextMessage; mine: boolean }
   );
 }
 
-function UserMessage({ message }: { message: TextMessage }) {
+/** 「让 AI 改」时带上的成果：点开回到画布里的这份成果 */
+function RevisedArtifacts({ artifacts }: { artifacts: MessageArtifact[] }) {
+  return (
+    <ul aria-label="要改的成果" className="m-0 flex list-none flex-wrap justify-end gap-1.5 p-0">
+      {artifacts.map((a) => (
+        <li key={a.id}>
+          <Link
+            to="/canvas/artifacts/$artifactId"
+            params={{ artifactId: a.id }}
+            className="inline-flex h-8 items-center gap-1.5 rounded-full bg-glass-active px-3 text-[12.5px] text-ink no-underline shadow-edge-strong"
+          >
+            <PencilLine size={13} aria-hidden="true" />
+            要改：{a.name}
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function UserMessage({ message, unseen }: { message: TextMessage; unseen: boolean }) {
   const { group, me, owner, models, busy, act } = useRoom();
   const mine = message.authorId === me;
   const mentions = message.data.mentions ?? [];
@@ -97,128 +156,106 @@ function UserMessage({ message }: { message: TextMessage }) {
   // 只发了文件、没写字，也没 @ 谁：不画空气泡
   const said = message.content.length > 0 || mentions.length > 0;
   // 对全体说的话（@ 了全体，或作为任务发布）：写明挑了谁先出来负责
-  const { task, lead } = message.data;
-  const led = (task || lead) && (
-    <span className={`px-1.5 text-xs text-ink-muted ${mine ? 'self-end' : ''}`}>
-      {task ? '任务' : ''}
-      {task && lead ? ' · ' : ''}
-      {lead ? `由 ${aiLook(models, lead).name} 先出来负责` : ''}
+  const { task, lead, interjection, artifacts = [] } = message.data;
+  const note = (task || lead || interjection) && (
+    <span>
+      {[
+        task ? '任务' : '',
+        lead ? `由 ${aiLook(models, lead).name} 先出来负责` : '',
+        // 私聊里的插话：送进去了，AI 做完手上这一步才看
+        interjection ? (unseen ? '插话 · AI 做完手上这一步就会看到' : '插话') : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')}
     </span>
   );
-  const hint = waiting.length > 0 && (
-    <div
-      className={`flex flex-wrap items-center gap-x-2.5 gap-y-1 px-1.5 text-xs text-ink-muted ${
-        mine ? 'justify-end' : ''
-      }`}
-    >
-      {waiting.map((ai) => (
-        <span key={ai.key} className="flex items-center gap-1.5">
-          {aiLook(models, ai.key).name} 在忙，忙完就看
-          {(mine || owner) && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void act(() => steerGroupMessage(group.id, message.id, ai.key))}
-              className="cursor-pointer border-0 bg-transparent p-0 text-xs font-medium text-ink underline underline-offset-4 disabled:opacity-45"
-            >
-              现在告诉它
-            </button>
-          )}
-        </span>
-      ))}
-    </div>
-  );
-  if (mine)
-    return (
-      <div className="flex flex-col items-end gap-1">
-        {said && (
-          <p className="bubble-out m-0 max-w-[460px] whitespace-pre-wrap break-words bg-solid px-4 py-2.5 text-[14.5px] leading-[1.65] text-on-solid">
-            <Mentions mentions={mentions} mine />
-            {message.content}
-          </p>
-        )}
-        <MessageFiles message={message} mine />
-        {led}
-        {hint}
-      </div>
-    );
   return (
-    <div className="flex items-end gap-2.5">
-      <MemberAvatar
-        member={{
-          userId: message.authorId,
-          displayName: message.displayName,
-          avatarVersion:
-            group.members.find((member) => member.userId === message.authorId)?.avatarVersion ?? 0,
-        }}
-        size={30}
-      />
-      <div className="flex min-w-0 flex-col items-start gap-[3px]">
-        <span className="pl-1.5 text-xs text-ink-muted">{message.displayName}</span>
-        {said && (
-          <p className="bubble-in m-0 max-w-[440px] whitespace-pre-wrap break-words bg-bubble px-4 py-2.5 text-[14.5px] leading-[1.65] shadow-edge-strong">
-            <Mentions mentions={mentions} mine={false} />
-            {message.content}
-          </p>
-        )}
-        <MessageFiles message={message} mine={false} />
-        {led}
-        {hint}
-      </div>
-    </div>
+    <Row
+      mine={mine}
+      name={message.displayName}
+      note={note}
+      avatar={
+        <MemberAvatar
+          member={{
+            userId: message.authorId,
+            displayName: message.displayName,
+            avatarVersion:
+              group.members.find((member) => member.userId === message.authorId)?.avatarVersion ??
+              0,
+          }}
+          size={30}
+        />
+      }
+    >
+      {said && (
+        <div
+          className={`m-0 max-w-[min(460px,100%)] whitespace-pre-wrap break-words px-4 py-2.5 text-[14.5px] leading-[1.65] ${
+            mine ? 'bubble-out bg-solid text-on-solid' : 'bubble-in bg-bubble shadow-edge-strong'
+          }`}
+        >
+          <Mentions mentions={mentions} mine={mine} />
+          <MessageText content={message.content} />
+        </div>
+      )}
+      {artifacts.length > 0 && <RevisedArtifacts artifacts={artifacts} />}
+      <MessageFiles message={message} mine={mine} />
+      {waiting.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 px-1 text-xs text-ink-muted">
+          {waiting.map((ai) => (
+            <span key={ai.key} className="flex items-center gap-1.5">
+              {aiLook(models, ai.key).name} 在忙，忙完就看
+              {(mine || owner) && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void act(() => steerGroupMessage(group.id, message.id, ai.key))}
+                  className="cursor-pointer border-0 bg-transparent p-0 text-xs font-medium text-ink underline underline-offset-4 disabled:opacity-45"
+                >
+                  现在告诉它
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+    </Row>
   );
-}
-
-/** AI 的话里能做的事（答问卷、确认任务单、「继续」）在群里都是 @ 着它发一句话；停下是停它这一轮 */
-function actionsFor(room: Room, key: string): ChatActions {
-  const { group } = room;
-  return {
-    conversationId: group.id,
-    busy: room.sending || room.busy ? 'send' : null,
-    error: null,
-    turnActive: Boolean(group.ais.find((ai) => ai.key === key)?.runId),
-    say: (_name, content) => room.send(content, [{ kind: 'ai', key }]),
-    steer: async () => undefined,
-    unqueue: async () => false,
-    stop: async () => {
-      await room.act(() => stopGroupAi(group.id, key));
-    },
-    focusComposer: () => room.mention({ kind: 'ai', key }),
-  };
 }
 
 function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) {
-  const { models, bench } = useRoom();
+  const { group, models, bench } = useRoom();
   const { runId } = message.data;
   const look = aiLook(models, message.authorId, message.displayName);
   return (
-    <div className="flex items-end gap-2.5">
-      <AiAvatar
-        mono={look.mono}
-        glow={look.glow}
-        size={30}
-        glowing={message.status === 'streaming'}
-      />
-      <div className="flex min-w-0 flex-col items-start gap-[3px]">
-        <span className="pl-1.5 text-xs text-ink-muted">{look.name}</span>
-        <div className="flex min-w-0 max-w-[500px] flex-col gap-2 text-[14.5px] leading-[1.65]">
-          <AiBody
-            message={message}
-            latest={latest}
-            onProcess={() => bench.openTasks(runId)}
-            bubble={{
-              className: 'bubble-in shadow-bubble-edge',
-              style: { background: `color-mix(in srgb, ${look.glow} 14%, transparent)` },
-            }}
-          />
-        </div>
+    <Row
+      name={look.name}
+      avatar={
+        <AiAvatar
+          mono={look.mono}
+          glow={look.glow}
+          size={30}
+          glowing={message.status === 'streaming'}
+        />
+      }
+    >
+      <div className="flex min-w-0 max-w-[min(520px,100%)] flex-col gap-2 text-[14.5px] leading-[1.65]">
+        <AiBody
+          message={message}
+          latest={latest}
+          // 群里过程在工作台看；和 AI 的私聊里收成一行、点开看
+          onProcess={group.kind === 'group' ? () => bench.openTasks(runId) : undefined}
+          bubble={{
+            className: 'bubble-in shadow-bubble-edge',
+            style: { background: `color-mix(in srgb, ${look.glow} 14%, transparent)` },
+          }}
+        />
       </div>
-    </div>
+    </Row>
   );
 }
 
 /** 群里一个 AI 这一轮的任务卡：任务名、状态、用时、花费、交了哪些文件（点开在工作台看），过程去工作台看 */
-function RoomTask({ card, authorId, name }: { card: TaskCard; authorId: string; name: string }) {
+function RoomTask({ card, authorId, name }: { card: TaskData; authorId: string; name: string }) {
   const { models, bench } = useRoom();
   const status = taskStatus(card);
   return (
@@ -249,114 +286,19 @@ function RoomTask({ card, authorId, name }: { card: TaskCard; authorId: string; 
   );
 }
 
-/** 圆环的周长（半径 21） */
-const RING = 2 * Math.PI * 21;
-/** 分工单里一项做到哪了，画成圆环上的一段：交了是满的，在做是一半 */
-const PROGRESS: Record<AssignCard['items'][number]['status'], number> = {
-  waiting: 0,
-  running: 0.5,
-  done: 1,
-  declined: 0,
-  failed: 0,
-  stopped: 0,
-  dropped: 0,
-};
-
-/**
- * 分工单：一个 AI 把一件事的几部分交给了群里别的 AI。交了几项、一共几项，每项一个圆环（里面是负责它的
- * AI），「看分工」去工作台的任务。照原型 ② 的「任务进度」。
- */
-function AssignProgress({
-  card,
-  authorId,
-  name,
-}: {
-  card: AssignCard;
-  authorId: string;
-  name: string;
-}) {
-  const { models, bench } = useRoom();
-  const done = card.items.filter((item) => item.status === 'done').length;
-  return (
-    <section
-      aria-label="任务进度"
-      className="flex flex-wrap items-center gap-[18px] rounded-pop bg-glass-strong px-[18px] py-4 shadow-edge-strong"
-    >
-      <div className="flex items-baseline gap-2.5">
-        <span className="font-display text-[30px] leading-none tracking-[-0.03em]">
-          {done}/{card.items.filter((item) => item.status !== 'dropped').length}
-        </span>
-        <span className="flex min-w-0 flex-col">
-          <span className="text-[13.5px] font-medium">{card.title}</span>
-          <span className="text-xs text-ink-muted">
-            {aiLook(models, authorId, name).name} 分了工
-          </span>
-        </span>
-      </div>
-      <ul aria-label="分工" className="m-0 flex flex-1 list-none flex-wrap gap-2.5 p-0">
-        {card.items.map((item) => {
-          const look = aiLook(models, item.key);
-          return (
-            <li
-              key={item.id}
-              role="img"
-              aria-label={`${look.name}：${item.task}，${itemNote(item)}`}
-              title={`${look.name}：${item.task}（${itemNote(item)}）`}
-              className="relative inline-flex size-[46px] items-center justify-center"
-            >
-              <svg
-                width="46"
-                height="46"
-                viewBox="0 0 46 46"
-                aria-hidden="true"
-                className="absolute left-0 top-0"
-              >
-                <circle
-                  cx="23"
-                  cy="23"
-                  r="21"
-                  fill="none"
-                  strokeWidth="2.5"
-                  className="stroke-track"
-                />
-                {PROGRESS[item.status] > 0 && (
-                  <circle
-                    cx="23"
-                    cy="23"
-                    r="21"
-                    fill="none"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeDasharray={`${(RING * PROGRESS[item.status]).toFixed(1)} ${RING.toFixed(1)}`}
-                    transform="rotate(-90 23 23)"
-                    className="stroke-accent"
-                  />
-                )}
-              </svg>
-              <AiAvatar mono={look.mono} glow={look.glow} size={30} />
-            </li>
-          );
-        })}
-      </ul>
-      <button
-        type="button"
-        onClick={() => bench.openTasks()}
-        className="h-[38px] cursor-pointer rounded-full border-0 bg-solid px-4 text-[13px] font-medium text-on-solid"
-      >
-        看分工
-      </button>
-    </section>
-  );
-}
-
 export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder: () => void }) {
   const room = useRoom();
-  const { group, busy } = room;
+  const { group, busy, models } = room;
+  // 私聊里排着队、还没交给 AI 的话不在聊天里（在输入框上面），交给它时才进来
+  const messages = useMemo(
+    () => group.messages.filter((m) => !(m.kind === 'text' && m.data.pending)),
+    [group.messages],
+  );
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const toBottom = useStickToBottom(scroller, content);
   // 自己刚发了一句：不管翻到哪都回到底部
-  const last = group.messages.at(-1);
+  const last = messages.at(-1);
   const mine = last?.role === 'user' && last.authorId === room.me ? last.id : undefined;
   const followed = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -364,14 +306,18 @@ export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder
     followed.current = mine;
     toBottom();
   }, [mine, toBottom]);
-  // 每个 AI 最新的一条话：只有它能答问卷、点「继续」
+  // 每个 AI 最新的一条话：只有它能答问卷、点「继续」；开了新话题，之前的都不算最新。
+  // 和 AI 的私聊里后面有了新的话（我的或它的）就不算：问卷答过了、任务单确认过了
   const latest = useMemo(() => {
     const last = new Map<string, string>();
-    for (const message of group.messages)
+    for (const message of messages) {
+      if (message.kind === 'topic' || (group.kind === 'dm' && message.kind === 'text'))
+        last.clear();
       if (message.kind === 'text' && message.role === 'assistant')
         last.set(message.authorId, message.id);
+    }
     return new Set(last.values());
-  }, [group.messages]);
+  }, [messages, group.kind]);
   const actions = useMemo(
     () => new Map(group.ais.map((ai) => [ai.key, actionsFor(room, ai.key)])),
     [group.ais, room],
@@ -385,7 +331,7 @@ export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder
     >
       <div
         ref={content}
-        aria-label="群消息记录"
+        aria-label="消息记录"
         role="log"
         className="mx-auto flex max-w-[720px] flex-col gap-3.5 pt-2.5"
       >
@@ -399,14 +345,24 @@ export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder
             查看更早消息
           </button>
         )}
-        {!group.messages.length && (
-          <p className="m-0 pt-10 text-center text-[13px] text-ink-muted">
-            {group.ais.length ? '说点什么，或者 @ 一个 AI 让它帮忙。' : '发一句话，开始聊天。'}
+        {!messages.length && (
+          <p className="m-0 pt-10 text-center text-[13px] leading-[1.8] text-ink-muted">
+            {group.kind === 'dm' ? (
+              <>
+                打个招呼，或者直接说要做什么：写文档、做图、做视频、做网页都行。
+                <br />
+                可以附上文件；它做的时候你说的话先排着，点「引导」它马上就看到，也可以随时让它停下。
+              </>
+            ) : group.ais.length ? (
+              '说点什么，或者 @ 一个 AI 让它帮忙。'
+            ) : (
+              '发一句话，开始聊天。'
+            )}
           </p>
         )}
-        {group.messages.map((message, index) => {
+        {messages.map((message, index) => {
           const at = new Date(message.createdAt);
-          const previous = group.messages[index - 1];
+          const previous = messages[index - 1];
           const divider =
             !previous || at.getTime() - Date.parse(previous.createdAt) > DIVIDER_GAP_MS;
           return (
@@ -414,20 +370,50 @@ export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder
               {divider && (
                 <div className="text-center text-xs text-ink-muted">{dividerText(at, now)}</div>
               )}
-              {message.kind === 'task' ? (
-                <RoomTask
-                  card={message.data}
-                  authorId={message.authorId}
-                  name={message.displayName}
-                />
+              {message.kind === 'topic' ? (
+                <div
+                  role="separator"
+                  className="flex items-center gap-3 py-1 text-xs text-ink-muted"
+                >
+                  <span className="h-px flex-1 bg-hairline" />
+                  {/* 「开了新话题」或「换到你的电脑（…）干活，开了新话题」 */}
+                  <span className="max-w-[70%] text-center">
+                    {message.content} · AI 从这里起不记得之前的事
+                  </span>
+                  <span className="h-px flex-1 bg-hairline" />
+                </div>
+              ) : message.kind === 'task' ? (
+                group.kind === 'group' ? (
+                  <RoomTask
+                    card={message.data}
+                    authorId={message.authorId}
+                    name={message.displayName}
+                  />
+                ) : (
+                  <TaskCard
+                    card={message.data}
+                    speaker={aiLook(models, message.authorId, message.displayName)}
+                  />
+                )
               ) : message.kind === 'assign' ? (
                 <AssignProgress
                   card={message.data}
                   authorId={message.authorId}
                   name={message.displayName}
                 />
-              ) : message.kind !== 'text' ? null : message.role === 'user' ? (
-                <UserMessage message={message} />
+              ) : message.role === 'user' ? (
+                <UserMessage
+                  message={message}
+                  // AI 看到插话才在它后面接着写：前面那段还在写、后面还没有它的话，就是还没看到
+                  unseen={
+                    messages
+                      .slice(0, index)
+                      .some((m) => m.role === 'assistant' && m.status === 'streaming') &&
+                    !messages
+                      .slice(index + 1)
+                      .some((m) => m.role === 'assistant' && m.kind === 'text')
+                  }
+                />
               ) : (
                 <ChatActionsContext.Provider
                   value={actions.get(message.authorId) ?? actionsFor(room, message.authorId)}

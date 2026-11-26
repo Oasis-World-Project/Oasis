@@ -117,7 +117,7 @@ describe('上传素材', () => {
     const api = chat();
     await openChat();
     fireEvent.change(screen.getByLabelText('消息'), { target: { value: '用这张照片' } });
-    fireEvent.change(screen.getByLabelText('选择文件'), { target: { files: [photo()] } });
+    fireEvent.change(screen.getByLabelText('选择要发的文件'), { target: { files: [photo()] } });
 
     const pending = await screen.findByRole('list', { name: '要发送的文件' });
     expect(within(pending).getByText('上传中 50%')).toBeTruthy();
@@ -133,7 +133,7 @@ describe('上传素材', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
-    const sent = await screen.findByRole('list', { name: '附件' });
+    const sent = await screen.findByRole('list', { name: '带的文件' });
     expect(api.bodies.find((b) => b.path.endsWith('/messages'))?.body).toEqual({
       content: '用这张照片',
       attachments: [UPLOAD],
@@ -150,7 +150,9 @@ describe('上传素材', () => {
     await openChat();
     const big = photo();
     Object.defineProperty(big, 'size', { value: 513 * 1024 * 1024 });
-    fireEvent.change(screen.getByLabelText('选择文件'), { target: { files: [big, photo()] } });
+    fireEvent.change(screen.getByLabelText('选择要发的文件'), {
+      target: { files: [big, photo()] },
+    });
     expect(await screen.findByText(/超过 512 MB，没有添加/)).toBeTruthy();
     expect(FakeXhr.sent).toHaveLength(1);
     fireEvent.click(await screen.findByRole('button', { name: '移除 民宿照片.jpg' }));

@@ -2,7 +2,8 @@
 // 自己的会话和工作目录、同一时间只有一轮）。群消息和私聊消息是同一个形状（MessageBody），
 // 多了序号、作者和 @ 了谁。两个好友的私聊（kind = 'direct'，见 social.ts）也是这个形状：两个人、没有 AI。
 import { z } from 'zod';
-import { MAX_ATTACHMENTS, Mention, MessageBody } from './conversation.ts';
+import { MAX_ATTACHMENTS, Mention, MessageBody, SetupBody } from './conversation.ts';
+import { Confirmation } from './model-gateway.ts';
 
 export const GROUP_HISTORY_NOTICE = '加入后可查看本群全部历史消息。';
 const name = z.string().trim().min(1).max(40);
@@ -152,9 +153,21 @@ export const GroupMessage = MessageBody.and(
   }),
 );
 export type GroupMessage = z.infer<typeof GroupMessage>;
+/**
+ * 还在变的消息：AI 正在写的话、进行中的任务卡、没关上的分工单、私聊里排着队还没交给 AI 的话。
+ * 它们是原地更新的（序号不变），推送每次连同最新的样子再给一遍，直到不再变。
+ */
+export const inFlux = (message: GroupMessage): boolean =>
+  message.status === 'streaming' ||
+  (message.kind === 'task' && message.data.status === 'running') ||
+  (message.kind === 'assign' && message.data.status === 'open') ||
+  (message.kind === 'text' && message.data.pending === true);
 export const GroupSnapshot = GroupSummary.extend({
-  /** 群，或两个好友的私聊（没有 AI、没有群主能做的那些事） */
-  kind: z.enum(['group', 'direct']).default('group'),
+  /**
+   * 群；两个好友的私聊（direct：没有 AI、没有群主能做的那些事）；和一个 AI 的私聊（dm：成员只有我、AI 只有它，
+   * 读消息和推送用群的这一套，发话、停下、开新话题走私聊自己的接口）
+   */
+  kind: z.enum(['group', 'direct', 'dm']).default('group'),
   members: z.array(GroupMember),
   ais: z.array(GroupAi),
   options: GroupOptions,
@@ -167,6 +180,10 @@ export const GroupSnapshot = GroupSummary.extend({
   /** 群文件变过几次的记号：变了就重新读群文件（GET …/files） */
   filesRev: z.number().int().nonnegative().safe().default(0),
   historyNotice: z.literal(GROUP_HISTORY_NOTICE),
+  /** 和 AI 的私聊才有：这段对话固定在哪干活、权限 */
+  home: SetupBody.optional(),
+  /** 和 AI 的私聊：这一轮在等我点的确认卡 */
+  confirmations: z.array(Confirmation).default([]),
 });
 export type GroupSnapshot = z.infer<typeof GroupSnapshot>;
 /**

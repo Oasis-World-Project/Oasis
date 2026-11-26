@@ -61,15 +61,27 @@ export function createGroupService(deps: {
   const { repo, seats, store, turns, profiles } = deps;
   const attach = (deps.brief ?? deps.files).attach;
 
-  /** 给群现在的样子补上成员的头像（名字在库里记着，账号改名时 profiles 会让它跟着改） */
+  /**
+   * 给群现在的样子补上成员的头像（群里的名字在库里记着，账号改名时 profiles 会让它跟着改）。
+   * 和 AI 的私聊没有成员表：主人的名字用账号的，他说的话上也是。
+   */
   async function seen(snapshot: GroupSnapshot): Promise<GroupSnapshot> {
     const people = await profiles.get(snapshot.members.map((member) => member.userId));
+    const members = snapshot.members.map((member) => ({
+      ...member,
+      avatarVersion: people.get(member.userId)?.avatarVersion ?? 0,
+    }));
+    if (snapshot.kind !== 'dm') return { ...snapshot, members };
+    const name = people.get(snapshot.ownerId)?.name ?? '我';
+    const said = (messages: GroupSnapshot['messages']) =>
+      messages.map((message) =>
+        message.role === 'user' ? { ...message, displayName: name } : message,
+      );
     return {
       ...snapshot,
-      members: snapshot.members.map((member) => ({
-        ...member,
-        avatarVersion: people.get(member.userId)?.avatarVersion ?? 0,
-      })),
+      members: members.map((member) => ({ ...member, displayName: name })),
+      messages: said(snapshot.messages),
+      live: said(snapshot.live),
     };
   }
 

@@ -1,11 +1,6 @@
-// 附件：输入框上方待发送的文件条（带上传进度，可移除），以及用户消息下面已发出的附件。
-import type { MessageAttachment } from '@oasis/contracts/conversation';
+// 输入框里待发送的文件条（带上传进度，可移除）。
 import { X } from 'lucide-react';
-import { useState } from 'react';
-import { uploadUrl } from '../api/upload.ts';
 import { formatBytes } from '../ui/format.ts';
-import { FileChip } from './FileChip.tsx';
-import { FilePreview, type PreviewFile } from './FilePreview.tsx';
 import type { PendingFile } from './use-attachments.ts';
 
 export function PendingFiles({
@@ -55,29 +50,5 @@ export function PendingFiles({
         </li>
       ))}
     </ul>
-  );
-}
-
-/** 用户消息下面的附件：点开预览，单独下载 */
-export function SentAttachments({ attachments }: { attachments: MessageAttachment[] }) {
-  const [preview, setPreview] = useState<PreviewFile | null>(null);
-  const toPreview = (a: MessageAttachment): PreviewFile => ({
-    path: a.name,
-    size: a.size,
-    url: uploadUrl(a.id),
-    downloadUrl: uploadUrl(a.id, true),
-  });
-  return (
-    <>
-      <ul
-        aria-label="附件"
-        className="m-0 -mt-2 ml-auto flex w-full max-w-[320px] list-none flex-col gap-1.5 p-0"
-      >
-        {attachments.map((a) => (
-          <FileChip key={a.id} file={toPreview(a)} onOpen={() => setPreview(toPreview(a))} />
-        ))}
-      </ul>
-      {preview && <FilePreview file={preview} onClose={() => setPreview(null)} />}
-    </>
   );
 }

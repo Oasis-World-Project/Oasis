@@ -1,14 +1,13 @@
-// AI 在一轮里的一段消息：它开工前说的话、干活的过程、收工后说的话（话里的问卷、任务单画成卡片），
+// AI 在一轮里的一段消息里的内容：它开工前说的话、干活的过程、收工后说的话（话里的问卷、任务单画成卡片），
 // 下面是结局（出错、已停下）和这一轮的花费。过程不整段铺在聊天里：私聊收成一行、点开才看；
-// 群里只写做到第几步，过程在工作台看。
+// 群里只写做到第几步，过程在工作台看。头像和排版在 group/RoomMessages.tsx。
 import type { MessageBody, MessagePart } from '@oasis/contracts/conversation';
 import { Info } from 'lucide-react';
 import { Fragment, type CSSProperties } from 'react';
-import { AiAvatar } from '../ui/Avatar.tsx';
 import { formatCost } from '../ui/format.ts';
 import { splitBlocks } from './blocks.ts';
 import { Markdown } from './Markdown.tsx';
-import { CardButton, type Speaker } from './parts.tsx';
+import { CardButton } from './parts.tsx';
 import { ProcessFold, stepFacts, Todos } from './Process.tsx';
 import { QuestionsCard } from './QuestionsCard.tsx';
 import { SheetCard } from './SheetCard.tsx';
@@ -31,12 +30,11 @@ function splitProcess(parts: MessagePart[]) {
   };
 }
 
-/** AI 说的话外面的那层气泡：私聊里是白玻璃；群里带它自己的光色（由群页给） */
+/** AI 说的话外面的那层气泡：带它自己的光色（由聊天页给） */
 export interface Bubble {
   className: string;
   style?: CSSProperties;
 }
-const DM_BUBBLE: Bubble = { className: 'rounded-card bg-glass-strong shadow-edge-strong' };
 
 /** AI 说的一段话：Markdown，代码块里的问卷和任务单画成卡片 */
 function AiText({
@@ -73,18 +71,18 @@ function AiText({
 
 /**
  * AI 一条消息里的内容：开工前说的话、过程（收成一行）、收工后说的话、出错和停下的说明、「继续」、花费。
- * 私聊和群里共用；外面的头像和排版各自放。
+ * 私聊和群里共用。
  */
 export function AiBody({
   message,
   latest,
-  bubble = DM_BUBBLE,
+  bubble,
   onProcess,
 }: {
   message: TextMessage;
   /** 是最新的一条（后面没有新的话）：问卷能答、任务单能确认、出错了能「继续」 */
   latest: boolean;
-  bubble?: Bubble;
+  bubble: Bubble;
   /** 群里：过程不放在聊天里，只写一行做到第几步，点它去工作台看这一轮的过程 */
   onProcess?: (() => void) | undefined;
 }) {
@@ -155,29 +153,5 @@ export function AiBody({
         <span className="text-[12px] text-ink-muted">这一轮花了 {formatCost(spentMicro)}</span>
       )}
     </>
-  );
-}
-
-export function AiMessage({
-  message,
-  speaker,
-  latest,
-}: {
-  message: TextMessage;
-  speaker: Speaker;
-  latest: boolean;
-}) {
-  return (
-    <div className="flex items-start gap-2.5">
-      <AiAvatar
-        mono={speaker.mono}
-        glow={speaker.glow}
-        size={30}
-        glowing={message.status === 'streaming'}
-      />
-      <div className="flex min-w-0 max-w-[80%] flex-col gap-2 text-[14.5px] leading-relaxed">
-        <AiBody message={message} latest={latest} />
-      </div>
-    </div>
   );
 }

@@ -268,7 +268,7 @@ describe('让 AI 改时带上批注', () => {
       attachments: [],
       artifacts: [image.id],
     });
-    expect(await screen.findByRole('region', { name: '私聊' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: '聊天' })).toBeTruthy();
   });
 });
 

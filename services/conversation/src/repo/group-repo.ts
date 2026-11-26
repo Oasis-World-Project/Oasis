@@ -1,9 +1,11 @@
 // 群的存储：成员、群里的 AI（席位：挂在群下面的一条会话）、群的设置、群消息。席位听到什么在 group-seats.ts。
 // 两个好友的私聊（kind = 'direct'，见 friend-repo.ts）读消息、发消息、推送也走这里；只有群才有的操作它做不了。
+// 和一个 AI 的私聊（kind = 'dm'）只有读消息和推送走这里：它在网页上和群是同一页。
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { Mention, MessageAttachment } from '@oasis/contracts/conversation';
 import { GROUP_HISTORY_NOTICE, GroupOptions, type GroupSnapshot } from '@oasis/contracts/group';
+import { defaultPermissions } from '@oasis/contracts/harness';
 import { HttpError } from '@oasis/service-kit';
 import { areFriends } from './friend-repo.ts';
 import {
@@ -15,6 +17,7 @@ import {
   toMessage,
   type GroupRow,
   type MessageRow,
+  type SeatRow,
 } from './group-rows.ts';
 import { inTransaction } from './tx.ts';
 
@@ -44,6 +47,16 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
     )
       throw missing();
     return row;
+  }
+  /** 读消息、连推送：群和好友的私聊核对是成员；和 AI 的私聊核对是它的主人（不锁行，它的一轮正往这一行上写） */
+  async function readable(db: pg.PoolClient, id: string, userId: string) {
+    const dm = (
+      await db.query<GroupRow>(
+        "select * from conversations where id=$1 and kind='dm' and owner_id=$2",
+        [id, userId],
+      )
+    ).rows[0];
+    return dm ?? owned(db, id, userId);
   }
   /** 只有群才有的操作：核对是成员、是群（两个好友的私聊做不了） */
   async function ownedGroup(db: pg.PoolClient, id: string, userId: string) {
@@ -87,13 +100,33 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
     cursor?: Cursor,
     watch: string[] = [],
   ): Promise<GroupSnapshot> {
-    const members = (
-      await db.query<{ userId: string; displayName: string; nickname: string; joinedAt: Date }>(
-        `select user_id as "userId",${MEMBER_NAME} as "displayName",coalesce(nickname,'') as nickname,joined_at as "joinedAt" from group_members where conversation_id=$1 and left_at is null order by ${MEMBER_ORDER}`,
-        [row.id, row.owner_id],
-      )
-    ).rows;
-    const allSeats = await seatsOf(db, row.id, true);
+    const dm = row.kind === 'dm';
+    // 和 AI 的私聊：成员只有主人（名字由 group-service 补上），席位就是这一行自己
+    const members = dm
+      ? [{ userId: row.owner_id, displayName: '我', nickname: '', joinedAt: row.created_at }]
+      : (
+          await db.query<{
+            userId: string;
+            displayName: string;
+            nickname: string;
+            joinedAt: Date;
+          }>(
+            `select user_id as "userId",${MEMBER_NAME} as "displayName",coalesce(nickname,'') as nickname,joined_at as "joinedAt" from group_members where conversation_id=$1 and left_at is null order by ${MEMBER_ORDER}`,
+            [row.id, row.owner_id],
+          )
+        ).rows;
+    const allSeats: SeatRow[] = dm
+      ? [
+          {
+            id: row.id,
+            model_key: row.model_key ?? '',
+            title: row.title,
+            options: {},
+            turn: row.turn,
+            heard_seq: row.heard_seq,
+          },
+        ]
+      : await seatsOf(db, row.id, true);
     const seats = allSeats.filter((seat) => !seat.options.removedAt);
     const names = new Map([
       ...allSeats.map((seat) => [seat.model_key, seat.title] as const),
@@ -139,13 +172,23 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
         role: seat.options.role ?? '',
         runId: seat.turn?.runId ?? null,
         startedAt: seat.turn?.startedAt ?? null,
-        callers: seat.turn?.callers ?? [],
+        callers: seat.turn?.callers ?? (dm && seat.turn ? [row.owner_id] : []),
         heardSeq: Number(seat.heard_seq),
       })),
       messages: messages.map((message) => toMessage(message, names)),
       live: live.map((message) => toMessage(message, names)),
       gone: watch.filter((id) => !live.some((message) => message.id === id)),
       filesRev: Number(row.options.filesRev ?? 0),
+      confirmations: dm ? (row.turn?.confirmations ?? []) : [],
+      ...(dm
+        ? {
+            home: {
+              workplace: row.workplace ?? { kind: 'cloud' as const },
+              permissions:
+                row.permissions ?? defaultPermissions(row.workplace ?? { kind: 'cloud' }),
+            },
+          }
+        : {}),
     };
   }
   return {
@@ -212,7 +255,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
       });
     },
     get(userId: string, id: string, cursor?: Cursor, watch?: string[]) {
-      return transaction(async (db) => snapshot(db, await owned(db, id, userId), cursor, watch));
+      return transaction(async (db) => snapshot(db, await readable(db, id, userId), cursor, watch));
     },
     /** 群主把一个好友直接拉进群（不用对方同意）；已经在群里就什么都不变 */
     addMember(userId: string, id: string, target: string, name: string) {

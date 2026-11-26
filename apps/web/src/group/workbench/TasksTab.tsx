@@ -4,6 +4,7 @@
 import type { AssignEditBody } from '@oasis/contracts/group';
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { editAssign, stopGroupAi } from '../../api/queries.ts';
 import { ProcessBody } from '../../chat/Process.tsx';
 import { elapsedText, useNow } from '../../chat/TaskCard.tsx';
@@ -199,7 +200,8 @@ function TaskDialog({
       : '',
     task.spentMicro > 0 ? formatCost(task.spentMicro) : '还没花钱',
   ].filter(Boolean);
-  return (
+  // 放到页面最外层：工作台这块是毛玻璃，fixed 的东西在它里面会被框住
+  return createPortal(
     <div
       className="fixed inset-0 z-40 flex items-center justify-center bg-veil p-6 backdrop-blur-sm"
       onPointerDown={(event) => event.target === event.currentTarget && onClose()}
@@ -285,7 +287,8 @@ function TaskDialog({
           </section>
         </div>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

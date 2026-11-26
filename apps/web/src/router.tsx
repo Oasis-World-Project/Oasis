@@ -20,10 +20,9 @@ import { AiSettingsPage } from './pages/AiSettingsPage.tsx';
 import { AisPage } from './pages/AisPage.tsx';
 import { ArtifactPage } from './pages/ArtifactPage.tsx';
 import { CanvasPage } from './pages/CanvasPage.tsx';
-import { DmPage } from './pages/DmPage.tsx';
 import { DmsPage } from './pages/DmsPage.tsx';
 import { GroupsPage } from './pages/GroupsPage.tsx';
-import { GroupPage } from './pages/GroupPage.tsx';
+import { ChatPage } from './pages/ChatPage.tsx';
 import { HomePage } from './pages/HomePage.tsx';
 import { LoginPage } from './pages/LoginPage.tsx';
 import { MePage } from './pages/MePage.tsx';
@@ -199,7 +198,7 @@ const groupRoute = createRoute({
     task: typeof search.task === 'string' ? search.task : undefined,
   }),
   staticData: { fixedHeight: true },
-  component: GroupPage,
+  component: ChatPage,
 });
 const dmsRoute = createRoute({
   getParentRoute: () => shellRoute,
@@ -210,14 +209,14 @@ const dmRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/dms/$conversationId',
   staticData: { fixedHeight: true },
-  component: DmPage,
+  component: ChatPage,
 });
-/** 和一个好友的私聊：页面和群页是同一个（两个人、没有 AI） */
+/** 和一个好友的私聊：和群、和 AI 的私聊是同一页（两个人、没有 AI） */
 const chatRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/chats/$chatId',
   staticData: { fixedHeight: true },
-  component: GroupPage,
+  component: ChatPage,
 });
 const meRoute = createRoute({ getParentRoute: () => shellRoute, path: '/me', component: MePage });
 const plazaRoute = createRoute({

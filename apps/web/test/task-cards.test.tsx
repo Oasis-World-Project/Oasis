@@ -128,9 +128,9 @@ describe('AI 在一轮里说的话和做的事', () => {
     expect(within(steps).getAllByRole('listitem', { hidden: true })).toHaveLength(2);
     expect(screen.getByText('服务恢复了，接着做')).toBeTruthy();
     expect(screen.getByText('待办 1/2')).toBeTruthy();
-    // 一轮在做：输入框照样能发（先排着），旁边有停止按钮
-    expect(screen.getByPlaceholderText('AI 正在做，发的话先排着，做完接着做…')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '停下这一轮' })).toBeTruthy();
+    // 一轮在做：输入框照样能发（先排着）；框里没字时发送键就是停下
+    expect(screen.getByPlaceholderText('它在做：你说的话先排着')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '停下' })).toBeTruthy();
   });
 
   it('干活的过程不整段铺在聊天里：开工前、收工后的话在外面，中间的步骤和边做边说的话收成一行，点开才看', async () => {
@@ -402,7 +402,7 @@ describe('用户的话', () => {
     expect(within(bar).getAllByRole('listitem')).toHaveLength(3);
     // 排着的话只在输入框上面，不在聊天里
     expect(screen.getAllByText('改成竖屏')).toHaveLength(1);
-    expect(screen.getByPlaceholderText('AI 正在做，发的话先排着，做完接着做…')).toBeTruthy();
+    expect(screen.getByPlaceholderText('它在做：你说的话先排着')).toBeTruthy();
     // 引导：现在交给这一轮，进聊天、标成插话
     fireEvent.click(within(bar).getByRole('button', { name: '引导：改成竖屏' }));
     expect(await screen.findByText('插话 · AI 做完手上这一步就会看到')).toBeTruthy();
@@ -425,16 +425,18 @@ describe('用户的话', () => {
 describe('开新话题、删私聊', () => {
   it('开新话题：问一句再开，聊天里出现分隔；一轮进行中不能开', async () => {
     const divider = message('topic', {}, 'user', '开了新话题');
-    const { api } = fakeChat([user('你好'), ai([say('你好！')])], {
-      extra: (method, path) =>
-        method === 'POST' && path === `/conversation/v1/conversations/${CONV}/topics`
-          ? json(201, { message: divider })
-          : undefined,
+    const { api, chat } = fakeChat([user('你好'), ai([say('你好！')])], {
+      extra: (method, path) => {
+        if (method !== 'POST' || path !== `/conversation/v1/conversations/${CONV}/topics`)
+          return undefined;
+        chat.messages = [...chat.messages, divider];
+        return json(201, { message: divider });
+      },
     });
     await openChat();
     await screen.findByText('你好！');
     fireEvent.click(screen.getByRole('button', { name: '开新话题' }));
-    const ask = screen.getByRole('group', { name: '开新话题？' });
+    const ask = screen.getByRole('group', { name: 'AI 会忘掉之前聊的，成果都还在' });
     expect(ask.textContent).toContain('AI 会忘掉之前聊的');
     fireEvent.click(within(ask).getByRole('button', { name: '开新话题' }));
     expect(await screen.findByRole('separator')).toBeTruthy();
@@ -457,12 +459,12 @@ describe('开新话题、删私聊', () => {
     });
     await openChat();
     fireEvent.click(await screen.findByRole('button', { name: '删除私聊' }));
-    const ask = screen.getByRole('group', { name: '删除这段私聊？' });
+    const ask = screen.getByRole('group', { name: '聊天、成果和 AI 的记忆都删掉，不能恢复' });
     expect(ask.textContent).toContain('聊天、成果和 AI 的记忆都删掉');
     fireEvent.click(within(ask).getByRole('button', { name: '删除' }));
     await waitFor(() =>
       expect(api.requests).toContain(`DELETE /conversation/v1/conversations/${CONV}`),
     );
-    await waitFor(() => expect(screen.queryByRole('region', { name: '私聊' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('region', { name: '聊天' })).toBeNull());
   });
 });

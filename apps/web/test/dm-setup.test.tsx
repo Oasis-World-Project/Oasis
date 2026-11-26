@@ -51,10 +51,12 @@ function fakeChat(messages: MessageBody[], turn: TurnState | null = null) {
       if (method === 'PUT' && path === `${BASE}/setup`) {
         const setup = body as { workplace: { kind: string } };
         const moved = setup.workplace.kind !== (chat.dm.workplace as { kind: string }).kind;
-        chat.dm = { ...chat.dm, ...setup };
+        // 原地改：假后端拼房间时读的是同一个对象
+        Object.assign(chat.dm, setup);
         const divider = moved
           ? { ...text('user', '换到你的电脑（D:\\Projects\\blog）干活，开了新话题'), kind: 'topic' }
           : null;
+        if (divider) chat.messages = [...chat.messages, divider as MessageBody];
         return json(200, { conversation: chat.dm, message: divider });
       }
       if (method === 'POST' && path === `${BASE}/confirmations/${CARD}`) {

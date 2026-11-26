@@ -105,13 +105,13 @@
   box-shadow: var(--oasis-glass-edge-bright), var(--oasis-shadow-composer);
 }
 
-/* 气泡的圆角：别人的话尾巴在左下（靠头像），我的话尾巴在右下 */
+/* 气泡的圆角：尖的那个角朝着头像（头像在话的上角）——别人的话在左上，我的话在右上 */
 @utility bubble-in {
-  border-radius: var(--oasis-radius-bubble) var(--oasis-radius-bubble) var(--oasis-radius-bubble)
-    var(--oasis-radius-tail);
+  border-radius: var(--oasis-radius-tail) var(--oasis-radius-bubble) var(--oasis-radius-bubble)
+    var(--oasis-radius-bubble);
 }
 @utility bubble-out {
-  border-radius: var(--oasis-radius-bubble) var(--oasis-radius-bubble) var(--oasis-radius-tail)
+  border-radius: var(--oasis-radius-bubble) var(--oasis-radius-tail) var(--oasis-radius-bubble)
     var(--oasis-radius-bubble);
 }
 

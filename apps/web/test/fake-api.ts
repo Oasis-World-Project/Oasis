@@ -1,4 +1,5 @@
 // 测试用的假后端：按路径应答 /api 请求，可切换登录状态。
+import { GROUP_HISTORY_NOTICE } from '@oasis/contracts/group';
 import { vi } from 'vitest';
 
 const NOW = '2026-10-22T08:00:00.000Z';
@@ -87,6 +88,54 @@ const withSetup = (dm: unknown) => ({
   ...(dm as object),
 });
 
+/**
+ * 和 AI 的私聊在页面上是一个房间（读消息、连推送用群的接口）：测试给的是私聊的消息和这一轮
+ * （GET …/conversations/:id/messages），这里拼成房间的样子。
+ */
+function dmRoom(
+  dm: { id: string; modelKey?: string; title?: string; workplace?: unknown; permissions?: unknown },
+  list: { messages: { role: string }[]; turn: { runId: string; startedAt: string } | null },
+) {
+  const key = dm.modelKey ?? 'claude';
+  const title = dm.title ?? MODELS.find((model) => model.key === key)?.name ?? key;
+  return {
+    id: dm.id,
+    kind: 'dm',
+    title,
+    ownerId: USER.id,
+    memberCount: 1,
+    aiCount: 1,
+    light: 'coral',
+    createdAt: NOW,
+    options: { light: 'coral', speak: 'mention' },
+    historyNotice: GROUP_HISTORY_NOTICE,
+    members: [{ userId: USER.id, displayName: USER.name, joinedAt: NOW }],
+    ais: [
+      {
+        key,
+        role: '',
+        runId: list.turn?.runId ?? null,
+        startedAt: list.turn?.startedAt ?? null,
+        callers: list.turn ? [USER.id] : [],
+        heardSeq: 0,
+      },
+    ],
+    messages: list.messages.map((message, index) => ({
+      ...message,
+      seq: index + 1,
+      authorId: message.role === 'user' ? USER.id : key,
+      displayName: message.role === 'user' ? USER.name : title,
+    })),
+    home: withSetup({}),
+    ...withHome(dm),
+    confirmations: (list.turn as { confirmations?: unknown[] } | null)?.confirmations ?? [],
+  };
+}
+const withHome = (dm: { workplace?: unknown; permissions?: unknown }) =>
+  dm.workplace && dm.permissions
+    ? { home: { workplace: dm.workplace, permissions: dm.permissions } }
+    : {};
+
 /** 测试自己加的接口：返回 undefined 表示不管，交给默认应答 */
 export type ExtraRoute = (
   method: string,
@@ -108,48 +157,64 @@ export function installFakeApi(options: {
     requests: [] as string[],
     bodies: [] as { path: string; body: unknown }[],
   };
-  const handler = vi.fn(async (input: string, init?: { method?: string; body?: string }) => {
-    const method = init?.method ?? 'GET';
-    const path = input.replace(/^\/api/, '');
-    state.requests.push(`${method} ${path}`);
-    if (method === 'POST' && path === '/identity/v1/auth/email-code')
-      return new Response(null, { status: 204 });
-    if (method === 'POST' && path === '/identity/v1/auth/verify') {
-      state.signedIn = true;
-      return json(200, { user: USER, isNewUser: true });
-    }
-    if (!state.signedIn) return unauthorized();
-    const body: unknown = init?.body ? JSON.parse(init.body) : undefined;
-    if (body !== undefined) state.bodies.push({ path, body });
-    const custom = await options.extra?.(method, path, body);
-    if (custom) return custom;
-    switch (path) {
-      case '/identity/v1/me':
-        return json(200, USER);
-      case '/billing/v1/wallet':
-        return json(200, {
-          availableMicro: 30_000_000,
-          heldMicro: 0,
-          grantedMicro: 30_000_000,
-          spentThisMonthMicro: 0,
-        });
-      case '/agent/v1/models':
-        return json(200, { models: MODELS });
-      case '/conversation/v1/dms':
-        return json(200, { conversations: (options.dms ?? []).map(withSetup) });
-      case '/conversation/v1/groups':
-        return json(200, { groups: [] });
-      case '/conversation/v1/friends':
-        return json(200, options.friends ?? { friends: [], incoming: [], outgoing: [] });
-      case '/conversation/v1/tasks':
-        return json(200, { tasks: options.tasks ?? [] });
-      // 「AI 们」页读「只用国内模型」开关：默认关着
-      case '/agent/v1/settings':
-        return json(200, { domesticOnly: false });
-      default:
-        return json(404, { error: { code: 'not_found', message: '没有这个接口' } });
-    }
-  });
+  const handler = vi.fn(
+    async (input: string, init?: { method?: string; body?: string }): Promise<Response> => {
+      const method = init?.method ?? 'GET';
+      const path = input.replace(/^\/api/, '');
+      state.requests.push(`${method} ${path}`);
+      if (method === 'POST' && path === '/identity/v1/auth/email-code')
+        return new Response(null, { status: 204 });
+      if (method === 'POST' && path === '/identity/v1/auth/verify') {
+        state.signedIn = true;
+        return json(200, { user: USER, isNewUser: true });
+      }
+      if (!state.signedIn) return unauthorized();
+      const body: unknown = init?.body ? JSON.parse(init.body) : undefined;
+      if (body !== undefined) state.bodies.push({ path, body });
+      const custom = await options.extra?.(method, path, body);
+      if (custom) return custom;
+      const room = /^\/conversation\/v1\/groups\/([0-9a-f-]{36})(\?.*)?$/.exec(path);
+      if (method === 'GET' && room) {
+        // 没人管的房间：按和 AI 的私聊算，用测试给的私聊消息拼
+        const list = await handler(`/api/conversation/v1/conversations/${room[1]}/messages`);
+        if (!list.ok) return list;
+        const dms = (options.dms ?? []) as { id: string }[];
+        return json(
+          200,
+          dmRoom(
+            dms.find((dm) => dm.id === room[1]) ?? { id: room[1]! },
+            (await list.json()) as Parameters<typeof dmRoom>[1],
+          ),
+        );
+      }
+      switch (path) {
+        case '/identity/v1/me':
+          return json(200, USER);
+        case '/billing/v1/wallet':
+          return json(200, {
+            availableMicro: 30_000_000,
+            heldMicro: 0,
+            grantedMicro: 30_000_000,
+            spentThisMonthMicro: 0,
+          });
+        case '/agent/v1/models':
+          return json(200, { models: MODELS });
+        case '/conversation/v1/dms':
+          return json(200, { conversations: (options.dms ?? []).map(withSetup) });
+        case '/conversation/v1/groups':
+          return json(200, { groups: [] });
+        case '/conversation/v1/friends':
+          return json(200, options.friends ?? { friends: [], incoming: [], outgoing: [] });
+        case '/conversation/v1/tasks':
+          return json(200, { tasks: options.tasks ?? [] });
+        // 「AI 们」页读「只用国内模型」开关：默认关着
+        case '/agent/v1/settings':
+          return json(200, { domesticOnly: false });
+        default:
+          return json(404, { error: { code: 'not_found', message: '没有这个接口' } });
+      }
+    },
+  );
   vi.stubGlobal('fetch', handler);
   return state;
 }

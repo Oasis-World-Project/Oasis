@@ -81,8 +81,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     const dms = createConversationRepo(pool);
     expect(await dms.findOwned(group.id, owner)).toBeUndefined();
     expect((await dms.findOwned(dm, owner))?.kind).toBe('dm');
-    await expect(groups.get(owner, dm)).rejects.toMatchObject({ statusCode: 404 });
     await expect(groups.get(member, dm)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(groups.send(owner, dm, '走群的接口发话', randomUUID(), [])).rejects.toMatchObject({
+      statusCode: 404,
+    });
   });
   it('成员不能管理其他人、不能拉人、不能解散群；拉人的接口要给用户 ID', async () => {
     const group = await setup();
