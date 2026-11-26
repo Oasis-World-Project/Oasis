@@ -82,10 +82,10 @@ export function registerGroupRoutes(
     await groups.removeAi(requireUserId(request), id, key, request.id);
     return reply.code(204).send();
   });
-  /** 停下这个 AI 正在做的一轮 */
-  app.post('/v1/groups/:id/ais/:key/stop', async (request, reply) => {
-    const { id, key } = parseWith(AiParams, request.params);
-    await groups.stopAi(requireUserId(request), id, key);
+  /** 停下正在做的一轮：席位的、云端任务的；和 AI 的私聊也用它 */
+  app.post('/v1/groups/:id/runs/:runId/stop', async (request, reply) => {
+    const { id, runId } = parseWith(Id.extend({ runId: z.uuid() }), request.params);
+    await groups.stopRun(requireUserId(request), id, runId);
     return reply.code(204).send();
   });
   /** 人改分工单：改派、改要求、撤掉一项，或整份全部停下 */

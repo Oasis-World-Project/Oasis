@@ -1,5 +1,6 @@
 // 分工：群里一个 AI 把一件事的几部分交给群里别的 AI。拆不拆、交给谁由它自己定，程序只给通道：
-// 它在回复里写一个 oasis-assign 代码块（分工单），这一轮说完后程序照着开工——没有上游的同时开，
+// 它在回复里写一个 oasis-assign 代码块（分工单），这一轮说完后程序照着开工——每一项是一个云端任务、
+// 有自己的会话（同一个 AI 可以同时做几项）；没有上游的同时开，
 // 上游都交了的自动接着开；被派的 AI 可以不接（oasis-decline）；有人没接、没做成，或者都结束了，
 // 轮到发单的 AI 处理和收口。分工单存成群里的一条消息。对全体说的话挑谁先出来也记在这里。
 import {
@@ -11,7 +12,11 @@ import {
 import type { AssignEditBody } from '@oasis/contracts/group';
 import { HttpError, type Logger } from '@oasis/service-kit';
 import type { z } from 'zod';
-import type { Conversation, ConversationRepo } from '../repo/conversation-repo.ts';
+import {
+  inGroup as isGroupSession,
+  type Conversation,
+  type ConversationRepo,
+} from '../repo/conversation-repo.ts';
 import type { AssignRow, GroupAssignRepo } from '../repo/group-assign-repo.ts';
 import type { GroupSeats } from '../repo/group-seats.ts';
 import { ownBrief, type SeatBrief } from './group-hearing.ts';
@@ -89,7 +94,7 @@ export function createGroupAssign(deps: {
   }
 
   /**
-   * 让这个席位开一轮（它有空才开）：先听它没听过的群聊，最后一行是 ending。
+   * 让群里的这份会话（席位、云端任务）开一轮（它有空才开）：先听它没听过的群聊，最后一行是 ending。
    * 返回这一轮的编号；它在忙、锁被占着返回 undefined（之后再试）；开不成返回 error。
    */
   async function open(
@@ -102,7 +107,7 @@ export function createGroupAssign(deps: {
     try {
       return await deps.store.withLock('message', seatId, async (locked) => {
         const seat = await locked.find(seatId);
-        if (!seat || seat.kind !== 'seat' || seat.turn || seat.options.removedAt) return undefined;
+        if (!seat || !isGroupSession(seat) || seat.turn || seat.options.removedAt) return undefined;
         const hearing = await seats.hearing(seatId, HEARING);
         if (!hearing) return undefined;
         const last = hearing.heard.at(-1);
@@ -128,28 +133,38 @@ export function createGroupAssign(deps: {
     }
   }
 
-  /** 把分工单里的一项交给它负责的 AI */
+  /** 把分工单里的一项交给它负责的 AI：这一项是一个云端任务，开一份自己的会话 */
   async function start(row: AssignRow, item: AssignItem): Promise<boolean> {
     const seat = await seats.seat(row.groupId, item.key);
-    if (!seat) {
+    const group = seat && (await deps.store.find(row.groupId));
+    if (!seat || !group) {
       Object.assign(item, { status: 'failed', note: '它已经不在群里了' });
       return true;
     }
-    if (seat.turn) return false;
     await repo.assigned(seat.id);
+    const task = await deps.store.createTask({
+      room: group,
+      modelKey: item.key,
+      title: taskTitle([], item.task),
+      heardSeq: Number(seat.heard_seq),
+    });
     const upstream = item.after.length
       ? `它要等的第 ${item.after.join('、')} 项已经交了，文件在群文件里。`
       : '';
     const from = item.from;
     const opened = await open(
-      seat.id,
+      task.id,
       item.key,
       `assign:${row.id}:${item.id}`,
       (names) =>
         `轮到你了：${names.get(row.key) ?? row.key} 发了分工单「${row.card.title}」，把第 ${item.id} 项交给你：${item.task}\n${upstream}${from ? `${names.get(from) ?? from} 之前做过一部分，它交的文件在群文件里。` : ''}这一项由你负责：做完把成果放进 out/ 交到群里，再说一句交了什么。不接就只回一个 oasis-decline 代码块写明原因，不要动手。`,
       taskTitle([], item.task),
     );
-    if (!opened) return false;
+    if (!opened) {
+      // 没开成（锁被占着）：这份会话不留，下次再开一份
+      await deps.store.deleteConversation(task.id);
+      return false;
+    }
     if ('error' in opened) Object.assign(item, { status: 'failed', note: opened.error });
     else Object.assign(item, { status: 'running', runId: opened.runId });
     return true;
@@ -157,9 +172,11 @@ export function createGroupAssign(deps: {
 
   /** 轮到发单的 AI：有人没接、没做成，或者都结束了该收口。它在忙就以后再说（返回 false） */
   async function report(row: AssignRow, over: boolean): Promise<boolean> {
-    const seat = await seats.seat(row.groupId, row.key);
+    // 回到发单的那份会话（席位，或它当时在做的那个云端任务）
+    const seatId = row.card.seat ?? (await seats.seat(row.groupId, row.key))?.id;
+    const seat = seatId ? await deps.store.find(seatId) : undefined;
     // 发单的 AI 已经不在群里：没人收口，直接关上
-    if (!seat) return true;
+    if (!seat || seat.options.removedAt) return true;
     if (seat.turn) return false;
     const opened = await open(
       seat.id,
@@ -202,8 +219,8 @@ export function createGroupAssign(deps: {
       // 记着在做、那个 AI 却已经不在这一轮里了（收尾那一下没记上：服务正好重启，或锁等得太久）：补记
       for (const item of items) {
         if (item.status !== 'running' || !item.runId) continue;
-        const seat = await seats.seat(groupId, item.key);
-        if (seat?.turn?.runId !== item.runId) record(item, await repo.said(groupId, item.runId));
+        if (!(await seats.running(groupId, item.runId)))
+          record(item, await repo.said(groupId, item.runId));
       }
       const ready = () => {
         const done = new Set(items.filter((i) => i.status === 'done').map((i) => i.id));
@@ -233,7 +250,7 @@ export function createGroupAssign(deps: {
 
   return {
     /**
-     * 一个席位的一轮结束了（调用方拿着它的 message 锁）：它做的是分工单里的一项就记下结果；
+     * 群里一份会话（席位、云端任务）的一轮结束了（调用方拿着它的 message 锁）：它做的是分工单里的一项就记下结果；
      * 它这一轮发了分工单就收下；它是对全体说的那句话挑中先出来的，说完了就让别的 AI 接话。
      */
     async settled(seat: Conversation, runId: string, callers: string[] = []) {
@@ -270,6 +287,7 @@ export function createGroupAssign(deps: {
           title: plan.title || taskTitle([], wanted[0]!.task),
           status: 'open',
           callers,
+          seat: seat.id,
           items: wanted.map((item): AssignItem => {
             const target = named(item.to);
             return {
@@ -310,8 +328,9 @@ export function createGroupAssign(deps: {
         const name = (key: string) => all.find((seat) => seat.model_key === key)?.title ?? key;
         /** 停下正在做这一项的那一轮：它收尾时这一项已经不算它的了，不会再记成它的结果 */
         const halt = async (item: AssignItem) => {
-          const seat = await seats.seat(groupId, item.key);
-          if (item.runId && seat?.turn?.runId === item.runId) await deps.turns.stop(seat.turn);
+          const running = item.runId && (await seats.running(groupId, item.runId));
+          const turn = running ? (await deps.store.find(running))?.turn : undefined;
+          if (turn) await deps.turns.stop(turn);
         };
         const live = (item: AssignItem) => item.status === 'waiting' || item.status === 'running';
         let said: string;

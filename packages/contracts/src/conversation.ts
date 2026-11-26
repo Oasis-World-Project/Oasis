@@ -151,6 +151,8 @@ export const TaskCard = z.object({
   revision: z.number().int().positive().optional(),
   /** 这一轮正等着用户点确认卡 */
   asking: z.boolean().optional(),
+  /** 做它的那份会话（挂在群或私聊下面、不显示的那一行）：改这个任务就接着它做。私聊里家里做的没有 */
+  seat: z.uuid().optional(),
   /** 任务名：任务单的标题，没有就是用户要求的开头（以前的任务卡没有） */
   title: z.string().optional(),
   status: z.enum(['running', 'done', 'stopped', 'failed']),
@@ -167,11 +169,12 @@ export const taskPhase = (card: Pick<TaskCard, 'status' | 'revision'>): TaskPhas
   card.status !== 'running' ? 'done' : card.revision ? 'fixing' : 'doing';
 
 /**
- * 画布上的一个任务：任务卡，加上它在哪段对话（成果上记的也是这个 ID）。私聊里的是那个私聊；
- * 群里的是做它的那个 AI 在群里的席位，另带 group：哪个群、哪个 AI（只有群主的画布里有群里的任务）。
+ * 画布上的一个任务：任务卡，加上做它的那份会话（conversationId，成果上记的也是这个 ID）和聊天在哪
+ * （room：私聊或群的 ID）。群里的另带 group：哪个群、哪个 AI（只有群主的画布里有群里的任务）。
  */
 export const TaskSummary = TaskCard.extend({
   conversationId: z.uuid(),
+  room: z.uuid(),
   group: z.object({ id: z.uuid(), title: z.string(), key: z.string() }).optional(),
 });
 export type TaskSummary = z.infer<typeof TaskSummary>;
@@ -209,6 +212,8 @@ export const AssignCard = z.object({
   items: z.array(AssignItem),
   /** 发单的那一轮是谁的话引来的（用户 ID）：他们和群主能改这份单子 */
   callers: z.array(z.uuid()).optional(),
+  /** 发单的那一轮在哪份会话里做的（席位或任务那一行）：收口回到那里；以前的单子没有，就是席位 */
+  seat: z.uuid().optional(),
 });
 export type AssignCard = z.infer<typeof AssignCard>;
 

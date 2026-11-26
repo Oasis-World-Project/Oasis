@@ -13,9 +13,14 @@ export type Message = typeof messages.$inferSelect;
 /** 这个会话的消息写在哪：私聊是它自己；群里的席位写进它所在的群 */
 export const roomOf = (conversation: Pick<Conversation, 'id' | 'parentId'>) =>
   conversation.parentId ?? conversation.id;
-/** 这个会话花哪个账户的钱：私聊花主人自己的；群里的席位花群的金库（账户号就是群的 ID） */
-export const accountOf = (conversation: Pick<Conversation, 'ownerId' | 'parentId'>) =>
-  conversation.parentId ?? conversation.ownerId;
+/** 这份会话是不是群里的（席位，或群里的云端任务）：花群的金库、话是说给全群的 */
+export const inGroup = (conversation: Pick<Conversation, 'kind' | 'options'>) =>
+  conversation.kind === 'seat' || conversation.options.room === 'group';
+/** 这个会话花哪个账户的钱：私聊（连它派到云端的任务）花主人自己的；群里的花群的金库（账户号就是群的 ID） */
+export const accountOf = (
+  conversation: Pick<Conversation, 'kind' | 'options' | 'ownerId' | 'parentId'>,
+) =>
+  inGroup(conversation) ? (conversation.parentId ?? conversation.ownerId) : conversation.ownerId;
 type NewMessage = Pick<
   typeof messages.$inferInsert,
   'conversationId' | 'authorKind' | 'authorId' | 'content' | 'status' | 'kind' | 'data' | 'error'
@@ -46,6 +51,18 @@ export interface ConversationRepo {
   listDms(ownerId: string): Promise<Conversation[]>;
   findOwned(id: string, ownerId: string): Promise<Conversation | undefined>;
   find(id: string): Promise<Conversation | undefined>;
+  /**
+   * 开一个云端任务的会话：挂在房间（群或和 AI 的私聊）下面的一行，由 room 里这个 AI 做；
+   * heardSeq：群里它已经听到第几条了（照它席位的）
+   */
+  createTask(task: {
+    room: Pick<Conversation, 'id' | 'kind' | 'ownerId'>;
+    modelKey: string;
+    title: string;
+    heardSeq?: number;
+  }): Promise<Conversation>;
+  /** 挂在这个房间下面的云端任务的会话 */
+  tasksOf(roomId: string): Promise<Conversation[]>;
   insertMessage(message: NewMessage): Promise<Message>;
   /** 改一条消息；消息已经不在了（被删）返回 undefined */
   updateMessage(id: string, patch: MessagePatch): Promise<Message | undefined>;
@@ -61,6 +78,8 @@ export interface ConversationRepo {
   findMessage(conversationId: string, id: string): Promise<Message | undefined>;
   /** 这段对话里交过这些成果之一的那张任务卡（最近的一张） */
   findTaskCard(conversationId: string, artifactIds: string[]): Promise<Message | undefined>;
+  /** 这份会话（云端任务）做出来的那张任务卡 */
+  findSeatCard(conversationId: string, seatId: string): Promise<Message | undefined>;
   /** AI 干活时用户发来、还排着队的话（这一轮做完接着开下一轮），按发的先后 */
   pendingMessages(conversationId: string): Promise<Message[]>;
   /** 排着队的话交给 AI 时挪到最后：聊天里按交给 AI 的先后排。消息不在了返回 undefined */
@@ -200,6 +219,26 @@ export function createConversationRepo(
       const [row] = await db.select().from(conversations).where(eq(conversations.id, id));
       return row;
     },
+    async createTask({ room, modelKey, title, heardSeq }) {
+      const [row] = await db
+        .insert(conversations)
+        .values({
+          kind: 'task',
+          ownerId: room.ownerId,
+          modelKey,
+          title,
+          parentId: room.id,
+          heardSeq: heardSeq ?? 0,
+          options: { room: room.kind === 'group' ? 'group' : 'dm' },
+        })
+        .returning();
+      return row!;
+    },
+    tasksOf: (roomId) =>
+      db
+        .select()
+        .from(conversations)
+        .where(and(eq(conversations.parentId, roomId), eq(conversations.kind, 'task'))),
 
     async insertMessage(message) {
       const [row] = await db.insert(messages).values(message).returning();
@@ -271,6 +310,21 @@ export function createConversationRepo(
       return row;
     },
 
+    async findSeatCard(conversationId, seatId) {
+      const [row] = await db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, conversationId),
+            eq(messages.kind, 'task'),
+            sql`${messages.data}->>'seat' = ${seatId}`,
+          ),
+        )
+        .orderBy(desc(messages.seq))
+        .limit(1);
+      return row;
+    },
     async findTaskCard(conversationId, artifactIds) {
       if (!artifactIds.length) return undefined;
       const [row] = await db

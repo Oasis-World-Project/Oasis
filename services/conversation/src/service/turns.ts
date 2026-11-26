@@ -18,6 +18,7 @@ import { GENERATION_TOOLS } from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import {
   accountOf,
+  inGroup,
   roomOf,
   type Conversation,
   type ConversationRepo,
@@ -56,7 +57,7 @@ export interface TurnDeps {
   funded?: (groupId: string) => Promise<void>;
 }
 
-/** 群里的席位做完一轮（turn）、空下来了：还有叫它的话就接着开下一轮（调用方拿着这个席位的 message 锁） */
+/** 群里的一份会话（席位、云端任务）做完一轮（turn）、空下来了：席位还有叫它的话就接着开下一轮（调用方拿着这份会话的 message 锁） */
 type SeatIdle = (store: ConversationRepo, seat: Conversation, turn: Turn) => Promise<void>;
 
 /** 一次拉多少条运行事件 */
@@ -159,7 +160,7 @@ export function createTurns(deps: TurnDeps) {
           await locked.touchConversation(roomOf(conversation));
           const latest = await locked.find(conversation.id);
           if (!latest || latest.turn) return;
-          if (latest.kind === 'seat') {
+          if (inGroup(latest)) {
             await seatIdle?.(locked, latest, turn).catch((err: unknown) =>
               logger.warn({ err, seatId: latest.id }, '席位空下来后没能接着开下一轮'),
             );
@@ -286,7 +287,7 @@ export function createTurns(deps: TurnDeps) {
     let revising: ArtifactLookupResult | undefined;
     let sessionId: string | undefined;
     try {
-      if (conversation.parentId) await deps.funded?.(conversation.parentId);
+      if (inGroup(conversation)) await deps.funded?.(accountOf(conversation));
       route = await deps.agent.json(
         'GET',
         `/internal/models/${encodeURIComponent(conversation.modelKey ?? '')}/route?userId=${conversation.ownerId}`,

@@ -44,8 +44,8 @@ export function EditPanel({
   overallHint: string;
   /** 做它的 AI（修改默认交给它） */
   maker: string | undefined;
-  /** 群里的 AI 做的：发进这个群，@ 做它的那个 AI */
-  group?: { id: string; title: string; key: string } | undefined;
+  /** 群里的 AI 做的：发进这个群，@ 做它的那个 AI；seat 是做它的那份会话（云端任务的就接着它改） */
+  group?: { id: string; title: string; key: string; seat?: string } | undefined;
   /** 做它的 AI 正在做一轮：做完之前不能再让它改 */
   busy: boolean;
 }) {
@@ -82,7 +82,7 @@ export function EditPanel({
         content,
         crypto.randomUUID(),
         [{ kind: 'ai', key: group.key }],
-        { attachments: [], refs },
+        { attachments: [], refs, ...(group.seat ? { seat: group.seat } : {}) },
       );
     },
     onSuccess: async () => {

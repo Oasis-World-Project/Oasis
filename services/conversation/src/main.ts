@@ -22,6 +22,7 @@ import { createGroupAssign } from './service/group-assign.ts';
 import { createGroupBrief } from './service/group-brief.ts';
 import { createGroupFiles } from './service/group-files.ts';
 import { createGroupService } from './service/group-service.ts';
+import { createGroupTasks } from './service/group-tasks.ts';
 import { createGroupSpeak } from './service/group-speak.ts';
 import { createProfiles } from './service/profiles.ts';
 import { createPurge } from './service/purge.ts';
@@ -132,6 +133,13 @@ await startService({
         brief,
         speak,
         assign,
+        tasks: createGroupTasks({
+          store: repo,
+          seats,
+          turns,
+          attach: brief.attach,
+          logger,
+        }),
         purge,
         vault,
         logger,

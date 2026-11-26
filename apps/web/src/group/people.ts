@@ -1,6 +1,6 @@
 // 群页里几处都要用的小东西：真人头像的颜色、AI 的样子、时间分隔行。
 import type { ModelEntry } from '@oasis/contracts/agent';
-import type { GroupSnapshot } from '@oasis/contracts/group';
+import type { GroupAi, GroupSnapshot } from '@oasis/contracts/group';
 
 /** 群里的人按 ID 分到几种柔色头像里：自己总是第一种，别人各自固定一种 */
 export function toneOf(userId: string, me: string | undefined): number {
@@ -20,6 +20,14 @@ export function aiLook(models: Map<string, ModelEntry>, key: string, fallback = 
     version: model?.versionLabel ?? '',
   };
 }
+
+/** 这个 AI 现在在做的每一轮：它自己那份会话的（群里的席位、私聊的家），和它名下的云端任务的 */
+export const runsOf = (ai: GroupAi) => [
+  ...(ai.runId ? [{ runId: ai.runId, callers: ai.callers }] : []),
+  ...ai.tasks,
+];
+/** 这个 AI 在忙：有一轮在做 */
+export const working = (ai: GroupAi) => runsOf(ai).length > 0;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const dayOf = (date: Date) =>

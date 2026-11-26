@@ -7,7 +7,7 @@ import { badgeOf, baseName } from '../../chat/files.ts';
 import type { PreviewFile } from '../../chat/files.ts';
 import { AiAvatar } from '../../ui/Avatar.tsx';
 import { MemberAvatar } from '../Members.tsx';
-import { aiLook } from '../people.ts';
+import { aiLook, runsOf } from '../people.ts';
 import { useRoom, type Room } from '../room.ts';
 
 function authorName(room: Pick<Room, 'group' | 'models'>, author: FileAuthor): string {
@@ -66,7 +66,8 @@ function agoText(at: string, now: number): string {
 
 /** 这个文件现在是不是有 AI 正在改：交出这一版的那一轮还没结束 */
 export const beingChanged = (room: Pick<Room, 'group'>, file: GroupFile) =>
-  file.runId !== null && room.group.ais.some((ai) => ai.runId === file.runId);
+  file.runId !== null &&
+  room.group.ais.some((ai) => runsOf(ai).some((run) => run.runId === file.runId));
 
 /** 文件卡片上的那句话：谁正在改；谁做的、谁改过；谁传的、多久以前 */
 export function fileNote(room: Pick<Room, 'group' | 'models'>, file: GroupFile, now: number) {

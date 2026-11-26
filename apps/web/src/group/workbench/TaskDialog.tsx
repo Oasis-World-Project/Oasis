@@ -4,15 +4,15 @@ import type { AssignEditBody } from '@oasis/contracts/group';
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { editAssign } from '../../api/queries.ts';
+import { editAssign, stopRun } from '../../api/queries.ts';
 import { ConfirmationCards } from '../../chat/ConfirmationCards.tsx';
 import { ProcessBody } from '../../chat/Process.tsx';
 import { elapsedText, useNow } from '../../chat/task-status.ts';
 import { AiAvatar } from '../../ui/Avatar.tsx';
 import { formatCost } from '../../ui/format.ts';
 import { actionsFor } from '../ai-actions.ts';
-import { aiLook } from '../people.ts';
-import { useRoom } from '../room.ts';
+import { aiLook, runsOf } from '../people.ts';
+import { dmAct, useRoom } from '../room.ts';
 import type { RoomTask } from './tasks.ts';
 
 const QUIET =
@@ -141,7 +141,13 @@ export function TaskDialog({
   const look = aiLook(models, task.key);
   const now = useNow(task.live);
   const ai = group.ais.find((item) => item.key === task.key);
-  const canStop = ai !== undefined && ai.runId === task.runId && (owner || ai.callers.includes(me));
+  // 这个任务正在做的那一轮：它自己那份会话的，或云端任务的。群主和引来它的人能停
+  const run = ai && runsOf(ai).find((item) => item.runId === task.runId);
+  const canStop = run !== undefined && (owner || run.callers.includes(me));
+  const stop = () =>
+    group.kind === 'dm'
+      ? dmAct(room, () => stopRun(group.id, task.runId))
+      : room.act(() => stopRun(group.id, task.runId));
   const ended = task.finishedAt ? Date.parse(task.finishedAt) : undefined;
   const { plan } = task;
   const editable =
@@ -179,20 +185,19 @@ export function TaskDialog({
             <p className="m-0 mt-1.5 text-[13px] text-ink-muted">{facts.join(' · ')}</p>
           </div>
           {canStop && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void actions.stop()}
-              className={QUIET}
-            >
+            <button type="button" disabled={busy} onClick={() => void stop()} className={QUIET}>
               停下
             </button>
           )}
-          {task.resumable && !ai?.runId && (
+          {task.resumable && !run && (
             <button
               type="button"
               disabled={busy || room.sending}
-              onClick={() => void actions.say('continue', '继续')}
+              onClick={() =>
+                void (task.seat && group.kind === 'group'
+                  ? room.send('继续', [{ kind: 'ai', key: task.key }], { seat: task.seat })
+                  : actions.say('continue', '继续'))
+              }
               className="h-9 cursor-pointer rounded-full border-0 bg-accent px-3.5 text-[12.5px] font-medium text-on-accent disabled:opacity-45"
             >
               让它继续

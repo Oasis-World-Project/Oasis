@@ -4,22 +4,16 @@ import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
-import {
-  addGroupAi,
-  modelsQuery,
-  removeGroupAi,
-  setGroupAiRole,
-  stopGroupAi,
-} from '../api/queries.ts';
+import { addGroupAi, modelsQuery, removeGroupAi, setGroupAiRole, stopRun } from '../api/queries.ts';
 import { ConfirmButton } from '../chat/parts.tsx';
 import { AiAvatar } from '../ui/Avatar.tsx';
-import { aiLook } from './people.ts';
+import { aiLook, runsOf, working } from './people.ts';
 import { Popover } from './RoomHeader.tsx';
 import { useRoom } from './room.ts';
 
 /** 这个 AI 现在在做什么：正在做的那一步；还没到第一步就是在想；有空 */
 function statusOf(ai: GroupAi, messages: GroupMessage[]): string {
-  if (!ai.runId) return '有空';
+  if (!working(ai)) return '有空';
   const writing = messages.findLast(
     (m) => m.kind === 'text' && m.authorId === ai.key && m.status === 'streaming',
   );
@@ -35,7 +29,9 @@ function AiCard({ ai, onClose }: { ai: GroupAi; onClose: () => void }) {
   const look = aiLook(models, ai.key);
   const [role, setRole] = useState(ai.role);
   const [editing, setEditing] = useState(false);
-  const canStop = Boolean(ai.runId) && (owner || ai.callers.includes(me));
+  // 我能停下的：群主都能停，别人只能停自己引来的
+  const mine = runsOf(ai).filter((run) => owner || run.callers.includes(me));
+  const canStop = mine.length > 0;
   return (
     <Popover
       label={look.name}
@@ -96,8 +92,8 @@ function AiCard({ ai, onClose }: { ai: GroupAi; onClose: () => void }) {
       <div className="flex items-center gap-2 text-[13px]">
         <span
           aria-hidden="true"
-          className={`size-[7px] rounded-full ${ai.runId ? '' : 'bg-dot-idle'}`}
-          style={ai.runId ? { background: look.glow } : undefined}
+          className={`size-[7px] rounded-full ${working(ai) ? '' : 'bg-dot-idle'}`}
+          style={working(ai) ? { background: look.glow } : undefined}
         />
         <span className="min-w-0 truncate">{statusOf(ai, group.messages)}</span>
       </div>
@@ -128,10 +124,14 @@ function AiCard({ ai, onClose }: { ai: GroupAi; onClose: () => void }) {
             <button
               type="button"
               disabled={busy}
-              onClick={() => void act(() => stopGroupAi(group.id, ai.key))}
+              onClick={() =>
+                void act(async () => {
+                  for (const run of mine) await stopRun(group.id, run.runId);
+                })
+              }
               className="h-9 cursor-pointer rounded-full border-0 bg-well px-3.5 text-[13px] text-ink disabled:opacity-45"
             >
-              停下它这一轮
+              {mine.length > 1 ? `停下它手上的 ${mine.length} 件事` : '停下它这一轮'}
             </button>
           )}
           {owner && (
@@ -200,7 +200,7 @@ export function Stage() {
       >
         {group.ais.map((ai) => {
           const look = aiLook(models, ai.key);
-          const busy = Boolean(ai.runId);
+          const busy = working(ai);
           return (
             <div role="listitem" key={ai.key} className="shrink-0">
               <button

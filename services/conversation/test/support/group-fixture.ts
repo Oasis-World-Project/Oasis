@@ -14,6 +14,7 @@ import { createGroupSeats } from '../../src/repo/group-seats.ts';
 import { createGroupAssign } from '../../src/service/group-assign.ts';
 import { createGroupFiles } from '../../src/service/group-files.ts';
 import { createGroupService } from '../../src/service/group-service.ts';
+import { createGroupTasks } from '../../src/service/group-tasks.ts';
 import type { Profiles } from '../../src/service/profiles.ts';
 import type { Turns } from '../../src/service/turns.ts';
 
@@ -87,6 +88,18 @@ export const groupAssign = (
     logger: pino({ level: 'silent' }),
   });
 
+/** 群里的云端任务：真的存储 */
+export const groupTasks = (pool: pg.Pool, deps: { store: ConversationRepo; turns: Turns }) => {
+  const files = groupFiles(pool);
+  return createGroupTasks({
+    store: deps.store,
+    seats: createGroupSeats(pool),
+    turns: deps.turns,
+    attach: files.attach,
+    logger: pino({ level: 'silent' }),
+  });
+};
+
 /** 假的金库：记着每个群有多少钱、谁存过、哪些群解散退过（没存过的群算有钱，不挡别的测试） */
 export function fakeVault() {
   const balances = new Map<string, number>();
@@ -127,6 +140,11 @@ export const humanGroups = (pool: pg.Pool, messagesPerMinute: number) =>
     files: groupFiles(pool),
     speak: { nudge: () => undefined },
     purge: { cancelTurn: async () => undefined, remote: async () => undefined },
+    tasks: {
+      publish: async () => undefined,
+      toRevise: async () => undefined,
+      revise: async () => undefined,
+    },
     vault: fakeVault(),
     logger: pino({ level: 'silent' }),
   });

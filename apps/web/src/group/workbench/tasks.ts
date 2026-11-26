@@ -16,6 +16,8 @@ export const TASK_COLUMNS: { id: TaskColumn; title: string }[] = [
 
 export interface RoomTask {
   runId: string;
+  /** 做它的那份会话（云端任务的、席位的）：让它继续、让它改时点名交给它；私聊家里做的没有 */
+  seat?: string;
   /** 哪个 AI 的 */
   key: string;
   title: string;
@@ -155,6 +157,7 @@ export function tasksOf(messages: GroupMessage[]): RoomTask[] {
     const did = `做了 ${steps.length} 步${files.length ? `，交了 ${files.length} 个文件` : ''}`;
     tasks.push({
       runId,
+      ...(card?.data.seat ? { seat: card.data.seat } : {}),
       key: (last ?? card)!.authorId,
       title: card?.data.title ?? texts.find((message) => message.data.title)?.data.title ?? '任务',
       column,

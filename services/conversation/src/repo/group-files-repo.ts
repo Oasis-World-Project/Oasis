@@ -3,7 +3,14 @@
 import type pg from 'pg';
 import type { FileAuthor } from '@oasis/contracts/group';
 import { HttpError } from '@oasis/service-kit';
-import { MEMBER_NAME, MESSAGE_COLUMNS, seatsOf, toMessage, type MessageRow } from './group-rows.ts';
+import {
+  MEMBER_NAME,
+  MESSAGE_COLUMNS,
+  seatsOf,
+  sessionsOf,
+  toMessage,
+  type MessageRow,
+} from './group-rows.ts';
 import { inTransaction } from './tx.ts';
 
 export interface FileRow {
@@ -193,11 +200,11 @@ export function createGroupFilesRepo(pool: pg.Pool) {
         if (files.rowCount) await bump(db, groupId, await nextRev(db));
       });
     },
-    /** 这个席位拿到群文件的第几版了（只往后挪） */
+    /** 这份会话（席位或云端任务）拿到群文件的第几版了（只往后挪） */
     async setSeen(seatId: string, rev: number) {
       await pool.query(
         `update conversations set options=options || jsonb_build_object('filesSeen',
-           greatest(coalesce((options->>'filesSeen')::bigint,0), $2::bigint)) where id=$1 and kind='seat'`,
+           greatest(coalesce((options->>'filesSeen')::bigint,0), $2::bigint)) where id=$1`,
         [seatId, rev],
       );
     },
@@ -215,7 +222,9 @@ export function createGroupFilesRepo(pool: pg.Pool) {
           ...seats.map((seat) => [seat.model_key, seat.title] as const),
           ...members.map((member) => [member.user_id, member.name] as const),
         ]),
-        running: new Set(seats.flatMap((seat) => (seat.turn ? [seat.turn.runId] : []))),
+        running: new Set(
+          (await sessionsOf(pool, groupId)).flatMap((row) => (row.turn ? [row.turn.runId] : [])),
+        ),
       };
     },
     /** 这段聊天里的一条消息带的文件：是谁发的；没有这个文件返回 undefined */

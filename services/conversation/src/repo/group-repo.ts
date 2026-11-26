@@ -13,7 +13,9 @@ import {
   MEMBER_NAME,
   MEMBER_ORDER,
   MESSAGE_COLUMNS,
+  runningTasks,
   seatsOf,
+  sessionsOf,
   toMessage,
   type GroupRow,
   type MessageRow,
@@ -148,6 +150,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
       )
     ).rows;
     const options = GroupOptions.parse(row.options);
+    const tasks = await runningTasks(db, row.id);
     return {
       id: row.id,
       kind: row.kind,
@@ -174,6 +177,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
         startedAt: seat.turn?.startedAt ?? null,
         callers: seat.turn?.callers ?? (dm && seat.turn ? [row.owner_id] : []),
         heardSeq: Number(seat.heard_seq),
+        tasks: tasks(seat.model_key),
       })),
       messages: messages.map((message) => toMessage(message, names)),
       live: live.map((message) => toMessage(message, names)),
@@ -361,12 +365,25 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
         return snapshot(db, row);
       });
     },
-    /** 解散群之前：核对是群主，给出群里所有的席位（连被移出的），由调用方清它们在别的服务里的东西 */
+    /**
+     * 解散群之前：核对是群主，给出群里所有的会话（席位连被移出的，和每个云端任务的），
+     * 由调用方清它们在别的服务里的东西
+     */
     seatsToPurge(userId: string, id: string) {
       return transaction(async (db) => {
         await ownedByOwner(db, id, userId, '解散群');
-        return seatsOf(db, id, true);
+        return sessionsOf(db, id);
       });
+    },
+    /** 这个 AI 在群里做过的云端任务的会话（把它移出群时清掉） */
+    async tasksOf(id: string, key: string) {
+      return (await sessionsOf(pool, id)).filter(
+        (row) => row.kind === 'task' && row.model_key === key,
+      );
+    },
+    /** 删掉一个云端任务的会话（它在别的服务里的东西已经清了） */
+    async dropTask(taskId: string) {
+      await pool.query("delete from conversations where id=$1 and kind='task'", [taskId]);
     },
     destroy(userId: string, id: string) {
       return transaction(async (db) => {

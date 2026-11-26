@@ -133,8 +133,9 @@ export const setGroupAiRole = (id: string, key: string, role: string) =>
     body: { role },
   });
 /** 停下群里这个 AI 正在做的一轮 */
-export const stopGroupAi = (id: string, key: string) =>
-  apiVoid(`${groupPath(id)}/ais/${encodeURIComponent(key)}/stop`, { method: 'POST', body: {} });
+/** 停下正在做的一轮（席位的、云端任务的；和 AI 的私聊里也用它）：已经做出来的会存下 */
+export const stopRun = (roomId: string, runId: string) =>
+  apiVoid(`${groupPath(roomId)}/runs/${runId}/stop`, { method: 'POST', body: {} });
 /** 人改分工单：改派、改要求、撤掉一项（正在做的先停下），或整份全部停下 */
 export const editAssign = (id: string, messageId: string, change: AssignEditBody) =>
   apiVoid(`${groupPath(id)}/assigns/${messageId}`, { method: 'POST', body: change });
@@ -165,13 +166,16 @@ export const depositToVault = (id: string, amountMicro: number) =>
   api(`${groupPath(id)}/vault/deposits`, TreasuryBody, { method: 'POST', body: { amountMicro } });
 export const deleteGroup = (id: string) =>
   apiVoid(`/conversation/v1/groups/${id}`, { method: 'DELETE' });
-/** 发一句话；files：随这句发的文件（已经传到 canvas 的 id）、引用的群文件（路径）、是不是作为任务发布 */
+/**
+ * 发一句话；files：随这句发的文件（已经传到 canvas 的 id）、引用的群文件（路径）、是不是作为任务发布、
+ * 是不是让 AI 接着做它的一个云端任务（seat：那个任务的会话）
+ */
 export const sendGroupMessage = (
   id: string,
   content: string,
   requestId: string,
   mentions: Mention[] = [],
-  files: { attachments?: string[]; refs?: string[]; task?: boolean } = {},
+  files: { attachments?: string[]; refs?: string[]; task?: boolean; seat?: string } = {},
 ) =>
   api(`${groupPath(id)}/messages`, GroupSnapshot, {
     method: 'POST',
@@ -182,6 +186,7 @@ export const sendGroupMessage = (
       attachments: files.attachments ?? [],
       refs: files.refs ?? [],
       task: files.task ?? false,
+      ...(files.seat ? { seat: files.seat } : {}),
     },
   });
 

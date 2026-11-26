@@ -9,6 +9,7 @@ import { ApiError } from '../api/client.ts';
 import { depositToVault, vaultQuery, walletQuery } from '../api/queries.ts';
 import { formatUsd } from '../ui/format.ts';
 import { MemberAvatar } from './Members.tsx';
+import { runsOf } from './people.ts';
 import { useRoom, type Room } from './room.ts';
 
 /** 一次存多少（美元） */
@@ -22,7 +23,7 @@ export function useVault(group: GroupSnapshot | null) {
   const [shown, setShown] = useState(false);
   const queryClient = useQueryClient();
   const { data } = useQuery({ ...vaultQuery(id), enabled: Boolean(id), refetchInterval: 60_000 });
-  const running = group?.ais.filter((ai) => ai.runId).length ?? 0;
+  const running = group?.ais.flatMap(runsOf).length ?? 0;
   useEffect(() => {
     if (id) void queryClient.invalidateQueries({ queryKey: ['vault', id] });
   }, [id, running, queryClient]);

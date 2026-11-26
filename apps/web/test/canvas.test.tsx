@@ -30,6 +30,7 @@ const TASKS = [
   {
     runId: OTHER_RUN,
     conversationId: OTHER_CONV,
+    room: OTHER_CONV,
     title: '价格表',
     status: 'running',
     startedAt: '2026-10-24T03:00:00.000Z',
@@ -40,6 +41,7 @@ const TASKS = [
   {
     runId: RUN,
     conversationId: CONV,
+    room: CONV,
     title: '民宿首页',
     status: 'done',
     startedAt: '2026-10-24T01:00:00.000Z',
@@ -189,6 +191,7 @@ describe('画布', () => {
         {
           runId: GROUP_RUN,
           conversationId: SEAT,
+          room: GROUP,
           title: '写流程',
           status: 'done',
           startedAt: '2026-10-24T02:00:00.000Z',

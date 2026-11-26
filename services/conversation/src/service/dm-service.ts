@@ -202,7 +202,9 @@ export function createDmService(deps: {
     async listTasks(ownerId: string): Promise<TaskSummary[]> {
       return (await repo.listTasks(ownerId, TASK_LIMIT)).map(({ message, seat }) => ({
         ...(message.data as TaskCard),
-        conversationId: seat?.id ?? message.conversationId,
+        // 做它的那份会话：卡上记着的（云端任务、席位），以前的卡没记就是席位，私聊家里做的是私聊自己
+        conversationId: (message.data as TaskCard).seat ?? seat?.id ?? message.conversationId,
+        room: message.conversationId,
         ...(seat
           ? { group: { id: message.conversationId, title: seat.group, key: message.authorId } }
           : {}),

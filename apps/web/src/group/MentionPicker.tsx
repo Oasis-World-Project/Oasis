@@ -2,7 +2,7 @@
 import type { Mention } from '@oasis/contracts/conversation';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { MemberAvatar } from './Members.tsx';
-import { aiLook } from './people.ts';
+import { aiLook, working } from './people.ts';
 import { Popover } from './RoomHeader.tsx';
 import { useRoom } from './room.ts';
 
@@ -52,11 +52,11 @@ export function MentionPicker({
                 onClick={() => onPick({ kind: 'ai', key: ai.key })}
                 className="flex w-[86px] cursor-pointer flex-col items-center gap-1.5 rounded-[22px] border-0 bg-bubble pb-2.5 pt-3 text-ink shadow-edge-bright"
               >
-                <AiAvatar mono={look.mono} glow={look.glow} size={40} glowing={Boolean(ai.runId)} />
+                <AiAvatar mono={look.mono} glow={look.glow} size={40} glowing={working(ai)} />
                 <span className="max-w-full truncate px-1 text-[13px] font-medium">
                   {look.name}
                 </span>
-                <span className="text-[11px] text-ink-muted">{ai.runId ? '在忙' : '有空'}</span>
+                <span className="text-[11px] text-ink-muted">{working(ai) ? '在忙' : '有空'}</span>
               </button>
             );
           })}

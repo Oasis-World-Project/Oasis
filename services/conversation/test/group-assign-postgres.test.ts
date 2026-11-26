@@ -17,6 +17,7 @@ import {
   fakeVault,
   groupAssign,
   groupFiles,
+  groupTasks,
 } from './support/group-fixture.ts';
 import { scratchSchema } from './support/schema.ts';
 import { client, event, fake, harnessUrl, othersUrl, until } from './support/turn-fixture.ts';
@@ -50,6 +51,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的分工', () => {
       profiles: fakeProfiles(new Map([[owner, '阿杰']])),
       files: groupFiles(pool),
       assign: groupAssign(pool, { store, turns, speak }),
+      tasks: groupTasks(pool, { store, turns }),
       speak,
       purge: createPurge({ harness, modelGateway, canvas }),
       vault: fakeVault(),
@@ -81,8 +83,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的分工', () => {
       refs: [],
       task,
     });
-  const runOf = async (id: string, key: string) =>
-    (await groups.get(owner, id)).ais.find((item) => item.key === key)!.runId;
+  /** 这个 AI 现在在做的一轮：席位的，或它名下的云端任务（分工单的一项、作为任务发布的） */
+  const runOf = async (id: string, key: string) => {
+    const ai = (await groups.get(owner, id)).ais.find((item) => item.key === key)!;
+    return ai.runId ?? ai.tasks[0]?.runId ?? null;
+  };
   /** 让这个 AI 正在做的一轮说完这句话 */
   async function finish(id: string, key: string, text: string) {
     const runId = (await runOf(id, key))!;
@@ -160,10 +165,18 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的分工', () => {
       '发了分工单「竞品 A 分析」，把第 1 项交给你：按 资料.md 做图表，存成 图表.md',
     );
     expect(String(first.prompt)).toContain('不接就只回一个 oasis-decline 代码块');
+    // 每一项是一个云端任务：有自己的会话（不是它的席位），花金库的钱
+    const { rows: sessions } = await pool.query<{ kind: string; options: { room?: string } }>(
+      'select kind,options from conversations where id=$1',
+      [first.conversationId],
+    );
+    expect(sessions).toMatchObject([{ kind: 'task', options: { room: 'group' } }]);
+    expect(first).toMatchObject({ payerId: id, scene: 'group' });
+    expect(first.continueFrom).toBeUndefined();
     expect(await runOf(id, 'kimi')).toBeNull();
     // 被派了活：它的「越聊越低」从这里重新算
     const { rows } = await pool.query<{ options: { assignedSeq?: number } }>(
-      "select options from conversations where parent_id=$1 and model_key='glm'",
+      "select options from conversations where parent_id=$1 and kind='seat' and model_key='glm'",
       [id],
     );
     expect(rows[0]!.options.assignedSeq).toBeGreaterThan(0);

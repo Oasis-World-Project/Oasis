@@ -18,6 +18,7 @@ import {
   fakeVault,
   groupAssign,
   groupFiles,
+  groupTasks,
 } from './support/group-fixture.ts';
 import { scratchSchema } from './support/schema.ts';
 import {
@@ -71,6 +72,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群文件', () => {
       profiles,
       files,
       assign: groupAssign(pool, { store, turns }),
+      tasks: groupTasks(pool, { store, turns }),
       speak: { nudge: () => undefined },
       purge: createPurge({ harness, modelGateway, canvas }),
       vault: fakeVault(),

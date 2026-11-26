@@ -1,4 +1,4 @@
-// 群里的席位听到什么：轮到一个 AI 时，群里有谁、它没听过的话。
+// 群里的会话（席位、云端任务）听到什么：轮到一个 AI 时，群里有谁、它没听过的话。
 import type pg from 'pg';
 import type { Mention } from '@oasis/contracts/conversation';
 import {
@@ -35,8 +35,8 @@ export function createGroupSeats(pool: pg.Pool) {
      */
     async hearing(seatId: string, limit: number) {
       const seat = (
-        await pool.query<{ parent_id: string; model_key: string; heard_seq: string }>(
-          "select parent_id,model_key,heard_seq from conversations where id=$1 and kind='seat'",
+        await pool.query<{ kind: string; parent_id: string; model_key: string; heard_seq: string }>(
+          "select kind,parent_id,model_key,heard_seq from conversations where id=$1 and kind in ('seat','task')",
           [seatId],
         )
       ).rows[0];
@@ -98,15 +98,37 @@ export function createGroupSeats(pool: pg.Pool) {
           files: fileNames(row.data),
           ...(row.data.task === true ? { task: true } : {}),
           ...(typeof row.data.lead === 'string' ? { lead: row.data.lead } : {}),
+          // 交给了哪份会话：是这一份就是点名给它的；是别的，或者这是云端任务而这句没点名给它，只当背景
+          ...(row.data.seat === seatId
+            ? { mine: true }
+            : row.data.seat || seat.kind === 'task'
+              ? { aside: true }
+              : {}),
         })),
         skipped: total - rows.length,
       };
+    },
+    /** 群里正在做 runId 这一轮的那份会话（席位或云端任务）；没有返回 undefined */
+    async running(groupId: string, runId: string) {
+      return (
+        await pool.query<{ id: string }>(
+          "select id from conversations where parent_id=$1 and kind in ('seat','task') and turn->>'runId'=$2",
+          [groupId, runId],
+        )
+      ).rows[0]?.id;
     },
     /** 这个席位听到了第几条（只往后挪）；顺手记下 AI 现在的名字 */
     async setHeard(seatId: string, seq: number, name?: string) {
       await pool.query(
         'update conversations set heard_seq=greatest(heard_seq,$2), title=coalesce($3,title) where id=$1',
         [seatId, seq, name ?? null],
+      );
+    },
+    /** 群里第 seq 条（人说的话）点名交给这份会话：这个 AI 别的会话只当背景听 */
+    async claim(groupId: string, seq: number, seatId: string) {
+      await pool.query(
+        "update messages set data=data || jsonb_build_object('seat',$3::text) where conversation_id=$1 and seq=$2 and author_kind='user'",
+        [groupId, seq, seatId],
       );
     },
     /** 群里的一条消息的序号和是谁发的；不在这个群里返回 undefined */

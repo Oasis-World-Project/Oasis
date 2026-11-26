@@ -55,6 +55,8 @@ export const GroupSendBody = z
     refs: z.array(FilePath).max(MAX_FILE_REFS).default([]),
     /** 作为任务发到群里：没 @ 某个 AI 时，挑最对口的一个出来负责；只有群里能用 */
     task: z.boolean().default(false),
+    /** 这句话是让 AI 接着做、改它的一个云端任务：那个任务的会话（任务卡上的 seat）；要 @ 做它的 AI */
+    seat: z.uuid().optional(),
   })
   .refine(
     (body) => body.content || body.attachments.length || body.refs.length,
@@ -102,13 +104,24 @@ export const GroupAi = z.object({
   key: AiKey,
   /** 在这个群里负责什么（群主写的，没写为空） */
   role: z.string().max(60),
-  /** 它正在进行的一轮；有空时为 null */
+  /** 它自己那份会话（群里的席位、私聊的家）正在进行的一轮；有空时为 null */
   runId: z.uuid().nullable(),
   startedAt: z.iso.datetime().nullable(),
   /** 这一轮是谁的话引来的（用户 ID）：他们和群主能停下它 */
   callers: z.array(z.uuid()),
   /** 它听到群里第几条了：@ 它的话序号比这大，就是它还没看到（在忙，忙完就看） */
   heardSeq: z.number().int().nonnegative().safe(),
+  /** 它名下正在云端做的任务（每个任务有自己的会话，和上面那一轮互不挡） */
+  tasks: z
+    .array(
+      z.object({
+        runId: z.uuid(),
+        startedAt: z.iso.datetime(),
+        /** 这一轮是谁的话引来的：他们和群主（私聊里是主人）能停下 */
+        callers: z.array(z.uuid()),
+      }),
+    )
+    .default([]),
 });
 export type GroupAi = z.infer<typeof GroupAi>;
 export const AddGroupAiBody = z.object({ key: AiKey });

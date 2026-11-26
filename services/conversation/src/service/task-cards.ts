@@ -11,6 +11,7 @@ import type { Logger, ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import {
   accountOf,
+  inGroup,
   roomOf,
   type Conversation,
   type ConversationRepo,
@@ -37,16 +38,20 @@ export function createTaskCards(deps: {
 
   /**
    * 要改的成果是哪个任务交的：找到了，这一轮就算在那个任务上（那张卡回到进行中，做完原地换新），
-   * 返回要记在这一轮上的东西；没找到（成果不是任务交的）就是一轮新的
+   * 返回要记在这一轮上的东西；没找到（成果不是任务交的）就是一轮新的。
+   * 云端任务的会话里的每一轮都算在它自己那张卡上（让它改、让它继续）。
    */
   async function revised(
     store: ConversationRepo,
     conversation: Conversation,
     artifactIds: string[],
   ): Promise<Pick<Turn, 'cardId' | 'revises'> | undefined> {
-    const card = await store.findTaskCard(roomOf(conversation), artifactIds);
+    const card =
+      conversation.kind === 'task'
+        ? await store.findSeatCard(roomOf(conversation), conversation.id)
+        : await store.findTaskCard(roomOf(conversation), artifactIds);
     // 群里只认这个 AI 自己交的任务
-    if (!card || (conversation.kind === 'seat' && card.authorId !== conversation.modelKey))
+    if (!card || (inGroup(conversation) && card.authorId !== conversation.modelKey))
       return undefined;
     const before = card.data as TaskCard;
     if (before.status === 'running') return undefined;
@@ -71,9 +76,11 @@ export function createTaskCards(deps: {
   ) {
     const content = card.status === 'running' ? '任务进行中' : '任务结束';
     const before = turn.revises;
+    // 挂在房间下面的会话（群里的席位、云端任务）做的：卡上记着是哪一份，改这个任务就接着它
+    const made = { ...card, ...(conversation.parentId ? { seat: conversation.id } : {}) };
     const data: TaskCard = before
       ? {
-          ...card,
+          ...made,
           ...(before.title ? { title: before.title } : {}),
           runs: [...before.runs, card.runId],
           revision: before.revision,
@@ -88,7 +95,7 @@ export function createTaskCards(deps: {
             ),
           ],
         }
-      : card;
+      : made;
     if (turn.cardId && (await store.updateMessage(turn.cardId, { content, data }))) return;
     const created = await store.insertMessage({
       conversationId: roomOf(conversation),
@@ -122,7 +129,7 @@ export function createTaskCards(deps: {
       },
       schema: RegisteredArtifacts,
     });
-    if (conversation.kind === 'seat') await deps.delivered?.(conversation, run.id, artifacts);
+    if (inGroup(conversation)) await deps.delivered?.(conversation, run.id, artifacts);
     return artifacts.map((a) => ({
       artifactId: a.id,
       name: a.name,

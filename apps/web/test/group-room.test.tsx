@@ -328,4 +328,77 @@ describe('群页里的 AI', () => {
     expect(screen.getByRole('button', { name: '金库，现在有 $10.00' })).not.toBeNull();
     expect(screen.queryByRole('status')).toBeNull();
   });
+
+  it('云端任务：AI 的席位空着也算在忙；点开任务按这一轮停下；让它继续时点名这个任务的会话', async () => {
+    const seat = '00000000-0000-4000-8000-000000000081';
+    const task = (status: string, extra = {}) => ({
+      ...said(4, 'claude', 'Claude', '任务进行中'),
+      role: 'assistant',
+      kind: 'task',
+      data: {
+        runId: run,
+        seat,
+        title: '做一张海报',
+        status,
+        startedAt: at,
+        finishedAt: status === 'running' ? null : at,
+        spentMicro: 1_000,
+        files: [],
+        ...extra,
+      },
+    });
+    const doing = group({
+      ais: [
+        {
+          key: 'claude',
+          role: '',
+          runId: null,
+          startedAt: null,
+          callers: [],
+          heardSeq: 3,
+          tasks: [{ runId: run, startedAt: at, callers: [me] }],
+        },
+      ],
+      messages: [said(2, me, '我', '做一张海报', { task: true }), writing(3), task('running')],
+    });
+    const state = installFakeApi({
+      signedIn: true,
+      extra: (method, path) =>
+        method === 'POST' && (path.endsWith('/stop') || path.endsWith('/messages'))
+          ? path.endsWith('/stop')
+            ? new Response(null, { status: 204 })
+            : json(200, doing)
+          : undefined,
+    });
+    const stream = await room(doing);
+    expect(screen.getByRole('button', { name: 'Claude，在忙' })).not.toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'Claude：做一张海报' }));
+    let dialog = screen.getByRole('dialog', { name: '做一张海报' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '停下' }));
+    await waitFor(() =>
+      expect(state.requests).toContain(`POST /conversation/v1/groups/${id}/runs/${run}/stop`),
+    );
+    // 停下了：席位和任务都空了，可以让它继续——这句话点名交给这个任务的会话
+    act(() =>
+      push(
+        stream,
+        group({
+          messages: [
+            said(2, me, '我', '做一张海报', { task: true }),
+            writing(3, { status: 'complete', data: { runId: run, parts: [], stopped: true } }),
+            task('stopped'),
+          ],
+        }),
+      ),
+    );
+    dialog = screen.getByRole('dialog', { name: '做一张海报' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: '让它继续' }));
+    await waitFor(() =>
+      expect(state.bodies.at(-1)?.body).toMatchObject({
+        content: '继续',
+        mentions: [{ kind: 'ai', key: 'claude' }],
+        seat,
+      }),
+    );
+  });
 });

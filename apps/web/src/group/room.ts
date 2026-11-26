@@ -11,6 +11,8 @@ export interface SendFiles {
   refs?: string[];
   /** 作为任务发到群里：没 @ 谁时挑最对口的 AI 出来负责 */
   task?: boolean;
+  /** 让 AI 接着做、改它的一个云端任务：那个任务的会话（任务卡上的 seat） */
+  seat?: string;
 }
 
 /** 聊天里能对工作台做的事 */

@@ -17,6 +17,7 @@ import {
   fakeVault,
   groupAssign,
   groupFiles,
+  groupTasks,
 } from './support/group-fixture.ts';
 import { client, event, fake, harnessUrl, othersUrl, until } from './support/turn-fixture.ts';
 
@@ -69,6 +70,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
       ),
       files: groupFiles(pool),
       assign: groupAssign(pool, { store, turns }),
+      tasks: groupTasks(pool, { store, turns }),
       speak: { nudge: (groupId) => void nudged.push(groupId) },
       purge: createPurge({ harness, modelGateway, canvas }),
       vault,
@@ -227,10 +229,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     await say(member, group.id, '做一张海报', 'claude');
     const runId = String(fake.starts[0]!.runId);
     const seatId = String(fake.starts[0]!.conversationId);
-    await expect(groups.stopAi(randomUUID(), group.id, 'claude')).rejects.toMatchObject({
+    await expect(groups.stopRun(randomUUID(), group.id, runId)).rejects.toMatchObject({
       statusCode: 404,
     });
-    await groups.stopAi(member, group.id, 'claude');
+    await groups.stopRun(member, group.id, runId);
     expect(fake.stops).toEqual([runId]);
     // 只有群主能加减 AI、改设置；一个群最多 2 个 AI（这里的上限）
     await expect(groups.removeAi(member, group.id, 'claude', 'r')).rejects.toMatchObject({

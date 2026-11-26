@@ -36,6 +36,10 @@ export interface Heard {
   task?: boolean;
   /** @ 了全体或作为任务发布时，挑中先出来负责的那个 AI */
   lead?: string;
+  /** 这句是点名交给听的这份会话的（让它改它做的那个任务） */
+  mine?: boolean;
+  /** 这句不是对听的这份会话说的（交给了这个 AI 的另一份会话；云端任务只认点名交给它的）：只当背景听 */
+  aside?: boolean;
 }
 
 /** 群里有谁 */
@@ -56,12 +60,14 @@ const toEveryone = (message: Heard) =>
   (message.task === true && !message.mentions.some((m) => m.kind === 'ai'));
 
 /**
- * 这句话是不是在叫这个 AI：@ 了它；或者是对全体 AI 说的、挑中先出来负责的是它
+ * 这句话是不是在叫这个 AI（的这份会话）：@ 了它；或者是对全体 AI 说的、挑中先出来负责的是它
  * （别的 AI 不因为这句话开工，等它说完）
  */
 export const calls = (message: Heard, key: string) =>
   message.authorKind === 'user' &&
-  (message.mentions.some((m) => m.kind === 'ai' && m.key === key) ||
+  !message.aside &&
+  (message.mine === true ||
+    message.mentions.some((m) => m.kind === 'ai' && m.key === key) ||
     (toEveryone(message) && message.lead === key));
 
 const clock = (at: Date) => at.toISOString().slice(5, 16).replace('T', ' ');

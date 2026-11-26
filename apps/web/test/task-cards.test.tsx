@@ -280,7 +280,7 @@ describe('聊天里的任务', () => {
     const { api } = fakeChat([user('画一只猫'), ai([], {}, 'streaming'), card], {
       turn: TURN,
       extra: (method, path) =>
-        method === 'POST' && path === `/conversation/v1/conversations/${CONV}/stop`
+        method === 'POST' && path === `/conversation/v1/groups/${CONV}/runs/${RUN}/stop`
           ? new Response(null, { status: 204 })
           : undefined,
     });
@@ -292,7 +292,7 @@ describe('聊天里的任务', () => {
     expect(dialog.textContent).toMatch(/用时 1 分 \d+ 秒/);
     fireEvent.click(within(dialog).getByRole('button', { name: '停下' }));
     await waitFor(() =>
-      expect(api.requests).toContain(`POST /conversation/v1/conversations/${CONV}/stop`),
+      expect(api.requests).toContain(`POST /conversation/v1/groups/${CONV}/runs/${RUN}/stop`),
     );
   });
 

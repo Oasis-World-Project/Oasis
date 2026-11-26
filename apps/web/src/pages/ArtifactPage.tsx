@@ -136,7 +136,10 @@ export function ArtifactPage() {
   const dm = artifact ? dms.find((item) => item.id === artifact.conversationId) : undefined;
   // 群里的 AI 做的（自己是群主）：「让 AI 改」发进那个群，@ 做它的 AI
   const { data: tasks = [] } = useQuery(tasksQuery);
-  const from = artifact ? tasks.find((task) => task.runId === artifact.runId)?.group : undefined;
+  const task = artifact
+    ? tasks.find((item) => item.runId === artifact.runId || item.runs?.includes(artifact.runId))
+    : undefined;
+  const from = task?.group ? { ...task.group, seat: task.conversationId } : undefined;
   const makerKey = from?.key ?? dm?.modelKey ?? undefined;
   const maker = makerKey ? models.get(makerKey) : undefined;
 

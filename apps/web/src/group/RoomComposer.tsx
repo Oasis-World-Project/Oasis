@@ -16,7 +16,7 @@ import { useChatActions } from '../chat/use-chat-actions.ts';
 import { WebToggle } from '../chat/WebToggle.tsx';
 import { BusyLine, PlusMenu, ROUND } from './ComposerMenus.tsx';
 import { MentionPicker } from './MentionPicker.tsx';
-import { aiLook } from './people.ts';
+import { aiLook, working } from './people.ts';
 import { mentionText, useRoom } from './room.ts';
 import { VaultEmpty } from './Vault.tsx';
 
@@ -112,7 +112,7 @@ export function RoomComposer({
   const locked = !online || sending;
   // 弹层贴着输入框的上沿：上面有「谁在忙」那一行时盖住它，没有时就在输入框上面
   const anchor =
-    scene === 'group' && group.ais.some((item) => item.runId)
+    scene === 'group' && group.ais.some(working)
       ? 'bottom-[calc(100%-34px)]'
       : 'bottom-[calc(100%+4px)]';
   const hasFiles = attachments.ids.length > 0 || attachments.files.length > 0;

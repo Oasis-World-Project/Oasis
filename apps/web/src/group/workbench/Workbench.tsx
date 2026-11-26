@@ -2,7 +2,7 @@
 // 预览（打开的群文件）、文件（群文件）、任务（每个 AI 的任务，过程在这里看），还能拉宽。照原型 ②⑥。
 import { ChevronLeft, ChevronRight, Maximize2, Minimize2 } from 'lucide-react';
 import { AiAvatar } from '../../ui/Avatar.tsx';
-import { aiLook } from '../people.ts';
+import { aiLook, working } from '../people.ts';
 import { useRoom } from '../room.ts';
 import { FilesTab } from './FilesTab.tsx';
 import { PreviewTab } from './PreviewTab.tsx';
@@ -23,7 +23,7 @@ const RING = 2 * Math.PI * 28;
 /** 收起的工作台：展开按钮、任务做完了几个、在忙的 AI */
 function Rail({ bench }: { bench: State }) {
   const { group, models } = useRoom();
-  const busy = group.ais.filter((ai) => ai.runId);
+  const busy = group.ais.filter(working);
   const done = bench.tasks.filter((task) => task.column === 'done').length;
   const total = bench.tasks.length;
   return (

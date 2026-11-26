@@ -60,6 +60,26 @@ export function memoryRepo(): ConversationRepo & {
       const row = conversations.get(id);
       return row ? structuredClone(row) : undefined;
     },
+    async createTask({ room, modelKey, title, heardSeq }) {
+      const row: Conversation = {
+        ...structuredClone(conversations.get(room.id)!),
+        id: randomUUID(),
+        kind: 'task',
+        modelKey,
+        title,
+        parentId: room.id,
+        heardSeq: heardSeq ?? 0,
+        turn: null,
+        lastRunId: null,
+        workplace: null,
+        permissions: null,
+        options: { room: room.kind === 'group' ? 'group' : 'dm' },
+      };
+      conversations.set(row.id, row);
+      return structuredClone(row);
+    },
+    tasksOf: async (roomId) =>
+      [...conversations.values()].filter((row) => row.kind === 'task' && row.parentId === roomId),
     async insertMessage(message) {
       const row: Message = {
         id: randomUUID(),
@@ -111,6 +131,10 @@ export function memoryRepo(): ConversationRepo & {
       const row = messages.find((m) => m.id === id && m.conversationId === conversationId);
       return row ? structuredClone(row) : undefined;
     },
+    findSeatCard: async (conversationId, seatId) =>
+      messages.findLast(
+        (m) => m.conversationId === conversationId && m.kind === 'task' && m.data.seat === seatId,
+      ),
     findTaskCard: async (conversationId, artifactIds) => {
       const row = messages.findLast(
         (m) =>

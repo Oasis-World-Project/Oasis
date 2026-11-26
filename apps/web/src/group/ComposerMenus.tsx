@@ -2,7 +2,7 @@
 import { MAX_FILE_REFS } from '@oasis/contracts/group';
 import { useState } from 'react';
 import { AiAvatar } from '../ui/Avatar.tsx';
-import { aiLook } from './people.ts';
+import { aiLook, working } from './people.ts';
 import { Popover } from './RoomHeader.tsx';
 import { useRoom } from './room.ts';
 import { fileNote, useClock } from './workbench/files.tsx';
@@ -109,8 +109,8 @@ export function PlusMenu({
 /** 输入框上面那行：几个 AI 在忙，谁在旁听；点它去工作台看它们在做什么 */
 export function BusyLine() {
   const { group, models, bench } = useRoom();
-  const busy = group.ais.filter((ai) => ai.runId);
-  const idle = group.ais.filter((ai) => !ai.runId);
+  const busy = group.ais.filter(working);
+  const idle = group.ais.filter((ai) => !working(ai));
   if (!busy.length) return null;
   const names = idle.map((ai) => aiLook(models, ai.key).name);
   return (

@@ -37,7 +37,7 @@ async function idle(user, groupId, label, timeoutMs = 300_000) {
   let group;
   while (Date.now() < deadline) {
     group = await user.api.get(`${base}/${groupId}`);
-    if (!group.ais.some((ai) => ai.runId) && !group.live.length) return group;
+    if (!group.ais.some((ai) => ai.runId || ai.tasks.length) && !group.live.length) return group;
     await sleep(1_000);
   }
   throw new Error(
@@ -193,12 +193,14 @@ export const group = {
     });
     const groupId = created.id;
     t.log(`群 ${groupId}（AI：${first}、${second}）`);
-    const seats = () =>
+    /** 挂在群下面的会话：每个 AI 的席位，和每个云端任务（分工单的一项）自己的 */
+    const rowsUnder = () =>
       query(
         'conversation',
-        `select id, model_key from conversations where parent_id = ${literal(groupId)}`,
+        `select id, kind, model_key from conversations where parent_id = ${literal(groupId)}`,
       );
-    const seatOf = (key) => seats().find((seat) => seat.model_key === key)?.id;
+    const seatOf = (key) =>
+      rowsUnder().find((row) => row.kind === 'seat' && row.model_key === key)?.id;
     let destroyed = false;
     try {
       t.check(
@@ -440,7 +442,20 @@ export const group = {
       t.check((await textOf(member, photoRoute)) === '天台合照', '好友私聊里发的文件对方应能读到');
 
       // ---- 解散群：席位的会话、工作目录、成果、发过的文件一起清掉 ----
-      const sessionIds = [...new Set(runs.map((run) => run.session_id).filter(Boolean))];
+      // 分工单的那一项是一个云端任务：有自己的会话，不占被派的那个 AI 的席位
+      const tasks = rowsUnder().filter((row) => row.kind === 'task');
+      t.check(
+        tasks.length === 1 && tasks[0].model_key === second && runsOf(tasks[0].id).length === 1,
+        `分工单的一项应开一个云端任务的会话：${JSON.stringify(tasks)}`,
+      );
+      const sessionIds = [
+        ...new Set(
+          rowsUnder()
+            .flatMap((row) => runsOf(row.id))
+            .map((run) => run.session_id)
+            .filter(Boolean),
+        ),
+      ];
       const refunded = await vault.beforeDissolve();
       await owner.api.del(`${base}/${groupId}`);
       destroyed = true;
