@@ -141,7 +141,7 @@ export function ArtifactCard({
         <Thumb artifact={artifact} />
         {artifact.annotations.length > 0 && (
           <span className="absolute right-2 top-2 rounded-full bg-accent px-2 py-0.5 text-[11px] font-medium text-on-accent">
-            批注 {artifact.annotations.length}
+            要改 {artifact.annotations.length} 处
           </span>
         )}
       </Link>

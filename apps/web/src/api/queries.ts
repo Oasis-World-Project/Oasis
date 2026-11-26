@@ -298,7 +298,7 @@ export const artifactQuery = (id: string) =>
     queryFn: () => api(`/canvas/v1/artifacts/${id}`, ArtifactBody),
   });
 
-/** 批注整份替换，返回更新后的成果 */
+/** 成果上要改的地方整份替换，返回更新后的成果 */
 export const saveAnnotations = (id: string, annotations: Annotation[]) =>
   api(`/canvas/v1/artifacts/${id}/annotations`, ArtifactBody, {
     method: 'PUT',

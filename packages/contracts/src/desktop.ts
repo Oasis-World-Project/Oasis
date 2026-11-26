@@ -30,11 +30,6 @@ export interface OasisDesktop {
   abortSyncedFile(token: string): Promise<void>;
   /** 在文件管理器里打开同步文件夹 */
   openSyncFolder(): Promise<void>;
-  /**
-   * 截取本窗口里这块区域（CSS 像素，相对窗口可视区）当前的真实画面，返回 PNG。
-   * 用于在运行中的应用上批注：隔离框里的画面页面自己读不到，只有主进程能截。旧版桌面端没有这个能力。
-   */
-  capturePage?(rect: DesktopCaptureRect): Promise<Uint8Array>;
   /** 在你的电脑上干活：这台电脑的设备号、连没连上 Oasis。旧版桌面端没有这个能力 */
   deviceStatus?(): Promise<DesktopDevice>;
   /**
@@ -64,13 +59,6 @@ export interface DesktopProjectFolder {
   folder: string;
 }
 
-export interface DesktopCaptureRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
 /** 单个同步文件的大小上限（主进程也会检查） */
 export const DESKTOP_SYNC_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
@@ -83,7 +71,6 @@ export const DESKTOP_CHANNELS = {
   finish: 'oasis:sync-finish',
   abort: 'oasis:sync-abort',
   open: 'oasis:sync-open',
-  capture: 'oasis:capture-page',
   device: 'oasis:device-status',
   project: 'oasis:project-choose',
   projectDefault: 'oasis:project-default',

@@ -151,31 +151,3 @@ describe('同步记录', () => {
     expect((await recovered.status()).synced).toEqual([A]);
   });
 });
-
-describe('批注截图区域', () => {
-  it('取整并裁到窗口内；不是数字、没有大小或完全在窗口外的拒绝', async () => {
-    const { captureRect } = await import('../src/capture-rect.ts');
-    const view = { width: 1200, height: 800 };
-    expect(captureRect({ x: 10.4, y: 20.6, width: 300.2, height: 200 }, view)).toEqual({
-      x: 10,
-      y: 20,
-      width: 301,
-      height: 201,
-    });
-    expect(captureRect({ x: -50, y: 700, width: 2000, height: 500 }, view)).toEqual({
-      x: 0,
-      y: 700,
-      width: 1200,
-      height: 100,
-    });
-    for (const bad of [
-      null,
-      'x',
-      { x: 1, y: 1, width: 'a', height: 1 },
-      { x: NaN, y: 0, width: 1, height: 1 },
-    ])
-      expect(() => captureRect(bad, view)).toThrow('参数不合格');
-    expect(() => captureRect({ x: 1300, y: 0, width: 10, height: 10 }, view)).toThrow('不在窗口里');
-    expect(() => captureRect({ x: 5, y: 5, width: 0, height: 10 }, view)).toThrow('不在窗口里');
-  });
-});

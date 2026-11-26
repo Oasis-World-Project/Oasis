@@ -65,8 +65,8 @@ const video: ArtifactBody = {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('从参数面板发起修改', () => {
-  it('改字幕字号和亮度：画面套上滤镜，「按这些参数改一版」带着参数发出', async () => {
+describe('「编辑」里直接调参数', () => {
+  it('改字幕字号和亮度：画面套上滤镜，「让 AI 改」带着参数发出', async () => {
     const sent: unknown[] = [];
     installFakeApi({
       signedIn: true,
@@ -101,9 +101,13 @@ describe('从参数面板发起修改', () => {
     await act(() => router.load());
     render(<App />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /^参数$/ }));
-    const panel = screen.getByRole('complementary', { name: '参数' });
-    const send = within(panel).getByRole('button', { name: /按这些参数改一版/ });
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }));
+    const panel = within(screen.getByRole('complementary', { name: '要改的地方' })).getByRole(
+      'region',
+      { name: '直接调' },
+    );
+    // 什么都没改、也没写要求：不能发
+    const send = screen.getByRole('button', { name: '让 AI 改' });
     expect((send as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(
       within(within(panel).getByRole('radiogroup', { name: '字幕字号' })).getByRole('radio', {
@@ -114,13 +118,7 @@ describe('从参数面板发起修改', () => {
       target: { value: '10' },
     });
     expect(document.querySelector('video')?.style.filter).toBe('brightness(1.1)');
-    fireEvent.click(within(panel).getByRole('button', { name: '按这些参数改一版（2 项）' }));
-
-    const dialog = await screen.findByLabelText('让 AI 改「宣传短片.mp4」');
-    const list = within(dialog).getByRole('region', { name: '参数修改', hidden: true });
-    expect(list.textContent).toContain('字幕字号：大');
-    expect(list.textContent).toContain('亮度：+10%');
-    fireEvent.click(within(dialog).getByRole('button', { name: '发给 AI 改', hidden: true }));
+    fireEvent.click(screen.getByRole('button', { name: '让 AI 改 · 2 处' }));
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toEqual({
       content:

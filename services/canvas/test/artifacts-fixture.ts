@@ -66,7 +66,6 @@ beforeAll(async () => {
 afterAll(() => harness.close());
 
 export let repo: ReturnType<typeof memoryArtifacts>;
-export let uploadRows: ReturnType<typeof memoryUploads>;
 export let objects: ReturnType<typeof memoryStore>;
 export let service: ReturnType<typeof createArtifactService>;
 export let app: Awaited<ReturnType<typeof createService>>['app'];
@@ -77,13 +76,11 @@ beforeEach(async () => {
   fetched.length = 0;
   fileFailures = 0;
   gatewayCalls.length = 0;
-  uploadRows = memoryUploads();
   repo = memoryArtifacts();
   const store = memoryStore();
   objects = store;
   service = createArtifactService({
     repo,
-    uploads: uploadRows,
     store,
     harness: createServiceClient('harness', harnessUrl),
     logger: pino({ level: 'silent' }),

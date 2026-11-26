@@ -60,7 +60,7 @@ export function CanvasPage() {
         <div className="min-w-0 flex-1">
           <h1 className="m-0 text-[38px] font-light leading-[1.15] tracking-[0.02em]">画布</h1>
           <p className="mb-0 mt-2 text-sm text-ink-muted">
-            AI 们做的成果，按任务放在一起。点开能预览、批注，让 AI 接着改。
+            AI 们做的成果，按任务放在一起。点开能预览，指出要改的地方让 AI 接着改。
           </p>
         </div>
         <label className="flex h-11 w-[260px] max-w-full items-center gap-2 rounded-full bg-glass-strong px-4 shadow-edge-strong">

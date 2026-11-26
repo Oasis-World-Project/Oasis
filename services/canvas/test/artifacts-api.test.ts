@@ -10,7 +10,6 @@ import {
   get,
   KAI,
   MIA,
-  objects,
   R1,
   R2,
   repo,
@@ -19,7 +18,6 @@ import {
   S2,
   service,
   sha256,
-  uploadRows,
 } from './artifacts-fixture.ts';
 
 describe('画布接口', () => {
@@ -220,20 +218,23 @@ describe('批注与批准', () => {
     ...extra,
   });
 
-  it('整份替换批注：只能改自己的，编号不能重复，坐标必须在画面里', async () => {
+  it('整份替换要改的地方：只能改自己的，编号不能重复，坐标必须在画面里；能全部删掉', async () => {
     await service.registerRun(run(R1));
     const image = repo.rows.find((r) => r.path === 'hero.png')!;
     const url = `/v1/artifacts/${image.id}/annotations`;
     const ok = await send('PUT', url, {
       annotations: [
-        note(1, { shape: { kind: 'ellipse', x: 0.1, y: 0.2, w: 0.3, h: 0.2 } }),
-        note(2, { time: 12.5, shape: { kind: 'pin', x: 0.5, y: 0.5 } }),
+        note(1, { shape: { kind: 'box', x: 0.1, y: 0.2, w: 0.3, h: 0.2 } }),
+        note(2, { time: 12.5, shape: { kind: 'pin', x: 0.5, y: 0.5 }, target: '按钮「立即预约」' }),
       ],
     });
     expect(ok.statusCode).toBe(200);
     expect(ok.json<{ annotations: unknown[] }>().annotations).toHaveLength(2);
     expect((await get(`/v1/artifacts/${image.id}`)).json()).toMatchObject({
-      annotations: [{ number: 1 }, { number: 2, time: 12.5 }],
+      annotations: [
+        { number: 1, target: null },
+        { number: 2, time: 12.5, target: '按钮「立即预约」' },
+      ],
     });
     expect((await send('PUT', url, { annotations: [note(1), note(1)] })).statusCode).toBe(400);
     expect(
@@ -243,52 +244,19 @@ describe('批注与批准', () => {
         })
       ).statusCode,
     ).toBe(400);
-    expect((await send('PUT', url, { annotations: [] }, MIA)).statusCode).toBe(404);
-  });
-
-  it('应用截图批注：截图必须是自己上传的；删掉批注或删对话时截图一起删', async () => {
-    await service.registerRun(run(R1));
-    const image = repo.rows.find((r) => r.path === 'hero.png')!;
-    const url = `/v1/artifacts/${image.id}/annotations`;
-    const frame = (id: string, ownerId: string) => {
-      uploadRows.rows.set(id, {
-        id,
-        ownerId,
-        name: '批注截图.png',
-        contentType: 'image/png',
-        size: 4,
-        sha256: 'a'.repeat(64),
-        objectKey: `uploads/${id}`,
-        state: 'ready',
-        createdAt: new Date(),
-      } as never);
-      objects.objects.set(`uploads/${id}`, { body: Buffer.from('png!'), type: 'image/png' });
-    };
-    const A = '50000000-0000-4000-8000-00000000000a';
-    const B = '50000000-0000-4000-8000-00000000000b';
-    const OTHER = '50000000-0000-4000-8000-00000000000c';
-    frame(A, KAI);
-    frame(B, KAI);
-    frame(OTHER, MIA);
-    const pin = { kind: 'pin', x: 0.5, y: 0.5 };
+    // 圈和画笔不再收
     expect(
-      (await send('PUT', url, { annotations: [note(1, { frame: OTHER, shape: pin })] })).statusCode,
-    ).toBe(422);
-    const ok = await send('PUT', url, {
-      annotations: [note(1, { frame: A, shape: pin }), note(2, { frame: B, shape: pin })],
-    });
-    expect(ok.json<{ annotations: { frame: string }[] }>().annotations.map((a) => a.frame)).toEqual(
-      [A, B],
-    );
-    await send('PUT', url, { annotations: [note(2, { frame: B, shape: pin })] });
-    expect(uploadRows.rows.has(A)).toBe(false);
-    expect(objects.objects.has(`uploads/${A}`)).toBe(false);
-    expect(uploadRows.rows.has(B)).toBe(true);
-    await service.purgeConversation(KAI, CONVERSATION);
-    expect(uploadRows.rows.has(B)).toBe(false);
-    expect(objects.objects.has(`uploads/${B}`)).toBe(false);
-    // 别人的上传不受影响
-    expect(uploadRows.rows.has(OTHER)).toBe(true);
+      (
+        await send('PUT', url, {
+          annotations: [note(3, { shape: { kind: 'ellipse', x: 0.1, y: 0.1, w: 0.2, h: 0.2 } })],
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect((await send('PUT', url, { annotations: [] }, MIA)).statusCode).toBe(404);
+    // 最后一条也能删掉
+    const cleared = await send('PUT', url, { annotations: [] });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json<{ annotations: unknown[] }>().annotations).toEqual([]);
   });
 
   it('批准是记号（界面已不显示，接口保留）：可以取消，只能改自己的', async () => {

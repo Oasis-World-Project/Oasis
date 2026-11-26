@@ -1,5 +1,5 @@
 // 工作台的「预览」页签：上面一排是打开着的文件，下面看正在看的那个——文件名、谁做的谁改过，
-// 「发到群里」（引用进输入框）、下载、删除；AI 交的文件群主可以「在画布里打开」（批注、让 AI 改）。预览只看不改。照原型 ②。
+// 「发到群里」（引用进输入框）、下载、删除；AI 交的文件群主可以「在画布里打开」（指出要改的地方、让 AI 改）。预览只看不改。照原型 ②。
 import { Link } from '@tanstack/react-router';
 import { Download, X } from 'lucide-react';
 import { deleteGroupFile } from '../../api/queries.ts';

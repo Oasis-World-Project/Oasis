@@ -96,25 +96,20 @@ export const ApplicationBundle = z.object({
 });
 export type ApplicationBundle = z.infer<typeof ApplicationBundle>;
 
-/** 批注坐标：相对画面（图片、PDF 页、视频帧）的 0–1 */
+/** 画面上的坐标：相对画面（图片、PDF 页、视频帧、运行着的网页、3D 视图）的 0–1 */
 const Unit = z.number().min(0).max(1);
 export const AnnotationShape = z.discriminatedUnion('kind', [
-  /** 编号点 */
+  /** 点了一下 */
   z.object({ kind: z.literal('pin'), x: Unit, y: Unit }),
-  /** 圈：左上角和宽高 */
-  z.object({ kind: z.literal('ellipse'), x: Unit, y: Unit, w: Unit, h: Unit }),
-  /** 画笔 */
-  z.object({
-    kind: z.literal('pen'),
-    points: z
-      .array(z.tuple([Unit, Unit]))
-      .min(2)
-      .max(400),
-  }),
+  /** 拖的一个框：左上角和宽高 */
+  z.object({ kind: z.literal('box'), x: Unit, y: Unit, w: Unit, h: Unit }),
 ]);
 export type AnnotationShape = z.infer<typeof AnnotationShape>;
 
-/** 成果上的一条批注：编号、意见，以及在哪（第几页、几秒、引用的原文、画的形状） */
+/**
+ * 成果上一处要改的地方（成果页的「编辑」）：编号、要怎么改，以及在哪——第几页、第几秒、引用的原文、
+ * 画面上的一个点或一个框、选中的是什么。
+ */
 export const Annotation = z.object({
   id: z.uuid(),
   number: z.number().int().min(1).max(99),
@@ -126,12 +121,12 @@ export const Annotation = z.object({
   /** 文档里引用的原文 */
   quote: z.string().trim().max(300).nullable(),
   shape: AnnotationShape.nullable(),
-  /** 运行中应用的批注画在哪张截图上（上传文件 id）；其他成果为 null */
-  frame: z.uuid().nullable().default(null),
+  /** 选中的是什么，写成一句话：网页里的一个元素（按钮「立即预约」）、3D 模型的一个部位、表格的一格（摄影 · 数量） */
+  target: z.string().trim().max(200).nullable().default(null),
 });
 export type Annotation = z.infer<typeof Annotation>;
 
-/** 一份成果的批注最多这么多条 */
+/** 一份成果上要改的地方最多记这么多 */
 export const MAX_ANNOTATIONS = 50;
 
 /** PUT /v1/artifacts/:id/annotations：整份替换 */
@@ -141,7 +136,7 @@ export const AnnotationList = z
     ({ annotations }) =>
       new Set(annotations.map((a) => a.id)).size === annotations.length &&
       new Set(annotations.map((a) => a.number)).size === annotations.length,
-    '批注编号不能重复',
+    '编号不能重复',
   );
 
 const Sha256 = z.string().regex(/^[a-f0-9]{64}$/);
@@ -179,7 +174,7 @@ export const ArtifactBody = z.object({
   syncPath: z.string(),
   /** 改出的新版：同一同步路径上被它替换的旧文件摘要（桌面端据此判断能不能覆盖） */
   replacesSha256: Sha256.nullable().optional(),
-  /** 用户的批注；旧响应缺省为没有 */
+  /** 用户记下的要改的地方；旧响应缺省为没有 */
   annotations: z.array(Annotation).default([]),
   /** 用户点了「批准」的时间；没批准为 null */
   approvedAt: z.iso.datetime().nullable().default(null),
@@ -240,7 +235,7 @@ export const RegisterRunArtifactsBody = z.object({
 });
 export type RegisterRunArtifactsBody = z.infer<typeof RegisterRunArtifactsBody>;
 
-/** 内部：删对话、删任务（真删除）时删掉这个人名下对应的成果和批注截图 */
+/** 内部：删对话、删任务（真删除）时删掉这个人名下对应的成果 */
 export const PurgeArtifactsBody = z.object({ ownerId: z.uuid() });
 
 const PreviewCell = z.union([z.string().max(20_000), z.number().finite(), z.boolean(), z.null()]);

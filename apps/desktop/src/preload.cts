@@ -15,7 +15,6 @@ const api: OasisDesktop = {
   finishSyncedFile: (token) => ipcRenderer.invoke('oasis:sync-finish', token),
   abortSyncedFile: (token) => ipcRenderer.invoke('oasis:sync-abort', token),
   openSyncFolder: () => ipcRenderer.invoke('oasis:sync-open'),
-  capturePage: (rect) => ipcRenderer.invoke('oasis:capture-page', rect),
   deviceStatus: () => ipcRenderer.invoke('oasis:device-status'),
   chooseProjectFolder: () => ipcRenderer.invoke('oasis:project-choose'),
   defaultProjectFolder: (name) => ipcRenderer.invoke('oasis:project-default', name),

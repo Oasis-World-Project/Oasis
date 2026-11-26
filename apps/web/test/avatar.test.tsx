@@ -218,7 +218,7 @@ describe('数字人对话页', () => {
     expect(await screen.findByRole('button', { name: '再对话一次' })).toBeTruthy();
   });
 
-  it('参数面板：数字人的语气、时长等改过的项变成修改意见', async () => {
+  it('「编辑」：数字人的语气、时长等直接调，改过的项随「让 AI 改」发出', async () => {
     installFakeApi({
       signedIn: true,
       extra: (method, path) => {
@@ -234,8 +234,11 @@ describe('数字人对话页', () => {
     });
     await act(() => router.load());
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', { name: '参数' }));
-    const panel = screen.getByRole('complementary', { name: '参数' });
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }));
+    const panel = within(screen.getByRole('complementary', { name: '要改的地方' })).getByRole(
+      'region',
+      { name: '直接调' },
+    );
     fireEvent.click(
       within(within(panel).getByRole('radiogroup', { name: '语气' })).getByRole('radio', {
         name: '更正式',
@@ -246,10 +249,6 @@ describe('数字人对话页', () => {
         name: '10 分钟',
       }),
     );
-    fireEvent.click(within(panel).getByRole('button', { name: '按这些参数改一版（2 项）' }));
-    const dialog = await screen.findByLabelText('让 AI 改「民宿前台.oasis-avatar.json」');
-    const list = within(dialog).getByRole('region', { name: '参数修改', hidden: true });
-    expect(list.textContent).toContain('语气：更正式');
-    expect(list.textContent).toContain('单次最长时长：10 分钟');
+    expect(screen.getByRole('button', { name: '让 AI 改 · 2 处' })).toBeTruthy();
   });
 });

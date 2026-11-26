@@ -18,7 +18,6 @@ import {
 } from '@oasis/service-kit';
 import { AVATAR_SPEC_SUFFIX, AvatarSpec } from '@oasis/contracts/avatar';
 import type { Artifact, ArtifactsRepo, NewArtifact } from '../repo/artifacts-repo.ts';
-import type { UploadsRepo } from '../repo/uploads-repo.ts';
 import { zipArtifacts, type ArchiveLimits } from './archive.ts';
 import { categoryOf, safePath, safeSegment, uniqueName } from './naming.ts';
 
@@ -63,7 +62,6 @@ function safeApplicationMember(path: string): boolean {
 export function createArtifactService(deps: {
   repo: ArtifactsRepo;
   /** 批注截图存成上传记录，成果换新版或删除时一起删 */
-  uploads: UploadsRepo;
   store: ObjectStore;
   /** 一轮的产出文件在 harness */
   harness: ServiceClient;
@@ -71,26 +69,12 @@ export function createArtifactService(deps: {
   maxFileBytes?: number;
   transferTimeoutMs?: number;
 }) {
-  const { repo, uploads, store, harness, logger } = deps;
+  const { repo, store, harness, logger } = deps;
 
-  /** 运行中应用的批注截图：只被批注引用 */
-  const framesOf = (rows: { annotations: { frame?: string | null }[] }[]) => [
-    ...new Set(rows.flatMap((row) => row.annotations.flatMap((a) => (a.frame ? [a.frame] : [])))),
-  ];
-  /** 批注删掉、成果被新版替换或删除时，截图一起删；重投时已经删掉的找不到，不重复删 */
-  async function dropFrames(ownerId: string, ids: string[]) {
-    if (!ids.length) return;
-    for (const row of await uploads.findOwned(ownerId, ids)) {
-      await store.delete(row.objectKey);
-      await uploads.remove(row.id);
-    }
-  }
-
-  /** 真删除这些成果：先删对象再删行，批注截图一起删 */
+  /** 真删除这些成果：先删对象再删行 */
   async function remove(ownerId: string, rows: Artifact[]) {
     for (const row of rows) await store.delete(row.objectKey);
     await repo.removeRows(rows.map((row) => row.id));
-    await dropFrames(ownerId, framesOf(rows));
   }
 
   /**
@@ -228,7 +212,6 @@ export function createArtifactService(deps: {
         if (file.sha256 && file.sha256 === old.sha256) continue;
         const row = await copyFile(run, file);
         if (row.sha256 && row.sha256 === old.sha256) continue;
-        const frames = framesOf([old]);
         await repo.replaceContent(old.id, {
           size: row.size,
           sha256: row.sha256,
@@ -238,7 +221,6 @@ export function createArtifactService(deps: {
           runId: run.runId,
           task: run.task,
         });
-        await dropFrames(run.ownerId, frames);
         logger.info({ runId: run.runId, path: file.path }, '成果已换成新版');
       }
       const added = run.outputs.filter((file) => !byPath.has(file.path));
@@ -336,25 +318,10 @@ export function createArtifactService(deps: {
       return { row, content: await store.read(row.objectKey) };
     },
 
-    /**
-     * 批注整份替换：编号不能重复，最多 50 条（契约已校验）。
-     * 新引用的截图必须是这个人自己上传的；不再被引用的截图随之删除。
-     */
+    /** 要改的地方整份替换：编号不能重复，最多 50 条（契约已校验） */
     async setAnnotations(ownerId: string, id: string, annotations: Annotation[]) {
-      const current = await service.get(ownerId, id);
-      const before = framesOf([current]);
-      const after = framesOf([{ annotations }]);
-      const added = after.filter((frame) => !before.includes(frame));
-      if (added.length && (await uploads.findOwned(ownerId, added)).length !== added.length)
-        throw new HttpError(422, 'annotation_frame', '批注截图不存在，请重新截图');
-      const saved = toBody((await repo.setReview(id, { annotations }))!);
-      // 截图被批注用上了，清扫不再删它
-      await uploads.claim(ownerId, added);
-      await dropFrames(
-        ownerId,
-        before.filter((frame) => !after.includes(frame)),
-      );
-      return saved;
+      await service.get(ownerId, id);
+      return toBody((await repo.setReview(id, { annotations }))!);
     },
 
     /** 批准 / 取消批准：只是记号，不挡修改 */

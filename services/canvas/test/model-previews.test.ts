@@ -44,7 +44,6 @@ function setup() {
   } as unknown as ServiceClient;
   const artifacts = createArtifactService({
     repo,
-    uploads: memoryUploads(),
     store,
     harness,
     logger,

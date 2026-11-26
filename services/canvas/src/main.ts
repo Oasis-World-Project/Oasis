@@ -37,7 +37,6 @@ await startService({
     store = objects.store;
     artifacts = createArtifactService({
       repo: createArtifactsRepo(postgres.pool),
-      uploads: createUploadsRepo(postgres.pool),
       store,
       // 复制成果文件可能要一会儿
       harness: createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 60_000 }),

@@ -36,7 +36,7 @@ const SCENES: { name: string; say: string; what: string; soon?: boolean }[] = [
   {
     name: '办公',
     say: '把这三份 PDF 整理成一页周报，配张图表',
-    what: '文档、表格、PPT、数据看板。做好了直接在画布里翻看和批注，哪里不满意圈出来让它改。',
+    what: '文档、表格、PPT、数据看板。做好了直接在画布里翻看，哪里不满意指出来让它改。',
   },
   {
     name: '创意',

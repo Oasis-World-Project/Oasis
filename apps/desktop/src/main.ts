@@ -1,7 +1,7 @@
 // Oasis 桌面端主进程：一个加载 Web 外壳的窗口。
 // 安全默认值：渲染进程隔离 + 沙箱 + 不开放 Node；外部链接交给系统浏览器；权限申请只放行自己页面的
 // 麦克风（和数字人对话），摄像头等别的一律拒绝。
-// 给页面开放的能力只有 preload 里的几个：把成果同步到用户选的文件夹、截取窗口里的一块画面用于批注、
+// 给页面开放的能力只有 preload 里的几个：把成果同步到用户选的文件夹、
 // 选 AI 干活的项目文件夹和看这台电脑连没连上（在你的电脑上干活，见 device.ts）。
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
@@ -18,7 +18,6 @@ import {
   shell,
   type IpcMainInvokeEvent,
 } from 'electron';
-import { captureRect } from './capture-rect.ts';
 import { createDeviceClient, type DeviceClient } from './device.ts';
 import { createDshRuntime } from './dsh-runtime.ts';
 import { createSyncFolder, freePath, type SyncFolder } from './sync-folder.ts';
@@ -92,7 +91,7 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' };
   });
   // 页面里的框只许打开本应用自己的地址（成果文件、配套 PDF）和内置 PDF 查看器，框里的网页想跳去别处
-  // 一律拦下。以前框的跳转全拦，画布里的 PDF 因此一片空白，批注模式用 pdf.js 画才看得到（2026-11-14 查明）。
+  // 一律拦下。以前框的跳转全拦，画布里的 PDF 因此一片空白，只有成果页的「编辑」里用 pdf.js 画的那一份看得到（2026-11-14 查明）。
   win.webContents.on('will-frame-navigate', (event) => {
     if (event.isMainFrame || !isExternal(event.url) || event.url.startsWith(PDF_VIEWER)) return;
     event.preventDefault();
@@ -181,21 +180,6 @@ function registerSync(sync: SyncFolder): void {
   });
 }
 
-/** 运行中应用的批注截图：只截发起请求的这个窗口、只接受本应用主页面的请求 */
-function registerCapture(): void {
-  ipcMain.handle(DESKTOP_CHANNELS.capture, async (event, rect: unknown) => {
-    fromApp(event);
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    if (!owner) throw new Error('找不到窗口');
-    const [width, height] = owner.getContentSize();
-    const image = await event.sender.capturePage(
-      captureRect(rect, { width: width!, height: height! }),
-    );
-    if (image.isEmpty()) throw new Error('没截到画面');
-    return image.toPNG();
-  });
-}
-
 /** 在你的电脑上干活：选 AI 干活的项目文件夹、看这台电脑连没连上 Oasis */
 function registerDevice(device: DeviceClient): void {
   ipcMain.handle(DESKTOP_CHANNELS.device, (event) => {
@@ -281,7 +265,6 @@ app.whenReady().then(
     const sync = createSyncFolder(path.join(app.getPath('userData'), 'sync.json'));
     await sync.recover();
     registerSync(sync);
-    registerCapture();
     const device = startDevice();
     registerDevice(device);
     await device.start();

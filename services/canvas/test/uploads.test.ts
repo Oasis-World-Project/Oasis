@@ -24,7 +24,6 @@ async function app(maxBytes = 1024) {
             uploads: createUploadService({ repo: memoryUploads(), store }),
             artifacts: createArtifactService({
               repo: memoryArtifacts(),
-              uploads: memoryUploads(),
               store,
               harness: createServiceClient('harness', 'http://127.0.0.1:9'),
               logger: pino({ level: 'silent' }),

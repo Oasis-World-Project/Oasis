@@ -5,7 +5,7 @@ import type pg from 'pg';
 import { artifacts } from './schema.ts';
 
 export type Artifact = typeof artifacts.$inferSelect;
-/** 新登记的成果没有批注、没有批准（表里有默认值） */
+/** 新登记的成果没有要改的地方、没有批准（表里有默认值） */
 export type NewArtifact = Omit<Artifact, 'createdAt' | 'annotations' | 'approvedAt'>;
 
 export interface ArtifactsRepo {
@@ -33,12 +33,12 @@ export interface ArtifactsRepo {
   syncDirs(ownerId: string): Promise<string[]>;
   /** 删掉这些成果行（对象已经删掉） */
   removeRows(artifactIds: string[]): Promise<void>;
-  /** 批注整份替换、批准记号 */
+  /** 要改的地方整份替换、批准记号 */
   setReview(
     id: string,
     patch: Partial<Pick<Artifact, 'annotations' | 'approvedAt'>>,
   ): Promise<Artifact | undefined>;
-  /** 又做了一遍：内容换成新版、归到这一轮的任务，批注和批准清掉，登记时间更新；id、同步路径不变 */
+  /** 又做了一遍：内容换成新版、归到这一轮的任务，要改的地方和批准清掉，登记时间更新；id、同步路径不变 */
   replaceContent(
     id: string,
     patch: Pick<

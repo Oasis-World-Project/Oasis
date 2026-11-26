@@ -86,7 +86,7 @@ pnpm browser:smoke
 | billing | 4102 | 额度钱包：注册送 $30、预扣与结算、用量 | 经 gateway |
 | agent | 4103 | 「AI 们」（型号清单里的对话 AI 和工具型号）、人设和型号路由、用户的设置（只用国内模型、每个 AI 用哪一档、名字和人格） | 经 gateway |
 | conversation | 4104 | 私聊（一轮：开、跟进、插话、停止、收尾）、群聊 | 经 gateway |
-| canvas | 4106 | 成果、批注、文件 | 经 gateway |
+| canvas | 4106 | 成果和上面要改的地方、文件 | 经 gateway |
 | harness | 4107 | 私聊 AI 的运行时：每一轮在沙箱或用户的电脑上跑 dsh（唯一接触 DeepSeek Harness） | 仅内部（桌面版经 gateway 连上来） |
 | model-gateway | 4108 | 所有模型调用的唯一出口，计量上报 billing | 仅内部 |
 | inspector | 4109 | 检查成果：文件解析、音视频解码、网页的浏览器检查、外站测试、模型预览（不调别的服务、不存东西） | 仅内部 |

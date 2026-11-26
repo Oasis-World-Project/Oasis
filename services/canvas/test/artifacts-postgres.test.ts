@@ -107,7 +107,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('成果按话题登记（真实�
           time: null,
           quote: null,
           shape: null,
-          frame: null,
+          target: null,
         },
       ],
       approvedAt: new Date(),

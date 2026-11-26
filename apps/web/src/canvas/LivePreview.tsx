@@ -13,6 +13,16 @@ const TOTAL_LIMIT = 256 * 1024 * 1024;
 /** 网页自己连续跳走这么多次就不再拉回，避免来回重载 */
 const MAX_RETURNS = 3;
 
+/**
+ * 成果页的「编辑」要知道用户点的是页面里的什么：运行框是隔离的，外面看不进去，所以在页面末尾加一小段脚本，
+ * 外面问「这一点上是什么」（坐标是相对页面的 0–1），它答一句话（按钮「立即预约」、图片「封面」、这一块）。
+ * 只有画布这边加，AI 自查用的那一份（@oasis/live-page）不带。
+ */
+const PICK_ASK = 'oasisPick';
+export const PICK_REPLY = 'oasisPicked';
+export const pickMessage = (id: string, x: number, y: number) => ({ [PICK_ASK]: { id, x, y } });
+const PICKER = `<script>(()=>{const kind={BUTTON:'按钮',A:'链接',INPUT:'输入框',TEXTAREA:'输入框',SELECT:'下拉框',IMG:'图片',VIDEO:'视频',CANVAS:'画面',H1:'标题',H2:'标题',H3:'标题',P:'文字',LI:'列表项',LABEL:'文字'};const say=(el)=>{if(!el||el===document.body||el===document.documentElement)return'';const text=(el.getAttribute('aria-label')||el.innerText||el.getAttribute('placeholder')||el.getAttribute('alt')||el.getAttribute('title')||'').trim().replace(/\\s+/g,' ').slice(0,40);const what=kind[el.tagName]||(el.getAttribute('role')==='button'?'按钮':'这一块');return text?what+'「'+text+'」':what};addEventListener('message',(event)=>{const ask=event.data&&event.data.${PICK_ASK};if(!ask||!event.source)return;event.source.postMessage({${PICK_REPLY}:{id:ask.id,label:say(document.elementFromPoint(ask.x*innerWidth,ask.y*innerHeight))}},'*')})})()</script>`;
+
 export interface LiveAsset {
   path: string;
   url: string;
@@ -144,7 +154,7 @@ export function LivePreview({
         <iframe
           key={run}
           title={name}
-          srcDoc={page.html}
+          srcDoc={page.html + PICKER}
           sandbox={LIVE_SANDBOX}
           allow="autoplay; fullscreen"
           referrerPolicy="no-referrer"

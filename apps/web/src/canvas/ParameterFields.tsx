@@ -1,13 +1,6 @@
-// 参数面板：成品参数的表单，每项默认「不变」。
-// 能预览的改了就在画面上看到（近似效果）；填好后「按这些参数改一版」交给修改对话框。
-import { RotateCcw, Sparkles, X } from 'lucide-react';
-import {
-  formatValue,
-  toParameters,
-  type Field,
-  type RevisionParameter,
-  type Values,
-} from './parameters.ts';
+// 成果页「编辑」里的「直接调」：成品参数的表单，每项默认「不变」。能预览的改了就在画面上看到（近似效果）。
+import { RotateCcw } from 'lucide-react';
+import { formatValue, type Field, type Values } from './parameters.ts';
 
 const input =
   'rounded-item border-0 bg-glass-active px-3 py-1.5 text-[13px] text-ink shadow-edge-strong outline-none focus-visible:outline-2 focus-visible:outline-accent';
@@ -142,90 +135,61 @@ function Control({
   }
 }
 
-export function ParameterPanel({
-  file,
+/** 「直接调」：要改的项选一个新值，没动的保持不变；随「让 AI 改」一起交给 AI 做出新版 */
+export function ParameterFields({
   fields,
   values,
   onChange,
-  onRevise,
-  onClose,
   previewable,
 }: {
-  file: string;
   fields: Field[];
   values: Values;
   onChange: (values: Values) => void;
-  onRevise: (parameters: RevisionParameter[]) => void;
-  onClose: () => void;
-  /** 这一类里能近似预览的项 */
+  /** 这一类里改了能在画面上直接看到的项（只是近似效果） */
   previewable: string[];
 }) {
-  const parameters = toParameters(file, fields, values);
   const set = (key: string, value: Values[string] | undefined) => {
     const next = { ...values };
     if (value === undefined) delete next[key];
     else next[key] = value;
     onChange(next);
   };
+  const changed = Object.keys(values).length > 0;
   return (
-    <aside
-      aria-label="参数"
-      className="flex max-h-[42%] w-full shrink-0 flex-col gap-3 overflow-auto rounded-card bg-glass-active p-4 shadow-edge-strong lg:max-h-none lg:w-[300px]"
-    >
+    <section aria-label="直接调" className="flex flex-col gap-3 rounded-card bg-well p-3.5">
       <header className="flex items-center gap-2">
-        <h2 className="m-0 flex-1 text-[15px] font-medium">参数</h2>
-        {parameters.length > 0 && (
+        <span className="flex-1 text-[12.5px] text-ink-muted">
+          直接调：没动的保持不变
+          {previewable.length > 0 && `；${previewable.join('、')}在画面上马上看得到（近似效果）`}
+        </span>
+        {changed && (
           <button
             type="button"
             onClick={() => onChange({})}
-            className="inline-flex h-8 items-center gap-1 rounded-full border-0 bg-transparent px-2 text-[12.5px] text-ink-muted"
+            className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-full border-0 bg-transparent px-1.5 text-[12px] text-ink-muted"
           >
-            <RotateCcw size={13} aria-hidden="true" />
+            <RotateCcw size={12} aria-hidden="true" />
             全部不变
           </button>
         )}
-        <button
-          type="button"
-          aria-label="收起参数"
-          onClick={onClose}
-          className="flex size-8 items-center justify-center rounded-full border-0 bg-track text-ink"
-        >
-          <X size={14} aria-hidden="true" />
-        </button>
       </header>
-      <p className="m-0 text-[12.5px] leading-relaxed text-ink-muted">
-        要改的项选一个新值，没动的保持不变。填好后交给 AI 做出新版。
-        {previewable.length > 0 &&
-          `${previewable.join('、')}改了能在画面上直接看到，但只是近似效果，新版做出来才是真的。`}
-      </p>
-      <div className="flex flex-col gap-3.5">
-        {fields.map((field) => (
-          <div key={field.key} className="flex flex-col gap-1.5">
-            <span className="text-[12.5px] font-medium">
-              {field.label}
-              {values[field.key] !== undefined && (
-                <button
-                  type="button"
-                  onClick={() => set(field.key, undefined)}
-                  className="ml-2 border-0 bg-transparent p-0 text-[11.5px] font-normal text-ink-muted underline"
-                >
-                  不变
-                </button>
-              )}
-            </span>
-            <Control field={field} value={values[field.key]} set={(v) => set(field.key, v)} />
-          </div>
-        ))}
-      </div>
-      <button
-        type="button"
-        disabled={parameters.length === 0}
-        onClick={() => onRevise(parameters)}
-        className="mt-1 inline-flex h-10 items-center justify-center gap-1.5 rounded-full border-0 bg-accent px-4 text-[13.5px] font-medium text-on-accent disabled:opacity-45"
-      >
-        <Sparkles size={14} aria-hidden="true" />
-        按这些参数改一版{parameters.length ? `（${parameters.length} 项）` : ''}
-      </button>
-    </aside>
+      {fields.map((field) => (
+        <div key={field.key} className="flex flex-col gap-1.5">
+          <span className="text-[12.5px] font-medium">
+            {field.label}
+            {values[field.key] !== undefined && (
+              <button
+                type="button"
+                onClick={() => set(field.key, undefined)}
+                className="ml-2 cursor-pointer border-0 bg-transparent p-0 text-[11.5px] font-normal text-ink-muted underline"
+              >
+                不变
+              </button>
+            )}
+          </span>
+          <Control field={field} value={values[field.key]} set={(v) => set(field.key, v)} />
+        </div>
+      ))}
+    </section>
   );
 }

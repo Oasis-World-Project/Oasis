@@ -27,7 +27,6 @@ import {
   S2,
   service,
   sha256,
-  uploadRows,
 } from './artifacts-fixture.ts';
 
 describe('登记一轮做好的成果', () => {
@@ -200,24 +199,11 @@ describe('登记一轮做好的成果', () => {
 });
 
 describe('后来的一轮改了成果；删对话', () => {
-  it('内容变了的原地换成新版（链接、同步路径不变，批注和截图清掉）；没变的不动；重复登记幂等', async () => {
+  it('内容变了的原地换成新版（链接、同步路径不变，要改的地方清掉）；没变的不动；重复登记幂等', async () => {
     await service.registerRun(run(R1));
     const copy = repo.rows.find((r) => r.path === '首页文案.md')!;
     const hero = repo.rows.find((r) => r.path === 'hero.png')!;
     const before = { id: copy.id, sha256: copy.sha256, syncPath: copy.syncPath };
-    const FRAME = '50000000-0000-4000-8000-0000000000f1';
-    uploadRows.rows.set(FRAME, {
-      id: FRAME,
-      ownerId: KAI,
-      name: '批注截图.png',
-      contentType: 'image/png',
-      size: 4,
-      sha256: 'a'.repeat(64),
-      objectKey: `uploads/${FRAME}`,
-      state: 'ready',
-      createdAt: new Date(),
-    } as never);
-    objects.objects.set(`uploads/${FRAME}`, { body: Buffer.from('png!'), type: 'image/png' });
     copy.annotations = [
       {
         id: '30000000-0000-4000-8000-0000000000a1',
@@ -227,7 +213,7 @@ describe('后来的一轮改了成果；删对话', () => {
         time: null,
         quote: null,
         shape: { kind: 'pin', x: 0.5, y: 0.5 },
-        frame: FRAME,
+        target: null,
       },
     ];
     files['首页文案.md'] = '# 山居（改过）';
@@ -248,43 +234,16 @@ describe('后来的一轮改了成果；删对话', () => {
     expect(updated.sha256).not.toBe(before.sha256);
     expect(updated.replacesSha256).toBe(before.sha256);
     expect(updated.annotations).toEqual([]);
-    expect(uploadRows.rows.has(FRAME)).toBe(false);
-    expect(objects.objects.has(`uploads/${FRAME}`)).toBe(false);
     expect(strFromU8(objects.objects.get(updated.objectKey)!.body)).toBe('# 山居（改过）');
     const same = repo.rows.find((r) => r.path === 'hero.png')!;
     expect(same).toMatchObject({ sha256: hero.sha256, replacesSha256: null, runId: R1 });
   });
 
-  it('删对话、删任务：成果行、对象和批注截图都删掉；重复调用没有副作用；别的对话、别人的不受影响', async () => {
+  it('删对话、删任务：成果行和对象都删掉；重复调用没有副作用；别的对话、别人的不受影响', async () => {
     await service.registerRun(run(R1));
     await service.registerRun(
       run(R3, ['首页文案.md'], { conversationId: OTHER_CONVERSATION, sessionId: S2 }),
     );
-    const FRAME = '50000000-0000-4000-8000-0000000000f2';
-    uploadRows.rows.set(FRAME, {
-      id: FRAME,
-      ownerId: KAI,
-      name: '批注截图.png',
-      contentType: 'image/png',
-      size: 4,
-      sha256: 'a'.repeat(64),
-      objectKey: `uploads/${FRAME}`,
-      state: 'ready',
-      createdAt: new Date(),
-    } as never);
-    objects.objects.set(`uploads/${FRAME}`, { body: Buffer.from('png!'), type: 'image/png' });
-    repo.rows.find((r) => r.sessionId === S1)!.annotations = [
-      {
-        id: '30000000-0000-4000-8000-0000000000a2',
-        number: 1,
-        note: '这里',
-        page: null,
-        time: null,
-        quote: null,
-        shape: { kind: 'pin', x: 0.5, y: 0.5 },
-        frame: FRAME,
-      },
-    ];
     const purge = (ownerId: string) =>
       app.inject({
         method: 'POST',
@@ -302,7 +261,6 @@ describe('后来的一轮改了成果；删对话', () => {
     expect((await purge(KAI)).statusCode).toBe(204);
     expect(repo.rows.map((r) => r.sessionId)).toEqual([S2]);
     expect([...objects.objects.keys()]).toEqual([`artifacts/${S2}/首页文案.md`]);
-    expect(uploadRows.rows.has(FRAME)).toBe(false);
     expect((await purgeRun(KAI)).statusCode).toBe(204);
     expect((await purgeRun(KAI)).statusCode).toBe(204);
     expect(repo.rows).toEqual([]);

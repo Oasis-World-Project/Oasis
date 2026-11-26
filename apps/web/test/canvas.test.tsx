@@ -250,24 +250,24 @@ describe('画布', () => {
     expect(await screen.findByText(/还没有成果/)).toBeTruthy();
   });
 
-  it('打开一个成果：预览内容；顶栏只有返回、批注、下载三个图标；底下写是哪个任务做的，能看过程', async () => {
+  it('打开一个成果：预览内容；顶栏是回画布、哪个任务的哪个文件、看过程、下载、「编辑」；下面写谁做的', async () => {
     fakeCanvas();
     await open(`/canvas/artifacts/${ARTIFACTS[0]!.id}`);
-    expect(await screen.findByRole('heading', { name: /首页文案\.md/ })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /民宿首页/ })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: '山里的小木屋' })).toBeTruthy();
     expect(screen.getByRole('link', { name: '回到画布' }).getAttribute('href')).toBe('/canvas');
-    expect(screen.getByRole('button', { name: '批注' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '编辑' }).getAttribute('aria-pressed')).toBe('false');
     expect(screen.getByRole('link', { name: '下载' }).getAttribute('href')).toBe(
       `/api/canvas/v1/artifacts/${ARTIFACTS[0]!.id}/content?download=1`,
     );
-    expect(screen.getByText(/任务「民宿首页」/)).toBeTruthy();
+    expect(screen.getByText(/做的 · .*放进画布/)).toBeTruthy();
     expect(screen.getByRole('link', { name: '看过程' }).getAttribute('href')).toBe(
       `/dms/${CONV}?task=${RUN}`,
     );
     expect(screen.queryByRole('button', { name: /让 AI 改|删除|批准/ })).toBeNull();
   });
 
-  it('做它的 AI 正在做一轮：批注换成「看进度」，点开回到私聊', async () => {
+  it('做它的 AI 正在做一轮：「看过程」写着它正在做；进了「编辑」也不能让它改', async () => {
     installFakeApi({
       signedIn: true,
       dms: [
@@ -288,9 +288,10 @@ describe('画布', () => {
       },
     });
     await open(`/canvas/artifacts/${ARTIFACTS[0]!.id}`);
-    const busy = await screen.findByRole('link', { name: 'AI 正在做，看进度' });
-    expect(busy.getAttribute('href')).toBe(`/dms/${CONV}`);
-    expect(screen.queryByRole('button', { name: '批注' })).toBeNull();
+    const busy = await screen.findByRole('link', { name: '它正在做，看进度' });
+    expect(busy.getAttribute('href')).toBe(`/dms/${CONV}?task=${RUN}`);
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    expect(screen.getByRole('button', { name: '它正在做…' })).toHaveProperty('disabled', true);
   });
 });
 
