@@ -41,24 +41,36 @@ export const Workplace = z.discriminatedUnion('kind', [
 export type Workplace = z.infer<typeof Workplace>;
 
 /**
- * 权限。access 和 beyond 只在用户电脑上分档（云端沙箱本来就隔离，总是完全访问）：
- * access 只读 / 可改项目文件夹 / 完全访问；beyond AI 要做超出权限的事时问我 / 直接允许 / 不做。
- * paidTools 用生图、视频、配音、音乐、3D 这些花钱的工具前问不问（云端和电脑都算）。
+ * 权限两档，只在用户电脑上分（云端沙箱本来就隔离，什么都不问）：
+ * 手动（manual）读、改项目文件夹里的文件不问；要做出文件夹的事、要用生图视频这类花钱的工具，先在聊天里出
+ * 确认卡问用户。自动（auto）都不问，出文件夹的事也能做。
+ * always：手动档里用户在确认卡上点过「以后都允许」的那一类（command 出文件夹的事，tool 花钱的工具），之后不再问。
  * web 联网搜索和读网页这两个工具给不给用：没写就是开，用户在输入框里关掉后是 false（下一轮起生效）。
  */
 export const Permissions = z.object({
-  access: z.enum(['read', 'project', 'full']),
-  beyond: z.enum(['ask', 'allow', 'deny']),
-  paidTools: z.enum(['ask', 'allow']),
+  mode: z.enum(['manual', 'auto']),
+  always: z
+    .array(z.enum(['command', 'tool']))
+    .max(2)
+    .optional(),
   web: z.boolean().optional(),
 });
 export type Permissions = z.infer<typeof Permissions>;
 
-/** 默认：云端完全访问；电脑上可改项目文件夹、超出时问我。花钱的工具都不问。 */
-export const defaultPermissions = (workplace: Workplace): Permissions =>
-  workplace.kind === 'device'
-    ? { access: 'project', beyond: 'ask', paidTools: 'allow' }
-    : { access: 'full', beyond: 'deny', paidTools: 'allow' };
+/** 默认：用户电脑上手动，云端自动 */
+export const defaultPermissions = (workplace: Workplace): Permissions => ({
+  mode: workplace.kind === 'device' ? 'manual' : 'auto',
+});
+
+/** 这一轮里这一类事要不要先问用户：只有用户电脑上的手动档问，点过「以后都允许」的那一类不问 */
+export const asksBefore = (
+  kind: 'command' | 'tool',
+  workplace: Workplace,
+  permissions: Permissions,
+): boolean =>
+  workplace.kind === 'device' &&
+  permissions.mode === 'manual' &&
+  !permissions.always?.includes(kind);
 
 /** 交给 AI 的文件放在沙箱的哪里：只能在 materials/ 下，不能有 .. */
 const MaterialPath = z

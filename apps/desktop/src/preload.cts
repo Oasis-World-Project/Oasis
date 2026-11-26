@@ -18,6 +18,7 @@ const api: OasisDesktop = {
   capturePage: (rect) => ipcRenderer.invoke('oasis:capture-page', rect),
   deviceStatus: () => ipcRenderer.invoke('oasis:device-status'),
   chooseProjectFolder: () => ipcRenderer.invoke('oasis:project-choose'),
+  defaultProjectFolder: (name) => ipcRenderer.invoke('oasis:project-default', name),
 };
 
 contextBridge.exposeInMainWorld('oasisDesktop', api);

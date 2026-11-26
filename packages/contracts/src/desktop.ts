@@ -42,6 +42,11 @@ export interface OasisDesktop {
    * 用户取消时返回 null。旧版桌面端没有这个能力
    */
   chooseProjectFolder?(): Promise<DesktopProjectFolder | null>;
+  /**
+   * 一段对话没选过文件夹时用的那个：「文档\Oasis\<对话名>」，没有就建好（同名的接着用），并登记成可以干活的
+   * 文件夹。旧版桌面端没有这个能力
+   */
+  defaultProjectFolder?(name: string): Promise<DesktopProjectFolder>;
 }
 
 /** 这台电脑接 Oasis 的活的情况 */
@@ -81,4 +86,5 @@ export const DESKTOP_CHANNELS = {
   capture: 'oasis:capture-page',
   device: 'oasis:device-status',
   project: 'oasis:project-choose',
+  projectDefault: 'oasis:project-default',
 } as const;

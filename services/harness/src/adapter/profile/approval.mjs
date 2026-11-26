@@ -1,7 +1,7 @@
-// Oasis 的权限衔接：每个会话切到这一轮的权限档（OASIS_PERMISSION：只读 / 可改项目文件夹 / 完全访问，
-// 超出时问不问），AI 要做超出权限的事（dsh 的 approval/request）时问 Oasis——在 model-gateway 登记一张
-// 确认卡，等用户在聊天里点「允许一次 / 以后都允许 / 拒绝」。用户设了「超出时直接允许」（OASIS_APPROVAL=allow）
-// 就不问、直接允许。问不到（断网、Oasis 出错）按 dsh 的规矩算没法问（fail closed）。
+// Oasis 的权限衔接：每个会话切到这一轮的权限档（DSH_PERMISSION_MODE：手动是可改项目文件夹，自动是完全访问），
+// AI 要做出文件夹的事（dsh 的 approval/request）时问 Oasis——在 model-gateway 登记一张确认卡，等用户在聊天里
+// 点「允许一次 / 以后都允许 / 拒绝」。用户点过「以后都允许」（OASIS_APPROVAL=allow）就不问、直接允许。
+// 问不到（断网、Oasis 出错）按 dsh 的规矩算没法问（fail closed）。
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -11,7 +11,6 @@ export const inject = ['permissionPresets'];
 /** 每次最多等这么久再问一遍（Oasis 那边长轮询） */
 const WAIT_SECONDS = 25;
 const MODES = {
-  'read-only': '只读',
   'workspace-write': '可改项目文件夹',
   'danger-full-access': '完全访问',
 };
@@ -28,7 +27,7 @@ export function apply(ctx) {
   const execution = JSON.parse(
     readFileSync(join(process.env.OASIS_IN ?? '/workspace/in', '.oasis-execution.json'), 'utf8'),
   );
-  const preset = process.env.OASIS_PERMISSION;
+  const preset = process.env.DSH_PERMISSION_MODE;
   const answer = process.env.OASIS_APPROVAL ?? 'ask';
   const base = process.env.OASIS_MODEL_BASE_URL;
   const headers = {

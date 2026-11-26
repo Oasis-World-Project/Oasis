@@ -3,7 +3,12 @@
 // dsh 升级（SDK 协议、事件格式变化）只改这个目录和 profile/ 下的组合。
 import type { Readable, Writable } from 'node:stream';
 import { DEVICE_ROOTS } from '@oasis/contracts/device';
-import type { ExecutionEnvironment, Permissions, Workplace } from '@oasis/contracts/harness';
+import {
+  asksBefore,
+  type ExecutionEnvironment,
+  type Permissions,
+  type Workplace,
+} from '@oasis/contracts/harness';
 import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
 import { ApplicationSpec } from '@oasis/contracts/canvas';
 import { BrowserTestPlan } from '@oasis/contracts/ui-test';
@@ -118,18 +123,17 @@ export interface SandboxPackages {
 }
 
 /**
- * 这一轮的权限 → dsh 的权限档（profile/cordis.patch.yml 里配的 5 个预设）和 approval.mjs 怎么答：
- * 只读 / 可改项目文件夹 / 完全访问；超出时不做的用 -strict 档（不问、直接不做），直接允许的由插件自己答。
+ * 用户电脑上这一轮的权限 → dsh 的权限档（profile/cordis.patch.yml 里配的两个预设）和 approval.mjs 怎么答：
+ * 手动是「可改项目文件夹」，要做出文件夹的事时问用户（点过「以后都允许」的由插件直接答允许）；
+ * 自动是「完全访问」，不问。
  */
-export function permissionEnv(permissions: Permissions): Record<string, string> {
-  const mode = (
-    { read: 'read-only', project: 'workspace-write', full: 'danger-full-access' } as const
-  )[permissions.access];
+export function permissionEnv(
+  workplace: Workplace,
+  permissions: Permissions,
+): Record<string, string> {
   return {
-    DSH_PERMISSION_MODE: mode,
-    OASIS_PERMISSION:
-      mode !== 'danger-full-access' && permissions.beyond === 'deny' ? `${mode}-strict` : mode,
-    OASIS_APPROVAL: permissions.beyond === 'allow' ? 'allow' : 'ask',
+    DSH_PERMISSION_MODE: permissions.mode === 'auto' ? 'danger-full-access' : 'workspace-write',
+    OASIS_APPROVAL: asksBefore('command', workplace, permissions) ? 'ask' : 'allow',
   };
 }
 
@@ -141,7 +145,9 @@ export function permissionEnv(permissions: Permissions): Record<string, string> 
 export function sandboxEnv(input: {
   runKey: string;
   model: string;
-  place: { modelBaseUrl: string; packages: SandboxPackages } | { permissions: Permissions };
+  place:
+    | { modelBaseUrl: string; packages: SandboxPackages }
+    | { workplace: Workplace; permissions: Permissions };
 }): Record<string, string> {
   const { place } = input;
   const modelBaseUrl =
@@ -163,7 +169,7 @@ export function sandboxEnv(input: {
       OASIS_IN: `${oasis}/in`,
       OASIS_OUT_DIR: `${oasis}/out`,
       OASIS_TOOL_STATE_DIR: `${oasis}/out/.oasis-tools`,
-      ...permissionEnv(place.permissions),
+      ...permissionEnv(place.workplace, place.permissions),
     };
   }
   const { egressProxy, npmRegistry, pipIndexUrl } = place.packages;

@@ -1,5 +1,5 @@
 // 输入框里的联网搜索开关：亮着是开，AI 可以用「联网搜索」「读网页」这两个工具；关着时这两个工具不给它。
-// 记在这段私聊的设置里（和在哪干活、权限放一起），下一轮起生效，正在做的一轮不变。
+// 记在这段私聊的设置里（和在哪干活、手动自动放一起），下一轮起生效，正在做的一轮不变。
 import type { ConversationBody } from '@oasis/contracts/conversation';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Globe } from 'lucide-react';

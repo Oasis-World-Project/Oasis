@@ -12,7 +12,7 @@ import { deleteDm, dmsQuery, messagesQuery, newTopic } from '../api/queries.ts';
 import { aiName, useModelMap } from '../api/use-model-map.ts';
 import { Composer } from '../chat/Composer.tsx';
 import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
-import { DmSetup } from '../chat/DmSetup.tsx';
+import { HomeBar } from '../chat/HomeBar.tsx';
 import { MessageItem } from '../chat/MessageItem.tsx';
 import { QueuedMessages } from '../chat/QueuedMessages.tsx';
 import { WebToggle } from '../chat/WebToggle.tsx';
@@ -109,7 +109,13 @@ export function DmPage() {
             </span>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
-            {conversation && <DmSetup conversation={conversation} turnActive={turnActive} />}
+            {conversation && (
+              <HomeBar
+                conversation={conversation}
+                name={aiName(models, conversation)}
+                turnActive={turnActive}
+              />
+            )}
             <NewTopic conversationId={conversationId} disabled={turnActive || list.length === 0} />
             <DeleteDm conversationId={conversationId} />
           </div>

@@ -4,6 +4,7 @@
 // 给页面开放的能力只有 preload 里的几个：把成果同步到用户选的文件夹、截取窗口里的一块画面用于批注、
 // 选 AI 干活的项目文件夹和看这台电脑连没连上（在你的电脑上干活，见 device.ts）。
 import { existsSync, readFileSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DESKTOP_CHANNELS } from '@oasis/contracts/desktop';
@@ -205,6 +206,18 @@ function registerDevice(device: DeviceClient): void {
     fromApp(event);
     const folder = await pickFolder(event, '选一个项目文件夹，AI 在这里面干活');
     return folder ? device.allowFolder(folder) : null;
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.projectDefault, async (event, name: unknown) => {
+    fromApp(event);
+    if (typeof name !== 'string') throw new Error('参数不合格');
+    // 对话名里不能当文件夹名的字符换掉；空的就叫「对话」
+    const safe = name
+      .replace(/[<>:"/\\|?*]/g, ' ')
+      .trim()
+      .replace(/[. ]+$/, '');
+    const folder = path.join(app.getPath('documents'), 'Oasis', safe.slice(0, 80) || '对话');
+    await mkdir(folder, { recursive: true });
+    return device.allowFolder(folder);
   });
 }
 

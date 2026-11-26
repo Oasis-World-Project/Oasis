@@ -44,16 +44,13 @@ const finish = async (runId: string) => {
 };
 
 describe('在哪干活和权限', () => {
-  it('没设过：云端沙箱、完全访问、超出不做、花钱的工具不问，开一轮照这个交给 harness', async () => {
+  it('没设过：云端沙箱、自动（什么都不问），开一轮照这个交给 harness', async () => {
     const [listed] = await dms.listDms(OWNER);
-    expect(listed).toMatchObject({
-      workplace: { kind: 'cloud' },
-      permissions: { access: 'full', beyond: 'deny', paidTools: 'allow' },
-    });
+    expect(listed).toMatchObject({ workplace: { kind: 'cloud' }, permissions: { mode: 'auto' } });
     await send('你好');
     expect(fake.starts[0]).toMatchObject({
       workplace: { kind: 'cloud' },
-      permissions: { access: 'full', beyond: 'deny', paidTools: 'allow' },
+      permissions: { mode: 'auto' },
     });
   });
 
@@ -61,23 +58,23 @@ describe('在哪干活和权限', () => {
     const first = (await send('写个脚本')).turn!.runId;
     const changed = await setup({
       workplace: { kind: 'cloud' },
-      permissions: { access: 'full', beyond: 'deny', paidTools: 'ask' },
+      permissions: { mode: 'manual' },
     });
     expect(changed.message).toBeNull();
-    expect(changed.conversation.permissions.paidTools).toBe('ask');
+    expect(changed.conversation.permissions.mode).toBe('manual');
     expect(fake.purged).toEqual([]);
     await finish(first);
     await send('再加个参数');
     expect(fake.starts[1]).toMatchObject({
       continueFrom: first,
-      permissions: { paidTools: 'ask' },
+      permissions: { mode: 'manual' },
     });
   });
 
   it('关掉联网搜索：记在这段私聊的设置里，不开新话题；下一轮交给 harness 的权限里带着它，再打开也一样', async () => {
     const off = await setup({
       workplace: { kind: 'cloud' },
-      permissions: { access: 'full', beyond: 'deny', paidTools: 'allow', web: false },
+      permissions: { mode: 'auto', web: false },
     });
     expect(off.message).toBeNull();
     expect(off.conversation.permissions.web).toBe(false);
@@ -86,7 +83,7 @@ describe('在哪干活和权限', () => {
     await finish(first);
     const on = await setup({
       workplace: { kind: 'cloud' },
-      permissions: { access: 'full', beyond: 'deny', paidTools: 'allow', web: true },
+      permissions: { mode: 'auto', web: true },
     });
     expect(on.conversation.permissions.web).toBe(true);
     await send('再查一次');
@@ -95,7 +92,7 @@ describe('在哪干活和权限', () => {
 
   it('换到电脑上：原来的会话清掉、插一条分隔，下一轮从头开始、在电脑上做；一轮进行中不能换地方', async () => {
     const first = (await send('写个脚本')).turn!.runId;
-    const permissions = { access: 'project', beyond: 'ask', paidTools: 'allow' } as const;
+    const permissions = { mode: 'manual' } as const;
     await expect(setup({ workplace: DEVICE, permissions })).rejects.toMatchObject({
       statusCode: 409,
       code: 'turn_active',
@@ -120,7 +117,7 @@ describe('确认卡', () => {
   it('model-gateway 那边在等用户点的卡放进这一轮；允许一次：卡收起，权限不变', async () => {
     await setup({
       workplace: DEVICE,
-      permissions: { access: 'project', beyond: 'ask', paidTools: 'allow' },
+      permissions: { mode: 'manual' },
     });
     const runId = (await send('把日志挪到 D:\\logs')).turn!.runId;
     const card = confirmation();
@@ -131,14 +128,11 @@ describe('确认卡', () => {
     expect(decided).toMatchObject({ id: card.id, status: 'allowed' });
     expect(decisions).toEqual([{ id: card.id, runId, decision: 'once' }]);
     expect((await turnOf())?.confirmations).toEqual([]);
-    expect((await repo.find(conversation.id))?.permissions?.beyond).toBe('ask');
+    expect((await repo.find(conversation.id))?.permissions).toEqual({ mode: 'manual' });
   });
 
-  it('以后都允许：同类的卡一起收起，私聊的权限改成直接允许（命令）或不问（花钱的工具）', async () => {
-    await setup({
-      workplace: DEVICE,
-      permissions: { access: 'project', beyond: 'ask', paidTools: 'ask' },
-    });
+  it('以后都允许：同类的卡一起收起，这一类记进私聊的权限，以后不再问', async () => {
+    await setup({ workplace: DEVICE, permissions: { mode: 'manual' } });
     await send('整理项目，再配一张封面图');
     const command = confirmation();
     const another = confirmation({ callId: 'call-2' });
@@ -152,12 +146,11 @@ describe('确认卡', () => {
     await confirm(command.id, 'always');
     expect((await turnOf())?.confirmations).toEqual([tool]);
     expect((await repo.find(conversation.id))?.permissions).toEqual({
-      access: 'project',
-      beyond: 'allow',
-      paidTools: 'ask',
+      mode: 'manual',
+      always: ['command'],
     });
     await confirm(tool.id, 'always');
-    expect((await repo.find(conversation.id))?.permissions?.paidTools).toBe('allow');
+    expect((await repo.find(conversation.id))?.permissions?.always).toEqual(['command', 'tool']);
   });
 
   it('拒绝：卡收起、权限不变；这一轮结束了再点就说不用确认了', async () => {

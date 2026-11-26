@@ -338,7 +338,7 @@ export function createDmService(deps: {
 
     /**
      * 改在哪干活和权限，下一轮起生效。换了地方从新话题开始：AI 的会话记录在原来那边接不上，
-     * 原来的清掉、聊天里插一条分隔；一轮进行中不能换地方。
+     * 原来的清掉、聊天里插一条分隔；一轮进行中不能换地方。还没说过话的对话直接定下，不算换。
      */
     async setup(
       ownerId: string,
@@ -354,9 +354,14 @@ export function createDmService(deps: {
         if (!isDeepStrictEqual(setupOf(latest).workplace, body.workplace)) {
           if (latest.turn)
             throw new HttpError(409, 'turn_active', '这一轮还在做，先停下再换干活的地方');
-          const place =
-            body.workplace.kind === 'device' ? `你的电脑（${body.workplace.folder}）` : '云端沙箱';
-          message = await startTopic(store, latest, `换到${place}干活，开了新话题`, requestId);
+          // 还没说过话的对话没有可忘的：直接定下在哪干活（桌面版里新对话的家定在电脑上），不插分隔
+          if (latest.lastMessageAt) {
+            const place =
+              body.workplace.kind === 'device'
+                ? `你的电脑（${body.workplace.folder}）`
+                : '云端沙箱';
+            message = await startTopic(store, latest, `换到${place}干活，开了新话题`, requestId);
+          }
         }
         await store.saveSetup(conversation.id, body);
         deps.logger.info(
@@ -398,10 +403,10 @@ export function createDmService(deps: {
           const { workplace, permissions } = setupOf(latest);
           await store.saveSetup(latest.id, {
             workplace,
-            permissions:
-              decided.kind === 'command'
-                ? { ...permissions, beyond: 'allow' }
-                : { ...permissions, paidTools: 'allow' },
+            permissions: {
+              ...permissions,
+              always: [...new Set([...(permissions.always ?? []), decided.kind])],
+            },
           });
         }
         // 点过的卡马上收起，不等下一次看进度

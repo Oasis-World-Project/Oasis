@@ -3,6 +3,7 @@
 // 文件、dsh 握手、接着原会话 → 交用户的话 → 记录事件 → 等这一轮做完（期间可插话）→ 给 Word/PPT 配 PDF、
 // 记下 out/ 的清单 → 结算算力 → 写结局。做完的地方留着等下一轮；停下、出错的收掉（销毁沙箱、作废 Key）。
 // 依赖暂时不可用时保存原会话，等接管（control.ts）。
+import { asksBefore } from '@oasis/contracts/harness';
 import { ExecutionModels, RunKeyCreated } from '@oasis/contracts/model-gateway';
 import { HttpError, packStreams } from '@oasis/service-kit';
 import { SANDBOX_PATHS, type AgentConnection } from '../../adapter/dsh.ts';
@@ -138,7 +139,7 @@ export function createExecution(
         const settings = {
           runId: id,
           domesticOnly: request.domesticOnly,
-          askPaid: request.permissions.paidTools === 'ask',
+          askPaid: asksBefore('tool', request.workplace, request.permissions),
           noWeb: request.permissions.web === false,
           ttlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
         };

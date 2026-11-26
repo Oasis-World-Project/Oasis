@@ -332,10 +332,15 @@ describe('dsh 事件翻译', () => {
   });
 
   it('用户电脑上：经网页地址上的 gateway 调模型，平台的文件在项目的 .oasis/ 下，权限档按设置', () => {
+    const workplace = {
+      kind: 'device',
+      deviceId: 'device-0001',
+      folder: 'D:\\Projects\\blog',
+    } as const;
     const env = sandboxEnv({
       runKey: 'k',
       model: 'deepseek/x',
-      place: { permissions: { access: 'project', beyond: 'ask', paidTools: 'allow' } },
+      place: { workplace, permissions: { mode: 'manual' } },
     });
     expect(env).toMatchObject({
       OASIS_MODEL_BASE_URL: '{origin}/api/run/v1',
@@ -343,34 +348,18 @@ describe('dsh 事件翻译', () => {
       OASIS_IN: '{project}/.oasis/in',
       OASIS_OUT_DIR: '{project}/.oasis/out',
       DSH_PERMISSION_MODE: 'workspace-write',
-      OASIS_PERMISSION: 'workspace-write',
       OASIS_APPROVAL: 'ask',
     });
     expect(env.HTTPS_PROXY).toBeUndefined();
-    const levels = (
-      [
-        ['read', 'deny'],
-        ['project', 'allow'],
-        ['full', 'deny'],
-      ] as const
-    ).map(([access, beyond]) => permissionEnv({ access, beyond, paidTools: 'ask' }));
-    expect(levels).toEqual([
-      {
-        DSH_PERMISSION_MODE: 'read-only',
-        OASIS_PERMISSION: 'read-only-strict',
-        OASIS_APPROVAL: 'ask',
-      },
-      {
-        DSH_PERMISSION_MODE: 'workspace-write',
-        OASIS_PERMISSION: 'workspace-write',
-        OASIS_APPROVAL: 'allow',
-      },
-      {
-        DSH_PERMISSION_MODE: 'danger-full-access',
-        OASIS_PERMISSION: 'danger-full-access',
-        OASIS_APPROVAL: 'ask',
-      },
-    ]);
+    // 手动档点过「以后都允许」出文件夹的事：不问了；自动档：完全访问、不问
+    expect(permissionEnv(workplace, { mode: 'manual', always: ['command'] })).toEqual({
+      DSH_PERMISSION_MODE: 'workspace-write',
+      OASIS_APPROVAL: 'allow',
+    });
+    expect(permissionEnv(workplace, { mode: 'auto' })).toEqual({
+      DSH_PERMISSION_MODE: 'danger-full-access',
+      OASIS_APPROVAL: 'allow',
+    });
   });
 });
 

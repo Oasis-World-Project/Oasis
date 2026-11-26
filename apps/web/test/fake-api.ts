@@ -83,7 +83,7 @@ const unauthorized = () => json(401, { error: { code: 'unauthorized', message: '
 /** 私聊没写在哪干活、权限的，按没设过算：云端沙箱、云端的默认权限 */
 const withSetup = (dm: unknown) => ({
   workplace: { kind: 'cloud' },
-  permissions: { access: 'full', beyond: 'deny', paidTools: 'allow' },
+  permissions: { mode: 'auto' },
   ...(dm as object),
 });
 

@@ -42,7 +42,7 @@ export const chat = {
     const dm = `/conversation/v1/conversations/${id}`;
     const saved = await t.user.api.put(`${dm}/setup`, {
       workplace: { kind: 'cloud' },
-      permissions: { access: 'full', beyond: 'deny', paidTools: 'allow', web: false },
+      permissions: { mode: 'auto', web: false },
     });
     t.check(
       saved.message === null && saved.conversation.permissions.web === false,

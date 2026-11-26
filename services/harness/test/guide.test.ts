@@ -60,14 +60,8 @@ describe('给主 AI 的说明和技能', () => {
     expect(profile).toContain('name: ./approval.mjs');
     expect(profile).not.toContain('/opt/oasis');
     expect(profile).not.toMatch(/^\s+reasoning:/m);
-    // 5 个权限档：只读、可改项目文件夹各有问 / 不问两档，完全访问不问
-    for (const preset of [
-      'read-only',
-      'read-only-strict',
-      'workspace-write',
-      'workspace-write-strict',
-      'danger-full-access',
-    ])
+    // 两个权限档：手动是可改项目文件夹（出文件夹的事问），自动是完全访问（不问）
+    for (const preset of ['workspace-write', 'danger-full-access'])
       expect(profile).toContain(`      ${preset}:\n`);
   });
 

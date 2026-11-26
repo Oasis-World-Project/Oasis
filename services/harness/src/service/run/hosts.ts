@@ -58,7 +58,7 @@ export function createHosts(deps: RunDeps) {
         model: row.model,
         place:
           request.workplace.kind === 'device'
-            ? { permissions: request.permissions }
+            ? { workplace: request.workplace, permissions: request.permissions }
             : { modelBaseUrl: deps.modelBaseUrl, packages: deps.packages },
       }),
     });

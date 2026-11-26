@@ -76,14 +76,14 @@ export const device = {
 
       const id = await t.user.openDm();
       t.track(id);
-      const permissions = { access: 'project', beyond: 'ask', paidTools: 'ask' };
+      const permissions = { mode: 'manual' };
       const setup = await t.user.api.put(`/conversation/v1/conversations/${id}/setup`, {
         workplace: { kind: 'device', deviceId, folder },
         permissions,
       });
       t.check(
-        setup.message?.kind === 'topic' && setup.conversation.workplace.kind === 'device',
-        `换到电脑上应插一条分隔：${JSON.stringify(setup).slice(0, 300)}`,
+        setup.message === null && setup.conversation.workplace.kind === 'device',
+        `还没说过话的对话定在电脑上，不该插分隔：${JSON.stringify(setup).slice(0, 300)}`,
       );
       await t.user.say(id, `整理一下这个项目，再做一张封面 ${marker('device', 1)}`);
 
@@ -128,8 +128,8 @@ export const device = {
       t.check(cardOf(messages, run?.id)?.data.status === 'done', '用了生图的一轮应有任务卡');
       const { conversations } = await t.user.api.get('/conversation/v1/dms');
       t.check(
-        conversations.find((c) => c.id === id)?.permissions.paidTools === 'allow',
-        '点了「以后都允许」，花钱的工具应改成不问',
+        conversations.find((c) => c.id === id)?.permissions.always?.includes('tool'),
+        '点了「以后都允许」，花钱的工具这一类应记下以后不问',
       );
 
       // 删私聊：电脑上这个会话的 dsh 记录也清掉

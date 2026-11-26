@@ -49,28 +49,19 @@
   config:
     dshHome: !!js dshHomePath('sessions')
 
-# ---- 权限：只读 / 可改项目文件夹 / 完全访问（只在用户电脑上分档，云端沙箱用默认的完全访问），超出时
-# 问用户（ask）或不做（-strict）。每个会话按这一轮的设置（OASIS_PERMISSION）切过去（approval.mjs）；
-# 超出权限要用户确认时由 approval.mjs 问 Oasis，用户在聊天里的确认卡上答。----
+# ---- 权限两档（只在用户电脑上分，云端沙箱用完全访问）：手动是可改项目文件夹、要做出文件夹的事时问用户；
+# 自动是完全访问、不问。每个会话按这一轮的设置（DSH_PERMISSION_MODE）切过去（approval.mjs）；要用户确认时
+# 由 approval.mjs 问 Oasis，用户在聊天里的确认卡上答。----
 - id: permission
   config:
     presets:
-      read-only:
-        sandbox: read-only
-        approval: ask
-      read-only-strict:
-        sandbox: read-only
-        approval: never
       workspace-write:
         sandbox: workspace-write
         approval: ask
-      workspace-write-strict:
-        sandbox: workspace-write
-        approval: never
       danger-full-access:
         sandbox: danger-full-access
         approval: never
-    defaultPreset: !!js process.env.OASIS_PERMISSION ?? 'danger-full-access'
+    defaultPreset: !!js process.env.DSH_PERMISSION_MODE ?? 'danger-full-access'
 
 # ---- 关掉：DeepSeek 自家账号、模型和网页搜索（模型和联网都走 Oasis） ----
 - id: deepseek-account
