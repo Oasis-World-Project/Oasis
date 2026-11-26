@@ -122,10 +122,10 @@ export function AiBody({
           <button
             type="button"
             onClick={onProcess}
+            aria-label={`${live ? `正在干活，做到第 ${steps} 步` : `做了 ${steps} 步`}，看过程`}
             className="cursor-pointer self-start border-0 bg-transparent p-0 text-left text-[13px] text-ink-muted underline decoration-hairline underline-offset-4"
           >
             {live ? `正在干活，做到第 ${steps} 步…` : `做了 ${steps} 步`}
-            <span className="sr-only">，看过程</span>
           </button>
         ) : (
           <ProcessFold parts={process} todos={todos} live={live} />

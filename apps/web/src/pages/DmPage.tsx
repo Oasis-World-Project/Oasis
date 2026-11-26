@@ -92,8 +92,8 @@ export function DmPage() {
     <ChatActionsContext.Provider value={actions}>
       <section
         aria-label="私聊"
-        // overflow-hidden：面板固定一屏高，里面的东西不能把整个页面撑出第二根滚动条
-        className={`glass relative flex h-[calc(100vh-44px)] min-h-[520px] flex-col overflow-hidden rounded-panel ${
+        // 占满外壳给的这一屏（外壳不滚）；overflow-hidden：消息区之外的东西不露到面板外面
+        className={`glass relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-panel ${
           dragging ? 'outline-2 -outline-offset-8 outline-dashed outline-accent' : ''
         }`}
         {...dropProps}
@@ -115,7 +115,7 @@ export function DmPage() {
           </div>
         </header>
 
-        {/* relative：消息里视觉隐藏的单选框（sr-only 是绝对定位）以消息区为定位基准，跟着消息区裁剪和滚动 */}
+        {/* relative：消息里绝对定位的东西以消息区为定位基准，跟着消息区裁剪和滚动 */}
         <div
           ref={scroller}
           className="relative flex-1 overflow-y-auto px-6 py-5"

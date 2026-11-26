@@ -81,7 +81,7 @@ export function GroupRoom({
   );
   const direct = group?.kind === 'direct';
   return (
-    <div className="-mx-1 -mt-2 flex h-[calc(100vh-36px)] min-h-[560px] gap-[18px]">
+    <div className="-mx-1 -mt-2 flex min-h-0 flex-1 gap-[18px]">
       {/* 整屏换成这个群的光：铺在最底下，侧栏的玻璃透出来的也是它 */}
       <div
         aria-hidden="true"

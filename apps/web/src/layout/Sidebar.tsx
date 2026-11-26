@@ -75,7 +75,7 @@ export function Sidebar() {
     <nav
       aria-label="主导航"
       data-state={open ? 'open' : 'closed'}
-      className={`glass sticky top-[18px] flex h-[calc(100vh-36px)] shrink-0 flex-col rounded-panel ${
+      className={`glass flex min-h-0 shrink-0 flex-col rounded-panel ${
         open ? 'w-[252px] px-[14px] pb-[14px] pt-[18px]' : 'w-[76px] items-center pb-[14px] pt-4'
       }`}
     >

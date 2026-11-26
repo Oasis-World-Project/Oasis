@@ -60,7 +60,7 @@ function RunView({ runId, conversationId }: { runId: string; conversationId: str
   return (
     <section
       aria-label="这一轮的进度"
-      className="glass flex min-h-[calc(100vh-44px)] flex-col gap-5 rounded-panel px-6 py-5"
+      className="glass flex flex-1 flex-col gap-5 rounded-panel px-6 py-5"
     >
       <header className="flex items-center gap-3">
         <Link

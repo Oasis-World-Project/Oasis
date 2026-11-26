@@ -377,8 +377,7 @@ export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder
     [group.ais, room],
   );
   const now = new Date();
-  // 消息区是 relative：问卷卡里视觉隐藏的单选框（sr-only 是绝对定位）以它为定位基准，跟着它裁剪和滚动；
-  // 不然单选框排在整页的最底下，选一下浏览器就把整页滚过去、多出一根滚动条（私聊页同样的处理）
+  // 消息区是 relative：消息里绝对定位的东西以它为定位基准，跟着它裁剪和滚动（私聊页同样的处理）
   return (
     <div
       ref={scroller}

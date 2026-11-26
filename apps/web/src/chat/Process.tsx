@@ -4,11 +4,13 @@ import type { MessagePart, StepPart, TodoItem } from '@oasis/contracts/conversat
 import { Check, Info, LoaderCircle, X } from 'lucide-react';
 import { Markdown } from './Markdown.tsx';
 
-export function StepIcon({ status }: { status: StepPart['status'] }) {
+/** 一步的状态图标。label：读屏时念出来的状态（「完成」「没成」）；不给就只是装饰 */
+export function StepIcon({ status, label }: { status: StepPart['status']; label?: string }) {
+  const named = label ? ({ role: 'img', 'aria-label': label } as const) : { 'aria-hidden': true };
   if (status === 'running')
-    return <LoaderCircle size={13} aria-hidden="true" className="animate-spin text-accent" />;
-  if (status === 'failed') return <X size={13} aria-hidden="true" className="text-accent" />;
-  return <Check size={13} aria-hidden="true" className="text-ink-muted" />;
+    return <LoaderCircle size={13} {...named} className="animate-spin text-accent" />;
+  if (status === 'failed') return <X size={13} {...named} className="text-accent" />;
+  return <Check size={13} {...named} className="text-ink-muted" />;
 }
 
 const STATUS_TEXT: Record<StepPart['status'], string> = {
@@ -84,9 +86,8 @@ export function ProcessBody({
           part.type === 'step' ? (
             <li key={index} className="flex flex-col gap-0.5">
               <span className="flex items-center gap-2">
-                <StepIcon status={part.status} />
+                <StepIcon status={part.status} label={STATUS_TEXT[part.status]} />
                 <span className="min-w-0 break-words">{part.label}</span>
-                <span className="sr-only">：{STATUS_TEXT[part.status]}</span>
               </span>
               {part.detail && (
                 <span className="whitespace-pre-wrap break-words pl-5 text-[12px] text-accent">

@@ -321,11 +321,8 @@ export function RoomComposer({
               </button>
             </span>
           ))}
-          <label htmlFor="group-input" className="sr-only">
-            消息
-          </label>
           <textarea
-            id="group-input"
+            aria-label="消息"
             ref={inputRef}
             rows={1}
             value={draft}

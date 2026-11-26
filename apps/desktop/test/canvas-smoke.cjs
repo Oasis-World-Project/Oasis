@@ -139,6 +139,9 @@ async function step(item, index) {
   if (opened) throw new Error('画布显示「网页没能打开」');
   // 样式和脚本都在框里生效（同一成果里的 style.css、app.js 按相对地址内嵌）
   await until(() => inFrame(`document.readyState === 'complete'`), '隔离框里的网页没加载完');
+  // 外壳固定一屏高：整页不能比窗口高（高出来就是多一根整页滚动条）
+  const taller = await main('document.documentElement.scrollHeight - window.innerHeight');
+  if (taller > 0) throw new Error(`整页比窗口高了 ${taller}px，外壳应该固定一屏高`);
   const plan = JSON.parse(planText);
   for (const [index, item] of plan.steps.entries()) await step(item, index);
   const html = await inFrame('document.documentElement.outerHTML');

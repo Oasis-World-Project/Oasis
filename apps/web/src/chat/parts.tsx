@@ -177,7 +177,8 @@ export function Choice({
 }) {
   return (
     <label
-      className={`inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-full px-3.5 text-[13.5px] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent ${
+      // relative：看不见的单选框铺满这一格，位置跟着这一格走
+      className={`relative inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-full px-3.5 text-[13.5px] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent ${
         checked ? 'bg-solid text-on-solid' : 'bg-glass-active text-ink shadow-edge-strong'
       } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
     >
@@ -187,7 +188,7 @@ export function Choice({
         checked={checked}
         onChange={onChange}
         disabled={disabled}
-        className="sr-only"
+        className="absolute inset-0 m-0 size-full cursor-[inherit] opacity-0"
       />
       {label}
       {isDefault && <span className={checked ? 'opacity-70' : 'text-ink-muted'}>· 默认</span>}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 工程规范 §7 的确定性检查入口：命名、镜像命名、服务调用、依赖方向、死代码/未用依赖、重复率、数据库迁移。
-// 用法：node scripts/check-engineering.mjs [--only naming,images,tokens,calls,deps,dead,dup,migrations]
+// 用法：node scripts/check-engineering.mjs [--only naming,images,tokens,layout,calls,deps,dead,dup,migrations]
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -18,6 +18,12 @@ const DOCKER_BUILD = /docker\s+(?:buildx\s+)?build\b[^\n]*/g;
 // AGENTS.md B.12：前端颜色只来自设计令牌，应用代码里不写裸色值
 const RAW_COLOR = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch)\(/;
 const TOKEN_CHECKED = /^apps\/web\/src\/.+\.(tsx?|css)$/;
+// 应用外壳固定一屏高、自己不滚（layout/AppShell.tsx）。两种写法会让整页多出一根滚动条，都出过事：
+// 页面按窗口高度给自己定高（100vh、h-screen）；sr-only（绝对定位的隐藏元素，会逃出它所在的滚动区）。
+// 隐藏的说明用 aria-label。外壳自己和不带外壳的页面（登录、官网、广场、找不到、连接中）除外。
+const PAGE_SIZING = /\bsr-only\b|100d?vh\b|\b(?:min-)?h-(?:screen|dvh)\b/;
+const PAGE_SIZING_EXEMPT =
+  /^apps\/web\/src\/(layout\/AppShell|router|pages\/(Login|Welcome|Plaza|NotFound)Page)\.tsx$/;
 // 服务之间的同步调用（createServiceClient('<对方>', …)，对方名字写成字面量）不能成环；
 // inspector 不调任何服务，检查要的内容由调用方给。已知的环都经过画布：画布从 harness 取一轮的产出
 // 文件、向 model-gateway 开数字人会话，而 harness 开跑时向画布取用户的文件和要改的成果、
@@ -121,6 +127,22 @@ function checkTokens() {
   return problems.length === 0;
 }
 
+function checkLayout() {
+  const problems = [];
+  for (const file of files.filter((f) => TOKEN_CHECKED.test(f) && !PAGE_SIZING_EXEMPT.test(f))) {
+    readFileSync(path.join(ROOT, file), 'utf8')
+      .split('\n')
+      .forEach((line, i) => {
+        if (PAGE_SIZING.test(line) && !/^\s*(\/\/|\*|\{\/\*)/.test(line))
+          problems.push(
+            `${file}:${i + 1}：页面不按窗口高度定高、不用 sr-only（见 AppShell）→ ${line.trim()}`,
+          );
+      });
+  }
+  for (const p of problems) console.error(`  ${p}`);
+  return problems.length === 0;
+}
+
 function checkCalls() {
   const edges = new Map();
   for (const file of files.filter((f) => /^services\/[^/]+\/src\/.+\.(ts|mts|mjs)$/.test(f))) {
@@ -187,6 +209,7 @@ const CHECKS = {
   naming: { label: '版本后缀命名', fn: checkNaming },
   images: { label: '镜像命名 oasis/', fn: checkImages },
   tokens: { label: '前端只用设计令牌', fn: checkTokens },
+  layout: { label: '页面不撑出整页滚动条', fn: checkLayout },
   calls: { label: '服务调用无环', fn: checkCalls },
   migrations: { label: '数据库迁移 Expand/Contract', fn: checkMigrations },
   deps: {

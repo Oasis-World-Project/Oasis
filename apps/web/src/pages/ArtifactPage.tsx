@@ -77,7 +77,7 @@ export function ArtifactPage() {
   return (
     <section
       aria-label="成果"
-      className="oasis-dots relative flex h-[calc(100vh-44px)] min-h-[560px] flex-col overflow-hidden rounded-panel bg-glass-strong shadow-[var(--oasis-glass-edge),var(--oasis-shadow-panel)]"
+      className="oasis-dots relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-panel bg-glass-strong shadow-[var(--oasis-glass-edge),var(--oasis-shadow-panel)]"
     >
       <div className="flex items-center gap-2 p-4">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">

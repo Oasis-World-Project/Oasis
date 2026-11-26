@@ -109,11 +109,8 @@ export function Composer({
         />
         <div className="flex min-w-0 flex-1 flex-col pt-1">
           <PendingFiles files={attachments.files} onRemove={attachments.remove} />
-          <label htmlFor="dm-input" className="sr-only">
-            消息
-          </label>
           <textarea
-            id="dm-input"
+            aria-label="消息"
             rows={1}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

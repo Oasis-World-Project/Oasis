@@ -22,7 +22,7 @@
 | `pnpm sandbox:build` · `sandbox:check:ops` | 构建 agent 沙箱镜像 `oasis/harness-sandbox-base:<dsh 版本>`；离线验收镜像里的本地操作 `oasis-op` |
 | `pnpm browser:build` · `browser:smoke` | 构建 inspector 的检查浏览器镜像 `oasis/inspector-browser:<Playwright 版本>`；本机烟测（静态网页、Node 应用按检查一轮产出的路子各查一遍，外站测一次） |
 | `pnpm lint` · `pnpm typecheck` · `pnpm test` | 静态检查、类型检查、测试 |
-| `pnpm check:engineering` | 命名、镜像命名、设计令牌、服务调用无环、依赖方向、死代码、重复率、迁移检查 |
+| `pnpm check:engineering` | 命名、镜像命名、设计令牌、页面不撑出整页滚动条、服务调用无环、依赖方向、死代码、重复率、迁移检查 |
 | `pnpm models:check` | 型号清单（`packages/contracts/src/lineup.ts`）对着 OpenRouter 目录核对：下架的、标价变了的、同一家新出的；`--probe` 试调对话 AI 的型号 |
 | `pnpm e2e` | 全链路回归：假模型、真容器、真画布，从私聊里说一句话跑到桌面端画布里打开成果（先停 `pnpm dev`；`--keep` 跑完不停服务；`--real` 真模型、每场景 ≤ $1，小游戏 `real-game` ≤ $3）。见 `docs/engineering/回归测试.md` |
 | `pnpm trace <对话 ID>` | 一个私聊每一轮的运行、调用、费用来源和画布成果，标出异常（按估算扣费、卡住的调用、没退回的冻结、遗留容器、花费对不上） |
@@ -55,6 +55,7 @@
     - 颜色、阴影、圆角、字体一律来自 `@oasis/design-tokens`（CSS 变量 + Tailwind 主题），`apps/web/src` 里不写裸色值（`#xxx`、`rgb()` 等）；缺少的令牌先加进 `packages/design-tokens`。`pnpm check:engineering` 的 tokens 检查和 pre-commit 钩子会拦截。
     - 应用主体是「珍珠雾面」，广场和游戏是「午夜蓝 + 金线」（`data-theme="plaza"`），官网页是「清晨湖水」（`data-theme="site"`），群主题光用 `data-light="coral|mint|sky|honey"`。
     - 侧栏 7 个入口就是全部一级页面；群聊、私聊不显示未读数字或红点（PRD G-02）。
+    - 外壳（`layout/AppShell.tsx`）固定一屏高、整页不滚：页面不按窗口高度给自己定高（`100vh`、`h-screen`），不用 `sr-only`（给读屏的说明写 `aria-label`）；占满一屏的页面在路由上标 `fixedHeight`，其余的在外壳右侧那一块里滚。`pnpm check:engineering` 的 layout 检查和 pre-commit 钩子会拦截。
     - 前端只通过 gateway 的 `/api/*` 访问后端；开发时由 Vite 转发。
     - 新依赖在第一次真正用到时才装（TanStack Query、Zustand、Radix 等），不预装。
     - 字体随应用打包（@fontsource），不引用外部字体服务。

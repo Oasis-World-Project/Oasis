@@ -15,7 +15,7 @@ import {
 import { ApiError, isConnectionError } from './api/client.ts';
 import { meQuery } from './api/queries.ts';
 import { desktop } from './desktop/sync.ts';
-import { AppShell } from './layout/AppShell.tsx';
+import { AppShell, PAGE_SCROLL_ID } from './layout/AppShell.tsx';
 import { AiSettingsPage } from './pages/AiSettingsPage.tsx';
 import { AisPage } from './pages/AisPage.tsx';
 import { ArtifactPage } from './pages/ArtifactPage.tsx';
@@ -174,6 +174,7 @@ const taskRoute = createRoute({
 const artifactRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/canvas/artifacts/$artifactId',
+  staticData: { fixedHeight: true },
   component: ArtifactPage,
 });
 /** 一轮的进度（任务卡上的「看进度」）：?conversation= 是这一轮所在的私聊 */
@@ -197,6 +198,7 @@ const groupRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { task?: string | undefined } => ({
     task: typeof search.task === 'string' ? search.task : undefined,
   }),
+  staticData: { fixedHeight: true },
   component: GroupPage,
 });
 const dmsRoute = createRoute({
@@ -207,12 +209,14 @@ const dmsRoute = createRoute({
 const dmRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/dms/$conversationId',
+  staticData: { fixedHeight: true },
   component: DmPage,
 });
 /** 和一个好友的私聊：页面和群页是同一个（两个人、没有 AI） */
 const chatRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/chats/$chatId',
+  staticData: { fixedHeight: true },
   component: GroupPage,
 });
 const meRoute = createRoute({ getParentRoute: () => shellRoute, path: '/me', component: MePage });
@@ -252,11 +256,17 @@ export function createAppRouter(options: { queryClient: QueryClient; history?: R
     defaultPreload: 'intent',
     defaultPendingComponent: ConnectionFailure,
     defaultPendingMs: 200,
+    // 换页时外壳里滚动的那一块回到顶上（整页不滚了，路由自带的回顶管不到它）
+    scrollToTopSelectors: [`#${PAGE_SCROLL_ID}`],
   });
 }
 
 declare module '@tanstack/react-router' {
   interface Register {
     router: ReturnType<typeof createAppRouter>;
+  }
+  interface StaticDataRouteOption {
+    /** 这一页占满一屏、里面的滚动自己管（聊天、成果页）；不标的页面在外壳右侧那一块里滚 */
+    fixedHeight?: boolean;
   }
 }
