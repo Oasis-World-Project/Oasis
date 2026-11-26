@@ -129,9 +129,6 @@ export function createArtifactService(deps: {
       ...(response.headers.get('content-length')
         ? { size: Number(response.headers.get('content-length')) }
         : {}),
-      ...(response.headers.get('x-oasis-file-sha256')
-        ? { sha256: response.headers.get('x-oasis-file-sha256')! }
-        : {}),
     });
     return {
       id: randomUUID(),

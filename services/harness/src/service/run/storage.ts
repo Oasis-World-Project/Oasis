@@ -1,10 +1,10 @@
-// 沙箱和对象存储之间搬文件：每轮结束把 out/ 打包存进对象存储（画布从这里登记成果），
-// 开跑时把用户随消息发的文件、要改的成果放进沙箱。会话和工作目录在持久卷里，不经对象存储。
-import { PassThrough, Readable } from 'node:stream';
+// 一轮和外面之间的文件：每轮结束列出 out/ 的清单（路径、大小、摘要）记在这一轮上——文件留在工作目录里，
+// 画布登记成果时要哪个再来取哪个（outputs.ts），平台不另存一份；开跑时把用户随消息发的文件、要改的
+// 成果放进沙箱。
+import { Readable } from 'node:stream';
 import { ArtifactLookupResult, UploadLookupResult } from '@oasis/contracts/canvas';
 import { scanArchive } from '@oasis/service-kit';
 import { SANDBOX_PATHS } from '../../adapter/dsh.ts';
-import type { Sandbox } from '../../executor/executor.ts';
 import { StopRun, type RunContext } from './shared.ts';
 
 /**
@@ -24,50 +24,20 @@ exit 0`;
 
 export function createStorage(ctx: RunContext): Pick<RunContext, 'save' | 'materialFiles'> {
   const { deps } = ctx;
-  const { store } = deps;
-
-  /** 把沙箱里的目录打包存进对象存储；目录不存在或为空时返回 undefined */
-  async function archive(sandbox: Pick<Sandbox, 'readArchive'>, path: string, key: string) {
-    const stream = await sandbox.readArchive(path);
-    if (!stream) return undefined;
-    const upload = new PassThrough();
-    const index = new PassThrough();
-    const fail = (error: Error) => {
-      stream.destroy(error);
-      upload.destroy(error);
-      index.destroy(error);
-    };
-    stream.on('error', fail);
-    const storing = store.putStream(key, upload, 'application/x-tar', {
-      maxBytes: deps.outputMaxBytes,
-    });
-    const scanning = scanArchive(index, deps.outputMaxBytes);
-    stream.pipe(upload);
-    stream.pipe(index);
-    try {
-      const [, files] = await Promise.all([storing, scanning]);
-      if (!files.length) {
-        await store.delete(key);
-        return undefined;
-      }
-      return { key, files };
-    } catch (error) {
-      fail(error instanceof Error ? error : new Error(String(error)));
-      await Promise.allSettled([storing, scanning]);
-      await store.delete(key);
-      throw error;
-    }
-  }
 
   return {
-    async save(sandbox, id, options = {}) {
-      if (options.companions)
-        await sandbox
-          .exec?.(['sh', '-c', companionPdfs(SANDBOX_PATHS.outputs)])
-          .catch((err: unknown) =>
-            deps.logger.warn({ runId: id, err }, '给 Word/PPT 配 PDF 没做完，照常存产出'),
-          );
-      return { outputs: await archive(sandbox, SANDBOX_PATHS.outputs, `runs/${id}/outputs.tar`) };
+    async save(row, sandbox) {
+      await sandbox
+        ?.exec(['sh', '-c', companionPdfs(SANDBOX_PATHS.outputs)])
+        .catch((err: unknown) =>
+          deps.logger.warn({ runId: row.id, err }, '给 Word/PPT 配 PDF 没做完，照常记产出'),
+        );
+      const executor = ctx.executorOf(row);
+      const place = { workspaceId: row.sessionId ?? row.id, runId: row.id };
+      if (executor.listWorkspace)
+        return { outputs: await executor.listWorkspace(place, SANDBOX_PATHS.outputs) };
+      const archive = await executor.readWorkspace(place, SANDBOX_PATHS.outputs);
+      return { outputs: archive ? await scanArchive(archive, deps.outputMaxBytes) : [] };
     },
 
     /** 用户发的文件和要改的成果：路径已由 conversation 定好、契约校验过 */

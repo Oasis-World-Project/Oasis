@@ -11,7 +11,14 @@ import path from 'node:path';
 import type { DesktopDevice, DesktopProjectFolder } from '@oasis/contracts/desktop';
 import { HarnessMessage, type DeviceMessage } from '@oasis/contracts/device';
 import { WebSocket } from 'ws';
-import { extractTar, packPath, placePath, resolvePlace, type Place } from './device-files.ts';
+import {
+  extractTar,
+  listFiles,
+  packPath,
+  placePath,
+  resolvePlace,
+  type Place,
+} from './device-files.ts';
 import type { DshRuntime } from './dsh-runtime.ts';
 
 /** 一条消息最大多大（harness 一次交来的文件最多 512 MiB，base64 后约 683 MiB） */
@@ -210,6 +217,11 @@ export function createDeviceClient(deps: {
           const place = placeOf(message.folder, message.workspaceId);
           const data = await packPath(placePath(message.path, place));
           return data ? { data: data.toString('base64') } : { ok: false };
+        });
+      case 'list':
+        return reply(message.id, async () => {
+          const place = placeOf(message.folder, message.workspaceId);
+          return { data: JSON.stringify(await listFiles(placePath(message.path, place))) };
         });
       case 'exists':
         return reply(message.id, async () => ({

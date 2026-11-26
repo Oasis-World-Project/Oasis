@@ -11,7 +11,6 @@ import {
   rows,
   events,
   finishes,
-  stored,
   issued,
   revoked,
   PHOTO,
@@ -99,7 +98,7 @@ describe('对话里的一轮：插话、停止和取消', () => {
     expect(finishes[0]?.outcome).toMatchObject({ status: 'cancelled' });
   });
 
-  it('停止：先存下已经做出来的产出，再销毁沙箱；会话留在持久工作目录里，下一轮接着做', async () => {
+  it('停止：先记下已经做出来的产出，再销毁沙箱；会话留在持久工作目录里，下一轮接着做', async () => {
     const run = await service.start({ ...base, prompt: 'SLOW 慢慢做' });
     await until(() => events.find((e) => e.kind === 'user_message'));
     await service.stop(run.id);
@@ -133,15 +132,14 @@ describe('对话里的一轮：插话、停止和取消', () => {
     expect(methods).toContain('session/resume');
   });
 
-  it('冻结失败不归档仍在变动的检查点，并明确告知保存失败', async () => {
+  it('冻结失败不去列仍在变动的产出，并明确告知', async () => {
     fake.pauseFails = true;
     const run = await service.start({ ...base, prompt: 'SLOW 等待' });
     await until(() => events.find((e) => e.kind === 'user_message'));
     await service.stop(run.id);
     const row = await finished(run.id);
-    expect(row.error).toContain('保存失败');
+    expect(row.error).toContain('没能列出');
     expect(lifecycle).not.toContain('archive');
-    expect(stored.has(`runs/${run.id}/outputs.tar`)).toBe(false);
   });
 
   it('沙箱还在启动时被取消：起好后立刻销毁，不再交用户的话', async () => {
@@ -166,7 +164,7 @@ describe('对话里的一轮：插话、停止和取消', () => {
     const row = await until(() =>
       rows.get(queued.id)?.status === 'stopped' ? rows.get(queued.id) : undefined,
     );
-    expect(row.outputKey).toBeNull();
+    expect(row.outputs).toEqual([]);
     expect(started.map((s) => s.runId)).not.toContain(queued.id);
   });
 

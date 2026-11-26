@@ -35,7 +35,7 @@ describe('依赖中断后的原运行接管', () => {
     fake.gatewayOffline = true;
     await until(() => rows.get(run.id)?.status === 'queued' || undefined);
     expect(rows.get(run.id)?.runKeyId).toBeTruthy();
-    expect(rows.get(run.id)?.outputKey).toBeTruthy();
+    expect(rows.get(run.id)?.outputs).toMatchObject([{ path: 'result.md' }]);
     expect(workspaces.has(run.id)).toBe(true);
     expect(finishes).toHaveLength(0);
     const checkpoint = await repo.suspension!(run.id);

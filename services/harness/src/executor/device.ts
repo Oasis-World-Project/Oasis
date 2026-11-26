@@ -8,6 +8,7 @@ import { DeviceMessage, type HarnessMessage } from '@oasis/contracts/device';
 import { DEVICE_OFFLINE, type Workplace } from '@oasis/contracts/harness';
 import { HttpError, readLimited, type Logger } from '@oasis/service-kit';
 import type { WebSocket } from 'ws';
+import { z } from 'zod';
 import type { Executor, Sandbox } from './executor.ts';
 
 type DeviceWorkplace = Extract<Workplace, { kind: 'device' }>;
@@ -22,6 +23,15 @@ const FILES_MAX_BYTES = 512 * 1024 * 1024;
 /** 一轮做到一半电脑断开：这一轮停下，会话还在那台电脑上，下一轮接着做 */
 const DISCONNECTED =
   '你的电脑断开了（桌面版关了或断网），这一轮停在这里；打开桌面版后说「继续」接着做';
+
+/** 电脑列回来的文件清单 */
+const WorkspaceFiles = z.array(
+  z.object({
+    path: z.string().min(1).max(2000),
+    size: z.number().int().nonnegative(),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  }),
+);
 
 type Reply = Extract<DeviceMessage, { type: 'reply' }>;
 interface DeviceRun {
@@ -231,10 +241,22 @@ export function createDeviceHub(deps: {
       async purgeWorkspace(sessionId) {
         await answer({ type: 'purge', id: randomUUID(), workspaceId: sessionId });
       },
-      async readStoredArchive(runId, path) {
+      // 文件就在用户的项目文件夹里：电脑连着就能取，没连上取不到
+      async readWorkspace({ workspaceId }, path) {
         const connection = connections.get(keyOf(userId, deviceId));
-        const run = connection?.runs.get(runId);
-        return connection && run ? read(connection, folder, run.workspaceId, path) : undefined;
+        return connection ? read(connection, folder, workspaceId, path) : undefined;
+      },
+      async listWorkspace({ workspaceId }, path) {
+        const reply = await ask(connected(), {
+          type: 'list',
+          id: randomUUID(),
+          folder,
+          workspaceId,
+          path: toDevice(path),
+        });
+        if (!reply.ok || !reply.data)
+          throw new HttpError(502, 'device_failed', reply.error ?? '你的电脑没能列出文件');
+        return WorkspaceFiles.parse(JSON.parse(reply.data));
       },
     };
   }

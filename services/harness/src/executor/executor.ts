@@ -52,11 +52,33 @@ export interface Executor {
   workspaceExists(sessionId: string): Promise<boolean>;
   purgeWorkspace(sessionId: string): Promise<void>;
   environment?(): Promise<ExecutionEnvironment>;
-  readStoredArchive?(runId: string, path: string): Promise<Readable | undefined>;
+  /**
+   * 把这个会话工作目录里的一个路径打成 tar 流取出，这一轮在不在跑都能取；取不到（路径不在、工作目录
+   * 不在了）返回 undefined
+   */
+  readWorkspace(place: WorkspaceRef, path: string): Promise<Readable | undefined>;
+  /**
+   * 列出工作目录里一个目录下的文件和摘要（路径相对这个目录）。文件不在平台这边的地方（用户电脑）自己列，
+   * 内容不用搬过来；没有这一项的由调用方取出来扫一遍
+   */
+  listWorkspace?(place: WorkspaceRef, path: string): Promise<WorkspaceFile[]>;
+}
+
+/** 哪个会话的工作目录；runId 是最近在里面干活的那一轮（它的沙箱还在就直接从沙箱里读） */
+interface WorkspaceRef {
+  workspaceId: string;
+  runId: string;
+}
+export interface WorkspaceFile {
+  path: string;
+  size: number;
+  sha256: string;
 }
 
 const LABEL_COMPONENT = 'oasis.component=harness-sandbox';
 const LABEL_RUN = 'oasis.run-id';
+/** 一轮结束后读工作目录用的临时容器（只读挂着这个会话的卷，不启动） */
+const LABEL_READER = 'oasis.component=harness-reader';
 const volumeNames = (id: string) => {
   if (!/^[\w-]+$/.test(id)) throw new Error('工作目录身份不合法');
   return [`oasis-workspace-${id}`, `oasis-sessions-${id}`];
@@ -100,6 +122,8 @@ export function createDockerExecutor(deps: {
   const { docker } = deps;
   const instanceId = randomUUID();
   let detected: { imageId: string; value: Promise<ExecutionEnvironment> } | undefined;
+  /** 正在删的读文件临时容器：删卷前等它们删完 */
+  const dropping = new Set<Promise<void>>();
   async function probe(imageId: string): Promise<ExecutionEnvironment> {
     const script = `const {spawnSync}=require('node:child_process');const fs=require('node:fs');const software={};for(const [key,bin,args] of [['node','node',['--version']],['python','python3',['--version']],['blender','blender',['--version']],['ffmpeg','ffmpeg',['-version']],['libreoffice','libreoffice',['--version']],['pdf','pdftoppm',['-v']],['browser','chromium',['--version']],['git','git',['--version']],['pandoc','pandoc',['--version']],['sqlite','sqlite3',['--version']],['jq','jq',['--version']],['imagemagick','magick',['-version']],['sox','sox',['--version']],['ripgrep','rg',['--version']],['esbuild','esbuild',['--version']],['typescript','tsc',['--version']]]){const r=spawnSync(bin,args,{encoding:'utf8',timeout:15000});if(r.status===0)software[key]=(r.stdout||r.stderr).split('\\n')[0]}const pixelFont=['/usr/share/fonts/opentype/unifont/unifont.otf','/usr/share/fonts/truetype/unifont/unifont.ttf'].find(p=>fs.existsSync(p));process.stdout.write(JSON.stringify({software,capabilities:Object.keys(software),notes:['沙箱仅经代理访问模型、工具和获准的软件包源。',software.browser?'沙箱里有 Chromium（命令 chromium，没有显卡，3D 画面靠 CPU 画）和 playwright-core（chromium.launch() 直接可用），可以打开自己做的页面操作、读页面状态、截图；沙箱不通外网，打不开外站。':'沙箱里没有浏览器。',...(pixelFont?['预装的字体在 /usr/share/fonts 下，可以拷进成果或取子集后内嵌：Noto CJK（中日韩）、点阵像素字体 Unifont（16×16，含中文，'+pixelFont+'）。']:[]),'可运行应用应交齐 oasis-app.json 与配套文件；oasis-tool app.check --dir out/<应用目录> 按画布的方式打开它跑一遍；外站测试只使用目录中可用的 website.test。','项目依赖应装入 /workspace，例如项目 node_modules 或 .venv，才能随工作目录恢复。']}))`;
     const { Id: id } = await docker.createContainer(`oasis-probe-${randomUUID()}`, {
@@ -298,17 +322,50 @@ export function createDockerExecutor(deps: {
       }
       return { endedAt: ended, ...(cores ? { cores } : {}) };
     },
-    async readStoredArchive(runId, path) {
+    async readWorkspace({ workspaceId, runId }, path) {
       const box = (await docker.listContainers(LABEL_COMPONENT)).find(
         (c) => c.Labels[LABEL_RUN] === runId,
       );
-      return box ? docker.getArchive(box.Id, path) : undefined;
+      if (box) return docker.getArchive(box.Id, path);
+      // 这一轮的沙箱已经销毁，文件在这个会话的卷里：建一个不启动的容器只读挂上卷来取，取完就删
+      const [name] = volumeNames(workspaceId);
+      if ((await docker.volume(name!))?.Labels?.['oasis.session-id'] !== workspaceId)
+        return undefined;
+      const { Id: id } = await docker.createContainer(`oasis-read-${randomUUID()}`, {
+        Image: deps.image,
+        Labels: {
+          'oasis.component': 'harness-reader',
+          'oasis.instance-id': instanceId,
+          'oasis.session-id': workspaceId,
+        },
+        HostConfig: {
+          Mounts: [{ Type: 'volume', Source: name!, Target: deps.workdir, ReadOnly: true }],
+          NetworkMode: 'none',
+        },
+      });
+      const drop = () => {
+        const removing = docker.removeContainer(id).catch(() => undefined);
+        dropping.add(removing);
+        void removing.finally(() => dropping.delete(removing));
+      };
+      const stream = await docker.getArchive(id, path).catch((err: unknown) => {
+        drop();
+        throw err;
+      });
+      if (stream) stream.once('close', drop);
+      else drop();
+      return stream;
     },
     async workspaceExists(sessionId) {
       const volumes = await Promise.all(volumeNames(sessionId).map((name) => docker.volume(name)));
       return volumes.every((v) => v?.Labels?.['oasis.session-id'] === sessionId);
     },
     async purgeWorkspace(sessionId) {
+      // 正在读这个卷的临时容器（读的人还没读完或刚读完）先删掉，不然卷删不了
+      for (const reader of await docker.listContainers(LABEL_READER))
+        if (reader.Labels['oasis.session-id'] === sessionId)
+          await docker.removeContainer(reader.Id);
+      await Promise.all(dropping);
       for (const name of volumeNames(sessionId)) {
         const volume = await docker.volume(name);
         if (volume?.Labels?.['oasis.session-id'] === sessionId) await docker.removeVolume(name);
@@ -318,8 +375,12 @@ export function createDockerExecutor(deps: {
     async removeOrphans(keep) {
       const containers = await docker.listContainers(LABEL_COMPONENT);
       const orphans = containers.filter((c) => !keep.has(c.Labels[LABEL_RUN] ?? ''));
-      const probes = await docker.listContainers('oasis.component=harness-probe');
-      orphans.push(...probes.filter((c) => c.Labels['oasis.instance-id'] !== instanceId));
+      for (const label of ['oasis.component=harness-probe', LABEL_READER])
+        orphans.push(
+          ...(await docker.listContainers(label)).filter(
+            (c) => c.Labels['oasis.instance-id'] !== instanceId,
+          ),
+        );
       for (const container of orphans) await docker.removeContainer(container.Id);
       return orphans.length;
     },

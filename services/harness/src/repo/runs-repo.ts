@@ -22,19 +22,9 @@ type NewRun = Pick<
   | 'workplace'
 >;
 type RunPatch = Partial<
-  Pick<
-    Run,
-    | 'status'
-    | 'error'
-    | 'containerId'
-    | 'runKeyId'
-    | 'startedAt'
-    | 'outputs'
-    | 'outputKey'
-    | 'summary'
-  >
+  Pick<Run, 'status' | 'error' | 'containerId' | 'runKeyId' | 'startedAt' | 'outputs' | 'summary'>
 >;
-export type RunOutcome = Pick<Run, 'status' | 'error' | 'outputs' | 'outputKey' | 'summary'> & {
+export type RunOutcome = Pick<Run, 'status' | 'error' | 'outputs' | 'summary'> & {
   finishedAt: Date;
 };
 

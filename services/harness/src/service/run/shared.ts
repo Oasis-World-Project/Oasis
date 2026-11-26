@@ -1,4 +1,4 @@
-// 运行服务（run-service.ts）分成几块：执行一次运行（execute）、沙箱和对象存储之间搬文件（storage）、
+// 运行服务（run-service.ts）分成几块：执行一次运行（execute）、一轮的产出清单和素材（storage）、
 // 停止 / 取消 / 重启接管（control）、读产出和过程（outputs）。各块通过同一个 RunContext 互相调用，
 // 这里只放它们共用的类型、状态和小工具，免得文件之间循环 import。
 import type { Readable } from 'node:stream';
@@ -15,7 +15,7 @@ import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
 import type { Logger, ObjectStore, ServiceClient, StreamFile } from '@oasis/service-kit';
 import type { AgentConnection, AgentGuide, SandboxPackages } from '../../adapter/dsh.ts';
 import type { DeviceHub } from '../../executor/device.ts';
-import type { Executor, Sandbox } from '../../executor/executor.ts';
+import type { Executor, Sandbox, WorkspaceFile } from '../../executor/executor.ts';
 import type { Run, RunOutcome, RunsRepo } from '../../repo/runs-repo.ts';
 import type { SandboxFiles } from '../guide.ts';
 
@@ -57,7 +57,7 @@ type Status = RunBody['status'];
 
 /** 放进 out/ 的占位文件：保证目录存在且属于沙箱用户，不算产出 */
 export const KEEP_FILE = '.oasis-keep';
-/** 批次恢复状态、工具的中间文件在 out/ 里，会随产出包存下，但不是成果。 */
+/** 批次恢复状态、工具的中间文件在 out/ 里，但不是成果。 */
 export const isPrivateOutput = (path: string) =>
   path === KEEP_FILE ||
   ['.oasis-batches', '.oasis-tools'].some((dir) => path === dir || path.startsWith(`${dir}/`));
@@ -104,8 +104,9 @@ export const newLiveRun = (nextSeq: number, sessionId: string): LiveRun => ({
   sessionId,
 });
 
+/** 一轮结束时 out/ 里有什么（清单；文件留在工作目录里） */
 export interface Saved {
-  outputs?: { key: string; files: { path: string; size: number }[] };
+  outputs?: WorkspaceFile[];
 }
 
 /** 取消、停止、超时、服务关闭时中止运行的原因 */
@@ -119,8 +120,7 @@ export class StopRun extends Error {
 
 /** 存下来的产出 → 运行结局里的字段 */
 export const savedOutcome = (saved: Saved) => ({
-  outputs: saved.outputs?.files.filter((f) => !isPrivateOutput(f.path)) ?? [],
-  outputKey: saved.outputs?.key ?? null,
+  outputs: saved.outputs?.filter((f) => !isPrivateOutput(f.path)) ?? [],
 });
 
 /** resumable：这次运行的持久工作目录还在，可以接着它的会话做 */
@@ -238,14 +238,10 @@ export interface RunContext {
 
   // ---- 搬文件（storage.ts）
   /**
-   * 取出产出（会话和工作目录在持久卷里，不用存）。companions：正常做完时先给 out/ 里的
-   * Word、PPT 配一份同名 PDF（画布按它预览，和下载的样子一致）；沙箱要在运行才能转。
+   * 列出这一轮 out/ 的清单。sandbox：正常做完时给，先在里面给 Word、PPT 配一份同名 PDF（画布按它
+   * 预览，和下载的样子一致；沙箱要在运行才能转）。
    */
-  save(
-    sandbox: Pick<Sandbox, 'readArchive'> & Partial<Pick<Sandbox, 'exec'>>,
-    id: string,
-    options?: { companions?: boolean },
-  ): Promise<Saved>;
+  save(row: Run, sandbox?: Pick<Sandbox, 'exec'>): Promise<Saved>;
   /** 用户给的素材：向 canvas 取出来，放到 materials/ 下 */
   materialFiles(materials: Material[], runId: string, ownerId: string): Promise<StreamFile[]>;
 

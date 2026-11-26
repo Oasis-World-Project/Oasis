@@ -1,9 +1,10 @@
 // 对话里主 AI 的一轮 = 一次运行。完整生命周期：
 // 排队 → 签发临时 Key → 起沙箱（挂上这个会话的持久工作目录）、放入说明和用户发的文件 → dsh 握手、
-// 接着原会话、交用户的话 → 记录事件 → 等这一轮做完（期间可插话）→ 取出产出存进对象存储
+// 接着原会话、交用户的话 → 记录事件 → 等这一轮做完（期间可插话）→ 记下 out/ 的清单
 // → 销毁沙箱、作废 Key → 写结局。
 // 工作目录和 dsh 会话在持久卷里，沙箱销毁后还在：下一轮用 continueFrom 接着原会话做，AI 记得之前的事。
-// 对象存储只存每轮的产出，不存会话。持久卷不在了就接不上（409 workspace_unavailable），由调用方开新会话。
+// 产出的文件留在工作目录里，这一轮上只记清单；画布登记成果时从工作目录现取（run/outputs.ts）。
+// 持久卷不在了就接不上（409 workspace_unavailable），由调用方开新会话。
 // 这里是对外接口和登记新运行；执行、搬文件、停止与接管、读产出分别在 run/ 下。
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -80,7 +81,7 @@ export function createRunService(deps: RunDeps) {
     const workplace = requestOf(body).workplace;
     if (!isDeepStrictEqual(previous.workplace ?? { kind: 'cloud' }, workplace))
       throw new HttpError(409, WORKSPACE_UNAVAILABLE, '换了干活的地方，接不上原会话');
-    // 只有对象存储里的产出、没有会话，不能冒充接着原会话做
+    // 工作目录不在了就没有会话，不能冒充接着原会话做
     if (!(await executorOf(previous).workspaceExists(session)))
       throw new HttpError(409, WORKSPACE_UNAVAILABLE, '原会话的工作目录已经不在了，接不上原会话');
     const history = await repo.listBySession(session);
@@ -160,13 +161,14 @@ export function createRunService(deps: RunDeps) {
     },
 
     /**
-     * 删对话、开新话题（用户删除就是真删除）：删掉这个对话已结束的运行的产出包、运行记录和持久工作目录。
+     * 删对话、开新话题（用户删除就是真删除）：删掉这个对话已结束的运行记录和持久工作目录。
      * 还有没结束的运行时什么都不删，返回 false（调用方先停下那一轮再删）。会话在用户电脑上而那台电脑
      * 没连上的，留在那台电脑上（记一条日志），其余照删。
      */
     async purgeConversation(conversationId: string): Promise<boolean> {
       const rows = await repo.listByConversation(conversationId);
       if (rows.some((row) => ['queued', 'starting', 'running'].includes(row.status))) return false;
+      // 2026-11-26 以前的一轮在对象存储里有一份产出包，一起删
       for (const row of rows) if (row.outputKey) await store.delete(row.outputKey);
       const bySession = new Map(rows.map((r) => [r.sessionId ?? r.id, r]));
       for (const [sessionId, row] of bySession)

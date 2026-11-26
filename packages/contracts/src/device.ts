@@ -41,6 +41,17 @@ export const HarnessMessage = z.discriminatedUnion('type', [
     workspaceId: Name,
     path: z.string().min(1).max(2000),
   }),
+  /**
+   * 列出一个目录里的文件（reply.data 是 JSON：[{ path, size, sha256 }]，path 相对这个目录；目录不在时是空的）。
+   * 一轮结束时列 out/：平台只记清单，文件留在电脑上，画布要哪个再取哪个
+   */
+  z.object({
+    type: z.literal('list'),
+    id: z.string(),
+    folder: z.string().min(1).max(1000),
+    workspaceId: Name,
+    path: z.string().min(1).max(2000),
+  }),
   /** 这个会话的 dsh 记录还在不在（接着原会话做之前问） */
   z.object({ type: z.literal('exists'), id: z.string(), workspaceId: Name }),
   /** 删掉这个会话的 dsh 家目录（删对话、开新话题） */
@@ -63,7 +74,7 @@ export const DeviceMessage = z.discriminatedUnion('type', [
   z.object({ type: z.literal('exit'), runId: RunId, code: z.number().int().nullable() }),
   /** 准备中的进展（第一次装 dsh 要几分钟），harness 记进这一轮的进度 */
   z.object({ type: z.literal('progress'), runId: RunId, status: z.string().max(100) }),
-  /** 对 start、read、exists、purge 的回答 */
+  /** 对 start、read、list、exists、purge 的回答 */
   z.object({
     type: z.literal('reply'),
     id: z.string(),

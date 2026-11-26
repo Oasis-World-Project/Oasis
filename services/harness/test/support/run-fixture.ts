@@ -45,7 +45,7 @@ export async function tarEntries(tar: Buffer | Readable) {
   return files;
 }
 
-/** 假执行器：每个沙箱里跑一个假 dsh；产出目录里有 result.md */
+/** 假执行器：每个沙箱里跑一个假 dsh；工作目录的 out/ 里有 result.md */
 export const started: SandboxSpec[] = [];
 export const destroyed: string[] = [];
 export const lifecycle: string[] = [];
@@ -53,8 +53,33 @@ export let orphansRemoved: ReadonlySet<string> | undefined;
 export const workspaces = new Set<string>();
 /** 运行中又放进沙箱的文件 */
 export const puts: { dir: string; files: { path: string; content: Buffer }[] }[] = [];
+/** 假沙箱和假工作目录里取出来的 tar：取目录时里面有 result.md，会话目录里还有原生会话记录 */
+async function archiveOf(path: string, workspaceId: string) {
+  lifecycle.push('archive');
+  await sleep(fake.archiveDelayMs);
+  const dir = path.split('/').at(-1) ?? 'x';
+  if (dir === 'sessions' && fake.noNativeSession) return undefined;
+  // 取单个文件：和 Docker 一样，包里只有这个文件
+  if (dir.includes('.'))
+    return Readable.from([await packFiles([{ path: dir, content: Buffer.from('# 成果') }])]);
+  // 接管时 harness 看持久卷里有没有原生会话记录
+  const extra =
+    dir === 'sessions'
+      ? [
+          {
+            path: `sessions/--workspace--/${workspaceId}/session.v4.jsonl.zstd`,
+            content: Buffer.from('native-fixture'),
+          },
+        ]
+      : [{ path: 'out/.oasis-batches/batch/meta.json', content: Buffer.from('{"rows":[]}') }];
+  return Readable.from([
+    await packFiles([{ path: `${dir}/result.md`, content: Buffer.from('# 成果') }, ...extra]),
+  ]);
+}
+
 export const executor: Executor = {
   check: async () => {},
+  readWorkspace: (place, path) => archiveOf(path, place.workspaceId),
   workspaceExists: async (id) => workspaces.has(id),
   suspend: async () => ({ endedAt: new Date(), cores: 2 }),
   purgeWorkspace: async (id) => {
@@ -86,25 +111,7 @@ export const executor: Executor = {
       stderr: new PassThrough(),
       exec: async (cmd) => void lifecycle.push(`exec ${cmd.join(' ')}`),
       put: async (dir, tar) => void puts.push({ dir, files: await tarEntries(tar) }),
-      async readArchive(path) {
-        lifecycle.push('archive');
-        await sleep(fake.archiveDelayMs);
-        const dir = path.split('/').at(-1) ?? 'x';
-        if (dir === 'sessions' && fake.noNativeSession) return undefined;
-        // 接管时 harness 看持久卷里有没有原生会话记录
-        const extra =
-          dir === 'sessions'
-            ? [
-                {
-                  path: `sessions/--workspace--/${spec.workspaceId}/session.v4.jsonl.zstd`,
-                  content: Buffer.from('native-fixture'),
-                },
-              ]
-            : [{ path: 'out/.oasis-batches/batch/meta.json', content: Buffer.from('{"rows":[]}') }];
-        return Readable.from([
-          await packFiles([{ path: `${dir}/result.md`, content: Buffer.from('# 成果') }, ...extra]),
-        ]);
-      },
+      readArchive: (path) => archiveOf(path, spec.workspaceId),
       async destroy() {
         lifecycle.push('destroy');
         destroyed.push(spec.runId);
@@ -196,7 +203,7 @@ export const repo: RunsRepo = {
   },
 };
 
-export const stored = new Map<string, Buffer>();
+const stored = new Map<string, Buffer>();
 const store: ObjectStore = {
   sign: async (key, method, expiresIn) =>
     `http://s3.test/oasis-harness/${key}?method=${method}&expires=${expiresIn}`,

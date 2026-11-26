@@ -14,7 +14,6 @@ import {
   rows,
   events,
   finishes,
-  stored,
   issued,
   revoked,
   compute,
@@ -27,6 +26,7 @@ import {
   finished,
   base,
   tarEntries,
+  until,
 } from './support/run-fixture.ts';
 
 const UPLOADER = '6e6e6e6e-6e6e-4e6e-8e6e-6e6e6e6e6e6e';
@@ -58,13 +58,11 @@ describe('对话里的一轮：输入和产出', () => {
 
     expect(row.status).toBe('succeeded');
     expect(row.outputs).toMatchObject([{ path: 'result.md', size: Buffer.byteLength('# 成果') }]);
-    // 存产出前先给 Word、PPT 配同名 PDF（画布按 PDF 预览）
+    // 记产出清单前先给 Word、PPT 配同名 PDF（画布按 PDF 预览）
     expect(lifecycle.slice(0, 2)).toEqual([
       expect.stringMatching(/^exec sh -c [\s\S]*soffice --headless/),
       'archive',
     ]);
-    // 会话在持久工作目录里，对象存储只存产出
-    expect([...stored.keys()]).toEqual([`runs/${run.id}/outputs.tar`]);
     expect(started[0]).toMatchObject({ workspaceId: run.id, restore: false });
     // 平台说明（开头是这个 AI 的人设）和技能每轮放进 dsh 的用户目录
     const guide = await tarEntries(placed(0, SANDBOX_PATHS.dshHome));
@@ -114,7 +112,7 @@ describe('对话里的一轮：输入和产出', () => {
     expect((await service.events(run.id, -1, 100))[0]?.data).toEqual({ status: 'admitted' });
   });
 
-  it('删对话：这个对话的产出包、运行记录和持久工作目录都删掉；还有一轮没结束就先不删；别的对话不动', async () => {
+  it('删对话：这个对话的运行记录和持久工作目录都删掉；还有一轮没结束就先不删；别的对话不动', async () => {
     const kept = await service.start({
       ...base,
       conversationId: OTHER_CONVERSATION,
@@ -130,7 +128,6 @@ describe('对话里的一轮：输入和产出', () => {
 
     expect(await service.purgeConversation(CONVERSATION)).toBe(true);
     expect([...rows.keys()]).toEqual([kept.id]);
-    expect([...stored.keys()]).toEqual([`runs/${kept.id}/outputs.tar`]);
     expect([...workspaces]).toEqual([kept.id]);
     // 再删一次也不报错
     expect(await service.purgeConversation(CONVERSATION)).toBe(true);
@@ -222,33 +219,37 @@ describe('对话里的一轮：输入和产出', () => {
       });
   });
 
-  it('一轮还没收尾时读产出文件（做好一个就登记进画布）：从沙箱的 out/ 里读，没有摘要', async () => {
-    const run = await service.start({ ...base, prompt: '写' });
-    await finished(run.id);
-    rows.get(run.id)!.outputKey = null;
-    executor.readStoredArchive = async (_id, path) =>
+  it('一轮还没收尾时读产出文件（做好一个就登记进画布）：清单还没有，工作目录里有就给', async () => {
+    const run = await service.start({ ...base, prompt: 'SLOW 慢慢做' });
+    await until(() => events.find((e) => e.kind === 'user_message'));
+    const original = executor.readWorkspace;
+    executor.readWorkspace = async (_place, path) =>
       path === `${SANDBOX_PATHS.workdir}/out/素材/帧.png`
         ? Readable.from([await packFiles([{ path: '帧.png', content: Buffer.from('png') }])])
         : undefined;
     try {
       const file = await service.fileStream(run.id, '素材/帧.png');
-      expect(file).toMatchObject({ size: 3, contentType: 'image/png', sha256: undefined });
+      expect(file).toMatchObject({ size: 3, contentType: 'image/png' });
       expect(Buffer.concat(await file.content.toArray()).toString()).toBe('png');
       await expect(service.fileStream(run.id, 'missing.png')).rejects.toMatchObject({
         statusCode: 404,
       });
     } finally {
-      delete executor.readStoredArchive;
+      executor.readWorkspace = original;
+      await service.cancel(run.id);
+      await finished(run.id);
     }
   });
 
-  it('读这一轮工作目录里的一个文件：沙箱还在就从沙箱读（只给普通文件），收尾后只剩 out/ 里的', async () => {
+  it('读这一轮工作目录里的一个文件：从工作目录里现读，只给普通文件', async () => {
     const run = await service.start({ ...base, prompt: '写' });
     await finished(run.id);
     const read = async (stream: Readable) => Buffer.concat(await stream.toArray()).toString();
-    // 沙箱还在：Docker 取单个文件得到的 tar 里只有这个文件
+    // Docker 取单个文件得到的 tar 里只有这个文件
     const asked: string[] = [];
-    executor.readStoredArchive = async (_id, path) => {
+    const original = executor.readWorkspace;
+    executor.readWorkspace = async (place, path) => {
+      expect(place).toEqual({ workspaceId: run.id, runId: run.id });
       asked.push(path);
       if (path.endsWith('missing.png')) return undefined;
       const files = path.endsWith('folder')
@@ -271,14 +272,7 @@ describe('对话里的一轮：输入和产出', () => {
         statusCode: 400,
       });
     } finally {
-      delete executor.readStoredArchive;
+      executor.readWorkspace = original;
     }
-    // 沙箱没了：从产出包读 out/ 下的，别处的 404
-    expect(await read((await service.workspaceFile(run.id, 'out/result.md')).content)).toBe(
-      '# 成果',
-    );
-    await expect(service.workspaceFile(run.id, 'notes.md')).rejects.toMatchObject({
-      statusCode: 404,
-    });
   });
 });

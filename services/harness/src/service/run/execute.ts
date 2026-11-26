@@ -1,6 +1,6 @@
 // 执行一轮：排队 → 签发临时 Key、冻结算力 → 起沙箱（挂上这个会话的持久工作目录）、放入平台说明、
 // 技能和用户发的文件 → dsh 握手、接着原会话、交用户的话 → 记录事件 → 等这一轮做完（期间可插话）
-// → 给 Word/PPT 配 PDF、取出产出存进对象存储 → 销毁沙箱、作废 Key、结算算力 → 写结局。
+// → 给 Word/PPT 配 PDF、记下 out/ 的清单 → 销毁沙箱、作废 Key、结算算力 → 写结局。
 // 依赖暂时不可用时保存原会话，等接管（control.ts）。
 import { ExecutionModels, RunKeyCreated } from '@oasis/contracts/model-gateway';
 import { HttpError, packFiles, packStreams, scanArchive } from '@oasis/service-kit';
@@ -168,7 +168,6 @@ export function createExecution(
         status: 'failed',
         error: null,
         outputs: [],
-        outputKey: null,
         summary: null,
       };
       const unavailable = (error: unknown) => error instanceof HttpError && error.statusCode >= 500;
@@ -287,10 +286,10 @@ export function createExecution(
           () => {
             const reason: unknown = run.abort.signal.reason;
             if (reason instanceof StopRun && reason.status !== 'cancelled') {
-              // 停止：先把已经做出来的东西存下来，再销毁沙箱
+              // 停止：先记下已经做出来的东西，再销毁沙箱
               run.saved = box
                 .pause()
-                .then(() => ctx.save(box, id))
+                .then(() => ctx.save(row))
                 .finally(async () => {
                   await box.destroy();
                   sandboxEndedAt ??= Date.now();
@@ -326,7 +325,7 @@ export function createExecution(
         });
         stopped();
 
-        const saved = await ctx.save(sandbox, id, { companions: true });
+        const saved = await ctx.save(row, sandbox);
         await agent.shutdown().catch(() => undefined);
         Object.assign(outcome, {
           status: failure ? 'failed' : 'succeeded',
@@ -341,8 +340,8 @@ export function createExecution(
           if (run.saved) {
             const saved = await run.saved.catch((saveErr: unknown) => {
               checkpointFailed = true;
-              logger.warn({ err: saveErr, runId: id }, '停止时保存产出失败');
-              outcome.error = '已停止，但进度保存失败，不能保证恢复';
+              logger.warn({ err: saveErr, runId: id }, '停止时没能列出产出');
+              outcome.error = '已停止，但没能列出已经做出的文件（文件还在工作目录里）';
               return {};
             });
             Object.assign(outcome, savedOutcome(saved));
@@ -356,7 +355,7 @@ export function createExecution(
           const box = sandbox;
           await box
             .pause()
-            .then(() => ctx.save(box, id))
+            .then(() => ctx.save(row))
             .then((saved) => Object.assign(outcome, savedOutcome(saved)))
             .catch((err: unknown) => logger.warn({ err, runId: id }, '失败时保存进度失败'));
         }
@@ -418,7 +417,6 @@ export function createExecution(
           // 撤销失败时保留旧 Key 标识，接管须先真正作废它再发新凭证。
           runKeyId: keyRevoked ? null : (keyId ?? row.runKeyId),
           outputs: outcome.outputs,
-          outputKey: outcome.outputKey,
           summary: outcome.summary,
         });
       } else await ctx.finish(row, outcome);

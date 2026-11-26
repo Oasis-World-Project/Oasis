@@ -42,14 +42,7 @@ export function createControl(ctx: RunContext) {
     const stored = await repo.control(row.id);
     const how = state.controlRequests.get(row.id) ?? stored;
     if (!how) return false;
-    const executor = ctx.executorOf(row);
-    const saved =
-      how === 'stop' && executor.readStoredArchive
-        ? await ctx.save(
-            { readArchive: (path) => executor.readStoredArchive!(row.id, path) },
-            row.id,
-          )
-        : {};
+    const saved = how === 'stop' ? await ctx.save(row) : {};
     await deps.modelGateway.json('POST', `/internal/v1/tools/runs/${row.id}/cancel`, {
       body: {},
       requestId: row.id,
@@ -60,8 +53,7 @@ export function createControl(ctx: RunContext) {
     await ctx.finish(row, {
       status: latest === 'cancel' ? 'cancelled' : 'stopped',
       error: latest === 'cancel' ? '已取消' : '已停止',
-      outputs: saved.outputs?.files.filter((f) => !isPrivateOutput(f.path)) ?? row.outputs,
-      outputKey: saved.outputs?.key ?? row.outputKey,
+      outputs: saved.outputs?.filter((f) => !isPrivateOutput(f.path)) ?? row.outputs,
       summary: row.summary,
     });
     state.controlRequests.delete(row.id);
@@ -140,7 +132,6 @@ export function createControl(ctx: RunContext) {
         status: 'failed',
         error: '恢复状态不可用：' + (err instanceof Error ? err.message : String(err)),
         outputs: row.outputs,
-        outputKey: row.outputKey,
         summary: row.summary,
       });
       return;
@@ -158,7 +149,7 @@ export function createControl(ctx: RunContext) {
 
   return {
     /**
-     * 停止：排队中的不再开始；运行中的先存下产出再销毁沙箱（会话和工作目录在持久卷里），之后可以接着做。
+     * 停止：排队中的不再开始；运行中的先记下产出清单再销毁沙箱（会话和工作目录在持久卷里），之后可以接着做。
      * 已经在收尾（马上就成功了）或已结束的不受影响，不报错。
      */
     stop: (id: string) => control(id, 'stop'),

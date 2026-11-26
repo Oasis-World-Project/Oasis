@@ -71,11 +71,7 @@ export function registerRoutes(app: ServiceApp, runs: RunService): void {
   app.get('/internal/runs/:runId/files/*', async (request, reply) => {
     const { runId, '*': path } = parseWith(FileParams, request.params);
     const file = await runs.fileStream(runId, path);
-    return reply
-      .type(file.contentType)
-      .header('content-length', file.size)
-      .header('x-oasis-file-sha256', file.sha256 ?? '')
-      .send(file.content);
+    return reply.type(file.contentType).header('content-length', file.size).send(file.content);
   });
 
   /** 读这一轮工作目录里的一个文件（相对 /workspace）：进度页预览中间产物 */
@@ -101,7 +97,7 @@ export function registerRoutes(app: ServiceApp, runs: RunService): void {
     return reply.code(204).send();
   });
 
-  /** 停止：存下产出（会话留在持久工作目录里），下一轮接着做 */
+  /** 停止：记下已有的产出（会话留在持久工作目录里），下一轮接着做 */
   app.post('/internal/runs/:runId/stop', async (request, reply) => {
     const { runId } = parseWith(RunParams, request.params);
     await runs.stop(runId);
@@ -114,7 +110,7 @@ export function registerRoutes(app: ServiceApp, runs: RunService): void {
     return reply.code(202).send();
   });
 
-  /** 删对话、开新话题：删掉这个对话的运行记录、产出包和持久工作目录（真删除，可重复调用） */
+  /** 删对话、开新话题：删掉这个对话的运行记录和持久工作目录（真删除，可重复调用） */
   app.post('/internal/conversations/:conversationId/purge', async (request, reply) => {
     const { conversationId } = parseWith(ConversationParams, request.params);
     if (!(await runs.purgeConversation(conversationId)))

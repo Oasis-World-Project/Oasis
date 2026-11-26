@@ -1,6 +1,7 @@
 // 在你的电脑上干活时的文件：harness 发来的 tar 包放进项目的 .oasis/ 和这个会话的 dsh 家目录；要取回的目录
 // 或文件打成 tar（和 Docker 取出的格式一样：条目以被取的目录或文件的名字开头）。路径里的 {project}、{home}、
 // {origin} 换成实际的；平台只碰这两个地方，跳不出去，链接之类的不跟。
+import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { lstat, mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -111,4 +112,25 @@ export async function packPath(
   }
   await collecting;
   return Buffer.concat(chunks);
+}
+
+/** 列出 target 目录里的普通文件（路径相对它，用 / 分隔），各算一遍 sha256；目录不在时是空的 */
+export async function listFiles(
+  target: string,
+): Promise<{ path: string; size: number; sha256: string }[]> {
+  const files: { path: string; size: number; sha256: string }[] = [];
+  const walk = async (dir: string, prefix: string) => {
+    for (const name of (await readdir(dir).catch(() => [])).sort()) {
+      const file = path.join(dir, name);
+      const info = await lstat(file).catch(() => undefined);
+      if (info?.isDirectory()) await walk(file, `${prefix}${name}/`);
+      else if (info?.isFile()) {
+        const hash = createHash('sha256');
+        for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
+        files.push({ path: prefix + name, size: info.size, sha256: hash.digest('hex') });
+      }
+    }
+  };
+  await walk(target, '');
+  return files;
 }

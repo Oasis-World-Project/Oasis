@@ -1,4 +1,4 @@
-// 真删除一段对话在别的服务里的东西：先取消正在进行的一轮并等它收尾，再清 harness 的运行记录、产出包和
+// 真删除一段对话在别的服务里的东西：先取消正在进行的一轮并等它收尾，再清 harness 的运行记录和
 // 持久工作目录，model-gateway 的工具结果，画布里的成果。删私聊、群里移出 AI、解散群都用它。
 import { setTimeout as sleep } from 'node:timers/promises';
 import { RunBody } from '@oasis/contracts/harness';
