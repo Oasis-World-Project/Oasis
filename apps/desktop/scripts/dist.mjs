@@ -165,7 +165,9 @@ await pack({
     ],
     win: { target: [{ target: 'nsis', arch: ['x64'] }] },
     nsis: {
-      oneClick: true,
+      // 带向导的安装：可以改安装位置（默认还是当前用户的 %LOCALAPPDATA%\Programs\Oasis）
+      oneClick: false,
+      allowToChangeInstallationDirectory: true,
       perMachine: false,
       // 只装到当前用户名下，用不到提权的小工具（它还常被杀毒软件拦下，打包会卡在复制它这一步）
       packElevateHelper: false,

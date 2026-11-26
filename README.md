@@ -29,7 +29,7 @@ $env:OASIS_RELEASE_WEB_URL = 'https://<线上的网址>'   # 装好的桌面版�
 pnpm desktop:dist                                       # 只能在 Windows 上跑；安装包在 apps/desktop/release/
 ```
 
-安装包（NSIS，约 200 MB，装好约 900 MB、两万五千个文件，安装要三四分钟）装到当前用户名下，不要管理员权限；自带 Node 和 dsh，「在我的电脑上干活」不用用户另装东西。没有签名（安装时 Windows 会提示「未知发布者」），不带自动更新。第一次打包要下载 Node（校验 SHA-256）、装 dsh（约 2 分钟），每次打包压缩约 10 分钟；下载慢时可以设 `OASIS_NODE_DIST`、`ELECTRON_BUILDER_BINARIES_MIRROR` 指到镜像站。
+安装包（NSIS，约 200 MB，装好约 900 MB、两万五千个文件，安装要三四分钟）带安装向导，可以改安装位置（默认装到当前用户名下），不要管理员权限；自带 Node 和 dsh，「在我的电脑上干活」不用用户另装东西。没有签名（安装时 Windows 会提示「未知发布者」），不带自动更新。第一次打包要下载 Node（校验 SHA-256）、装 dsh（约 2 分钟），每次打包压缩约 10 分钟；下载慢时可以设 `OASIS_NODE_DIST`、`ELECTRON_BUILDER_BINARIES_MIRROR` 指到镜像站。
 
 ### 登录与接入模型
 
