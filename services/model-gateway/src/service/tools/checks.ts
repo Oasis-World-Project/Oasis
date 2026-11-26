@@ -123,7 +123,7 @@ export const appCheck: ToolDef = {
   description:
     '把 out/ 里的网页应用（带 oasis-app.json）放进隔离浏览器里打开，按 oasis-test.json 操作，当场返回页面报错和没通过的步骤；给了 --out 就把完整报告（JSON）存进去，平台截的画面（打开后的首屏 opening.jpg、测试里 screenshot 步骤和没通过那一步的截图）存在报告旁边，名字是「报告名-截图名」。',
   usage:
-    'oasis-tool app.check --dir out/site [--out out/检查报告.json]（--dir 是 oasis-app.json 所在目录）',
+    'oasis-tool app.check --dir out/site [--out work/检查报告.json]（--dir 是 oasis-app.json 所在目录；报告和截图是给你自己看的，放在 work/，out/ 里的才进画布）',
   unit: '次（算力单独结算）',
   estimateMicro: 0,
   holdMicro: () => 1,

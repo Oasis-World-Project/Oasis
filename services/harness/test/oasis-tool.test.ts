@@ -63,9 +63,9 @@ describe('oasis-tool', () => {
     expect(
       targetsFor(
         [{ name: 'app-check.json' }, { name: 'opening.jpg' }, { name: 'step-3.jpg' }],
-        'out/检查报告.json',
+        'work/检查报告.json',
       ),
-    ).toEqual(['out/检查报告.json', 'out/检查报告-opening.jpg', 'out/检查报告-step-3.jpg']);
+    ).toEqual(['work/检查报告.json', 'work/检查报告-opening.jpg', 'work/检查报告-step-3.jpg']);
     expect(targetsFor(files, undefined)).toEqual([
       join('out', 'image-1.png'),
       join('out', 'image-2.png'),
