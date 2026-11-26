@@ -13,6 +13,9 @@ export type Message = typeof messages.$inferSelect;
 /** 这个会话的消息写在哪：私聊是它自己；群里的席位写进它所在的群 */
 export const roomOf = (conversation: Pick<Conversation, 'id' | 'parentId'>) =>
   conversation.parentId ?? conversation.id;
+/** 这个会话花哪个账户的钱：私聊花主人自己的；群里的席位花群的金库（账户号就是群的 ID） */
+export const accountOf = (conversation: Pick<Conversation, 'ownerId' | 'parentId'>) =>
+  conversation.parentId ?? conversation.ownerId;
 type NewMessage = Pick<
   typeof messages.$inferInsert,
   'conversationId' | 'authorKind' | 'authorId' | 'content' | 'status' | 'kind' | 'data' | 'error'

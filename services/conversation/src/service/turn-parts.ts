@@ -8,7 +8,8 @@ import {
   type TodoItem as Todo,
 } from '@oasis/contracts/conversation';
 import type { RunBody, RunEventBody } from '@oasis/contracts/harness';
-import { HttpError } from '@oasis/service-kit';
+import { ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
+import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import {
   roomOf,
@@ -45,6 +46,31 @@ const NOTICES: Record<string, string> = {
 
 /** 生图、视频这类工具通常要多久（秒，按调用记录）：工具名和点名的型号（没点名用默认的）；不知道为 undefined */
 export type Durations = (tool: string, model: string | undefined) => number | undefined;
+
+/** 工具目录（各型号通常要多久）多久重新拉一次 */
+const CATALOG_MS = 5 * 60_000;
+
+/** 工具目录：几分钟拉一次；拉不到就用上次的（第一次拉不到就不写预计用时） */
+export function toolDurations(deps: { modelGateway: ServiceClient; logger: Logger }) {
+  let catalog: { at: number; tools: ToolEntry[] } = { at: 0, tools: [] };
+  return async (): Promise<Durations> => {
+    if (Date.now() - catalog.at > CATALOG_MS) {
+      const tools = await deps.modelGateway
+        .json('GET', '/internal/v1/tools', { schema: ToolList })
+        .then((list) => list.tools)
+        .catch((err: unknown) => {
+          deps.logger.warn({ err }, '读不到工具目录，这次不写预计用时');
+          return catalog.tools;
+        });
+      catalog = { at: Date.now(), tools };
+    }
+    const { tools } = catalog;
+    return (key, model) => {
+      const rates = tools.find((tool) => tool.key === key)?.rates ?? [];
+      return (rates.find((rate) => rate.model === model) ?? rates[0])?.seconds ?? undefined;
+    };
+  };
+}
 
 const asText = (value: unknown) => (typeof value === 'string' ? value : undefined);
 const asTexts = (value: unknown) =>

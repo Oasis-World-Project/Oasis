@@ -17,7 +17,10 @@ export type WalletBody = z.infer<typeof WalletBody>;
 
 /** 内部：调用模型前按最大可能花费冻结额度。amountMicro 是上游原价，billing 会乘以定价系数。 */
 export const CreateHoldBody = z.object({
+  /** 从哪个账户冻结：个人的账户号是用户 ID，群的金库是群的 ID */
   userId: z.uuid(),
+  /** 花金库的钱时：是谁叫 AI 花的（金库页按人算花了多少） */
+  actorId: z.uuid().optional(),
   amountMicro: z.number().int().positive(),
   reason: z.string().min(1).max(100),
   ref: z.string().min(1).max(200),
@@ -43,3 +46,24 @@ export type SettleHoldBody = z.infer<typeof SettleHoldBody>;
 
 export const SettleResult = z.object({ chargedMicro: Micro });
 export type SettleResult = z.infer<typeof SettleResult>;
+
+/** 往群的金库里存：从这个人自己的钱包转进去（存进去就是群的，不能取回） */
+export const TreasuryDepositBody = z.object({
+  userId: z.uuid(),
+  amountMicro: z.number().int().positive(),
+});
+
+/** 群的金库：现在有多少，一共存了、花了多少，每个人存了多少、叫 AI 花了多少 */
+export const TreasuryBody = z.object({
+  availableMicro: Micro,
+  depositedMicro: Micro,
+  spentMicro: Micro,
+  members: z.array(z.object({ userId: z.uuid(), depositedMicro: Micro, spentMicro: Micro })),
+});
+export type TreasuryBody = z.infer<typeof TreasuryBody>;
+
+/** 解散群时金库里剩下的按各人存入的比例退回各自的钱包 */
+export const TreasuryRefunds = z.object({
+  refunds: z.array(z.object({ userId: z.uuid(), amountMicro: Micro })),
+});
+export type TreasuryRefunds = z.infer<typeof TreasuryRefunds>;

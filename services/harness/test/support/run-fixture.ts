@@ -136,6 +136,7 @@ export const repo: RunsRepo = {
     rows.set(run.id, {
       ...run,
       conversationId: run.conversationId ?? null,
+      actorId: run.actorId ?? null,
       status: 'queued',
       error: null,
       containerId: null,
@@ -347,8 +348,11 @@ modelGateway.get('/internal/uploads/:id/content', async (request, reply) => {
 });
 /** 假 canvas：画布里的一个成果（「让 AI 改」时拷进工作目录） */
 export const POSTER = '6d6d6d6d-6d6d-4d6d-8d6d-6d6d6d6d6d6d';
+/** 成果是按谁名下查的 */
+export const artifactOwners: string[] = [];
 modelGateway.post('/internal/artifacts/lookup', async (request, reply) => {
-  const { ids } = request.body as { ids: string[] };
+  const { ids, ownerId } = request.body as { ids: string[]; ownerId: string };
+  artifactOwners.push(ownerId);
   if (ids.some((id) => id !== POSTER))
     return reply
       .code(404)

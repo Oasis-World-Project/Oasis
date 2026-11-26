@@ -35,6 +35,7 @@ async function metered<T extends { usage: ComputeUsage }>(
     // 记在调用它的那一轮上，这一轮的花费里就有它
     runId: deps.runId ?? id,
     payerId: deps.payerId!,
+    actorId: deps.actorId,
     cores,
     maxMs,
     purpose: 'application-check',
@@ -222,7 +223,7 @@ export const androidTest: ToolDef = {
     { name: 'steps', kind: 'json', required: true, description: '最多 10 步的声明式测试' },
   ],
   long: true,
-  start: (deps, args) => deps.browserstack!.start(args, deps.payerId!, deps.signal),
+  start: (deps, args) => deps.browserstack!.start(args, deps.actorId ?? deps.payerId!, deps.signal),
   check: (deps, id) => deps.browserstack!.check(id, deps.receipt!, deps.signal),
   cancel: async (deps, id) => {
     await deps.browserstack!.check(id, deps.receipt!, deps.signal, true);

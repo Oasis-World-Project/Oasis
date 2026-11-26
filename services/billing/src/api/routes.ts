@@ -1,4 +1,4 @@
-import { CreateHoldBody, SettleHoldBody } from '@oasis/contracts/billing';
+import { CreateHoldBody, SettleHoldBody, TreasuryDepositBody } from '@oasis/contracts/billing';
 import { parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import { z } from 'zod';
 import type { WalletService } from '../service/wallet-service.ts';
@@ -33,6 +33,18 @@ export function registerRoutes(app: ServiceApp, wallets: WalletService): void {
     const { costMicro, detail } = parseWith(SettleHoldBody, request.body);
     return wallets.settle(id, costMicro, detail);
   });
+
+  // 以下只给 conversation 用：群的金库（账户号就是群的 ID；谁能存、谁能看由 conversation 按群成员核对）
+  app.get('/internal/treasuries/:id', async (request) =>
+    wallets.treasury(parseWith(HoldParams, request.params).id),
+  );
+  app.post('/internal/treasuries/:id/deposits', async (request) => {
+    const { userId, amountMicro } = parseWith(TreasuryDepositBody, request.body);
+    return wallets.deposit(parseWith(HoldParams, request.params).id, userId, amountMicro);
+  });
+  app.post('/internal/treasuries/:id/dissolve', async (request) =>
+    wallets.dissolve(parseWith(HoldParams, request.params).id),
+  );
 
   app.post('/internal/holds/:id/release', async (request, reply) => {
     await wallets.release(parseWith(HoldParams, request.params).id);

@@ -16,6 +16,7 @@ import {
 import {
   fileResponseHeaders,
   parseWith,
+  readActorId,
   requirePayerId,
   type ServiceApp,
 } from '@oasis/service-kit';
@@ -44,7 +45,10 @@ const ConfirmationParams = z.object({ confirmationId: z.uuid() });
 const WaitQuery = z.object({ wait: z.coerce.number().int().min(0).max(30).default(0) });
 
 /** 内部调用方：付费人在 x-oasis-payer-id 头里 */
-const internalCaller = (request: FastifyRequest): Caller => ({ payerId: requirePayerId(request) });
+const internalCaller = (request: FastifyRequest): Caller => {
+  const actorId = readActorId(request);
+  return { payerId: requirePayerId(request), ...(actorId ? { actorId } : {}) };
+};
 
 /** 目录按「只用国内模型」过滤（?domesticOnly=true）；没带就列全部 */
 const ScopeQuery = z.object({

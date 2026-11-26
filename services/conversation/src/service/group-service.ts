@@ -19,6 +19,7 @@ import { calls, hearingText, seatBrief } from './group-hearing.ts';
 import type { Profiles } from './profiles.ts';
 import type { Purge } from './purge.ts';
 import type { Turns } from './turns.ts';
+import type { Vault } from './vault.ts';
 
 /** 一次从群里取多少条没听过的话（交给 AI 的条数和字数另有上限） */
 const HEARING_LIMIT = 200;
@@ -56,10 +57,18 @@ export function createGroupService(deps: {
     }): Promise<string>;
   };
   purge: Purge;
+  /** 群的金库（钱在 billing） */
+  vault: Pick<Vault, 'get' | 'deposit' | 'dissolve'>;
   logger: Logger;
 }) {
   const { repo, seats, store, turns, profiles } = deps;
   const attach = (deps.brief ?? deps.files).attach;
+
+  /** 只有群有金库（两个好友的私聊、和 AI 的私聊没有）：不是群、不是成员一律 404 */
+  async function group(userId: string, id: string) {
+    if ((await repo.get(userId, id, NO_MESSAGES)).kind !== 'group')
+      throw new HttpError(404, 'group_not_found', '没有这个群，或你已不在群里');
+  }
 
   /**
    * 给群现在的样子补上成员的头像（群里的名字在库里记着，账号改名时 profiles 会让它跟着改）。
@@ -236,8 +245,24 @@ export function createGroupService(deps: {
       for (const seat of await repo.seatsToPurge(userId, id))
         await purgeSeat(seat.id, userId, requestId, false);
       await deps.files.purge(id, requestId);
+      // 金库里剩下的按各人存入的比例退回各自的钱包；退不成就先不删群（钱不能丢），可以再点一次
+      const { refunds } = await deps.vault.dissolve(id);
       await repo.destroy(userId, id);
-      deps.logger.info({ groupId: id }, '群已解散');
+      deps.logger.info({ groupId: id, refunds: refunds.length }, '群已解散');
+    },
+
+    /** 金库：现在有多少、每个人存了多少、叫 AI 花了多少（群成员都能看） */
+    async vault(userId: string, id: string) {
+      await group(userId, id);
+      return deps.vault.get(id);
+    },
+
+    /** 从自己的钱包往金库里存（群成员都能存；存进去就是群的） */
+    async deposit(userId: string, id: string, amountMicro: number) {
+      await group(userId, id);
+      const vault = await deps.vault.deposit(id, userId, amountMicro);
+      deps.logger.info({ groupId: id, userId, amountMicro }, '往金库里存了钱');
+      return vault;
     },
 
     /**

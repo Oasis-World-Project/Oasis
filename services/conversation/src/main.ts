@@ -26,6 +26,7 @@ import { createGroupSpeak } from './service/group-speak.ts';
 import { createProfiles } from './service/profiles.ts';
 import { createPurge } from './service/purge.ts';
 import { createTurns } from './service/turns.ts';
+import { createVault } from './service/vault.ts';
 
 /** 多久看一次有没有别的实例丢下的一轮（它的跟进租约过期后接手） */
 const SWEEP_MS = 30_000;
@@ -46,6 +47,9 @@ await startService({
     // 登记成品要从 harness 复制文件，可能要一会儿
     const canvas = createServiceClient('canvas', config.CANVAS_URL, { timeoutMs: 600_000 });
     const harness = createServiceClient('harness', config.HARNESS_URL, { timeoutMs: 30_000 });
+    const vault = createVault(
+      createServiceClient('billing', config.BILLING_URL, { timeoutMs: 10_000 }),
+    );
     const files = createGroupFiles({
       repo: createGroupFilesRepo(resources.postgres.pool),
       canvas,
@@ -63,6 +67,7 @@ await startService({
       logger,
       pollMs: config.TURN_POLL_MS,
       delivered: files.delivered,
+      funded: vault.funded,
     });
     const purge = createPurge({ harness, modelGateway, canvas });
     const dms = createDmService({
@@ -128,6 +133,7 @@ await startService({
         speak,
         assign,
         purge,
+        vault,
         logger,
       }),
       config.GROUP_STREAMS_PER_USER,

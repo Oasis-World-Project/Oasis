@@ -87,6 +87,35 @@ export const groupAssign = (
     logger: pino({ level: 'silent' }),
   });
 
+/** 假的金库：记着每个群有多少钱、谁存过、哪些群解散退过（没存过的群算有钱，不挡别的测试） */
+export function fakeVault() {
+  const balances = new Map<string, number>();
+  const dissolved: string[] = [];
+  const get = async (groupId: string) => ({
+    availableMicro: balances.get(groupId) ?? 1_000_000,
+    depositedMicro: 0,
+    spentMicro: 0,
+    members: [],
+  });
+  return {
+    balances,
+    dissolved,
+    get,
+    async deposit(groupId: string, _userId: string, amountMicro: number) {
+      balances.set(groupId, (balances.get(groupId) ?? 0) + amountMicro);
+      return get(groupId);
+    },
+    async dissolve(groupId: string) {
+      dissolved.push(groupId);
+      return { refunds: [] };
+    },
+    async funded(groupId: string) {
+      if ((await get(groupId)).availableMicro <= 0)
+        throw new HttpError(402, 'vault_empty', '金库空了，存入后群里的 AI 才能用');
+    },
+  };
+}
+
 export const humanGroups = (pool: pg.Pool, messagesPerMinute: number) =>
   createGroupService({
     repo: createGroupRepo(pool, { members: 3, groups: 20, messagesPerMinute, ais: 8 }),
@@ -98,5 +127,6 @@ export const humanGroups = (pool: pg.Pool, messagesPerMinute: number) =>
     files: groupFiles(pool),
     speak: { nudge: () => undefined },
     purge: { cancelTurn: async () => undefined, remote: async () => undefined },
+    vault: fakeVault(),
     logger: pino({ level: 'silent' }),
   });

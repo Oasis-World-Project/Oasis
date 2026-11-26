@@ -57,6 +57,8 @@ export interface ToolDeps {
   logger?: Logger;
   browserstack?: BrowserStackClient;
   payerId?: string;
+  /** 花金库的钱时：这一轮是谁叫的（他传的文件在他名下） */
+  actorId?: string | undefined;
   render?: RenderClient;
   openrouter: ProviderClient;
   tavily: SearchClient;

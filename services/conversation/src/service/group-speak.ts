@@ -109,7 +109,8 @@ export function createGroupSpeak(deps: {
     ].join('\n');
     try {
       const { choices } = await deps.modelGateway.json('POST', '/internal/v1/chat/completions', {
-        headers: { 'x-oasis-payer-id': state.ownerId },
+        // 判断谁想接话花的是金库的钱，不记在谁头上
+        headers: { 'x-oasis-payer-id': state.id },
         body: {
           model: deps.model,
           stream: false,

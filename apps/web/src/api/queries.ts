@@ -8,7 +8,7 @@ import {
   GroupWork,
   type GroupOptions,
 } from '@oasis/contracts/group';
-import { WalletBody } from '@oasis/contracts/billing';
+import { TreasuryBody, WalletBody } from '@oasis/contracts/billing';
 import { ArtifactBody, ArtifactList, type Annotation } from '@oasis/contracts/canvas';
 import {
   ConversationBody,
@@ -154,6 +154,15 @@ export const groupSnapshot = (id: string, before?: number) =>
   );
 export const removeGroupMember = (id: string, userId: string) =>
   apiVoid(`/conversation/v1/groups/${id}/members/${userId}`, { method: 'DELETE' });
+/** 群的金库：现在有多少、每个人存了多少、叫 AI 花了多少 */
+export const vaultQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['vault', id],
+    queryFn: () => api(`${groupPath(id)}/vault`, TreasuryBody),
+  });
+/** 从我的钱包往群的金库里存（存进去就是群的），返回金库的新样子 */
+export const depositToVault = (id: string, amountMicro: number) =>
+  api(`${groupPath(id)}/vault/deposits`, TreasuryBody, { method: 'POST', body: { amountMicro } });
 export const deleteGroup = (id: string) =>
   apiVoid(`/conversation/v1/groups/${id}`, { method: 'DELETE' });
 /** 发一句话；files：随这句发的文件（已经传到 canvas 的 id）、引用的群文件（路径）、是不是作为任务发布 */

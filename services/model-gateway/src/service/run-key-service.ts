@@ -50,6 +50,7 @@ export function createRunKeyService(deps: {
         id: keyId,
         keyHash: hashKey(key),
         payerId: input.payerId,
+        actorId: input.actorId ?? null,
         runId: input.runId,
         conversationId: input.conversationId ?? null,
         domesticOnly: input.domesticOnly ?? false,
@@ -67,6 +68,7 @@ export function createRunKeyService(deps: {
       if (!row) throw new HttpError(401, 'invalid_run_key', '运行凭证无效或已过期');
       return {
         payerId: row.payerId,
+        ...(row.actorId ? { actorId: row.actorId } : {}),
         runId: row.runId,
         ...(row.conversationId ? { conversationId: row.conversationId } : {}),
         ...(row.domesticOnly ? { domesticOnly: true } : {}),
@@ -90,7 +92,7 @@ export function createRunKeyService(deps: {
     /** 同一个 dsh 接着做下一轮：Key 改归到这一轮。已作废或过期的不能改（调用方重起 dsh、另发一把） */
     async rebind(
       keyId: string,
-      input: Pick<Caller, 'domesticOnly' | 'askPaid' | 'noWeb'> & {
+      input: Pick<Caller, 'actorId' | 'domesticOnly' | 'askPaid' | 'noWeb'> & {
         runId: string;
         ttlSeconds: number;
       },
@@ -98,6 +100,7 @@ export function createRunKeyService(deps: {
       const at = now();
       const rebound = await repo.rebind(keyId, at, {
         runId: input.runId,
+        actorId: input.actorId ?? null,
         domesticOnly: input.domesticOnly ?? false,
         askPaid: input.askPaid ?? false,
         noWeb: input.noWeb ?? false,

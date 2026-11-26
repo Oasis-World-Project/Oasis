@@ -28,6 +28,8 @@ export const conversationEnv = {
   IDENTITY_URL: z.url(),
   /** 一轮的花费；删对话时清掉工具的结果 */
   MODEL_GATEWAY_URL: z.url(),
+  /** 群的金库：存入、查账、解散时退回 */
+  BILLING_URL: z.url(),
   /** 私聊里的 AI 在沙箱里干活：开一轮、插话、停止、读进度 */
   HARNESS_URL: z.url(),
   /** 核对用户随消息发的文件；一轮结束时把成品登记进画布 */

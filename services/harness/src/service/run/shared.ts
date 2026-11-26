@@ -125,6 +125,10 @@ export const savedOutcome = (saved: Saved) => ({
   outputs: saved.outputs?.filter((f) => !isPrivateOutput(f.path)) ?? [],
 });
 
+/** 这一轮替谁做的：他的电脑、他名下的文件 */
+export const personOf = (run: Pick<Run, 'payerId' | 'actorId'>): string =>
+  run.actorId ?? run.payerId;
+
 /** resumable：这次运行的持久工作目录还在，可以接着它的会话做 */
 export function toRunBody(run: Run, resumable: boolean): RunBody {
   return {
@@ -212,7 +216,7 @@ export interface RunContext {
   /** 对外的运行信息：能不能接着做看持久工作目录还在不在 */
   bodyOf(row: Run): Promise<RunBody>;
   /** 在哪跑：云端沙箱，或这个人的哪台电脑（那台电脑的桌面版没连上时 409 device_offline） */
-  executorOf(place: { payerId: string; workplace?: Workplace | null }): Executor;
+  executorOf(place: Pick<Run, 'payerId' | 'actorId'> & { workplace?: Workplace | null }): Executor;
 
   // ---- 执行（execute.ts）
   /** 准入：执行环境就绪、模型在执行目录里（打开了「只用国内模型」的只认国内厂商的模型） */

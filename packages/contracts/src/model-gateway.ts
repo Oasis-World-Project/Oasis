@@ -89,7 +89,10 @@ export type DecisionRequest = z.infer<typeof DecisionRequest>;
 /** POST /internal/run-keys：为对话里的一轮（一次 agent 运行）签发临时 Key。 */
 export const CreateRunKeyBody = z.object({
   runId: z.uuid(),
+  /** 花哪个账户的钱：个人的账户号是用户 ID，群的金库是群的 ID */
   payerId: z.uuid(),
+  /** 花金库的钱时：这一轮是谁叫的（金库页按人算花了多少） */
+  actorId: z.uuid().optional(),
   /** 这一轮属于哪个对话：调用记录按它归属，删对话时按它清理工具的结果 */
   conversationId: z.uuid().optional(),
   /** 用户打开了「只用国内模型」：这一轮的工具只给国内厂商的型号 */
@@ -110,7 +113,7 @@ export type CreateRunKeyBody = z.input<typeof CreateRunKeyBody>;
 
 /**
  * 同一个 dsh 接着做下一轮：把它手里的 Key 改归到新的一轮（调用记到新的一轮名下、按新一轮的设置问不问、
- * 有效期重新算）。付钱的人和对话不变。
+ * 有效期重新算、是谁叫的换成这一轮的）。付钱的账户和对话不变。
  */
 export const RebindRunKeyBody = CreateRunKeyBody.omit({ payerId: true, conversationId: true });
 export type RebindRunKeyBody = z.input<typeof RebindRunKeyBody>;
@@ -156,6 +159,7 @@ export const DecideConfirmationBody = z.object({ runId: z.uuid(), decision: Conf
 export const ComputeHoldBody = z.object({
   runId: z.uuid(),
   payerId: z.uuid(),
+  actorId: z.uuid().optional(),
   /** 沙箱的 CPU 核数 */
   cores: z.number().positive().max(64),
   /** 最长运行多久（毫秒） */

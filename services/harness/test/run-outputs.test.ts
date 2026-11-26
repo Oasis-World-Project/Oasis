@@ -20,6 +20,7 @@ import {
   lifecycle,
   PHOTO,
   uploadOwners,
+  artifactOwners,
   BIG,
   POSTER,
   service,
@@ -33,6 +34,7 @@ import {
 } from './support/run-fixture.ts';
 
 const UPLOADER = '6e6e6e6e-6e6e-4e6e-8e6e-6e6e6e6e6e6e';
+const OWNER = '6f6f6f6f-6f6f-4f6f-8f6f-6f6f6f6f6f6f';
 
 const OTHER_CONVERSATION = '4d4d4d4d-4d4d-4d4d-8d4d-4d4d4d4d4d4d';
 const placed = (index: number, dir: string) =>
@@ -194,6 +196,27 @@ describe('对话里的一轮：输入和产出', () => {
     expect(files.find((f) => f.path === 'canvas/site/poster.png')?.content.toString()).toBe(
       'poster-bytes',
     );
+
+    // 群里的一轮：花群的金库（payerId 是群），替叫它的那个人做（actorId）。临时 Key 和算力冻结上都带着他；
+    // 没写是谁名下的文件按他查，群里的成果写着在群主名下
+    issued.length = 0;
+    compute.length = 0;
+    const seat = await service.start({
+      ...base,
+      actorId: UPLOADER,
+      prompt: '改海报',
+      materials: [
+        { uploadId: PHOTO, path: 'materials/照片.jpg' },
+        { artifactId: POSTER, ownerId: OWNER, path: 'materials/group/poster.png' },
+      ],
+    });
+    await finished(seat.id);
+    expect(issued.at(-1)).toMatchObject({ payerId: base.payerId, actorId: UPLOADER });
+    expect(compute.find((call) => call.path === 'hold')?.body).toMatchObject({
+      payerId: base.payerId,
+      actorId: UPLOADER,
+    });
+    expect([uploadOwners.at(-1), artifactOwners.at(-1)]).toEqual([UPLOADER, OWNER]);
 
     const errors: (string | null)[] = [];
     for (const material of [

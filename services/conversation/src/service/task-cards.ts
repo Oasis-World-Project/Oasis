@@ -9,7 +9,12 @@ import type { RunBody } from '@oasis/contracts/harness';
 import { GENERATION_TOOLS, RunActivity } from '@oasis/contracts/model-gateway';
 import type { Logger, ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
-import { roomOf, type Conversation, type ConversationRepo } from '../repo/conversation-repo.ts';
+import {
+  accountOf,
+  roomOf,
+  type Conversation,
+  type ConversationRepo,
+} from '../repo/conversation-repo.ts';
 import type { Turn } from '../repo/schema.ts';
 
 const RegisteredArtifacts = z.object({ artifacts: z.array(ArtifactBody) });
@@ -24,9 +29,9 @@ export function createTaskCards(deps: {
   const { logger } = deps;
 
   /** 这一轮在 model-gateway 那边的情况：花费、用过的工具、在等用户点的确认卡 */
-  const activityOf = (ownerId: string, runId: string) =>
+  const activityOf = (account: string, runId: string) =>
     deps.modelGateway.json('GET', `/internal/v1/runs/${runId}`, {
-      headers: { [OASIS_HEADERS.payerId]: ownerId },
+      headers: { [OASIS_HEADERS.payerId]: account },
       schema: RunActivity,
     });
 
@@ -176,7 +181,7 @@ export function createTaskCards(deps: {
     turn: Turn,
     run: RunBody,
   ) {
-    const spend = await activityOf(conversation.ownerId, turn.runId);
+    const spend = await activityOf(accountOf(conversation), turn.runId);
     if (!isDeepStrictEqual(spend.confirmations, turn.confirmations ?? []))
       await store.updateTurn(conversation.id, turn.runId, { confirmations: spend.confirmations });
     const files = await deliver(store, conversation, turn, run);

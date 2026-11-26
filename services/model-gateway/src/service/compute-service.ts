@@ -32,6 +32,7 @@ export function createComputeService(deps: {
       /** 一轮的沙箱是这一轮的运行；检查用的浏览器记在调用它的那一轮上 */
       runId: string;
       payerId: string;
+      actorId?: string | undefined;
       cores: number;
       maxMs: number;
       purpose?: keyof typeof MODEL;
@@ -40,7 +41,11 @@ export function createComputeService(deps: {
       if (deps.pricePerCoreHourMicro === 0) return { callId: null, heldMicro: 0 };
       const heldMicro = Math.max(1, cost(input.cores, input.maxMs));
       const call = await meter.hold({
-        caller: { payerId: input.payerId, runId: input.runId },
+        caller: {
+          payerId: input.payerId,
+          runId: input.runId,
+          ...(input.actorId ? { actorId: input.actorId } : {}),
+        },
         kind: 'compute',
         model: MODEL[input.purpose ?? 'run'],
         amountMicro: heldMicro,

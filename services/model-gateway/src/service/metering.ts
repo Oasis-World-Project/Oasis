@@ -13,7 +13,10 @@ import type { CostSource, Usage } from './pricing.ts';
  * autoAllow：用户这一轮点过「以后都允许」的确认种类。
  */
 export interface Caller {
+  /** 花哪个账户的钱：个人的账户号是用户 ID，群的金库是群的 ID */
   payerId: string;
+  /** 花金库的钱时：是谁叫 AI 花的 */
+  actorId?: string;
   runId?: string;
   conversationId?: string;
   domesticOnly?: boolean;
@@ -191,6 +194,7 @@ export function createMeter(deps: {
       const { holdId } = await billing.json('POST', '/internal/holds', {
         body: {
           userId: input.caller.payerId,
+          ...(input.caller.actorId ? { actorId: input.caller.actorId } : {}),
           amountMicro: input.amountMicro,
           reason: 'model_call',
           ref: `call:${id}`,

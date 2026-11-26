@@ -17,10 +17,11 @@ import { createOutputs } from './run/outputs.ts';
 import {
   createGate,
   newLiveRun,
+  personOf,
   requestOf,
-  toRunBody,
   type RunContext,
   type RunDeps,
+  toRunBody,
 } from './run/shared.ts';
 import { createHosts } from './run/hosts.ts';
 import { createStorage } from './run/storage.ts';
@@ -42,10 +43,10 @@ export function createRunService(deps: RunDeps) {
     if (!row) throw new HttpError(404, 'run_not_found', '没有这次运行');
     return row;
   }
-  const executorOf: RunContext['executorOf'] = ({ payerId, workplace }) => {
+  const executorOf: RunContext['executorOf'] = ({ workplace, ...run }) => {
     if (workplace?.kind !== 'device') return deps.executor;
     if (!deps.devices) throw new HttpError(503, 'devices_unavailable', '这里不能在用户电脑上干活');
-    return deps.devices.executor(payerId, workplace);
+    return deps.devices.executor(personOf(run), workplace);
   };
   const ctx = {
     deps,
@@ -72,12 +73,7 @@ export function createRunService(deps: RunDeps) {
     if (stopping?.abort.signal.aborted) await stopping.done;
     const previous = await repo.get(runId);
     const ended = ['succeeded', 'failed', 'cancelled', 'stopped'].includes(previous?.status ?? '');
-    if (
-      !previous ||
-      previous.payerId !== body.payerId ||
-      previous.conversationId !== body.conversationId ||
-      !ended
-    )
+    if (!previous || previous.conversationId !== body.conversationId || !ended)
       throw new HttpError(409, 'continue_unavailable', '要接着的那一轮不存在或还没结束');
     const session = previous.sessionId ?? previous.id;
     // 换了地方（云端和电脑、换了电脑或文件夹）：会话在原来那边，接不上
@@ -109,7 +105,7 @@ export function createRunService(deps: RunDeps) {
       }
       // 目录未就绪、用户的电脑没连上属于准入等待，不登记失败运行
       const catalog = await ctx.admit(
-        executorOf({ payerId: body.payerId, workplace }),
+        executorOf({ payerId: body.payerId, actorId: body.actorId ?? null, workplace }),
         body.model,
         request.domesticOnly,
       );
@@ -126,6 +122,7 @@ export function createRunService(deps: RunDeps) {
           {
             id,
             payerId: body.payerId,
+            actorId: body.actorId ?? null,
             conversationId: body.conversationId,
             model: body.model,
             prompt: body.prompt,
@@ -217,7 +214,7 @@ export function createRunService(deps: RunDeps) {
       const run = live.get(id);
       if (!run?.put || run.closing || run.abort.signal.aborted)
         throw new HttpError(409, 'run_not_active', '这一轮现在放不进文件');
-      await run.put(packStreams(await ctx.materialFiles(materials, id, row.payerId)));
+      await run.put(packStreams(await ctx.materialFiles(materials, id, personOf(row))));
     },
 
     ...createOutputs(ctx),

@@ -24,6 +24,11 @@ export function requirePayerId(request: FastifyRequest): string {
   return payerId;
 }
 
+/** 花金库的钱时是谁叫 AI 花的；内部接口用，没带就是没有。 */
+export function readActorId(request: FastifyRequest): string | undefined {
+  return readUuidHeader(request, OASIS_HEADERS.actorId);
+}
+
 /** 从 Cookie 请求头里取某个 Cookie 的值。 */
 export function readCookie(header: string | undefined, name: string): string | undefined {
   if (!header) return undefined;

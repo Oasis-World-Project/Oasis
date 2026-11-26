@@ -34,7 +34,7 @@ export {
   postgresAndEventBus,
   type StandardResources,
 } from './presets.ts';
-export { readCookie, requirePayerId, requireUserId } from './request-context.ts';
+export { readActorId, readCookie, requirePayerId, requireUserId } from './request-context.ts';
 export type { ServiceResource } from './resource.ts';
 export { createServiceClient, type ServiceClient } from './service-client.ts';
 export { createSseParser, type SseParser } from './sse.ts';

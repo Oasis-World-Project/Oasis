@@ -28,6 +28,7 @@ export function memoryRunKeys(): RunKeysRepo & {
       rows.push({
         ...key,
         conversationId: key.conversationId ?? null,
+        actorId: key.actorId ?? null,
         domesticOnly: key.domesticOnly ?? false,
         askPaid: key.askPaid ?? false,
         noWeb: key.noWeb ?? false,

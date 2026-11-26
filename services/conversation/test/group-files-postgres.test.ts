@@ -12,7 +12,13 @@ import type { GroupFiles } from '../src/service/group-files.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
-import { befriend, fakeProfiles, groupAssign, groupFiles } from './support/group-fixture.ts';
+import {
+  befriend,
+  fakeProfiles,
+  fakeVault,
+  groupAssign,
+  groupFiles,
+} from './support/group-fixture.ts';
 import { scratchSchema } from './support/schema.ts';
 import {
   client,
@@ -67,6 +73,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群文件', () => {
       assign: groupAssign(pool, { store, turns }),
       speak: { nudge: () => undefined },
       purge: createPurge({ harness, modelGateway, canvas }),
+      vault: fakeVault(),
       logger,
     });
     friends = createFriendService({

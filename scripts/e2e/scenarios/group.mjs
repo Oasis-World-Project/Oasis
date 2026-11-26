@@ -1,12 +1,14 @@
 // 回归场景（docs/engineering/回归测试.md）：好友和群里的 AI。按账号 ID 加好友、对方同意；好友之间私聊；
 // 群主建群时直接把好友拉进来。@ 谁谁回，回之前先听它没听过的群聊；@ 全体只挑一个先出来负责，
 // 它发分工单把一项交给另一个 AI，那个 AI 做完交了，再轮到它收口；
-// 它忙着时 @ 它的话先等着，「现在告诉它」作为插话送进正在做的一轮；群员叫的 AI 花群主的钱；
+// 它忙着时 @ 它的话先等着，「现在告诉它」作为插话送进正在做的一轮；群里的 AI 花群的金库：空着时不开工，
+// 成员从自己的钱包存进去，花的记在叫它的人头上，解散时剩下的按各人存入的比例退回；
 // 群文件：人发的文件和 AI 交的文件都在里面，别的 AI 开一轮时拿到、改了就是新版本；好友私聊里也能发文件。
 // 解散群，席位的会话、工作目录、成果、发过的文件一起清掉；删好友，两人的私聊一起删。
 import { randomUUID } from 'node:crypto';
 import { literal, query } from '../db.mjs';
 import { marker, writeFiles } from '../fake-provider.mjs';
+import { openVault } from './group-vault.mjs';
 import { runsOf, workspaceExists } from './shared.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,7 +47,10 @@ async function idle(user, groupId, label, timeoutMs = 300_000) {
 
 /** 这个 AI 在群里说的话 */
 const spoke = (group, key) =>
-  group.messages.filter((m) => m.authorId === key && m.kind === 'text' && m.role === 'assistant');
+  group.messages.filter(
+    (m) =>
+      m.authorId === key && m.kind === 'text' && m.role === 'assistant' && m.status !== 'failed',
+  );
 
 /** 分工单里那一项交给谁（跑起来才知道第二个 AI 是谁） */
 let assignTo = '';
@@ -205,18 +210,19 @@ export const group = {
           (await member.api.get(base)).groups.some((g) => g.id === groupId),
         `建群时拉的好友应直接在群里、显示账号的名字：${JSON.stringify(created.members)}`,
       );
-      const before = { owner: await owner.wallet(), member: await member.wallet() };
+      // ---- 金库：空着时叫 AI 不开工；群主存 $4、群员存 $2（从各自的钱包转进去）----
+      const vault = await openVault(t, { owner, member, groupId, ai: first, say });
 
       // ---- 没 @ 谁：AI 不说话 ----
       await say(member, groupId, '场地定在 B 栋天台');
       await sleep(2_000);
       let now = await owner.api.get(`${base}/${groupId}`);
       t.check(
-        !now.ais.some((ai) => ai.runId) && !now.messages.some((m) => m.role === 'assistant'),
+        !now.ais.some((ai) => ai.runId) && !spoke(now, first).length && !spoke(now, second).length,
         `没 @ 谁时 AI 不应开口：${JSON.stringify(now.ais.map((ai) => [ai.key, ai.runId]))}`,
       );
 
-      // ---- 群员 @ 一个 AI：只有它回，回之前听到了没 @ 它的那句；花的是群主的钱 ----
+      // ---- 群员 @ 一个 AI：只有它回，回之前听到了没 @ 它的那句；花的是金库的钱，记在群员头上 ----
       await say(member, groupId, `写一句开场白 ${marker('group', 1)}`, [
         { kind: 'ai', key: first },
       ]);
@@ -231,12 +237,7 @@ export const group = {
         (opening?.data.spentMicro ?? 0) > 0,
         `这一轮的花费应写在它的话上：${opening?.data.spentMicro}`,
       );
-      const after = { owner: await owner.wallet(), member: await member.wallet() };
-      t.check(
-        after.owner.availableMicro < before.owner.availableMicro &&
-          after.member.availableMicro === before.member.availableMicro,
-        `群员叫的 AI 应花群主的钱：群主 ${before.owner.availableMicro}→${after.owner.availableMicro}，群员 ${before.member.availableMicro}→${after.member.availableMicro}`,
-      );
+      await vault.spentBy(member);
 
       // ---- @ 全体：只挑一个先出来负责（判断模型都给 0 分时是第一个）；它发分工单把欢迎词交给第二个，
       //      第二个做完交了，再轮到它收口。第一个接着自己的会话，第二个第一次开口 ----
@@ -440,8 +441,10 @@ export const group = {
 
       // ---- 解散群：席位的会话、工作目录、成果、发过的文件一起清掉 ----
       const sessionIds = [...new Set(runs.map((run) => run.session_id).filter(Boolean))];
+      const refunded = await vault.beforeDissolve();
       await owner.api.del(`${base}/${groupId}`);
       destroyed = true;
+      await refunded();
       let left = [];
       for (let i = 0; i < 30; i++) {
         left = await owner.artifacts(seatId);

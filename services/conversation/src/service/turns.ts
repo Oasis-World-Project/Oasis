@@ -14,9 +14,10 @@ import {
   type StartRunBody,
   type Workplace,
 } from '@oasis/contracts/harness';
-import { GENERATION_TOOLS, ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
+import { GENERATION_TOOLS } from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import {
+  accountOf,
   roomOf,
   type Conversation,
   type ConversationRepo,
@@ -34,8 +35,8 @@ import {
   segmentOf,
   settleSteps,
   terminal,
+  toolDurations,
   writeEvents,
-  type Durations,
 } from './turn-parts.ts';
 
 export interface TurnDeps {
@@ -51,6 +52,8 @@ export interface TurnDeps {
   spendMs?: number;
   /** 群里的席位交了文件（已登记进画布）：进群文件 */
   delivered?: (seat: Conversation, runId: string, files: ArtifactBody[]) => Promise<void>;
+  /** 群里的席位开一轮前：金库空了就不开（抛 402） */
+  funded?: (groupId: string) => Promise<void>;
 }
 
 /** 群里的席位做完一轮（turn）、空下来了：还有叫它的话就接着开下一轮（调用方拿着这个席位的 message 锁） */
@@ -58,8 +61,6 @@ type SeatIdle = (store: ConversationRepo, seat: Conversation, turn: Turn) => Pro
 
 /** 一次拉多少条运行事件 */
 const EVENT_PAGE = 500;
-/** 工具目录（各型号通常要多久）多久重新拉一次 */
-const CATALOG_MS = 5 * 60_000;
 /** 开一轮是先记下这一轮、再交给 harness：交接的这一会儿（请求最多等 10 秒）harness 里还没有它 */
 const HANDOVER_MS = 60_000;
 /** 接不上原会话（工作目录不在了、会话已有更新的一轮）：这一轮开新会话 */
@@ -86,25 +87,7 @@ export function createTurns(deps: TurnDeps) {
     }
   }
 
-  /** 工具目录：几分钟拉一次；拉不到就用上次的（第一次拉不到就不写预计用时） */
-  let catalog: { at: number; tools: ToolEntry[] } = { at: 0, tools: [] };
-  async function durations(): Promise<Durations> {
-    if (Date.now() - catalog.at > CATALOG_MS) {
-      const tools = await deps.modelGateway
-        .json('GET', '/internal/v1/tools', { schema: ToolList })
-        .then((list) => list.tools)
-        .catch((err: unknown) => {
-          logger.warn({ err }, '读不到工具目录，这次不写预计用时');
-          return catalog.tools;
-        });
-      catalog = { at: Date.now(), tools };
-    }
-    const { tools } = catalog;
-    return (key, model) => {
-      const rates = tools.find((tool) => tool.key === key)?.rates ?? [];
-      return (rates.find((rate) => rate.model === model) ?? rates[0])?.seconds ?? undefined;
-    };
-  }
+  const durations = toolDurations(deps);
 
   /**
    * 这一轮结束：最后一段 AI 消息写上结局和花费，out/ 里的成品按产出清单再登记一遍（进行中已经登记的
@@ -129,7 +112,7 @@ export function createTurns(deps: TurnDeps) {
       }
     }
     const spend = run
-      ? await cards.activityOf(conversation.ownerId, run.id).catch((err: unknown) => {
+      ? await cards.activityOf(accountOf(conversation), run.id).catch((err: unknown) => {
           logger.warn({ err, runId: run.id }, '读这一轮的花费失败');
           return { spentMicro: 0, tools: [] };
         })
@@ -303,6 +286,7 @@ export function createTurns(deps: TurnDeps) {
     let revising: ArtifactLookupResult | undefined;
     let sessionId: string | undefined;
     try {
+      if (conversation.parentId) await deps.funded?.(conversation.parentId);
       route = await deps.agent.json(
         'GET',
         `/internal/models/${encodeURIComponent(conversation.modelKey ?? '')}/route?userId=${conversation.ownerId}`,
@@ -320,7 +304,7 @@ export function createTurns(deps: TurnDeps) {
     } catch (err) {
       logger.warn(
         { err, conversationId: conversation.id },
-        '这一轮开不了：查不到 AI 的型号或要改的成果',
+        '这一轮开不了：金库空了，或查不到 AI 的型号、要改的成果',
       );
       await store.touchConversation(room);
       return [await aiMessage('failed', {}, refused(err))];
@@ -358,7 +342,9 @@ export function createTurns(deps: TurnDeps) {
     const workplace: Workplace = conversation.workplace ?? { kind: 'cloud' };
     const body: StartRunBody = {
       runId,
-      payerId: conversation.ownerId,
+      payerId: accountOf(conversation),
+      // 花金库的钱：记在叫它的那个人头上（没人叫、它自己接的话不记在谁头上）
+      ...(brief?.callers[0] ? { actorId: brief.callers[0] } : {}),
       conversationId: conversation.id,
       model: route.providerModel,
       persona: brief ? `${route.systemPrompt}\n\n${brief.persona}`.trim() : route.systemPrompt,

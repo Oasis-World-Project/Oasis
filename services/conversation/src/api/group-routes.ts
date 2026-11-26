@@ -13,6 +13,7 @@ import {
   GroupSendBody,
   GroupSteerBody,
   inFlux,
+  VaultDepositBody,
 } from '@oasis/contracts/group';
 import { HttpError, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import type { GroupService } from '../service/group-service.ts';
@@ -124,6 +125,16 @@ export function registerGroupRoutes(
     await groups.destroy(requireUserId(request), parseWith(Id, request.params).id, request.id);
     return reply.code(204).send();
   });
+  app.get('/v1/groups/:id/vault', async (request) =>
+    groups.vault(requireUserId(request), parseWith(Id, request.params).id),
+  );
+  app.post('/v1/groups/:id/vault/deposits', async (request) =>
+    groups.deposit(
+      requireUserId(request),
+      parseWith(Id, request.params).id,
+      parseWith(VaultDepositBody, request.body).amountMicro,
+    ),
+  );
   app.post('/v1/groups/:id/messages', async (request) => {
     const body = parseWith(GroupSendBody, request.body);
     return groups.send(

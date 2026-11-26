@@ -46,6 +46,8 @@ export interface Room {
   /** 发一句话（可以带文件、引用群文件），返回发出去了没有 */
   send: (content: string, mentions: Mention[], files?: SendFiles) => Promise<boolean>;
   bench: Bench;
+  /** 群的金库（只有群有）：现在有多少（还没读到是 undefined）、打开金库的窗 */
+  vault?: { availableMicro: number | undefined; open: () => void } | undefined;
   /** 在输入框里 @ 上谁（舞台卡片上的「@ 它」） */
   mention: (mention: Mention) => void;
   /** 光标回到输入框；给了提示就换成输入框里的提示（如「说说要改哪里」），发出去后清掉 */

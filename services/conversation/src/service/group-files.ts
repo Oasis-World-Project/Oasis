@@ -81,7 +81,7 @@ export function createGroupFiles(deps: {
     const path = `${GROUP_DIR}/${next.path}`;
     const material =
       next.source === 'artifact'
-        ? { artifactId: next.refId, path }
+        ? { artifactId: next.refId, ownerId: next.refOwner, path }
         : { uploadId: next.refId, ownerId: next.refOwner, path };
     for (const runId of (await repo.people(groupId)).running) {
       if (runId === next.runId) continue;
@@ -132,7 +132,7 @@ export function createGroupFiles(deps: {
       const path = `${GROUP_DIR}/${row.path}`;
       materials.push(
         row.source === 'artifact'
-          ? { artifactId: row.ref_id, path }
+          ? { artifactId: row.ref_id, ownerId: row.ref_owner, path }
           : { uploadId: row.ref_id, ownerId: row.ref_owner, path },
       );
       const who =

@@ -18,6 +18,7 @@ import { BusyLine, PlusMenu, ROUND } from './ComposerMenus.tsx';
 import { MentionPicker } from './MentionPicker.tsx';
 import { aiLook } from './people.ts';
 import { mentionText, useRoom } from './room.ts';
+import { VaultEmpty } from './Vault.tsx';
 
 const sameMention = (a: Mention, b: Mention) =>
   a.kind === b.kind &&
@@ -177,6 +178,7 @@ export function RoomComposer({
 
   return (
     <footer className="relative flex flex-col px-[18px] pb-[18px] pt-1">
+      <VaultEmpty />
       {scene === 'group' && <BusyLine />}
       {scene === 'dm' && (
         <DmQueue

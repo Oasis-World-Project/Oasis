@@ -246,6 +246,7 @@ export function createToolCall(ctx: ToolContext) {
           logger: deps.logger,
           browserstack: deps.browserstack,
           payerId: input.caller.payerId,
+          actorId: input.caller.actorId,
           openrouter: deps.openrouter,
           tavily: deps.tavily,
           fal: deps.fal,

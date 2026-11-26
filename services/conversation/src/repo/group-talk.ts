@@ -40,6 +40,7 @@ export function createGroupTalk(pool: pg.Pool) {
         )
       ).rows.reverse();
       return {
+        id: groupId,
         ownerId: group.owner_id,
         title: group.title,
         options: group.options,

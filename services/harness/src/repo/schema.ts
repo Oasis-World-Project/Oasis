@@ -6,7 +6,10 @@ const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' 
 
 export const runs = pgTable('runs', {
   id: uuid('id').primaryKey(),
+  /** 花哪个账户的钱：个人的账户号是用户 ID，群的金库是群的 ID */
   payerId: uuid('payer_id').notNull(),
+  /** 这一轮替谁做的（他的电脑、他名下的文件）；空就是付钱的那个人自己 */
+  actorId: uuid('actor_id'),
   conversationId: uuid('conversation_id').notNull(),
   model: text('model').notNull(),
   prompt: text('prompt').notNull(),

@@ -21,7 +21,7 @@ export interface RunKeysRepo {
   rebind(
     id: string,
     now: Date,
-    next: Pick<RunKey, 'runId' | 'domesticOnly' | 'askPaid' | 'noWeb' | 'expiresAt'>,
+    next: Pick<RunKey, 'runId' | 'actorId' | 'domesticOnly' | 'askPaid' | 'noWeb' | 'expiresAt'>,
   ): Promise<boolean>;
   /** 这一轮里这一类确认以后都允许 */
   allowAlways(runId: string, kind: Kind): Promise<void>;

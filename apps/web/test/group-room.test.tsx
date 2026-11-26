@@ -278,4 +278,54 @@ describe('群页里的 AI', () => {
       }),
     );
   });
+
+  it('金库：页头上是现在有多少；空了时输入框上面提示一句；点开能看每个人存了、花了多少，从钱包存入', async () => {
+    let vault = {
+      availableMicro: 0,
+      depositedMicro: 3_000_000,
+      spentMicro: 3_000_000,
+      members: [{ userId: friend, depositedMicro: 3_000_000, spentMicro: 3_000_000 }],
+    };
+    const state = installFakeApi({
+      signedIn: true,
+      extra: (method, path) => {
+        if (path === `/conversation/v1/groups/${id}/vault`) return json(200, vault);
+        if (method !== 'POST' || !path.endsWith('/vault/deposits')) return undefined;
+        vault = { ...vault, availableMicro: 10_000_000, depositedMicro: 13_000_000 };
+        vault.members = [
+          ...vault.members,
+          { userId: me, depositedMicro: 10_000_000, spentMicro: 0 },
+        ];
+        return json(200, vault);
+      },
+    });
+    await room();
+    expect(await screen.findByRole('button', { name: '金库，现在有 $0.00' })).not.toBeNull();
+    const empty = screen.getByRole('status');
+    expect(empty.textContent).toContain('金库空了。存入后群里的 AI 才能用。');
+    fireEvent.click(within(empty).getByRole('button', { name: '存入' }));
+    const dialog = screen.getByRole('dialog', { name: '金库' });
+    expect(within(dialog).getByText('一共存入 $3.00，花了 $3.00')).not.toBeNull();
+    expect(within(dialog).getByText('从我的钱包存入（钱包里有 $30.00）')).not.toBeNull();
+    const rows = () =>
+      within(dialog)
+        .getAllByRole('row')
+        .map((row) => row.textContent);
+    expect(rows()).toEqual(['我我存入 $0.00花了 $0.00', '阿阿杰存入 $3.00花了 $3.00']);
+    // 默认存 $10
+    expect(within(dialog).getByRole('radio', { name: '$10' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: '存入 $10' }));
+    await waitFor(() => expect(rows()[0]).toBe('我我存入 $10.00花了 $0.00'));
+    expect(state.bodies.at(-1)).toEqual({
+      path: `/conversation/v1/groups/${id}/vault/deposits`,
+      body: { amountMicro: 10_000_000 },
+    });
+    // 有钱了：页头换成新的数，提示收起
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
+    expect(screen.queryByRole('dialog', { name: '金库' })).toBeNull();
+    expect(screen.getByRole('button', { name: '金库，现在有 $10.00' })).not.toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
 });

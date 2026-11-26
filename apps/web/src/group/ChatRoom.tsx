@@ -15,6 +15,7 @@ import { RoomMessages } from './RoomMessages.tsx';
 import { RoomContext, type Bench, type Room } from './room.ts';
 import { Stage } from './Stage.tsx';
 import { useGroupRoom } from './use-group-room.ts';
+import { useVault, VaultDialog } from './Vault.tsx';
 import { TaskDialog } from './workbench/TaskDialog.tsx';
 import { useWorkbench } from './workbench/use-workbench.ts';
 import { Workbench } from './workbench/Workbench.tsx';
@@ -71,6 +72,7 @@ export function ChatRoom({
     [files, tasks, openFile, openTasks],
   );
   const focused = tasks.find((item) => item.runId === workbench.focus);
+  const { vault, ...vaultWindow } = useVault(group);
   const myId = me.data?.id;
   const { online, busy, sending, act, send } = state;
   const input = useRef<HTMLTextAreaElement>(null);
@@ -104,9 +106,10 @@ export function ChatRoom({
             mention,
             focus,
             bench,
+            vault,
           }
         : null,
-    [group, myId, models, online, busy, sending, act, refresh, send, mention, focus, bench],
+    [group, myId, models, online, busy, sending, act, refresh, send, mention, focus, bench, vault],
   );
   const scene = group?.kind ?? kind;
   // 和 AI 的私聊只有它一个 AI：输入框上面排着队的话、问卷的回答、「继续」都是对它说
@@ -188,6 +191,7 @@ export function ChatRoom({
             chat
           )}
           {scene !== 'direct' && <Workbench bench={workbench} />}
+          {vaultWindow.shown && <VaultDialog onClose={vaultWindow.close} />}
           {focused && (
             <TaskDialog
               task={focused}

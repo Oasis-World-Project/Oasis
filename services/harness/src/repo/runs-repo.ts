@@ -14,6 +14,7 @@ type NewRun = Pick<
   typeof runs.$inferInsert,
   | 'id'
   | 'payerId'
+  | 'actorId'
   | 'conversationId'
   | 'model'
   | 'prompt'

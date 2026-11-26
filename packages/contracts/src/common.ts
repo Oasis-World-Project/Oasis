@@ -38,5 +38,7 @@ export type MetaBody = z.infer<typeof MetaBody>;
 export const OASIS_HEADERS = {
   userId: 'x-oasis-user-id',
   payerId: 'x-oasis-payer-id',
+  /** 花金库的钱时：是谁叫 AI 花的（用户 ID） */
+  actorId: 'x-oasis-actor-id',
   requestId: 'x-request-id',
 } as const;

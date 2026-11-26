@@ -10,7 +10,7 @@ import { SANDBOX_PATHS, type AgentConnection } from '../../adapter/dsh.ts';
 import type { RunOutcome } from '../../repo/runs-repo.ts';
 import { startRunLease } from '../run-lease.ts';
 import type { Host, Hosts, Relay } from './hosts.ts';
-import { savedOutcome, StopRun, type LiveRun, type RunContext } from './shared.ts';
+import { personOf, savedOutcome, StopRun, type LiveRun, type RunContext } from './shared.ts';
 
 /** 服务重启接管时交给 AI 的话：原会话和工作目录已恢复，接着做 */
 const RECOVERED = '服务连接中断后已恢复原工作目录和原会话。请从未完成处继续，不重做已有工作。';
@@ -84,7 +84,7 @@ export function createExecution(
       // 在用户电脑上跑的不占云端沙箱的名额、不收算力钱
       const device = request.workplace.kind === 'device';
       const idleMs = device ? deps.idleMs.device : deps.idleMs.cloud;
-      const executor = ctx.executorOf({ payerId: row.payerId, workplace: request.workplace });
+      const executor = ctx.executorOf({ ...row, workplace: request.workplace });
       const release = device ? () => undefined : await state.gate.acquire();
       let host: Host | undefined;
       let keyId: string | undefined;
@@ -138,6 +138,7 @@ export function createExecution(
 
         const settings = {
           runId: id,
+          ...(row.actorId ? { actorId: row.actorId } : {}),
           domesticOnly: request.domesticOnly,
           askPaid: asksBefore('tool', request.workplace, request.permissions),
           noWeb: request.permissions.web === false,
@@ -179,6 +180,7 @@ export function createExecution(
           client: deps.modelGateway,
           runId: id,
           payerId: row.payerId,
+          ...(row.actorId ? { actorId: row.actorId } : {}),
           keyId,
           keyTtlSeconds: deps.keyTtlSeconds ?? 6 * 3600,
           cores: device ? 0 : deps.cores,
@@ -193,7 +195,7 @@ export function createExecution(
 
         const materials = recovering
           ? undefined
-          : await ctx.materialFiles(request.materials, id, row.payerId);
+          : await ctx.materialFiles(request.materials, id, personOf(row));
         const record: Relay['to'] = (kind, data) => ctx.record(id, run, kind, data);
         let greeting: { setup: string; unsaid: boolean } | undefined;
         let stderr = () => '';

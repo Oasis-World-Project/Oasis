@@ -281,6 +281,7 @@ services:
       AGENT_URL: http://agent:4103
       IDENTITY_URL: http://identity:4101
       MODEL_GATEWAY_URL: http://model-gateway:4108
+      BILLING_URL: http://billing:4102
       HARNESS_URL: http://harness:4107
       CANVAS_URL: http://canvas:4106
     depends_on: *data-deps

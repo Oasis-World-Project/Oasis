@@ -3,6 +3,8 @@ import type {
   CreateHoldBody,
   HoldResult,
   SettleResult,
+  TreasuryBody,
+  TreasuryRefunds,
   WalletBody,
 } from '@oasis/contracts/billing';
 import { HttpError, type Logger } from '@oasis/service-kit';
@@ -85,11 +87,63 @@ export function createWalletService(deps: {
         throw new HttpError(409, 'hold_closed', '这笔冻结已经结算或释放');
     },
 
+    /** 往群的金库里存：从这个人自己的钱包转进去，存进去就是群的 */
+    async deposit(treasuryId: string, userId: string, amountMicro: number): Promise<TreasuryBody> {
+      if (!(await repo.deposit(userId, treasuryId, amountMicro)))
+        throw new HttpError(402, 'insufficient_balance', '钱包里的额度不够存这么多');
+      return this.treasury(treasuryId);
+    },
+
+    /** 群的金库：现在有多少、每个人存了多少、叫 AI 花了多少（还没人存过就是空的） */
+    async treasury(treasuryId: string): Promise<TreasuryBody> {
+      const [wallet, members] = await Promise.all([
+        repo.findWallet(treasuryId),
+        repo.treasuryMembers(treasuryId),
+      ]);
+      return {
+        availableMicro: wallet ? wallet.balanceMicro - wallet.heldMicro : 0,
+        depositedMicro: members.reduce((sum, m) => sum + m.depositedMicro, 0),
+        spentMicro: members.reduce((sum, m) => sum + m.spentMicro, 0),
+        // 没记是谁叫的花费（比如判断谁想接话）算在总数里，不单列一个人
+        members: members.flatMap(({ userId, depositedMicro, spentMicro }) =>
+          userId ? [{ userId, depositedMicro, spentMicro }] : [],
+        ),
+      };
+    },
+
+    /**
+     * 解散群：金库里剩下的按各人累计存入的比例退回各自的钱包（除不尽的零头给存得最多的人），
+     * 其中算送的额度的份额和他存入时一样。解散后这个金库不能再花；可以重复调用
+     * （解散时还冻结着的钱，结算、退回之后由 releaseExpired 接着退）。
+     */
+    async dissolve(treasuryId: string): Promise<TreasuryRefunds> {
+      const savers = (await repo.treasuryMembers(treasuryId))
+        .filter((m) => m.userId && m.depositedMicro > 0)
+        .sort((a, b) => b.depositedMicro - a.depositedMicro);
+      const total = savers.reduce((sum, m) => sum + m.depositedMicro, 0);
+      const refunds = await repo.refund(treasuryId, (available) => {
+        const parts = savers.map((m) => Math.floor((available * m.depositedMicro) / total));
+        const rest = available - parts.reduce((sum, part) => sum + part, 0);
+        return savers.map((m, index) => {
+          const amountMicro = parts[index]! + (index === 0 ? rest : 0);
+          return {
+            userId: m.userId!,
+            amountMicro,
+            giftedMicro: Math.round((amountMicro * m.giftedMicro) / m.depositedMicro),
+          };
+        });
+      });
+      if (refunds.length) deps.logger.info({ treasuryId, refunds }, '金库解散，剩下的已退回');
+      return { refunds: refunds.map(({ userId, amountMicro }) => ({ userId, amountMicro })) };
+    },
+
     async releaseExpired(): Promise<number> {
       const ids = await repo.expiredHoldIds(now());
       let released = 0;
       for (const id of ids) if (await repo.releaseHold(id, now())) released += 1;
       if (released > 0) deps.logger.warn({ released }, '已退回过期未结算的冻结');
+      // 解散时还冻结着的钱后来结算、退回了：剩下的接着按比例退给各人
+      for (const id of await repo.closedWithMoney()) await this.dissolve(id);
       return released;
     },
   };

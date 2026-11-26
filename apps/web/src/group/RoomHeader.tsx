@@ -1,4 +1,4 @@
-// 聊天页顶上。群：群名、几个人几个 AI、真人头像叠放（点开是成员）、「⋯」群设置。照原型 ②。
+// 聊天页顶上。群：群名、几个人几个 AI、金库、真人头像叠放（点开是成员）、「⋯」群设置。照原型 ②。
 // 和一个好友的私聊：页头是对方的头像和名字。和一个 AI 的私聊：它的头像和名字、在哪干活，「开新话题」、删除。
 import type { GroupSpeak } from '@oasis/contracts/group';
 import { Ellipsis } from 'lucide-react';
@@ -16,6 +16,7 @@ import { AiAvatar } from '../ui/Avatar.tsx';
 import { MemberAvatar, MyNickname, PullFriends } from './Members.tsx';
 import { aiLook, headcount } from './people.ts';
 import { dmAct, useRoom } from './room.ts';
+import { VaultButton } from './Vault.tsx';
 
 /** 没人被 @ 的时候 AI 们怎么办（后两种按概率开口，见《群聊》§3） */
 const SPEAK: { id: GroupSpeak; label: string; desc: string }[] = [
@@ -111,7 +112,7 @@ function RoomMenu({ onClose, onLeft }: { onClose: () => void; onLeft: () => void
         {owner ? (
           <ConfirmButton
             label="解散群"
-            question="删除群及全部消息？此操作无法恢复。"
+            question="删除群及全部消息？金库里剩下的按各人存入的比例退回。此操作无法恢复。"
             confirmLabel="解散群"
             disabled={busy}
             onConfirm={() =>
@@ -268,6 +269,7 @@ function GroupHeader({ onLeft, children }: { onLeft: () => void; children: React
             {!online && ' · 连接中…'}
           </p>
         </div>
+        <VaultButton />
         <button
           type="button"
           aria-label={`成员 · ${group.memberCount}`}

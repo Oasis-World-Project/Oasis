@@ -11,7 +11,13 @@ import { createGroupSeats } from '../src/repo/group-seats.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
-import { befriend, fakeProfiles, groupAssign, groupFiles } from './support/group-fixture.ts';
+import {
+  befriend,
+  fakeProfiles,
+  fakeVault,
+  groupAssign,
+  groupFiles,
+} from './support/group-fixture.ts';
 import { client, event, fake, harnessUrl, othersUrl, until } from './support/turn-fixture.ts';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', () => {
@@ -25,6 +31,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
   const store = createConversationRepo(pool);
   let turns: Turns, groups: GroupService;
   const nudged: string[] = [];
+  const vault = fakeVault();
   beforeAll(async () => {
     await pool.query(`create schema ${schema}`);
     const root = new URL('../migrations/', import.meta.url);
@@ -46,6 +53,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
       logger,
       pollMs: 20,
       spendMs: 20,
+      funded: vault.funded,
     });
     groups = createGroupService({
       repo: createGroupRepo(pool, { members: 5, groups: 20, messagesPerMinute: 30, ais: 2 }),
@@ -63,6 +71,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
       assign: groupAssign(pool, { store, turns }),
       speak: { nudge: (groupId) => void nudged.push(groupId) },
       purge: createPurge({ harness, modelGateway, canvas }),
+      vault,
       logger,
     });
   });
@@ -117,8 +126,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     const sent = await say(owner, group.id, '预算按 60 人算', 'glm');
     expect(fake.starts).toHaveLength(1);
     const start = fake.starts[0]!;
-    // 花的钱记在群主账上；这一轮属于席位自己的会话，不是群
-    expect(start).toMatchObject({ payerId: owner, scene: 'group' });
+    // 花的是群的金库（账户号是群的 ID），记在叫它的人头上；这一轮属于席位自己的会话，不是群
+    expect(start).toMatchObject({ payerId: group.id, actorId: owner, scene: 'group' });
     expect(start.conversationId).not.toBe(group.id);
     expect(start.continueFrom).toBeUndefined();
     const prompt = String(start.prompt);
@@ -149,7 +158,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     );
   });
 
-  it('@ 全体：只挑一个先出来负责（挑不出来按进群先后），别的 AI 不因为这句话开工；成员叫的也记在群主账上', async () => {
+  it('@ 全体：只挑一个先出来负责（挑不出来按进群先后），别的 AI 不因为这句话开工；成员叫的花金库的钱、记在他头上', async () => {
     const group = await setup();
     const sent = await say(member, group.id, '大家各用一句话介绍自己', 'all');
     expect(fake.starts).toHaveLength(1);
@@ -157,7 +166,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
       data: { lead: 'claude' },
     });
     const start = fake.starts[0]!;
-    expect(start).toMatchObject({ payerId: owner, scene: 'group' });
+    expect(start).toMatchObject({ payerId: group.id, actorId: member, scene: 'group' });
     expect(String(start.prompt)).toContain('林夏 @全体 AI：大家各用一句话介绍自己');
     expect(String(start.prompt)).toContain(
       '轮到你了：林夏 @ 了全体 AI，判断下来你最对口，由你先出来负责（别的 AI 在等你说完）。',
@@ -254,6 +263,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     expect(fake.starts[0]!.continueFrom).toBeUndefined();
     fake.purged.length = 0;
     await groups.destroy(owner, group.id, 'r');
+    // 解散时金库里剩下的退回各人
+    expect(vault.dissolved).toEqual([group.id]);
     expect(fake.purged.filter((item) => item.startsWith('canvas:'))).toHaveLength(2);
     expect(fake.purged).toContain(`canvas:${seatId}`);
     expect(
@@ -263,5 +274,29 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
         ])
       ).rows[0].n,
     ).toBe(0);
+  });
+
+  it('金库空了：叫 AI 不开一轮，它那条消息写着金库空了；成员存入后就能用；不是成员不能看、不能存', async () => {
+    const group = await setup();
+    vault.balances.set(group.id, 0);
+    fake.starts.length = 0;
+    await say(member, group.id, '排一下流程', 'claude');
+    expect(fake.starts).toHaveLength(0);
+    expect((await groups.get(owner, group.id)).messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      status: 'failed',
+      error: '金库空了，存入后群里的 AI 才能用',
+    });
+    expect((await ai(group.id, 'claude')).runId).toBeNull();
+    await expect(groups.vault(randomUUID(), group.id)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(groups.deposit(randomUUID(), group.id, 5)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(await groups.deposit(member, group.id, 5_000_000)).toMatchObject({
+      availableMicro: 5_000_000,
+    });
+    await say(member, group.id, '再排一下流程', 'claude');
+    // 花金库的钱，记在叫它的成员头上
+    expect(fake.starts.at(-1)).toMatchObject({ payerId: group.id, actorId: member });
   });
 });

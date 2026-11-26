@@ -11,7 +11,13 @@ import { createGroupSeats } from '../src/repo/group-seats.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
-import { befriend, fakeProfiles, groupAssign, groupFiles } from './support/group-fixture.ts';
+import {
+  befriend,
+  fakeProfiles,
+  fakeVault,
+  groupAssign,
+  groupFiles,
+} from './support/group-fixture.ts';
 import { scratchSchema } from './support/schema.ts';
 import { client, event, fake, harnessUrl, othersUrl, until } from './support/turn-fixture.ts';
 
@@ -46,6 +52,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的分工', () => {
       assign: groupAssign(pool, { store, turns, speak }),
       speak,
       purge: createPurge({ harness, modelGateway, canvas }),
+      vault: fakeVault(),
       logger,
     });
   });

@@ -47,6 +47,8 @@ export const runKeys = pgTable('run_keys', {
   id: uuid('id').primaryKey(),
   keyHash: text('key_hash').notNull().unique(),
   payerId: uuid('payer_id').notNull(),
+  /** 花金库的钱时：这一轮是谁叫的 */
+  actorId: uuid('actor_id'),
   runId: uuid('run_id').notNull(),
   conversationId: uuid('conversation_id'),
   /** 用户打开了「只用国内模型」：这一轮的工具只给国内厂商的型号 */

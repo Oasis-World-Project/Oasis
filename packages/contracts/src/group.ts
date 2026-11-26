@@ -113,6 +113,10 @@ export const GroupAi = z.object({
 export type GroupAi = z.infer<typeof GroupAi>;
 export const AddGroupAiBody = z.object({ key: AiKey });
 export const GroupAiRoleBody = z.object({ role: z.string().trim().max(60) });
+/** 从自己的钱包往群的金库里存（最多一次 $1000） */
+export const VaultDepositBody = z.object({
+  amountMicro: z.number().int().positive().max(1_000_000_000),
+});
 /** 「现在告诉它」：排着的一句现在作为插话交给这个 AI 正在做的一轮 */
 export const GroupSteerBody = z.object({ key: AiKey });
 const AssignItemId = z.string().trim().min(1).max(20);

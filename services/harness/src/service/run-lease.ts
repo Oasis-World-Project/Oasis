@@ -6,6 +6,8 @@ export async function startRunLease(input: {
   client: ServiceClient;
   runId: string;
   payerId: string;
+  /** 花金库的钱时：这一轮是谁叫的 */
+  actorId?: string;
   keyId: string;
   keyTtlSeconds: number;
   /** 沙箱的核数；0：在用户自己的电脑上跑，不冻结、不收算力钱，只续凭证 */
@@ -37,7 +39,13 @@ export async function startRunLease(input: {
   const reserve = async () =>
     cores > 0
       ? client.json('POST', '/internal/v1/compute', {
-          body: { runId, payerId: input.payerId, cores, maxMs: windowMs },
+          body: {
+            runId,
+            payerId: input.payerId,
+            ...(input.actorId ? { actorId: input.actorId } : {}),
+            cores,
+            maxMs: windowMs,
+          },
           schema: ComputeHold,
           requestId: runId,
         })

@@ -83,7 +83,7 @@ const Materials = z
   .array(
     z.union([
       z.object({ uploadId: z.uuid(), path: MaterialPath, ownerId: z.uuid().optional() }),
-      z.object({ artifactId: z.uuid(), path: MaterialPath }),
+      z.object({ artifactId: z.uuid(), path: MaterialPath, ownerId: z.uuid().optional() }),
     ]),
   )
   .max(2000);
@@ -91,7 +91,10 @@ const Materials = z
 export const StartRunBody = z.object({
   /** 调用方可以自带运行 ID（便于幂等）；不给就由 harness 生成 */
   runId: z.uuid().optional(),
+  /** 花哪个账户的钱：个人的账户号是用户 ID，群的金库是群的 ID */
   payerId: z.uuid(),
+  /** 这一轮替谁做的（他的电脑、他名下的文件；花金库的钱时记在他头上）：不给就是付钱的那个人自己 */
+  actorId: z.uuid().optional(),
   /** 这一轮属于哪个对话：删对话时一起清理 */
   conversationId: z.uuid(),
   /** 供应商型号，如 deepseek/deepseek-v4.1-flash */
@@ -111,12 +114,12 @@ export const StartRunBody = z.object({
    * 交给 AI 的文件：开沙箱前由 harness 向 canvas 取出，放在沙箱里的 path（如 materials/照片.jpg）。
    * uploadId 是用户随消息发的文件；artifactId 是画布里的成果（「让 AI 改」的成果不在这个会话的
    * 工作目录里时拷一份进来）。是不是这个用户的，conversation 收消息时已经核对过。
-   * ownerId：这个文件在 canvas 里是谁名下的；不给就是付费人（群里别的成员传的群文件要给）。
+   * ownerId：这个文件在 canvas 里是谁名下的；不给就是这一轮替谁做的那个人（群里的文件都要给）。
    */
   materials: Materials.default([]),
   /**
    * 接着上一轮做：挂上它的持久工作目录（会话、out/、装好的依赖都在），AI 记得前面的事。
-   * 只能接同一付费人、已结束、工作目录还在的运行；工作目录不在了返回 409 {@link WORKSPACE_UNAVAILABLE}。
+   * 只能接同一个对话里已结束、工作目录还在的运行；工作目录不在了返回 409 {@link WORKSPACE_UNAVAILABLE}。
    */
   continueFrom: z.uuid().optional(),
   /** 在哪干活：不给就是云端沙箱 */

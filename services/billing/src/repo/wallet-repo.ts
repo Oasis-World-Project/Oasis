@@ -1,5 +1,5 @@
 // 钱包的数据访问。每个改余额的操作都在一个事务里完成，并靠行锁和表约束防止并发出错。
-import { and, eq, gte, lt, sql, sum } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, isNull, lt, sql, sum } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { holds, ledgerEntries, processedEvents, wallets } from './schema.ts';
@@ -46,9 +46,10 @@ export function createWalletRepo(pool: pg.Pool) {
       });
     },
 
-    /** 可用余额够才冻结；不够返回 undefined。 */
+    /** 可用余额够才冻结；不够（或是解散了的金库）返回 undefined。 */
     async createHold(input: {
       userId: string;
+      actorId?: string | undefined;
       amountMicro: number;
       reason: string;
       ref: string;
@@ -64,6 +65,7 @@ export function createWalletRepo(pool: pg.Pool) {
           .where(
             and(
               eq(wallets.userId, input.userId),
+              isNull(wallets.closedAt),
               sql`${wallets.balanceMicro} - ${wallets.heldMicro} >= ${input.amountMicro}`,
             ),
           )
@@ -116,6 +118,7 @@ export function createWalletRepo(pool: pg.Pool) {
           .where(eq(holds.id, holdId));
         await tx.insert(ledgerEntries).values({
           userId: hold.userId,
+          actorId: hold.actorId,
           kind: 'charge',
           amountMicro: charged,
           holdId,
@@ -157,6 +160,170 @@ export function createWalletRepo(pool: pg.Pool) {
         .select({ id: holds.id })
         .from(holds)
         .where(and(eq(holds.status, 'open'), lt(holds.expiresAt, now)))
+        .limit(limit);
+      return rows.map((row) => row.id);
+    },
+
+    /**
+     * 往金库里存：从这个人的钱包转进金库（没有金库就建）。可用余额不够返回 undefined。
+     * 其中有多少是注册送的额度记在两条流水上（送的先花、先存）：退回时仍算送的。
+     */
+    async deposit(userId: string, treasuryId: string, amountMicro: number) {
+      return db.transaction(async (tx) => {
+        const [wallet] = await tx
+          .select()
+          .from(wallets)
+          .where(eq(wallets.userId, userId))
+          .for('update');
+        if (!wallet || wallet.balanceMicro - wallet.heldMicro < amountMicro) return undefined;
+        const [moved] = await tx
+          .select({
+            spent: sql<string>`coalesce(sum(${ledgerEntries.amountMicro}) filter (where ${ledgerEntries.kind} = 'charge'), 0)`,
+            giftedOut: sql<string>`coalesce(sum((${ledgerEntries.detail}->>'giftedMicro')::bigint) filter (where ${ledgerEntries.kind} = 'transfer_out'), 0)`,
+            giftedIn: sql<string>`coalesce(sum((${ledgerEntries.detail}->>'giftedMicro')::bigint) filter (where ${ledgerEntries.kind} = 'transfer_in'), 0)`,
+          })
+          .from(ledgerEntries)
+          .where(eq(ledgerEntries.userId, userId));
+        const giftedLeft = Math.max(
+          0,
+          wallet.grantedMicro -
+            Number(moved?.spent ?? 0) -
+            Number(moved?.giftedOut ?? 0) +
+            Number(moved?.giftedIn ?? 0),
+        );
+        const giftedMicro = Math.min(amountMicro, giftedLeft, wallet.balanceMicro);
+        await tx
+          .update(wallets)
+          .set({
+            balanceMicro: sql`${wallets.balanceMicro} - ${amountMicro}`,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(wallets.userId, userId));
+        await tx
+          .insert(wallets)
+          .values({ userId: treasuryId, balanceMicro: amountMicro, heldMicro: 0, grantedMicro: 0 })
+          .onConflictDoUpdate({
+            target: wallets.userId,
+            set: {
+              balanceMicro: sql`${wallets.balanceMicro} + ${amountMicro}`,
+              updatedAt: sql`now()`,
+            },
+          });
+        await tx.insert(ledgerEntries).values([
+          {
+            userId,
+            actorId: treasuryId,
+            kind: 'transfer_out',
+            amountMicro,
+            ref: 'deposit',
+            detail: { giftedMicro },
+          },
+          {
+            userId: treasuryId,
+            actorId: userId,
+            kind: 'transfer_in',
+            amountMicro,
+            ref: 'deposit',
+            detail: { giftedMicro },
+          },
+        ]);
+        return true;
+      });
+    },
+
+    /** 金库的账：每个人存了多少（连其中送的额度）、叫 AI 花了多少 */
+    async treasuryMembers(treasuryId: string) {
+      const rows = await db
+        .select({
+          userId: ledgerEntries.actorId,
+          deposited: sql<string>`coalesce(sum(${ledgerEntries.amountMicro}) filter (where ${ledgerEntries.kind} = 'transfer_in'), 0)`,
+          gifted: sql<string>`coalesce(sum((${ledgerEntries.detail}->>'giftedMicro')::bigint) filter (where ${ledgerEntries.kind} = 'transfer_in'), 0)`,
+          spent: sql<string>`coalesce(sum(${ledgerEntries.amountMicro}) filter (where ${ledgerEntries.kind} = 'charge'), 0)`,
+        })
+        .from(ledgerEntries)
+        .where(
+          and(
+            eq(ledgerEntries.userId, treasuryId),
+            sql`${ledgerEntries.kind} in ('transfer_in', 'charge')`,
+          ),
+        )
+        .groupBy(ledgerEntries.actorId);
+      return rows.map((row) => ({
+        userId: row.userId,
+        depositedMicro: Number(row.deposited),
+        giftedMicro: Number(row.gifted),
+        spentMicro: Number(row.spent),
+      }));
+    },
+
+    /**
+     * 解散：金库记成已解散，里面没被冻结的钱按 shares 退回各人的钱包（shares 由调用方按存入比例算好），
+     * 金库清到只剩冻结着的。没钱可退时只记已解散，可以重复调用。
+     */
+    async refund(
+      treasuryId: string,
+      shares: (available: number) => { userId: string; amountMicro: number; giftedMicro: number }[],
+    ) {
+      return db.transaction(async (tx) => {
+        const [wallet] = await tx
+          .select()
+          .from(wallets)
+          .where(eq(wallets.userId, treasuryId))
+          .for('update');
+        if (!wallet) return [];
+        const available = wallet.balanceMicro - wallet.heldMicro;
+        const refunds = available > 0 ? shares(available).filter((r) => r.amountMicro > 0) : [];
+        const total = refunds.reduce((sum, r) => sum + r.amountMicro, 0);
+        await tx
+          .update(wallets)
+          .set({
+            balanceMicro: sql`${wallets.balanceMicro} - ${total}`,
+            closedAt: sql`coalesce(${wallets.closedAt}, now())`,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(wallets.userId, treasuryId));
+        for (const { userId, amountMicro, giftedMicro } of refunds) {
+          await tx
+            .insert(wallets)
+            .values({ userId, balanceMicro: amountMicro, heldMicro: 0, grantedMicro: 0 })
+            .onConflictDoUpdate({
+              target: wallets.userId,
+              set: {
+                balanceMicro: sql`${wallets.balanceMicro} + ${amountMicro}`,
+                updatedAt: sql`now()`,
+              },
+            });
+          await tx.insert(ledgerEntries).values([
+            {
+              userId: treasuryId,
+              actorId: userId,
+              kind: 'transfer_out',
+              amountMicro,
+              ref: 'dissolve',
+              detail: { giftedMicro },
+            },
+            {
+              userId,
+              actorId: treasuryId,
+              kind: 'transfer_in',
+              amountMicro,
+              ref: 'dissolve',
+              detail: { giftedMicro },
+            },
+          ]);
+        }
+        return refunds;
+      });
+    },
+
+    /** 解散了、里面又有了能退的钱的金库（解散时还冻结着的，后来退回来了） */
+    async closedWithMoney(limit = 100): Promise<string[]> {
+      const rows = await db
+        .select({ id: wallets.userId })
+        .from(wallets)
+        .where(
+          and(isNotNull(wallets.closedAt), sql`${wallets.balanceMicro} - ${wallets.heldMicro} > 0`),
+        )
         .limit(limit);
       return rows.map((row) => row.id);
     },
