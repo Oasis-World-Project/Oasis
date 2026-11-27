@@ -36,7 +36,8 @@ export const revise = {
           description: '写文案和海报说明',
         },
       ],
-      reply: '文案和海报说明写好了。',
+      // 收尾时写明主成果：记在任务卡上、排在最前面，改过一轮还是它
+      reply: '文案和海报说明写好了。\n\n```oasis-deliver\n{ "main": "out/海报说明.md" }\n```',
     },
     2: {
       steps: [
@@ -105,8 +106,9 @@ export const revise = {
         card.data.revision === 1 &&
         card.data.runs?.join() === runs.map((run) => run.id).join() &&
         card.data.files.length === 2 &&
-        card.data.files.some((file) => file.artifactId === sheet.id),
-      `让 AI 改应算在原来那张任务卡上（一张卡、两轮、改了 1 次、成果还是那 2 个）：${JSON.stringify(cards.map((m) => m.data))}`,
+        card.data.main === '海报说明.md' &&
+        card.data.files[0].artifactId === sheet.id,
+      `让 AI 改应算在原来那张任务卡上（一张卡、两轮、改了 1 次、成果还是那 2 个，AI 写明的主成果排第一）：${JSON.stringify(cards.map((m) => m.data))}`,
     );
 
     // ---- 在云端做：这件事单独派出去，开一份自己的会话（不接着私聊的），花自己的钱包 ----

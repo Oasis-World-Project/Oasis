@@ -63,6 +63,7 @@ export function createTaskCards(deps: {
         revision: (before.revision ?? 0) + 1,
         spentMicro: before.spentMicro,
         files: before.files,
+        ...(before.main ? { main: before.main } : {}),
       },
     };
   }
@@ -86,6 +87,8 @@ export function createTaskCards(deps: {
           revision: before.revision,
           spentMicro: before.spentMicro + card.spentMicro,
           // 改过的成果在画布里是原地换新、编号不变：原来的顺序留着，新交的排在后面
+          // 这一轮没再写明主成果：还是原来那个
+          ...(!card.main && before.main ? { main: before.main } : {}),
           files: [
             ...before.files.map(
               (old) => card.files.find((file) => file.artifactId === old.artifactId) ?? old,
@@ -96,6 +99,11 @@ export function createTaskCards(deps: {
           ],
         }
       : made;
+    // 主成果排在最前面：任务卡、任务窗、画布里都照这个顺序
+    data.files = [
+      ...data.files.filter((file) => file.path === data.main),
+      ...data.files.filter((file) => file.path !== data.main),
+    ];
     if (turn.cardId && (await store.updateMessage(turn.cardId, { content, data }))) return;
     const created = await store.insertMessage({
       conversationId: roomOf(conversation),

@@ -153,6 +153,8 @@ export const TaskCard = z.object({
   asking: z.boolean().optional(),
   /** 做它的那份会话（挂在群或私聊下面、不显示的那一行）：改这个任务就接着它做。私聊里家里做的没有 */
   seat: z.uuid().optional(),
+  /** 主成果：files 里的一个路径，AI 收尾时自己写明的（oasis-deliver）；没写就没有 */
+  main: z.string().optional(),
   /** 任务名：任务单的标题，没有就是用户要求的开头（以前的任务卡没有） */
   title: z.string().optional(),
   status: z.enum(['running', 'done', 'stopped', 'failed']),
@@ -343,6 +345,9 @@ export const AssignBlock = z.object({
 export type AssignBlock = z.infer<typeof AssignBlock>;
 /** ```oasis-decline 代码块：分工单里交给自己的那一项不接，写明原因 */
 export const DeclineBlock = z.object({ reason: z.string().trim().max(500).default('') });
+
+/** ```oasis-deliver 代码块：AI 收尾时写明这一轮的主成果是哪个文件（out/ 下的路径）；不显示在话里 */
+export const DeliverBlock = z.object({ main: z.string().trim().min(1).max(500) });
 
 /** ```oasis-plan 代码块：大活开工前给用户看的任务单，用户确认后照着做 */
 export const PlanBlock = z.object({

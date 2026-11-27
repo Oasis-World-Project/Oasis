@@ -113,7 +113,9 @@ export function groupTasks(input: {
   });
   for (const group of kept) {
     group.title ||= '未命名任务';
-    group.finals.sort(byPath);
+    // 主成果（AI 自己写明的）排在最前面
+    const main = group.task?.main;
+    group.finals.sort((a, b) => Number(b.path === main) - Number(a.path === main) || byPath(a, b));
     group.materials.sort(byPath);
   }
   return { groups: kept.sort((a, b) => b.at - a.at), matching };

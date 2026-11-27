@@ -21,7 +21,7 @@ export interface Turn {
   /** 任务卡消息：这一轮用了生图、视频这类工具或交了文件才有；改一个任务的那一轮一开始就是那个任务的卡 */
   cardId?: string;
   /** 这一轮是在改一个已有的任务：那张卡在这一轮之前的样子（名字、做过的每一轮、成果、已经花的） */
-  revises?: Pick<TaskCard, 'title' | 'spentMicro' | 'files'> & {
+  revises?: Pick<TaskCard, 'title' | 'spentMicro' | 'files' | 'main'> & {
     runs: string[];
     revision: number;
   };

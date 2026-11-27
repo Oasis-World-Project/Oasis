@@ -1,10 +1,12 @@
 // 把 harness 的运行事件写进 AI 的消息：AI 说的话、做的步骤、待办、系统提示。
 // AI 看到用户的插话时分段：之后的写进一条新的 AI 消息，插话排在前一段后面。
 import {
+  DeliverBlock,
   StepJob,
   TodoItem,
   type MessagePart,
   type StepPart,
+  type TaskFile,
   type TodoItem as Todo,
 } from '@oasis/contracts/conversation';
 import type { RunBody, RunEventBody } from '@oasis/contracts/harness';
@@ -47,6 +49,30 @@ const NOTICES: Record<string, string> = {
 
 /** 生图、视频这类工具通常要多久（秒，按调用记录）：工具名和点名的型号（没点名用默认的）；不知道为 undefined */
 export type Durations = (tool: string, model: string | undefined) => number | undefined;
+
+/** AI 收尾时写明主成果的代码块（harness 给 AI 的说明里有写法）；有的模型把它写在一行里 */
+const DELIVER = /```oasis-deliver\b([\s\S]*?)```/g;
+
+/**
+ * 这一轮的主成果：AI 最后那段话里的 oasis-deliver 代码块写的路径（out/ 下的），得是这一轮任务里的文件。
+ * 没写、写得不对、对不上文件都算没有。
+ */
+export function mainOf(said: string, files: Pick<TaskFile, 'path'>[]): string | undefined {
+  const body = [...said.matchAll(DELIVER)].at(-1)?.[1];
+  if (!body) return undefined;
+  let parsed;
+  try {
+    parsed = DeliverBlock.safeParse(
+      JSON.parse(body.slice(body.indexOf('{'), body.lastIndexOf('}') + 1)),
+    );
+  } catch {
+    return undefined;
+  }
+  if (!parsed.success) return undefined;
+  // 用户电脑上 out/ 是 .oasis/out/，Windows 上可能写成反斜杠
+  const path = parsed.data.main.replaceAll('\\', '/').replace(/^(\.\/)?(\.oasis\/)?(out\/)?/, '');
+  return files.find((file) => file.path === path)?.path;
+}
 
 /** 工具目录（各型号通常要多久）多久重新拉一次 */
 const CATALOG_MS = 5 * 60_000;

@@ -34,6 +34,7 @@ import {
   contentOf,
   failure,
   refused,
+  mainOf,
   segmentOf,
   settleSteps,
   terminal,
@@ -120,6 +121,7 @@ export function createTurns(deps: TurnDeps) {
         })
       : { spentMicro: 0, tools: [] };
     const message = await store.findMessage(roomOf(conversation), turn.segmentId);
+    let said = '';
     if (message) {
       const settled = settleSteps(
         segmentOf(message),
@@ -127,8 +129,9 @@ export function createTurns(deps: TurnDeps) {
         run?.finishedAt ?? new Date().toISOString(),
       );
       for (const text of notices) settled.parts.push({ type: 'notice', text });
+      said = contentOf(settled);
       await store.updateMessage(message.id, {
-        content: contentOf(settled),
+        content: said,
         status: status === 'failed' ? 'failed' : 'complete',
         error: status === 'failed' ? failure(run?.error) : null,
         data: {
@@ -149,6 +152,8 @@ export function createTurns(deps: TurnDeps) {
         finishedAt: run?.finishedAt ?? new Date().toISOString(),
         spentMicro: spend.spentMicro,
         files,
+        // 主成果：AI 收尾时自己写明的那个文件
+        ...(mainOf(said, files) ? { main: mainOf(said, files) } : {}),
       });
     // 和用户的操作错开：拿到 message 锁再收尾，免得用户这时发的话两头落空
     for (let attempt = 0; ; attempt += 1) {

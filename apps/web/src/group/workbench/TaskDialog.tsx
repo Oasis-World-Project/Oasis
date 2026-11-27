@@ -235,7 +235,14 @@ export function TaskDialog({
         <div className="scroll-quiet flex min-h-0 flex-col gap-[18px] overflow-y-auto">
           {task.files.length > 0 && (
             <section aria-label="成果" className="flex flex-col gap-2.5">
-              <h3 className="m-0 text-sm font-medium">成果</h3>
+              <h3 className="m-0 flex items-baseline gap-2 text-sm font-medium">
+                成果
+                {task.main && (
+                  <span className="text-xs font-normal text-ink-muted">
+                    第一个是{look.name}自己标的主成果
+                  </span>
+                )}
+              </h3>
               <span className="flex flex-wrap gap-1.5">
                 {task.files.map((file) => (
                   <button
@@ -245,7 +252,10 @@ export function TaskDialog({
                       onFile(file.path);
                       onClose();
                     }}
-                    className="h-[30px] max-w-full cursor-pointer truncate rounded-full border-0 bg-well px-3 text-xs font-medium text-ink"
+                    aria-current={file.path === task.main ? 'true' : undefined}
+                    className={`h-[30px] max-w-full cursor-pointer truncate rounded-full border-0 px-3 text-xs font-medium ${
+                      file.path === task.main ? 'bg-solid text-on-solid' : 'bg-well text-ink'
+                    }`}
                   >
                     {file.name}
                   </button>

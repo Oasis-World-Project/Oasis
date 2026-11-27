@@ -296,7 +296,7 @@ describe('聊天里的任务', () => {
     );
   });
 
-  it('做完：一条任务（任务名、交了几个文件、花费）和它交的文件；文件点开在工作台预览、能下载、能去画布；弹出的窗里写着用时', async () => {
+  it('做完：一条任务（任务名、交了几个文件、花费）和它交的文件；文件点开在工作台预览、能下载、能去画布；弹出的窗里写着用时、标出主成果', async () => {
     const PAGE = '00000000-0000-4000-8000-0000000000d1';
     const card = message('task', {
       runId: RUN,
@@ -305,6 +305,7 @@ describe('聊天里的任务', () => {
       startedAt: '2026-11-14T08:00:00.000Z',
       finishedAt: '2026-11-14T08:03:20.000Z',
       spentMicro: 120_000,
+      main: 'site/index.html',
       files: [
         {
           artifactId: PAGE,
@@ -322,8 +323,11 @@ describe('聊天里的任务', () => {
         },
       ],
     });
-    fakeChat([user('做个网页'), ai([say('做好了')], { spentMicro: 120_000 }), card]);
+    // AI 写明主成果的那一块不显示在话里
+    const said = '做好了\n\n```oasis-deliver\n{ "main": "site/index.html" }\n```';
+    fakeChat([user('做个网页'), ai([say(said)], { spentMicro: 120_000 }), card]);
     await openChat();
+    expect(screen.queryByText(/oasis-deliver/)).toBeNull();
     const row = await screen.findByRole('button', { name: 'Claude：民宿首页' });
     expect(row.textContent).toContain('交了 2 个文件');
     expect(row.textContent).toContain('$0.1200');
@@ -343,7 +347,16 @@ describe('聊天里的任务', () => {
     fireEvent.click(row);
     const dialog = screen.getByRole('dialog', { name: '民宿首页' });
     expect(dialog.textContent).toContain('用时 3 分 20 秒');
-    expect(within(dialog).getByRole('region', { name: '成果' })).toBeTruthy();
+    const outs = within(dialog).getByRole('region', { name: '成果' });
+    expect(outs.textContent).toContain('自己标的主成果');
+    expect(
+      within(outs)
+        .getAllByRole('button')
+        .map((button) => [button.textContent, button.getAttribute('aria-current')]),
+    ).toEqual([
+      ['index.html', 'true'],
+      ['首屏.png', null],
+    ]);
     expect(within(dialog).queryByRole('button', { name: '停下' })).toBeNull();
   });
 });

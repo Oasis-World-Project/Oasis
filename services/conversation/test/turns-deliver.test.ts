@@ -1,5 +1,5 @@
 // 做好一个就进画布：一轮进行中，做完的步骤存下的 out/ 里的文件登记进画布、写到任务卡上；结束时按
-// 产出清单再登记一遍。画布按任务分用的任务列表。
+// 产出清单再登记一遍。画布按任务分用的任务列表。AI 收尾时写明的主成果记在任务卡上、排在最前面。
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
@@ -110,5 +110,39 @@ describe('做好一个就进画布', () => {
       run(second, { status: 'succeeded', finishedAt: new Date().toISOString() }),
     );
     await finished();
+  });
+
+  it('AI 收尾时用 oasis-deliver 写明主成果：记在任务卡上、排在最前面；写的不是这一轮的文件就没有主成果', async () => {
+    const deliver = async (said: string) => {
+      const runId = (await send('写报告')).turn!.runId;
+      fake.events.set(runId, [event(0, 'assistant_text', { text: said })]);
+      fake.runs.set(
+        runId,
+        run(runId, {
+          status: 'succeeded',
+          outputs: ['数据.csv', '报告.docx'].map((path) => ({
+            path,
+            size: 1,
+            sha256: 'c'.repeat(64),
+          })),
+          finishedAt: new Date().toISOString(),
+        }),
+      );
+      fake.events.get(runId)!.push(event(1, 'turn_end', { reason: 'completed' }));
+      await finished();
+      return repo.messages.filter((m) => m.kind === 'task').at(-1)!.data as {
+        main?: string;
+        files: { path: string }[];
+      };
+    };
+    const card = await deliver(
+      '报告写好了。\n\n```oasis-deliver\n{ "main": "out/报告.docx" }\n```',
+    );
+    expect(card.main).toBe('报告.docx');
+    expect(card.files.map((file) => file.path)).toEqual(['报告.docx', '数据.csv']);
+
+    const none = await deliver('好了。\n\n```oasis-deliver\n{ "main": "别的.docx" }\n```');
+    expect(none.main).toBeUndefined();
+    expect(none.files.map((file) => file.path)).toEqual(['数据.csv', '报告.docx']);
   });
 });

@@ -47,6 +47,7 @@ const TASKS = [
     startedAt: '2026-10-24T01:00:00.000Z',
     finishedAt: '2026-10-24T01:10:00.000Z',
     spentMicro: 350_000,
+    main: '预热短片.mp4',
     files: [],
   },
 ];
@@ -155,6 +156,8 @@ describe('画布', () => {
     expect(within(home).getByRole('heading', { name: '成品' })).toBeTruthy();
     expect(within(home).getByRole('heading', { name: /素材/ }).textContent).toContain('1');
     expect(within(home).getAllByRole('article')).toHaveLength(3);
+    // AI 自己标的主成果排在成品的最前面（没标就按名字排）
+    expect(within(home).getAllByRole('article')[0]!.textContent).toContain('预热短片.mp4');
     expect(within(home).getByRole('link', { name: '看过程' }).getAttribute('href')).toBe(
       `/dms/${CONV}?task=${RUN}`,
     );

@@ -33,7 +33,10 @@ export interface RoomTask {
   /** 过程：这一轮按先后的每一段（步骤、边做边说的话、提示） */
   parts: MessagePart[];
   todos?: TodoItem[];
+  /** 交的文件；有主成果时它排在最前面（任务卡上就是这个顺序） */
   files: TaskFile[];
+  /** 主成果的路径：AI 收尾时自己写明的；没写就没有 */
+  main?: string;
   spentMicro: number;
   startedAt: string;
   finishedAt: string | null;
@@ -184,6 +187,7 @@ export function tasksOf(messages: GroupMessage[]): RoomTask[] {
       parts,
       ...(todos ? { todos } : {}),
       files,
+      ...(card?.data.main ? { main: card.data.main } : {}),
       spentMicro:
         card?.data.spentMicro ?? texts.reduce((sum, m) => sum + (m.data.spentMicro ?? 0), 0),
       startedAt: card?.data.startedAt ?? texts[0]?.createdAt ?? card!.createdAt,
