@@ -1,8 +1,8 @@
 import type { StartRunBody } from '@oasis/contracts/harness';
-import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, notInArray, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
-import { runEvents, runs } from './schema.ts';
+import { runEvents, runs, sessionVersions } from './schema.ts';
 
 export type Run = typeof runs.$inferSelect;
 export type RunEvent = typeof runEvents.$inferSelect;
@@ -30,6 +30,8 @@ export type RunOutcome = Pick<Run, 'status' | 'error' | 'outputs' | 'summary'> &
 };
 
 const UNFINISHED = ['queued', 'starting', 'running'] as const;
+/** 一份会话留几版会话记录：能连着撤回最近的几轮（留 n 版能连着撤 n - 1 轮） */
+export const VERSIONS_KEPT = 4;
 
 export interface RunsRepo {
   /** 插入一条新运行；ID 已存在时不插入，返回 false（调用方自带 ID 时用于幂等） */
@@ -51,8 +53,15 @@ export interface RunsRepo {
   /** 属于这个对话的全部运行（删对话、开新话题时清理） */
   listByConversation(conversationId: string): Promise<Run[]>;
   listBySession(sessionId: string): Promise<Run[]>;
-  /** 删掉这些运行（运行事件级联删除） */
+  /** 删掉这些运行（运行事件、存的会话记录级联删除） */
   removeMany(ids: string[]): Promise<void>;
+  /** 存下这一轮结束时的会话记录；这份会话只留最近 {@link VERSIONS_KEPT} 版 */
+  saveVersion(run: Pick<Run, 'id' | 'sessionId'>, archive: Buffer): Promise<void>;
+  /** 这一轮结束时的会话记录：有没有存、要不要在下一轮起 dsh 前放回去 */
+  version(runId: string): Promise<{ archive: Buffer; restore: boolean } | undefined>;
+  hasVersion(runId: string): Promise<boolean>;
+  /** 下一轮起 dsh 前要不要先把这一版放回去 */
+  setRestore(runId: string, restore: boolean): Promise<void>;
 }
 
 export function createRunsRepo(pool: pg.Pool): RunsRepo {
@@ -168,6 +177,43 @@ export function createRunsRepo(pool: pg.Pool): RunsRepo {
     listBySession: (sessionId) => db.select().from(runs).where(eq(runs.sessionId, sessionId)),
     async removeMany(ids) {
       if (ids.length) await db.delete(runs).where(inArray(runs.id, ids));
+    },
+    async saveVersion(run, archive) {
+      const sessionId = run.sessionId ?? run.id;
+      await db.transaction(async (tx) => {
+        await tx
+          .insert(sessionVersions)
+          .values({ runId: run.id, sessionId, archive })
+          .onConflictDoUpdate({ target: sessionVersions.runId, set: { archive } });
+        const kept = tx
+          .select({ runId: sessionVersions.runId })
+          .from(sessionVersions)
+          .where(eq(sessionVersions.sessionId, sessionId))
+          .orderBy(desc(sessionVersions.createdAt))
+          .limit(VERSIONS_KEPT);
+        await tx
+          .delete(sessionVersions)
+          .where(
+            and(eq(sessionVersions.sessionId, sessionId), notInArray(sessionVersions.runId, kept)),
+          );
+      });
+    },
+    async version(runId) {
+      const [row] = await db
+        .select({ archive: sessionVersions.archive, restore: sessionVersions.restore })
+        .from(sessionVersions)
+        .where(eq(sessionVersions.runId, runId));
+      return row;
+    },
+    async hasVersion(runId) {
+      const rows = await db
+        .select({ runId: sessionVersions.runId })
+        .from(sessionVersions)
+        .where(eq(sessionVersions.runId, runId));
+      return rows.length > 0;
+    },
+    async setRestore(runId, restore) {
+      await db.update(sessionVersions).set({ restore }).where(eq(sessionVersions.runId, runId));
     },
   };
 }

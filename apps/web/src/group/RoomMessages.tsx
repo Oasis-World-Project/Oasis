@@ -13,12 +13,14 @@ import { AiBody } from '../chat/AiMessage.tsx';
 import { FileChip } from '../chat/FileChip.tsx';
 import { FilePreview, type PreviewFile } from '../chat/FilePreview.tsx';
 import { MessageText } from '../chat/MessageText.tsx';
+import { splitBlocks } from '../chat/blocks.ts';
 import { ChatActionsContext } from '../chat/use-chat-actions.ts';
 import { useStickToBottom } from '../chat/use-stick-to-bottom.ts';
 import { AiAvatar } from '../ui/Avatar.tsx';
 import { actionsFor } from './ai-actions.ts';
 import { AssignProgress } from './AssignProgress.tsx';
 import { MemberAvatar } from './Members.tsx';
+import { MessageActions } from './MessageActions.tsx';
 import { aiLook, DIVIDER_GAP_MS, dividerText } from './people.ts';
 import { mentionText, uploadPath, useRoom } from './room.ts';
 import { FilePill } from './workbench/files.tsx';
@@ -144,7 +146,16 @@ function RevisedArtifacts({ artifacts }: { artifacts: MessageArtifact[] }) {
   );
 }
 
-function UserMessage({ message, unseen }: { message: TextMessage; unseen: boolean }) {
+function UserMessage({
+  message,
+  unseen,
+  retractable,
+}: {
+  message: TextMessage;
+  unseen: boolean;
+  /** 我的最后一句：能编辑、删除 */
+  retractable: boolean;
+}) {
   const { group, me, owner, models, busy, act } = useRoom();
   const mine = message.authorId === me;
   const mentions = message.data.mentions ?? [];
@@ -195,6 +206,9 @@ function UserMessage({ message, unseen }: { message: TextMessage; unseen: boolea
       )}
       {artifacts.length > 0 && <RevisedArtifacts artifacts={artifacts} />}
       <MessageFiles message={message} mine={mine} />
+      {message.content.length > 0 && (
+        <MessageActions text={message.content} retract={retractable ? message.id : undefined} />
+      )}
       {waiting.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 px-1 text-xs text-ink-muted">
           {waiting.map((ai) => (
@@ -221,6 +235,10 @@ function UserMessage({ message, unseen }: { message: TextMessage; unseen: boolea
 function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) {
   const { models } = useRoom();
   const look = aiLook(models, message.authorId, message.displayName);
+  // 复制的是它说的话：问卷、任务单这些卡片和不显示的块不算
+  const said = splitBlocks(message.content)
+    .flatMap((block) => (block.kind === 'text' ? [block.text] : []))
+    .join('\n\n');
   return (
     <Row
       name={look.name}
@@ -242,6 +260,7 @@ function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) 
             style: { background: `color-mix(in srgb, ${look.glow} 14%, transparent)` },
           }}
         />
+        {message.status !== 'streaming' && said && <MessageActions text={said} />}
       </div>
     </Row>
   );
@@ -315,6 +334,13 @@ export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder
     () => new Map(group.ais.map((ai) => [ai.key, actionsFor(room, ai.key)])),
     [group.ais, room],
   );
+  // 和 AI 的私聊里我的最后一句（它没在做、不是派到云端的）：能编辑、删除
+  const lastMine = useMemo(() => {
+    const last = messages.findLast((m) => m.role === 'user');
+    return group.kind === 'dm' && !group.ais[0]?.runId && last?.kind === 'text' && !last.data.task
+      ? last.id
+      : undefined;
+  }, [messages, group.kind, group.ais]);
   const now = new Date();
   // 消息区是 relative：消息里绝对定位的东西以它为定位基准，跟着它裁剪和滚动（私聊页同样的处理）
   return (
@@ -381,6 +407,7 @@ export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder
               ) : message.role === 'user' ? (
                 <UserMessage
                   message={message}
+                  retractable={message.id === lastMine}
                   // AI 看到插话才在它后面接着写：前面那段还在写、后面还没有它的话，就是还没看到
                   unseen={
                     messages

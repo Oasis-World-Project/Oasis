@@ -108,7 +108,8 @@ describe('对话里的一轮：插话、停止和取消', () => {
       error: '已停止',
       outputs: [{ path: 'result.md' }],
     });
-    expect(lifecycle.slice(0, 3)).toEqual(['pause', 'archive', 'destroy']);
+    // 先停住，存下会话记录、列出产出，再销毁
+    expect(lifecycle.slice(0, 4)).toEqual(['pause', 'archive', 'archive', 'destroy']);
     expect(await service.get(run.id)).toMatchObject({ resumable: true });
     expect(destroyed).toContain(run.id);
     expect(revoked).toHaveLength(1);

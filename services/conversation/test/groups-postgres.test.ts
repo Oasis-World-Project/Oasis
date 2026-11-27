@@ -335,7 +335,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     expect(await store.startTurn(conversation.id, { ...turn, runId: r2 })).toBe(true);
     await store.endTurn(conversation.id, r2, r2);
     expect(await store.find(conversation.id)).toMatchObject({ lastRunId: r2 });
-    await store.newTopic(conversation.id);
+    await store.resumeFrom(conversation.id, null);
     expect(await store.find(conversation.id)).toMatchObject({ lastRunId: null });
     // 画布按任务分：这个人私聊里的任务卡；消息列最近的几条
     await store.insertMessage({

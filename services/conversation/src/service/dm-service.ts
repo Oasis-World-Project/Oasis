@@ -27,6 +27,7 @@ import {
 } from '../repo/conversation-repo.ts';
 import { createConfirmations } from './confirmations.ts';
 import { createDmCloud } from './dm-cloud.ts';
+import { createDmRetract } from './dm-retract.ts';
 import type { Purge } from './purge.ts';
 import type { Turns } from './turns.ts';
 
@@ -101,6 +102,7 @@ export function createDmService(deps: {
   const { repo, turns } = deps;
   const cloud = createDmCloud({ repo, turns });
   const confirmations = createConfirmations(deps);
+  const retract = createDmRetract(deps);
 
   async function owned(conversationId: string, ownerId: string): Promise<Conversation> {
     const conversation = await repo.findOwned(conversationId, ownerId);
@@ -124,7 +126,7 @@ export function createDmService(deps: {
       body: {},
       requestId,
     });
-    await store.newTopic(conversation.id);
+    await store.resumeFrom(conversation.id, null);
     const divider = await store.insertMessage({
       conversationId: conversation.id,
       authorKind: 'user',
@@ -311,12 +313,17 @@ export function createDmService(deps: {
       });
     },
 
-    /** 从队里删掉一句（真删除）；改一句是删掉后放回输入框，由前端做 */
-    async unqueue(ownerId: string, conversationId: string, messageId: string) {
+    /**
+     * 删掉我的一句话（真删除）：排着队的随时能删；交给 AI 了的只能删最后一句，AI 的记忆退回这句话之前
+     *（见 dm-retract.ts）。改一句是删掉后放回输入框，由前端做
+     */
+    async remove(ownerId: string, conversationId: string, messageId: string, requestId: string) {
       const conversation = await owned(conversationId, ownerId);
-      await withMessageLock(conversation.id, async (store) => {
-        await queuedMessage(store, conversation.id, messageId);
-        await store.deleteMessage(messageId);
+      return withMessageLock(conversation.id, async (store) => {
+        const message = await store.findMessage(conversation.id, messageId);
+        if (message?.authorKind !== 'user' || message.kind !== 'text')
+          throw new HttpError(404, 'message_not_found', '这句话已经不在了');
+        return retract.remove(store, (await store.find(conversation.id))!, message, requestId);
       });
     },
 

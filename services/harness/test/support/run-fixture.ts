@@ -7,7 +7,13 @@ import Fastify from 'fastify';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 import type { Executor, Sandbox, SandboxSpec } from '../../src/executor/executor.ts';
-import type { Run, RunEvent, RunOutcome, RunsRepo } from '../../src/repo/runs-repo.ts';
+import {
+  VERSIONS_KEPT,
+  type Run,
+  type RunEvent,
+  type RunOutcome,
+  type RunsRepo,
+} from '../../src/repo/runs-repo.ts';
 import { createRunService } from '../../src/service/run-service.ts';
 import { fakeDsh, methods } from './fake-dsh.ts';
 
@@ -128,6 +134,8 @@ export const executor: Executor = {
 
 /** 内存里的 runs 表 + 事件 + 写过的结局 */
 export const rows = new Map<string, Run>();
+/** 存下的会话记录（一轮一版） */
+export const versions = new Map<string, { sessionId: string; archive: Buffer; restore: boolean }>();
 export const events: RunEvent[] = [];
 export const finishes: { id: string; outcome: RunOutcome }[] = [];
 export const repo: RunsRepo = {
@@ -200,7 +208,23 @@ export const repo: RunsRepo = {
     [...rows.values()].filter((r) => r.conversationId === conversationId),
   listBySession: async (sessionId) => [...rows.values()].filter((r) => r.sessionId === sessionId),
   async removeMany(ids) {
-    for (const id of ids) rows.delete(id);
+    for (const id of ids) {
+      rows.delete(id);
+      versions.delete(id);
+    }
+  },
+  async saveVersion(run, archive) {
+    const sessionId = run.sessionId ?? run.id;
+    versions.delete(run.id);
+    versions.set(run.id, { sessionId, archive, restore: false });
+    const mine = [...versions].filter(([, version]) => version.sessionId === sessionId);
+    for (const [runId] of mine.slice(0, -VERSIONS_KEPT)) versions.delete(runId);
+  },
+  version: async (runId) => versions.get(runId),
+  hasVersion: async (runId) => versions.has(runId),
+  async setRestore(runId, restore) {
+    const version = versions.get(runId);
+    if (version) version.restore = restore;
   },
 };
 
@@ -445,6 +469,7 @@ beforeEach(() => {
   ])
     list.length = 0;
   rows.clear();
+  versions.clear();
   stored.clear();
   fake.startDelayMs = 0;
   fake.archiveDelayMs = 0;

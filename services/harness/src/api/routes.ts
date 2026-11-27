@@ -2,7 +2,12 @@
 // 取消、清理对话，给 canvas 读产出文件；对外只有一条——用户电脑上的桌面版经 gateway 连上来
 // （WebSocket，gateway 认过人、在 x-oasis-user-id 里写上是谁）。harness 不调 inspector。
 import { OASIS_HEADERS } from '@oasis/contracts/common';
-import { RunMaterialsBody, RunMessageBody, StartRunBody } from '@oasis/contracts/harness';
+import {
+  RunMaterialsBody,
+  RunMessageBody,
+  StartRunBody,
+  UndoRunBody,
+} from '@oasis/contracts/harness';
 import { HttpError, parseWith, type ServiceApp } from '@oasis/service-kit';
 import { WebSocketServer } from 'ws';
 import { z } from 'zod';
@@ -108,6 +113,12 @@ export function registerRoutes(app: ServiceApp, runs: RunService): void {
     const { runId } = parseWith(RunParams, request.params);
     await runs.cancel(runId);
     return reply.code(202).send();
+  });
+
+  /** 撤回这份会话最近的一轮：AI 的记忆退回它之前，这一轮的记录删掉；返回之后接着哪一轮做 */
+  app.post('/internal/runs/:runId/undo', async (request) => {
+    const { runId } = parseWith(RunParams, request.params);
+    return runs.undo(runId, parseWith(UndoRunBody, request.body).conversationId);
   });
 
   /** 删对话、开新话题：删掉这个对话的运行记录和持久工作目录（真删除，可重复调用） */

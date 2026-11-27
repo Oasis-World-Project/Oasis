@@ -101,8 +101,8 @@ export interface ConversationRepo {
   endTurn(id: string, runId: string, lastRunId: string | null): Promise<void>;
   /** 有一轮在进行的对话 */
   activeTurns(): Promise<Conversation[]>;
-  /** 开新话题：下一轮开新会话 */
-  newTopic(id: string): Promise<void>;
+  /** 下一轮接着哪一轮的会话做；null：开新会话（开新话题、撤回了这份会话的第一轮） */
+  resumeFrom(id: string, lastRunId: string | null): Promise<void>;
   /** 改在哪干活和权限（下一轮起用） */
   saveSetup(id: string, setup: Pick<Conversation, 'workplace' | 'permissions'>): Promise<void>;
 }
@@ -421,8 +421,8 @@ export function createConversationRepo(
 
     activeTurns: () => db.select().from(conversations).where(isNotNull(conversations.turn)),
 
-    async newTopic(id) {
-      await db.update(conversations).set({ lastRunId: null }).where(eq(conversations.id, id));
+    async resumeFrom(id, lastRunId) {
+      await db.update(conversations).set({ lastRunId }).where(eq(conversations.id, id));
     },
 
     async saveSetup(id, setup) {

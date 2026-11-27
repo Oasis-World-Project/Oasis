@@ -1,8 +1,19 @@
 // 与 migrations/ 里的表一一对应（表结构以 SQL 迁移为准）。
 import type { RunEventKind, RunOutputFile, RunStatus, Workplace } from '@oasis/contracts/harness';
-import { integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  customType,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
+const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
 
 export const runs = pgTable('runs', {
   id: uuid('id').primaryKey(),
@@ -41,3 +52,13 @@ export const runEvents = pgTable(
   },
   (table) => [primaryKey({ columns: [table.runId, table.seq] })],
 );
+
+/** 一轮结束时的 dsh 会话记录（tar 包，不含附件）；一份会话只留最近几版 */
+export const sessionVersions = pgTable('session_versions', {
+  runId: uuid('run_id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  archive: bytea('archive').notNull(),
+  /** 撤回了后面那一轮：下一轮新起 dsh 之前先把这一版放回去 */
+  restore: boolean('restore').notNull().default(false),
+  createdAt: at('created_at').notNull().defaultNow(),
+});

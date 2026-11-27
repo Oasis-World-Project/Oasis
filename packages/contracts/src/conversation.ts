@@ -300,6 +300,9 @@ export const SendResult = z.object({
 });
 export type SendResult = z.infer<typeof SendResult>;
 
+/** 删掉我的一句话的结果：删掉的消息（这句话；交给 AI 了的还有 AI 对它的回复） */
+export const RemovedMessages = z.object({ removed: z.array(z.uuid()) });
+
 /** 改了在哪干活和权限：改好的私聊；换了地方时还有一条新话题的分隔消息 */
 export const SetupResult = z.object({
   conversation: ConversationBody,

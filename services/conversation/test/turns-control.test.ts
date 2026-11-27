@@ -17,7 +17,7 @@ import {
   restartTurns,
   send,
   steer,
-  unqueue,
+  remove,
   until,
   finished,
   aiMessages,
@@ -149,7 +149,7 @@ describe('排队、插话、停止、出错', () => {
     const events = [event(0, 'user_message', { text: '写首诗' })];
     fake.events.set(first, events);
     for (const text of ['写春天', '要七言的', '算了不要了']) await send(text);
-    await unqueue('算了不要了');
+    await remove('算了不要了');
     expect(repo.messages.some((m) => m.content === '算了不要了')).toBe(false);
     await steer('要七言的');
     events.push(
@@ -157,12 +157,13 @@ describe('排队、插话、停止、出错', () => {
       event(2, 'assistant_text', { text: '好，七言' }),
     );
     await until(() => aiMessages().find((m) => m.content === '好，七言'));
-    // 已经交给 AI 的不在队里了：删不了、也不能再引导
-    for (const act of [() => unqueue('要七言的'), () => unqueue('写首诗'), () => steer('要七言的')])
-      await expect(act()).rejects.toMatchObject({
-        statusCode: 404,
-        code: 'queued_message_not_found',
-      });
+    // 已经交给 AI 的不在队里了：不能再引导；这一轮还在做，也删不了
+    await expect(steer('要七言的')).rejects.toMatchObject({
+      statusCode: 404,
+      code: 'queued_message_not_found',
+    });
+    for (const said of ['要七言的', '写首诗'])
+      await expect(remove(said)).rejects.toMatchObject({ statusCode: 409, code: 'turn_active' });
     fake.runs.set(first, run(first, { status: 'succeeded', finishedAt: new Date().toISOString() }));
     const second = await until(() => (fake.starts.length === 2 ? fake.starts[1] : undefined));
     expect(second).toMatchObject({ prompt: '写春天', continueFrom: first });

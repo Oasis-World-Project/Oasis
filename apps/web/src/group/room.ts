@@ -52,6 +52,8 @@ export interface Room {
   vault?: { availableMicro: number | undefined; open: () => void } | undefined;
   /** 在输入框里 @ 上谁（舞台卡片上的「@ 它」） */
   mention: (mention: Mention) => void;
+  /** 把一段话放回输入框（编辑我的最后一句：删掉后放回来，改好再发） */
+  refill: (text: string) => void;
   /** 光标回到输入框；给了提示就换成输入框里的提示（如「说说要改哪里」），发出去后清掉 */
   focus: (hint?: string) => void;
 }

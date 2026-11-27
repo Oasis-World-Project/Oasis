@@ -14,6 +14,7 @@ import {
   ConversationBody,
   ConversationList,
   MessageBody,
+  RemovedMessages,
   SendResult,
   type Mention,
   SetupResult,
@@ -265,9 +266,11 @@ export const steerMessage = (conversationId: string, messageId: string) =>
     body: {},
   });
 
-/** 从队里删掉一句（还没交给 AI 的） */
-export const unqueueMessage = (conversationId: string, messageId: string) =>
-  apiVoid(`${conversationPath(conversationId)}/messages/${messageId}`, { method: 'DELETE' });
+/** 删掉我的一句话：排着队的，或交给 AI 了的最后一句（AI 的记忆退回这句话之前） */
+export const removeMessage = (conversationId: string, messageId: string) =>
+  api(`${conversationPath(conversationId)}/messages/${messageId}`, RemovedMessages, {
+    method: 'DELETE',
+  });
 
 /** 停下正在进行的一轮：已经做出来的存下，下一轮接着做 */
 export const stopTurn = (conversationId: string) =>

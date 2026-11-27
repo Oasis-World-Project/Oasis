@@ -5,7 +5,17 @@
 // 和好友的私聊：没有「@」，「＋」就是发文件。和 AI 的私聊：「＋」里是「在云端做」和上传文件。
 import type { Mention } from '@oasis/contracts/conversation';
 import { ArrowUp, AtSign, Plus, Square, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type Ref,
+  type RefObject,
+} from 'react';
 import { confirmTurn, saveGroupHome, saveSetup } from '../api/queries.ts';
 import { PendingFiles } from '../chat/Attachments.tsx';
 import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
@@ -77,10 +87,17 @@ function StopButton() {
   );
 }
 
+/** 聊天页能对输入框做的事 */
+export interface ComposerHandle {
+  /** 把一段话放回输入框，排在已经写的前面 */
+  putBack: (text: string) => void;
+}
+
 export function RoomComposer({
   inputRef,
   hint,
   onSent,
+  handle,
   attachments,
   mentions,
   onMentions,
@@ -90,6 +107,8 @@ export function RoomComposer({
   inputRef: RefObject<HTMLTextAreaElement | null>;
   /** 卡片要求的提示（如「说说要改哪里」） */
   hint: string | null;
+  /** 给聊天页的手柄：把一段话放回输入框（编辑我的最后一句） */
+  handle: Ref<ComposerHandle>;
   /** 发出去了：提示清掉 */
   onSent: () => void;
   /** 要发的文件（拖进聊天窗的也加在这里） */
@@ -120,6 +139,15 @@ export function RoomComposer({
       ? 'bottom-[calc(100%-34px)]'
       : 'bottom-[calc(100%+4px)]';
   const hasFiles = attachments.ids.length > 0 || attachments.files.length > 0;
+  /** 把一段话放回输入框（编辑排着队的一句、编辑我的最后一句）：排在已经写的前面 */
+  const putBack = useCallback(
+    (text: string) => {
+      setDraft((current) => (current.trim() ? `${text}\n${current}` : text));
+      inputRef.current?.focus();
+    },
+    [inputRef],
+  );
+  useImperativeHandle(handle, () => ({ putBack }), [putBack]);
   const hasText = draft.trim().length > 0;
   const canSend =
     !locked &&
@@ -192,14 +220,7 @@ export function RoomComposer({
     <footer className="relative flex flex-col px-[18px] pb-[18px] pt-1">
       <VaultEmpty />
       {scene === 'group' && <BusyLine />}
-      {scene !== 'direct' && (
-        <DmQueue
-          onEdit={(text) => {
-            setDraft((current) => (current.trim() ? `${text}\n${current}` : text));
-            inputRef.current?.focus();
-          }}
-        />
-      )}
+      {scene !== 'direct' && <DmQueue onEdit={putBack} />}
       {open === 'mention' && (
         <MentionPicker anchor={anchor} onPick={pick} onClose={() => setOpen(null)} />
       )}

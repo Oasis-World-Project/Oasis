@@ -194,9 +194,9 @@ export function memoryRepo(): ConversationRepo & {
       row.lastRunId = lastRunId;
     },
     activeTurns: async () => [...conversations.values()].filter((c) => c.turn),
-    async newTopic(id) {
+    async resumeFrom(id, lastRunId) {
       const row = conversations.get(id);
-      if (row) row.lastRunId = null;
+      if (row) row.lastRunId = lastRunId;
     },
     async saveSetup(id, setup) {
       const row = conversations.get(id);

@@ -135,6 +135,16 @@ export const DEVICE_OFFLINE = 'device_offline';
 /** 接着的那一轮的持久工作目录已经不在了（被清掉）：接不上原会话，调用方改成开新会话。 */
 export const WORKSPACE_UNAVAILABLE = 'workspace_unavailable';
 
+/**
+ * 撤回一轮（POST /internal/runs/:runId/undo）：用户编辑、删除了引出它的那句话。只能撤这份会话最近的
+ * 一轮；AI 的记忆退回这一轮之前，已经改的文件不动。它接着的那一轮结束时的会话记录没存下来返回 409
+ * {@link SESSION_VERSION_GONE}。撤的是这份会话的第一轮时整份会话清掉（云端的工作目录也清，成果在画布里）。
+ */
+export const UndoRunBody = z.object({ conversationId: z.uuid() });
+/** 撤回之后接着哪一轮做；null：这份会话没有了，下一轮开新会话 */
+export const UndoRunResult = z.object({ continueFrom: z.uuid().nullable() });
+export const SESSION_VERSION_GONE = 'session_version_gone';
+
 /** 运行产出的文件（沙箱里 /workspace/out 下的内容） */
 export const RunOutputFile = z.object({
   path: z.string(),

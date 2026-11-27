@@ -387,8 +387,8 @@ describe('用户的话', () => {
     fireEvent.click(screen.getByRole('button', { name: /查看全文/ }));
     const dialog = screen.getByRole('dialog', { hidden: true });
     expect(within(dialog).getByText(text)).toBeTruthy();
-    // 没有编辑、重新生成、删除单条消息
-    expect(screen.queryByRole('button', { name: /编辑消息|重新生成|删除消息/ })).toBeNull();
+    // 没有重新生成；编辑、删除只有我的最后一句有（test/message-actions.test.tsx）
+    expect(screen.queryByRole('button', { name: /重新生成/ })).toBeNull();
   });
 
   it('AI 干活时发的话排在输入框上面（照 Codex），不进聊天：可以引导（现在交给 AI）、改、删', async () => {
@@ -408,8 +408,9 @@ describe('用户的话', () => {
             return json(200, { messages: [steered], turn: TURN });
           }
           if (method === 'DELETE' && path.startsWith(`${PATH}/`)) {
-            chat.messages = chat.messages.filter((m) => path !== `${PATH}/${m.id}`);
-            return new Response(null, { status: 204 });
+            const removed = chat.messages.filter((m) => path === `${PATH}/${m.id}`);
+            chat.messages = chat.messages.filter((m) => !removed.includes(m));
+            return json(200, { removed: removed.map((m) => m.id) });
           }
           return undefined;
         },

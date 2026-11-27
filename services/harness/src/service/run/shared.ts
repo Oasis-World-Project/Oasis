@@ -248,6 +248,11 @@ export interface RunContext {
    * 预览，和下载的样子一致；沙箱要在运行才能转）。
    */
   save(row: Run, sandbox?: Pick<Sandbox, 'exec'>): Promise<Saved>;
+  /**
+   * 撤回过这份会话后面的一轮：新起的 dsh 握手之前，把它接着的那一轮结束时存的会话记录放回去
+   *（那边的记录还停在被撤回的那一轮之后）
+   */
+  restoreSession(row: Run, sandbox: Pick<Sandbox, 'put'>): Promise<void>;
   /** 用户给的素材：向 canvas 取出来，放到 materials/ 下 */
   materialFiles(materials: Material[], runId: string, ownerId: string): Promise<StreamFile[]>;
 

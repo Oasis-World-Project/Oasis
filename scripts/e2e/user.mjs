@@ -148,6 +148,9 @@ export async function signIn(options) {
     },
     stop: (conversationId) => api.post(`${dm(conversationId)}/stop`),
     newTopic: (conversationId) => api.post(`${dm(conversationId)}/topics`),
+    /** 删掉我的一句话（最后一句：AI 的回复一起删，它的记忆退回这句话之前）；返回删掉的消息 */
+    removeMessage: async (conversationId, messageId) =>
+      (await api.del(`${dm(conversationId)}/messages/${messageId}`)).removed,
     /** 删除这个用户的私聊（真删除：进行中的一轮先取消，成果、会话记录、工作目录一起删）；返回删了几个 */
     async removeDms(ids) {
       const { conversations } = await api.get('/conversation/v1/dms');

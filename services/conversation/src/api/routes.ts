@@ -72,11 +72,10 @@ export function registerRoutes(app: ServiceApp, dms: DmService): void {
     });
   });
 
-  /** 从队里删掉一句（只能删还排着、没交给 AI 的） */
-  app.delete('/v1/conversations/:id/messages/:messageId', async (request, reply) => {
+  /** 删掉我的一句话：排着队的，或交给 AI 了的最后一句（AI 的记忆退回这句话之前） */
+  app.delete('/v1/conversations/:id/messages/:messageId', async (request) => {
     const { id, messageId } = parseWith(MessageParams, request.params);
-    await dms.unqueue(requireUserId(request), id, messageId);
-    return reply.code(204).send();
+    return { removed: await dms.remove(requireUserId(request), id, messageId, request.id) };
   });
 
   /** 某一轮工作目录里的一个文件：进度页预览这一轮做出的中间产物和成品 */

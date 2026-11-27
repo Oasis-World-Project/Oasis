@@ -247,7 +247,10 @@ export function createExecution(
           startedAt: row.startedAt ?? new Date(),
         });
 
-        if (!reused) greeting = await hosts.greet({ row, host, recovering, stopped, stderr });
+        if (!reused) {
+          await ctx.restoreSession(row, box);
+          greeting = await hosts.greet({ row, host, recovering, stopped, stderr });
+        }
         run.prompts += 1;
         run.opening = 'sent';
         await agent.prompt(

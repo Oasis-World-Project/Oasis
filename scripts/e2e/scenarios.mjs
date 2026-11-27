@@ -4,6 +4,7 @@ import { device } from './scenarios/device.mjs';
 import { fault, gateway, takeover } from './scenarios/faults.mjs';
 import { group } from './scenarios/group.mjs';
 import { media, video } from './scenarios/media.mjs';
+import { retract } from './scenarios/retract.mjs';
 import { interject, revise, stop, topic, workspace } from './scenarios/revise.mjs';
 import { chat, solo, web } from './scenarios/web.mjs';
 
@@ -18,6 +19,7 @@ export const SCENARIOS = {
   interject,
   stop,
   topic,
+  retract,
   workspace,
   group,
   video,

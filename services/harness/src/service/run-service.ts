@@ -8,7 +8,12 @@
 // 这里是对外接口和登记新运行；执行、搬文件、停止与接管、读产出分别在 run/ 下。
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { type RunBody, type StartRunBody, WORKSPACE_UNAVAILABLE } from '@oasis/contracts/harness';
+import {
+  type RunBody,
+  SESSION_VERSION_GONE,
+  type StartRunBody,
+  WORKSPACE_UNAVAILABLE,
+} from '@oasis/contracts/harness';
 import { HttpError, packStreams } from '@oasis/service-kit';
 import type { Run } from '../repo/runs-repo.ts';
 import { createControl } from './run/control.ts';
@@ -87,6 +92,18 @@ export function createRunService(deps: RunDeps) {
     if (history.some((r) => r.id !== previous.id && r.createdAt > previous.createdAt))
       throw new HttpError(409, 'session_advanced', '该会话已有后续运行，请从最新进度继续');
     return previous;
+  }
+
+  /** 清掉一份会话：空着留用的 dsh 先收掉，再删它的持久工作目录（在用户电脑上而电脑没连上的留在那边） */
+  async function purgeSession(row: Run): Promise<void> {
+    const sessionId = row.sessionId ?? row.id;
+    await hosts.drop(sessionId);
+    await executorOf(row)
+      .purgeWorkspace(sessionId)
+      .catch((err: unknown) => {
+        if (!row.workplace) throw err;
+        logger.warn({ err, sessionId }, '用户电脑没连上，那边的会话没删');
+      });
   }
 
   return {
@@ -171,20 +188,42 @@ export function createRunService(deps: RunDeps) {
       // 2026-11-26 以前的一轮在对象存储里有一份产出包，一起删
       for (const row of rows) if (row.outputKey) await store.delete(row.outputKey);
       const bySession = new Map(rows.map((r) => [r.sessionId ?? r.id, r]));
-      for (const [sessionId, row] of bySession) {
-        // 这份会话空着留用的 dsh 先收掉，再删工作目录
-        await hosts.drop(sessionId);
-        await executorOf(row)
-          .purgeWorkspace(sessionId)
-          .catch((err: unknown) => {
-            if (!row.workplace) throw err;
-            logger.warn({ err, conversationId, sessionId }, '用户电脑没连上，那边的会话没删');
-          });
-      }
+      for (const row of bySession.values()) await purgeSession(row);
       await repo.removeMany(rows.map((row) => row.id));
       if (rows.length)
         logger.info({ conversationId, runs: rows.length }, '对话的运行和工作目录已清理');
       return true;
+    },
+
+    /**
+     * 撤回这份会话最近的一轮（用户编辑、删除了引出它的那句话）：下一轮新起 dsh 之前把它接着的那一轮
+     * 结束时存的会话记录放回去，AI 就不记得这一轮了；这一轮的记录删掉，已经改的文件不动。
+     */
+    async undo(id: string, conversationId: string): Promise<{ continueFrom: string | null }> {
+      await live.get(id)?.done;
+      const row = await owned(id);
+      if (row.conversationId !== conversationId)
+        throw new HttpError(404, 'run_not_found', '运行不存在');
+      if (['queued', 'starting', 'running'].includes(row.status))
+        throw new HttpError(409, 'run_active', '这一轮还没结束，先停下再撤回');
+      const session = row.sessionId ?? row.id;
+      const history = await repo.listBySession(session);
+      if (history.some((r) => r.id !== row.id && r.createdAt > row.createdAt))
+        throw new HttpError(409, 'session_advanced', '只能撤回这份会话最近的一轮');
+      if (row.continueFrom && !(await repo.hasVersion(row.continueFrom)))
+        throw new HttpError(409, SESSION_VERSION_GONE, '这一轮之前的会话记录没有存下来，退不回去');
+      if (row.continueFrom) {
+        // 空着留用的 dsh 手里是这一轮之后的会话：收掉，下一轮新起
+        await hosts.drop(session);
+        await repo.setRestore(row.continueFrom, true);
+      } else {
+        // 这份会话的第一轮：退回去就是什么都不记得，整份会话清掉，下一轮开新会话
+        await purgeSession(row);
+      }
+      if (row.outputKey) await store.delete(row.outputKey);
+      await repo.removeMany([row.id]);
+      logger.info({ runId: id, continueFrom: row.continueFrom }, '撤回了一轮');
+      return { continueFrom: row.continueFrom };
     },
 
     /**

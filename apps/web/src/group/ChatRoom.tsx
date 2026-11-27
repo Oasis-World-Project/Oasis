@@ -9,7 +9,7 @@ import { useModelMap } from '../api/use-model-map.ts';
 import { useAttachments } from '../chat/use-attachments.ts';
 import { ChatActionsContext } from '../chat/use-chat-actions.ts';
 import { actionsFor } from './ai-actions.ts';
-import { addMention, RoomComposer } from './RoomComposer.tsx';
+import { addMention, RoomComposer, type ComposerHandle } from './RoomComposer.tsx';
 import { RoomHeader } from './RoomHeader.tsx';
 import { RoomMessages } from './RoomMessages.tsx';
 import { RoomContext, type Bench, type Room } from './room.ts';
@@ -82,6 +82,9 @@ export function ChatRoom({
     setHint(next ?? null);
     input.current?.focus();
   }, []);
+  /** 输入框给出来的手柄：把一段话放回去 */
+  const composer = useRef<ComposerHandle>(null);
+  const putBack = useCallback((text: string) => composer.current?.putBack(text), []);
   /** 重新读一遍；私聊的列表、额度跟着变（发了话、开了新话题、换了地方） */
   const { refresh: reload } = state;
   const refresh = useCallback(async () => {
@@ -105,12 +108,28 @@ export function ChatRoom({
             refresh,
             send,
             mention,
+            refill: putBack,
             focus,
             bench,
             vault,
           }
         : null,
-    [group, myId, models, online, busy, sending, act, refresh, send, mention, focus, bench, vault],
+    [
+      group,
+      myId,
+      models,
+      online,
+      busy,
+      sending,
+      act,
+      refresh,
+      send,
+      mention,
+      putBack,
+      focus,
+      bench,
+      vault,
+    ],
   );
   const scene = group?.kind ?? kind;
   // 和 AI 的私聊只有它一个 AI：输入框上面排着队的话、问卷的回答、「继续」都是对它说
@@ -167,6 +186,7 @@ export function ChatRoom({
       <RoomComposer
         inputRef={input}
         hint={hint}
+        handle={composer}
         onSent={() => setHint(null)}
         attachments={attachments}
         mentions={mentions}

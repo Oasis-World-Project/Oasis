@@ -1,10 +1,18 @@
 // 一轮和外面之间的文件：每轮结束列出 out/ 的清单（路径、大小、摘要）记在这一轮上——文件留在工作目录里，
 // 画布登记成果时要哪个再来取哪个（outputs.ts），平台不另存一份；开跑时把用户随消息发的文件、要改的
-// 成果放进沙箱。
+// 成果放进沙箱。每轮结束还把 dsh 的会话记录存一版在我们这边（撤回最后一句时退回上一版）。
 import { Readable } from 'node:stream';
 import { ArtifactLookupResult, UploadLookupResult } from '@oasis/contracts/canvas';
-import { scanArchive } from '@oasis/service-kit';
-import { SANDBOX_PATHS } from '../../adapter/dsh.ts';
+import {
+  listFiles,
+  onlyFile,
+  packFiles,
+  readLimited,
+  rewriteArchive,
+  scanArchive,
+} from '@oasis/service-kit';
+import { isSessionArchive, SANDBOX_PATHS } from '../../adapter/dsh.ts';
+import type { Executor } from '../../executor/executor.ts';
 import { StopRun, type RunContext } from './shared.ts';
 
 /**
@@ -22,7 +30,43 @@ find . -type f \\( -iname '*.docx' -o -iname '*.pptx' \\) ! -path '*/.*' | while
 done
 exit 0`;
 
-export function createStorage(ctx: RunContext): Pick<RunContext, 'save' | 'materialFiles'> {
+/** 一份会话记录最多存多大：再大就不存这一版（撤回时退不回这一轮结束的地方） */
+const SESSION_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * 这份会话现在的 dsh 会话记录，打成能直接解到 dsh 用户目录下的 tar 包（sessions/<dsh 按工作目录起的
+ * 目录>/<会话 ID>/session.*）。它引用的附件不带：按内容摘要存、只增不减，留在原地就行。
+ * 还没有会话记录返回 undefined。
+ */
+async function sessionArchive(executor: Executor, workspaceId: string) {
+  const mine = (path: string) => isSessionArchive(path, workspaceId);
+  if (executor.listWorkspace) {
+    // 文件不在平台这边（用户电脑、E2B）：先列出来，只取会话记录，不把附件搬一遍
+    const files: { path: string; content: Buffer }[] = [];
+    for (const { path } of await executor.listWorkspace(workspaceId, SANDBOX_PATHS.sessions)) {
+      if (!mine(path)) continue;
+      const source = await executor.readWorkspace(workspaceId, `${SANDBOX_PATHS.sessions}/${path}`);
+      if (!source) return undefined;
+      const file = await onlyFile(source, SESSION_MAX_BYTES);
+      files.push({
+        path: `sessions/${path}`,
+        content: await readLimited(file.content, SESSION_MAX_BYTES),
+      });
+    }
+    return files.length ? packFiles(files) : undefined;
+  }
+  const source = await executor.readWorkspace(workspaceId, SANDBOX_PATHS.sessions);
+  if (!source) return undefined;
+  const tar = await readLimited(
+    rewriteArchive(source, 'sessions', mine, undefined),
+    SESSION_MAX_BYTES,
+  );
+  return (await listFiles(tar)).length ? tar : undefined;
+}
+
+export function createStorage(
+  ctx: RunContext,
+): Pick<RunContext, 'save' | 'materialFiles' | 'restoreSession'> {
   const { deps } = ctx;
 
   return {
@@ -34,10 +78,24 @@ export function createStorage(ctx: RunContext): Pick<RunContext, 'save' | 'mater
         );
       const executor = ctx.executorOf(row);
       const workspaceId = row.sessionId ?? row.id;
+      // 会话记录存一版：没存成不挡这一轮（只是撤回最后一句时退不回这里）
+      await sessionArchive(executor, workspaceId)
+        .then((archive) => archive && deps.repo.saveVersion(row, archive))
+        .catch((err: unknown) =>
+          deps.logger.warn({ runId: row.id, err }, '这一轮结束时的会话记录没存下来'),
+        );
       if (executor.listWorkspace)
         return { outputs: await executor.listWorkspace(workspaceId, SANDBOX_PATHS.outputs) };
       const archive = await executor.readWorkspace(workspaceId, SANDBOX_PATHS.outputs);
       return { outputs: archive ? await scanArchive(archive, deps.outputMaxBytes) : [] };
+    },
+
+    async restoreSession(row, sandbox) {
+      if (!row.continueFrom) return;
+      const version = await deps.repo.version(row.continueFrom);
+      if (!version?.restore) return;
+      await sandbox.put(SANDBOX_PATHS.dshHome, version.archive);
+      await deps.repo.setRestore(row.continueFrom, false);
     },
 
     /** 用户发的文件和要改的成果：路径已由 conversation 定好、契约校验过 */

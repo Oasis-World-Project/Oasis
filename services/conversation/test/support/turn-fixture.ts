@@ -37,6 +37,10 @@ export const fake = {
   stops: [] as string[],
   cancels: [] as string[],
   purged: [] as string[],
+  /** 撤回过的轮；撤回之后接着哪一轮（不给就是这份会话没有了）；undoError：撤不回 */
+  undone: [] as string[],
+  undoTo: null as string | null,
+  undoError: undefined as { status: number; code: string; message: string } | undefined,
 };
 export const run = (id: string, patch: Partial<RunBody> = {}): RunBody => ({
   id,
@@ -106,6 +110,16 @@ harness.post('/internal/runs/:id/cancel', async (request, reply) => {
   const found = fake.runs.get(id);
   if (found) found.status = 'cancelled';
   return reply.code(202).send();
+});
+harness.post('/internal/runs/:id/undo', async (request, reply) => {
+  const id = (request.params as { id: string }).id;
+  if (fake.undoError)
+    return reply
+      .code(fake.undoError.status)
+      .send(fail(fake.undoError.status, fake.undoError.code, fake.undoError.message));
+  fake.undone.push(id);
+  fake.runs.delete(id);
+  return { continueFrom: fake.undoTo };
 });
 harness.post('/internal/conversations/:id/purge', async (request, reply) => {
   fake.purged.push(`harness:${(request.params as { id: string }).id}`);
@@ -353,6 +367,9 @@ beforeEach(async () => {
     stops: [],
     cancels: [],
     purged: [],
+    undone: [],
+    undoTo: null,
+    undoError: undefined,
   });
   Object.assign(activity, { spentMicro: 0, tools: [], confirmations: [] });
   decisions.length = 0;
@@ -410,9 +427,9 @@ export const steer = (content: string) =>
     messageId: userMessageId(content),
     requestId: 'r',
   });
-/** 从队里删掉这句 */
-export const unqueue = (content: string) =>
-  dms.unqueue(OWNER, conversation.id, userMessageId(content));
+/** 删掉我说的这句（排着队的，或交给 AI 了的最后一句） */
+export const remove = (content: string) =>
+  dms.remove(OWNER, conversation.id, userMessageId(content), 'r');
 /** 等到条件成立（跟进在后台跑） */
 export async function until<T>(
   read: () => T | undefined | Promise<T | undefined>,

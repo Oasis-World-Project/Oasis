@@ -1,6 +1,6 @@
 // AI 的话里能做的事（答问卷、确认任务单、「继续」）都是往对话里发一句话：群里是 @ 着它发，私聊里直接发。
 // 停下是停它这一轮；私聊里排着队的话可以现在交给它（引导）或从队里删掉。
-import { steerMessage, stopRun, stopTurn, unqueueMessage } from '../api/queries.ts';
+import { removeMessage, steerMessage, stopRun, stopTurn } from '../api/queries.ts';
 import type { ChatActions } from '../chat/use-chat-actions.ts';
 import { dmAct, type Room } from './room.ts';
 
@@ -20,7 +20,7 @@ export function actionsFor(room: Room, key: string): ChatActions {
       if (dm) await dmAct(room, () => steerMessage(group.id, messageId));
     },
     unqueue: async (messageId) =>
-      dm ? dmAct(room, () => unqueueMessage(group.id, messageId)) : false,
+      dm ? dmAct(room, () => removeMessage(group.id, messageId)) : false,
     stop: async () => {
       if (dm) await dmAct(room, () => stopTurn(group.id));
       else if (runId) await room.act(() => stopRun(group.id, runId));
