@@ -1,15 +1,11 @@
 // 离线故障注入控制进程。与产品相同的运行服务、PostgreSQL repo 和 Docker 执行器。
-import { createReadStream } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import pg from 'pg';
 import {
-  checkedParts,
   createDockerApi,
   createServiceClient,
   defaultDockerSocket,
   packFiles,
-  type ObjectStore,
 } from '@oasis/service-kit';
 import { pino } from 'pino';
 import { SANDBOX_PATHS } from '../src/adapter/dsh.ts';
@@ -21,32 +17,6 @@ const pool = new pg.Pool({
   connectionString: process.env.TEST_DATABASE_URL,
   options: `-c search_path=${process.env.OASIS_TEST_SCHEMA}`,
 });
-const directory = process.env.OASIS_TEST_DIRECTORY!;
-const path = (key: string) => {
-  if (!/^runs\/[\w-]+\/[\w.-]+$/.test(key)) throw new Error('Invalid test object key');
-  return join(directory, key);
-};
-const store: ObjectStore = {
-  get: (key) => readFile(path(key)),
-  read: async (key) => createReadStream(path(key)),
-  delete: async (key) => rm(path(key), { force: true }),
-  async put(key, body) {
-    await mkdir(dirname(path(key)), { recursive: true });
-    await writeFile(path(key), body);
-  },
-  async putStream(key, source, _type, limits) {
-    const parts = checkedParts(source, limits);
-    const chunks: Buffer[] = [];
-    for (;;) {
-      const item = await parts.next();
-      if (item.done) {
-        await this.put(key, Buffer.concat(chunks), 'application/x-tar');
-        return item.value;
-      }
-      chunks.push(item.value);
-    }
-  },
-};
 const docker = createDockerApi(defaultDockerSocket());
 const docked = createDockerExecutor({
   docker: {
@@ -108,7 +78,6 @@ const client = createServiceClient('offline-test', process.env.OASIS_TEST_GATEWA
 const service = createRunService({
   repo: createRunsRepo(pool),
   executor,
-  store,
   modelGateway: client,
   canvas: client,
   idleMs: { cloud: 0, device: 0 },

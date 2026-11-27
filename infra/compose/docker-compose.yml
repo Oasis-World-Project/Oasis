@@ -323,9 +323,6 @@ services:
       DATABASE_URL: postgres://svc_harness:${HARNESS_DB_PASSWORD:?}@postgres:5432/harness?sslmode=disable
       MODEL_GATEWAY_URL: http://model-gateway:4108
       CANVAS_URL: http://canvas:4106
-      S3_ENDPOINT: http://seaweedfs:8333
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:?}
       DOCKER_SOCKET: /var/run/docker.sock
       SANDBOX_NPM_REGISTRY: ${SANDBOX_NPM_REGISTRY:-https://registry.npmjs.org/}
       SANDBOX_PIP_INDEX_URL: ${SANDBOX_PIP_INDEX_URL:-https://pypi.org/simple}
@@ -344,8 +341,6 @@ services:
       - ${DOCKER_SOCKET_GID:-0}
     depends_on:
       <<: *data-deps
-      seaweedfs:
-        condition: service_healthy
       sandbox-ingress:
         condition: service_healthy
       sandbox-egress:

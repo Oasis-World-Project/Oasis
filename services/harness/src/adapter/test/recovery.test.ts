@@ -1,8 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
 import Fastify from 'fastify';
 import { describe, it, expect } from 'vitest';
@@ -20,9 +18,6 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_UR
           connectionString: process.env.TEST_DATABASE_URL,
           options: `-c search_path=${schema}`,
         });
-        const directory = await mkdtemp(
-          join(process.env.OASIS_RECOVERY_TEST_DIR ?? tmpdir(), 'oasis-recovery-'),
-        );
         const runId = randomUUID(),
           payerId = randomUUID(),
           conversationId = randomUUID();
@@ -87,7 +82,6 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_UR
               env: {
                 ...process.env,
                 OASIS_TEST_SCHEMA: schema,
-                OASIS_TEST_DIRECTORY: directory,
                 OASIS_TEST_GATEWAY: gatewayUrl,
                 OASIS_TEST_RUN: runId,
                 OASIS_TEST_PAYER: payerId,
@@ -182,7 +176,6 @@ describe.skipIf(!process.env.OASIS_NATIVE_IMAGE || !process.env.TEST_DATABASE_UR
           await pool.query(`drop schema if exists ${schema} cascade`);
           await pool.end();
           await gateway.close();
-          await rm(directory, { recursive: true, force: true });
         }
       },
       150000,

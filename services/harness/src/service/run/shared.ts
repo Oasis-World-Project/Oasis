@@ -12,7 +12,7 @@ import {
   type Workplace,
 } from '@oasis/contracts/harness';
 import type { ModelCapabilities } from '@oasis/contracts/model-gateway';
-import type { Logger, ObjectStore, ServiceClient, StreamFile } from '@oasis/service-kit';
+import type { Logger, ServiceClient, StreamFile } from '@oasis/service-kit';
 import type { AgentConnection, AgentGuide, SandboxPackages } from '../../adapter/dsh.ts';
 import type { DeviceHub } from '../../executor/device.ts';
 import type { Executor, Sandbox, WorkspaceFile } from '../../executor/executor.ts';
@@ -25,7 +25,6 @@ export interface RunDeps {
   executor: Executor;
   /** 连着 Oasis 的用户电脑（桌面版）；没有就只能在云端跑 */
   devices?: DeviceHub;
-  store: ObjectStore;
   modelGateway: ServiceClient;
   /** 取用户上传的素材 */
   canvas: ServiceClient;

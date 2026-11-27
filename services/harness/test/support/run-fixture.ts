@@ -2,7 +2,7 @@
 // 假 model-gateway，每个用例前重置。
 import { extract } from 'tar-stream';
 import { PassThrough, Readable } from 'node:stream';
-import { createServiceClient, checkedParts, packFiles, type ObjectStore } from '@oasis/service-kit';
+import { createServiceClient, packFiles } from '@oasis/service-kit';
 import Fastify from 'fastify';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
@@ -150,7 +150,6 @@ export const repo: RunsRepo = {
       containerId: null,
       runKeyId: null,
       outputs: [],
-      outputKey: null,
       summary: null,
       sessionId: run.sessionId ?? null,
       continueFrom: run.continueFrom ?? null,
@@ -225,38 +224,6 @@ export const repo: RunsRepo = {
   async setRestore(runId, restore) {
     const version = versions.get(runId);
     if (version) version.restore = restore;
-  },
-};
-
-const stored = new Map<string, Buffer>();
-const store: ObjectStore = {
-  sign: async (key, method, expiresIn) =>
-    `http://s3.test/oasis-harness/${key}?method=${method}&expires=${expiresIn}`,
-  delete: async (key) => {
-    stored.delete(key);
-  },
-  putStream: async (key, source, _type, limits) => {
-    const iterator = checkedParts(source, limits);
-    const chunks: Buffer[] = [];
-    for (;;) {
-      const part = await iterator.next();
-      if (part.done) {
-        stored.set(key, Buffer.concat(chunks));
-        return part.value;
-      }
-      chunks.push(part.value);
-    }
-  },
-  put: async (key, body) => void stored.set(key, body),
-  get: async (key) => {
-    const body = stored.get(key);
-    if (!body) throw new Error(`没有 ${key}`);
-    return body;
-  },
-  read: async (key) => {
-    const body = stored.get(key);
-    if (!body) throw new Error(`没有 ${key}`);
-    return Readable.from([body]);
   },
 };
 
@@ -413,7 +380,6 @@ export const buildService = (override: Partial<Parameters<typeof createRunServic
   createRunService({
     repo,
     executor,
-    store,
     modelGateway: createServiceClient('model-gateway', url),
     canvas: createServiceClient('canvas', url),
     materialsMaxBytes: 1024,
@@ -470,7 +436,6 @@ beforeEach(() => {
     list.length = 0;
   rows.clear();
   versions.clear();
-  stored.clear();
   fake.startDelayMs = 0;
   fake.archiveDelayMs = 0;
 });

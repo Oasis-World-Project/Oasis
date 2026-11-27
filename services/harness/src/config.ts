@@ -1,4 +1,4 @@
-import { databaseEnv, objectStoreEnv } from '@oasis/service-kit';
+import { databaseEnv } from '@oasis/service-kit';
 import { z } from 'zod';
 
 const positiveInt = z.coerce.number().int().positive();
@@ -89,8 +89,4 @@ export const harnessEnv = {
   MATERIALS_MAX_BYTES: positiveInt.optional(),
   /** 产出文件打包后的大小上限 */
   OUTPUT_MAX_BYTES: positiveInt.optional(),
-
-  // ---- 对象存储（产出与会话存档） ----
-  ...objectStoreEnv,
-  S3_BUCKET: z.string().default('oasis-harness'),
 };

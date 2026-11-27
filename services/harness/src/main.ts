@@ -3,12 +3,10 @@
 import { fileURLToPath } from 'node:url';
 import {
   createDockerApi,
-  createObjectStore,
   createPostgres,
   createServiceClient,
   defaultDockerSocket,
   startService,
-  type ObjectStore,
   type ServiceResource,
 } from '@oasis/service-kit';
 import { DEVICE_PATHS, SANDBOX_PATHS } from './adapter/dsh.ts';
@@ -29,7 +27,6 @@ const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
 let executor: Executor;
 let devices: DeviceHub | undefined;
-let store: ObjectStore;
 let runs: RunService | undefined;
 let recoveryTimer: NodeJS.Timeout | undefined;
 
@@ -45,18 +42,6 @@ await startService({
       databaseUrl: config.DATABASE_URL,
       logger: ctx.logger,
     });
-
-    const objects = createObjectStore({
-      endpoint: config.S3_ENDPOINT,
-      region: config.S3_REGION,
-      accessKey: config.S3_ACCESS_KEY,
-      secretKey: config.S3_SECRET_KEY,
-      bucket: config.S3_BUCKET,
-      multipartMaxAgeMs: config.S3_MULTIPART_MAX_AGE_MS,
-      logger: ctx.logger,
-    });
-    await objects.ensureBucket();
-    store = objects.store;
 
     if (config.CLOUD_EXECUTOR === 'e2b') {
       if (!config.E2B_API_KEY || !config.E2B_RUN_API_URL)
@@ -97,7 +82,7 @@ await startService({
         devices?.close();
       },
     };
-    return { postgres, instanceLock, objectStore: objects.resource, sandboxes };
+    return { postgres, instanceLock, sandboxes };
   },
   routes: async (app, { config, resources, logger, name }) => {
     devices = createDeviceHub({ logger, paths: DEVICE_PATHS });
@@ -106,7 +91,6 @@ await startService({
       repo: createRunsRepo(resources.postgres.pool),
       executor,
       devices,
-      store,
       modelGateway: createServiceClient('model-gateway', config.MODEL_GATEWAY_URL, {
         timeoutMs: 10_000,
       }),

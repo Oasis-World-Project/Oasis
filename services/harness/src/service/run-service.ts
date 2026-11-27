@@ -32,7 +32,7 @@ import { createHosts } from './run/hosts.ts';
 import { createStorage } from './run/storage.ts';
 
 export function createRunService(deps: RunDeps) {
-  const { repo, store, logger } = deps;
+  const { repo, logger } = deps;
   const state: RunContext['state'] = {
     live: new Map(),
     sessions: new Set(),
@@ -185,8 +185,6 @@ export function createRunService(deps: RunDeps) {
     async purgeConversation(conversationId: string): Promise<boolean> {
       const rows = await repo.listByConversation(conversationId);
       if (rows.some((row) => ['queued', 'starting', 'running'].includes(row.status))) return false;
-      // 2026-11-26 以前的一轮在对象存储里有一份产出包，一起删
-      for (const row of rows) if (row.outputKey) await store.delete(row.outputKey);
       const bySession = new Map(rows.map((r) => [r.sessionId ?? r.id, r]));
       for (const row of bySession.values()) await purgeSession(row);
       await repo.removeMany(rows.map((row) => row.id));
@@ -220,7 +218,6 @@ export function createRunService(deps: RunDeps) {
         // 这份会话的第一轮：退回去就是什么都不记得，整份会话清掉，下一轮开新会话
         await purgeSession(row);
       }
-      if (row.outputKey) await store.delete(row.outputKey);
       await repo.removeMany([row.id]);
       logger.info({ runId: id, continueFrom: row.continueFrom }, '撤回了一轮');
       return { continueFrom: row.continueFrom };

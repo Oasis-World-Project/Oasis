@@ -29,8 +29,6 @@ export const runs = pgTable('runs', {
   containerId: text('container_id'),
   runKeyId: uuid('run_key_id'),
   outputs: jsonb('outputs').$type<RunOutputFile[]>().notNull().default([]),
-  /** 以前每轮把 out/ 打包存一份的对象键（2026-11-26 起不再写；旧的一轮删对话时照删，之后收缩掉这一列） */
-  outputKey: text('output_key'),
   summary: text('summary'),
   sessionId: text('session_id'),
   continueFrom: uuid('continue_from'),
