@@ -185,7 +185,7 @@ function UserMessage({ message, unseen }: { message: TextMessage; unseen: boolea
     >
       {said && (
         <div
-          className={`m-0 max-w-[min(460px,100%)] whitespace-pre-wrap break-words px-4 py-2.5 text-[14.5px] leading-[1.65] ${
+          className={`m-0 max-w-[min(560px,78%)] whitespace-pre-wrap break-words px-4 py-2.5 text-[14.5px] leading-[1.65] ${
             mine ? 'bubble-out bg-solid text-on-solid' : 'bubble-in bg-bubble shadow-edge-strong'
           }`}
         >
@@ -233,7 +233,7 @@ function AiSays({ message, latest }: { message: TextMessage; latest: boolean }) 
         />
       }
     >
-      <div className="flex min-w-0 max-w-[min(520px,100%)] flex-col gap-2 text-[14.5px] leading-[1.65]">
+      <div className="flex min-w-0 max-w-[min(640px,100%)] flex-col gap-2 text-[14.5px] leading-[1.65]">
         <AiBody
           message={message}
           latest={latest}
@@ -262,7 +262,7 @@ function TaskStrip({ message }: { message: Extract<GroupMessage, { kind: 'task' 
   return (
     <div className="flex flex-col gap-2 pl-10">
       {task && (
-        <div className="max-w-[min(520px,100%)]">
+        <div className="max-w-[min(640px,100%)]">
           <TaskRow task={task} onOpen={() => bench.openTasks(card.runId)} />
         </div>
       )}
@@ -320,14 +320,9 @@ export function RoomMessages({ hasOlder, onOlder }: { hasOlder: boolean; onOlder
   return (
     <div
       ref={scroller}
-      className="fade-top scroll-quiet relative min-h-0 flex-1 overflow-y-auto px-7 pb-2 pt-1"
+      className="fade-top scroll-quiet relative min-h-0 flex-1 overflow-y-auto px-6 pb-2 pt-1"
     >
-      <div
-        ref={content}
-        aria-label="消息记录"
-        role="log"
-        className="mx-auto flex max-w-[720px] flex-col gap-3.5 pt-2.5"
-      >
+      <div ref={content} aria-label="消息记录" role="log" className="flex flex-col gap-4 pt-2.5">
         {hasOlder && (
           <button
             type="button"
