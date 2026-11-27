@@ -45,6 +45,14 @@ function card(kind: string, body: string): TextBlock | null {
   return parsed.success ? { kind: 'plan', data: parsed.data } : null;
 }
 
+/** 去掉话里不显示的那几块（分工单、主成果），别的原样留着：过程里照原样列出 AI 的话时用 */
+export const withoutHidden = (text: string) =>
+  text
+    .replace(FENCE, (block, kind: string, body: string) =>
+      (kind === 'assign' || kind === 'deliver') && card(kind, body) ? '' : block,
+    )
+    .trim();
+
 /** 把一段话拆成文字和卡片，按原来的顺序 */
 export function splitBlocks(text: string): TextBlock[] {
   const blocks: TextBlock[] = [];

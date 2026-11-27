@@ -2,6 +2,7 @@
 // 聊天里不整段铺开：收成一行、点开才看（ProcessFold）；点开一个任务弹出的窗里是同一份（ProcessBody）。
 import type { MessagePart, StepPart, TodoItem } from '@oasis/contracts/conversation';
 import { Check, Info, LoaderCircle, X } from 'lucide-react';
+import { withoutHidden } from './blocks.ts';
 import { Markdown } from './Markdown.tsx';
 
 /** 一步的状态图标。label：读屏时念出来的状态（「完成」「没成」）；不给就只是装饰 */
@@ -100,14 +101,14 @@ export function ProcessBody({
               <Info size={13} aria-hidden="true" />
               {part.text}
             </li>
-          ) : (
+          ) : withoutHidden(part.text) ? (
             <li
               key={index}
               className="my-1 rounded-item bg-glass-strong/60 px-3 py-2 text-ink [overflow-wrap:anywhere]"
             >
-              <Markdown source={part.text} />
+              <Markdown source={withoutHidden(part.text)} />
             </li>
-          ),
+          ) : null,
         )}
       </ol>
       {todos && todos.length > 0 && <Todos items={todos} live={live} />}

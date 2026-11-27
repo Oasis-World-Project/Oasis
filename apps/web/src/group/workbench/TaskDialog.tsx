@@ -239,7 +239,7 @@ export function TaskDialog({
                 成果
                 {task.main && (
                   <span className="text-xs font-normal text-ink-muted">
-                    第一个是{look.name}自己标的主成果
+                    第一个是 {look.name} 自己标的主成果
                   </span>
                 )}
               </h3>

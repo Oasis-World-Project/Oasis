@@ -347,6 +347,9 @@ describe('聊天里的任务', () => {
     fireEvent.click(row);
     const dialog = screen.getByRole('dialog', { name: '民宿首页' });
     expect(dialog.textContent).toContain('用时 3 分 20 秒');
+    // 过程里照原样列着它的话，写明主成果的那一块也不显示
+    expect(dialog.textContent).toContain('做好了');
+    expect(dialog.textContent).not.toContain('"main"');
     const outs = within(dialog).getByRole('region', { name: '成果' });
     expect(outs.textContent).toContain('自己标的主成果');
     expect(
