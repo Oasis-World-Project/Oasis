@@ -84,6 +84,8 @@ export interface LiveRun {
   lastText?: string;
   /** 事件按顺序写库 */
   writes: Promise<void>;
+  /** 等着新事件的读取方（events 带 wait 时挂在这里）：写进一条事件、这一轮结束时叫醒 */
+  waiters: Set<() => void>;
   /** 被停止时从沙箱里取出的产出 */
   saved?: Promise<Saved>;
   done: Promise<void>;
@@ -91,6 +93,11 @@ export interface LiveRun {
   suspended?: boolean;
   /** 沙箱起来以后：往工作目录里再放一包文件（没有就是这个执行环境不支持，或沙箱还没起来） */
   put?: (tar: Readable) => Promise<void>;
+}
+
+/** 叫醒等着这一轮新事件的读取方 */
+export function wake(run: LiveRun): void {
+  for (const waiter of [...run.waiters]) waiter();
 }
 
 /** 新登记的一次运行（在这个进程里执行） */
@@ -102,6 +109,7 @@ export const newLiveRun = (nextSeq: number, sessionId: string): LiveRun => ({
   closing: false,
   nextSeq,
   writes: Promise.resolve(),
+  waiters: new Set(),
   done: Promise.resolve(),
   sessionId,
 });

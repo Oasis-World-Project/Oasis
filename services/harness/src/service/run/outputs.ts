@@ -69,9 +69,26 @@ export function createOutputs(ctx: RunContext) {
   }
 
   return {
-    async events(id: string, afterSeq: number, limit: number): Promise<RunEventBody[]> {
+    /**
+     * 运行事件，按序号增量读。waitMs：这一轮还在这个进程里做、暂时没有新事件时，等到有新事件或这一轮
+     * 结束再回（最多等这么久），调用方不用隔一会儿来问一次
+     */
+    async events(id: string, afterSeq: number, limit: number, waitMs = 0): Promise<RunEventBody[]> {
       await owned(id);
-      const rows = await repo.listEvents(id, afterSeq, limit);
+      let rows = await repo.listEvents(id, afterSeq, limit);
+      const run = ctx.state.live.get(id);
+      if (!rows.length && waitMs > 0 && run) {
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer);
+            run.waiters.delete(done);
+            resolve();
+          };
+          const timer = setTimeout(done, waitMs);
+          run.waiters.add(done);
+        });
+        rows = await repo.listEvents(id, afterSeq, limit);
+      }
       return rows.map((e) => ({
         seq: e.seq,
         kind: e.kind,

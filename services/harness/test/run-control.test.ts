@@ -98,6 +98,23 @@ describe('对话里的一轮：插话、停止和取消', () => {
     expect(finishes[0]?.outcome).toMatchObject({ status: 'cancelled' });
   });
 
+  it('读事件带 wait：暂时没有新的就等着，来了新事件马上回；这一轮结束也马上回，结束了的不等', async () => {
+    const run = await service.start({ ...base, prompt: 'SLOW 慢慢做' });
+    // 刚登记只有第 0 条：等着，沙箱起来、话交出去的事件一写进来就回
+    let began = Date.now();
+    expect((await service.events(run.id, 0, 200, 5_000)).length).toBeGreaterThan(0);
+    expect(Date.now() - began).toBeLessThan(2_000);
+    await until(() => events.find((e) => e.kind === 'user_message'));
+
+    began = Date.now();
+    const ending = service.events(run.id, 10_000, 200, 5_000);
+    await service.stop(run.id);
+    await finished(run.id);
+    expect(await ending).toEqual([]);
+    expect(await service.events(run.id, 10_000, 200, 5_000)).toEqual([]);
+    expect(Date.now() - began).toBeLessThan(2_000);
+  });
+
   it('停止：先记下已经做出来的产出，再销毁沙箱；会话留在持久工作目录里，下一轮接着做', async () => {
     const run = await service.start({ ...base, prompt: 'SLOW 慢慢做' });
     await until(() => events.find((e) => e.kind === 'user_message'));

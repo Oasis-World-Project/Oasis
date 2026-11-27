@@ -29,6 +29,7 @@ import { createGroupTasks } from './service/group-tasks.ts';
 import { createGroupSpeak } from './service/group-speak.ts';
 import { createProfiles } from './service/profiles.ts';
 import { createPurge } from './service/purge.ts';
+import { createRoomWake } from './service/room-wake.ts';
 import { createTurns } from './service/turns.ts';
 import { createVault } from './service/vault.ts';
 
@@ -62,6 +63,7 @@ await startService({
       maxFiles: config.GROUP_FILES_MAX,
       handoverBytes: config.GROUP_FILES_HANDOVER_BYTES,
     });
+    const rooms = createRoomWake();
     const turns = createTurns({
       repo,
       agent,
@@ -69,6 +71,7 @@ await startService({
       canvas,
       modelGateway,
       logger,
+      changed: rooms.wake,
       pollMs: config.TURN_POLL_MS,
       delivered: files.delivered,
       funded: vault.funded,
@@ -158,6 +161,7 @@ await startService({
       }),
       config.GROUP_STREAMS_PER_USER,
       watching,
+      rooms,
     );
     registerGroupFileRoutes(app, files);
     registerFriendRoutes(

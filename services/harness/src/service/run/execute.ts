@@ -10,7 +10,7 @@ import { SANDBOX_PATHS, type AgentConnection } from '../../adapter/dsh.ts';
 import type { RunOutcome } from '../../repo/runs-repo.ts';
 import { startRunLease } from '../run-lease.ts';
 import type { Host, Hosts, Relay } from './hosts.ts';
-import { personOf, savedOutcome, StopRun, type LiveRun, type RunContext } from './shared.ts';
+import { personOf, savedOutcome, StopRun, wake, type LiveRun, type RunContext } from './shared.ts';
 
 /** 服务重启接管时交给 AI 的话：原会话和工作目录已恢复，接着做 */
 const RECOVERED = '服务连接中断后已恢复原工作目录和原会话。请从未完成处继续，不重做已有工作。';
@@ -75,7 +75,8 @@ export function createExecution(
       const written = interjection ? { ...data, interjection } : data;
       run.writes = run.writes
         .then(() => repo.appendEvents(runId, [{ seq, kind, data: written }]))
-        .catch((err: unknown) => logger.error({ err, runId, seq }, '写运行事件失败'));
+        .catch((err: unknown) => logger.error({ err, runId, seq }, '写运行事件失败'))
+        .then(() => wake(run));
     },
 
     async execute(row, request, run, catalog, recovering = false) {
@@ -363,6 +364,7 @@ export function createExecution(
         });
       } else await ctx.finish(row, outcome);
       state.live.delete(id);
+      wake(run);
     },
 
     async finish(row, outcome) {

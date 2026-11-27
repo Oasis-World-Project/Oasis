@@ -49,6 +49,8 @@ const FileParams = RunParams.extend({ '*': z.string().min(1).max(500) });
 const EventsQuery = z.object({
   after: z.coerce.number().int().min(-1).default(-1),
   limit: z.coerce.number().int().positive().max(1000).default(200),
+  /** 暂时没有新事件时最多等多少毫秒再回（这一轮有新事件或结束就马上回） */
+  wait: z.coerce.number().int().min(0).max(30_000).default(0),
 });
 
 export function registerRoutes(app: ServiceApp, runs: RunService): void {
@@ -65,11 +67,11 @@ export function registerRoutes(app: ServiceApp, runs: RunService): void {
     return runs.get(runId);
   });
 
-  /** 运行过程中的事件，按序号增量拉取（after = 已经拿到的最大序号） */
+  /** 运行过程中的事件，按序号增量拉取（after = 已经拿到的最大序号）；带 wait 时没有新的就等一会儿 */
   app.get('/internal/runs/:runId/events', async (request) => {
     const { runId } = parseWith(RunParams, request.params);
-    const { after, limit } = parseWith(EventsQuery, request.query);
-    return { events: await runs.events(runId, after, limit) };
+    const { after, limit, wait } = parseWith(EventsQuery, request.query);
+    return { events: await runs.events(runId, after, limit, wait) };
   });
 
   /** 读一个产出文件（out/ 下的相对路径）：画布登记成果时复制 */

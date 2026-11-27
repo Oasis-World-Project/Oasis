@@ -57,6 +57,8 @@ export interface TurnDeps {
   delivered?: (seat: Conversation, runId: string, files: ArtifactBody[]) => Promise<void>;
   /** 群里的席位开一轮前：金库空了就不开（抛 402） */
   funded?: (groupId: string) => Promise<void>;
+  /** 房间里的消息变了：叫醒它开着的推送 */
+  changed?: (roomId: string) => void;
 }
 
 /** 群里的一份会话（席位、云端任务）做完一轮（turn）、空下来了：席位还有叫它的话就接着开下一轮（调用方拿着这份会话的 message 锁） */
@@ -182,6 +184,7 @@ export function createTurns(deps: TurnDeps) {
         await sleep(200);
       }
     }
+    deps.changed?.(roomOf(conversation));
     logger.info({ conversationId: conversation.id, runId: turn.runId, status }, '一轮结束');
   }
 
@@ -196,22 +199,24 @@ export function createTurns(deps: TurnDeps) {
         if (!conversation || !turn) return;
         const run = await getRun(turn.runId);
         if (!run) {
-          // 还在交接（比如这时用户刷新了私聊页，开始跟进）就接着等；过了交接的时间还没有，
-          // 才是没开成（交给 harness 之前服务重启了）
+          // 还在交接就接着等；过了交接的时间还没有，才是没开成（交给 harness 之前服务重启了）
           if (Date.now() - Date.parse(turn.startedAt) > HANDOVER_MS)
             return await finish(store, conversation, turn, undefined);
           await sleep(pollMs, undefined, { signal: closing.signal }).catch(() => undefined);
           continue;
         }
+        // 没有新事件时 harness 等到有了（或这一轮结束、等够了）才回：不用隔一会儿问一次
+        const asked = Date.now();
         const { events } = await harness.json(
           'GET',
-          `/internal/runs/${turn.runId}/events?after=${turn.cursor}&limit=${EVENT_PAGE}`,
+          `/internal/runs/${turn.runId}/events?after=${turn.cursor}&limit=${EVENT_PAGE}&wait=${spendMs}`,
           { schema: RunEventList },
         );
         // 用户正在发话、这批没写进去：等一会儿再拉，写完才算跟到了这里
         const written =
           !events.length ||
           (await writeEvents(store, conversationId, turn.runId, events, await durations()));
+        if (written && events.length) deps.changed?.(roomOf(conversation));
         if (written && terminal(run.status) && events.length < EVENT_PAGE) {
           const latest = (await store.find(conversationId))?.turn;
           if (latest?.runId === turn.runId)
@@ -226,11 +231,12 @@ export function createTurns(deps: TurnDeps) {
               logger.warn({ err, runId: turn.runId }, '看这一轮的进展（花费、成果）失败，下次再看'),
             );
         }
-        backoff = pollMs;
-        if (written && events.length === EVENT_PAGE) continue;
+        if (written && events.length) continue;
+        // 没写成、或 harness 没等就回了（这一轮不在它手里做了）：隔一会儿再问
+        backoff = written ? Math.max(0, pollMs - (Date.now() - asked)) : pollMs;
       } catch (err) {
         logger.warn({ err, conversationId }, '跟进这一轮出错，稍后再试');
-        backoff = Math.min(backoff * 2, 30_000);
+        backoff = Math.min(Math.max(backoff, pollMs) * 2, 30_000);
       }
       await sleep(backoff, undefined, { signal: closing.signal }).catch(() => undefined);
     }

@@ -19,6 +19,7 @@ import { ConfirmBody, SetupBody } from '@oasis/contracts/conversation';
 import { HttpError, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
 import type { GroupHomes } from '../service/group-homes.ts';
 import type { GroupService } from '../service/group-service.ts';
+import { createRoomWake, type RoomWake } from '../service/room-wake.ts';
 
 const Id = z.object({ id: z.uuid() });
 const AiParams = Id.extend({ key: z.string().min(1).max(50) });
@@ -40,6 +41,8 @@ export function registerGroupRoutes(
   streamLimit: number,
   /** 每个群现在有几条推送连着：有人开着群，「积极参与」的 AI 才会自己起话头 */
   watching = new Map<string, number>(),
+  /** 房间里的消息变了就叫醒它的推送 */
+  rooms: Pick<RoomWake, 'wait'> = createRoomWake(),
 ) {
   const streams = new Map<string, Set<AbortController>>();
   app.addHook('preClose', async () => {
@@ -211,7 +214,9 @@ export function registerGroupRoutes(
         );
         // AI 的消息是原地更新的（序号不变）：还在变的下次连同最新的样子再给一遍，直到它不再变
         const watch = snapshot.live.filter(inFlux).map((message) => message.id);
-        await delay(1000, undefined, { signal: controller.signal });
+        // 消息变了马上再读（稍等一下，把挨着的几次变化并成一次）；没人叫就隔一秒自己查
+        await rooms.wait(id, 1000, controller.signal);
+        await delay(60, undefined, { signal: controller.signal });
         snapshot = await groups.get(userId, id, { after }, watch);
       }
     } catch (error) {
