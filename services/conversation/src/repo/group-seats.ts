@@ -1,4 +1,4 @@
-// 群里的会话（席位、云端任务）听到什么：轮到一个 AI 时，群里有谁、它没听过的话。
+// 群里的会话（席位、云端任务、成员和 AI 的家）听到什么：轮到一个 AI 时，群里有谁、它没听过的话。
 import type pg from 'pg';
 import type { Mention } from '@oasis/contracts/conversation';
 import {
@@ -7,6 +7,7 @@ import {
   MESSAGE_COLUMNS,
   nameOf,
   seatsOf,
+  SESSION_KINDS,
   type GroupRow,
   type MessageRow,
 } from './group-rows.ts';
@@ -30,13 +31,19 @@ export function createGroupSeats(pool: pg.Pool) {
       return (await seatsOf(pool, groupId)).find((seat) => seat.model_key === key);
     },
     /**
-     * 轮到一个席位时要交给它的：群里有谁，和它没听过的话（它自己说的不算；按先后，最多 limit 条，
-     * 更早的只数个数）。
+     * 轮到一份会话时要交给它的：群里有谁，和它没听过的话（它自己说的不算；按先后，最多 limit 条，
+     * 更早的只数个数）。publishing：从席位这边听、正要给它开一个云端任务。
      */
-    async hearing(seatId: string, limit: number) {
+    async hearing(seatId: string, limit: number, publishing = false) {
       const seat = (
-        await pool.query<{ kind: string; parent_id: string; model_key: string; heard_seq: string }>(
-          "select kind,parent_id,model_key,heard_seq from conversations where id=$1 and kind in ('seat','task')",
+        await pool.query<{
+          kind: string;
+          parent_id: string;
+          model_key: string;
+          heard_seq: string;
+          member: string | null;
+        }>(
+          `select kind,parent_id,model_key,heard_seq,options->>'member' as member from conversations where id=$1 and kind in ${SESSION_KINDS}`,
           [seatId],
         )
       ).rows[0];
@@ -98,21 +105,26 @@ export function createGroupSeats(pool: pg.Pool) {
           files: fileNames(row.data),
           ...(row.data.task === true ? { task: true } : {}),
           ...(typeof row.data.lead === 'string' ? { lead: row.data.lead } : {}),
-          // 交给了哪份会话：是这一份就是点名给它的；是别的，或者这是云端任务而这句没点名给它，只当背景
+          // 交给了哪份会话：是这一份就是点名给它的；别的只当背景——点名给了别的会话的；云端任务没被点名的；
+          // 成员的家里不是这个成员说的；席位只认作为任务发布的（publishing：正要给它开一个云端任务），
+          // 平常人 @ 它都在叫的人的家里做
           ...(row.data.seat === seatId
             ? { mine: true }
-            : row.data.seat || seat.kind === 'task'
+            : row.data.seat ||
+                (seat.kind === 'home'
+                  ? row.author_id !== seat.member
+                  : !(seat.kind === 'seat' && publishing && row.data.task === true))
               ? { aside: true }
               : {}),
         })),
         skipped: total - rows.length,
       };
     },
-    /** 群里正在做 runId 这一轮的那份会话（席位或云端任务）；没有返回 undefined */
+    /** 群里正在做 runId 这一轮的那份会话（席位、云端任务、成员的家）；没有返回 undefined */
     async running(groupId: string, runId: string) {
       return (
         await pool.query<{ id: string }>(
-          "select id from conversations where parent_id=$1 and kind in ('seat','task') and turn->>'runId'=$2",
+          `select id from conversations where parent_id=$1 and kind in ${SESSION_KINDS} and turn->>'runId'=$2`,
           [groupId, runId],
         )
       ).rows[0]?.id;

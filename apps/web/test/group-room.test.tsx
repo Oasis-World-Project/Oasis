@@ -401,4 +401,54 @@ describe('群页里的 AI', () => {
       }),
     );
   });
+
+  it('我在这个群的家：输入框里写着在哪干活；我叫的那一轮在等我点的确认卡就在输入框上面，点的是群的接口', async () => {
+    const card = {
+      id: '00000000-0000-4000-8000-000000000091',
+      kind: 'command',
+      text: '要把清单写到项目外面的文件夹',
+      callId: 'call-1',
+      status: 'pending',
+      createdAt: at,
+    };
+    const state = installFakeApi({
+      signedIn: true,
+      extra: (method, path) =>
+        method === 'POST' && path.includes('/confirmations/')
+          ? json(200, { ...card, status: 'allowed' })
+          : undefined,
+    });
+    await room(
+      group({
+        home: { workplace: { kind: 'cloud' }, permissions: { mode: 'auto' } },
+        homeUnset: true,
+        confirmations: [card],
+        ais: [
+          {
+            key: 'claude',
+            role: '',
+            runId: run,
+            startedAt: at,
+            callers: [me],
+            heardSeq: 2,
+            tasks: [],
+          },
+        ],
+        messages: [
+          said(2, me, '我', '整理一下', { mentions: [{ kind: 'ai', key: 'claude' }] }),
+          writing(3),
+        ],
+      }),
+    );
+    expect(screen.getByTitle('这段对话在哪干活').textContent).toBe('云端');
+    const asking = screen.getByRole('group', { name: '等你确认' });
+    expect(asking.textContent).toContain('要把清单写到项目外面的文件夹');
+    fireEvent.click(within(asking).getByRole('button', { name: '允许一次' }));
+    await waitFor(() =>
+      expect(state.bodies.at(-1)).toEqual({
+        path: `/conversation/v1/groups/${id}/confirmations/${card.id}`,
+        body: { decision: 'once' },
+      }),
+    );
+  });
 });

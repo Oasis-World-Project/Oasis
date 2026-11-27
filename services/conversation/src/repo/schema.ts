@@ -40,9 +40,10 @@ export const conversations = pgTable('conversations', {
   /**
    * dm 和 AI 的私聊；group 群；seat 群里一个 AI 的席位（parentId 指向群，一轮和私聊的一样跑，消息写进群里）；
    * direct 两个好友的私聊（两人都是成员，消息和推送用群的那一套）；task 一个云端任务自己的会话
-   *（parentId 指向群或和 AI 的私聊，一个任务一行，消息写进那个房间）
+   *（parentId 指向群或和 AI 的私聊，一个任务一行，消息写进那个房间）；home 群里一个成员和一个 AI 的家
+   *（parentId 指向群，options.member 是这个成员；他 @ 这个 AI 时在这里做，过程只给他看）
    */
-  kind: text('kind', { enum: ['dm', 'group', 'seat', 'direct', 'task'] }).notNull(),
+  kind: text('kind', { enum: ['dm', 'group', 'seat', 'direct', 'task', 'home'] }).notNull(),
   ownerId: uuid('owner_id').notNull(),
   modelKey: text('model_key'),
   title: text('title').notNull(),

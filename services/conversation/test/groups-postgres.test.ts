@@ -2,10 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
 import { pino } from 'pino';
-import { createHttpServer } from '@oasis/service-kit';
+import { createHttpServer, type ServiceClient } from '@oasis/service-kit';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createConversationRepo } from '../src/repo/conversation-repo.ts';
 import { registerGroupRoutes } from '../src/api/group-routes.ts';
+import { createGroupRepo } from '../src/repo/group-repo.ts';
+import { createGroupSessions } from '../src/repo/group-sessions.ts';
+import { createConfirmations } from '../src/service/confirmations.ts';
+import { createGroupHomes } from '../src/service/group-homes.ts';
 import { befriend, humanGroups, NEW_GROUP } from './support/group-fixture.ts';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与事件连接', () => {
@@ -52,7 +56,19 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
           [dm, owner],
         );
     }
-    registerGroupRoutes(app, groups, 3);
+    const store = createConversationRepo(pool);
+    registerGroupRoutes(
+      app,
+      groups,
+      createGroupHomes({
+        repo: createGroupRepo(pool, { members: 3, groups: 20, messagesPerMinute: 30, ais: 8 }),
+        sessions: createGroupSessions(pool),
+        store,
+        confirmations: createConfirmations({ repo: store, modelGateway: {} as ServiceClient }),
+        logger: pino({ level: 'silent' }),
+      }),
+      3,
+    );
     await app.listen({ host: '127.0.0.1', port: 0 });
     base = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
   });
@@ -88,8 +104,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
   });
   it('成员不能管理其他人、不能拉人、不能解散群；拉人的接口要给用户 ID', async () => {
     const group = await setup();
-    await expect(groups.remove(member, group.id, owner)).rejects.toMatchObject({ statusCode: 409 });
-    await expect(groups.remove(member, group.id, outsider)).rejects.toMatchObject({
+    await expect(groups.remove(member, group.id, owner, 'r')).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    await expect(groups.remove(member, group.id, outsider, 'r')).rejects.toMatchObject({
       statusCode: 403,
     });
     await expect(groups.addMember(member, group.id, outsider, 'r')).rejects.toMatchObject({
@@ -158,7 +176,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('6.1 真实数据库、权限与
     expect(response.status).toBe(200);
     const reader = response.body!.getReader();
     expect(new TextDecoder().decode((await reader.read()).value)).toContain('snapshot');
-    await groups.remove(owner, group.id, member);
+    await groups.remove(owner, group.id, member, 'r');
     let text = '';
     const until = Date.now() + 5000;
     while (Date.now() < until) {

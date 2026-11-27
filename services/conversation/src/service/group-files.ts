@@ -329,7 +329,7 @@ export function createGroupFiles(deps: {
     /** 工作台「任务」页签要的消息 */
     async work(userId: string, groupId: string) {
       await group(userId, groupId);
-      return { messages: await repo.work(groupId, WORK_RUNS) };
+      return { messages: await repo.work(groupId, WORK_RUNS, userId) };
     },
   };
 }

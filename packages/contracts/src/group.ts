@@ -104,14 +104,17 @@ export const GroupAi = z.object({
   key: AiKey,
   /** 在这个群里负责什么（群主写的，没写为空） */
   role: z.string().max(60),
-  /** 它自己那份会话（群里的席位、私聊的家）正在进行的一轮；有空时为 null */
+  /** 我和它的那份会话（群里是我在这个群里和它的家，私聊就是这段私聊）正在进行的一轮；没有就是 null */
   runId: z.uuid().nullable(),
   startedAt: z.iso.datetime().nullable(),
   /** 这一轮是谁的话引来的（用户 ID）：他们和群主能停下它 */
   callers: z.array(z.uuid()),
-  /** 它听到群里第几条了：@ 它的话序号比这大，就是它还没看到（在忙，忙完就看） */
+  /** 我和它的那份会话听到群里第几条了：我 @ 它的话序号比这大，就是它还没看到（在忙，忙完就看） */
   heardSeq: z.number().int().nonnegative().safe(),
-  /** 它名下正在云端做的任务（每个任务有自己的会话，和上面那一轮互不挡） */
+  /**
+   * 它在别的会话里正在做的每一轮（和上面那一轮互不挡）：云端任务；群里还有它自己接话的那一轮、
+   * 别的成员叫它在他们家里做的
+   */
   tasks: z
     .array(
       z.object({
@@ -197,9 +200,11 @@ export const GroupSnapshot = GroupSummary.extend({
   /** 群文件变过几次的记号：变了就重新读群文件（GET …/files） */
   filesRev: z.number().int().nonnegative().safe().default(0),
   historyNotice: z.literal(GROUP_HISTORY_NOTICE),
-  /** 和 AI 的私聊才有：这段对话固定在哪干活、权限 */
+  /** 我在这里叫 AI 干活的地方和权限：和 AI 的私聊是这段对话的；群里是我在这个群的家（各人各管各的） */
   home: SetupBody.optional(),
-  /** 和 AI 的私聊：这一轮在等我点的确认卡 */
+  /** 群里：我还没定过家在哪（桌面版里这时在这台电脑上按群名建一个文件夹） */
+  homeUnset: z.boolean().optional(),
+  /** 我叫的那几轮在等我点的确认卡 */
   confirmations: z.array(Confirmation).default([]),
 });
 export type GroupSnapshot = z.infer<typeof GroupSnapshot>;

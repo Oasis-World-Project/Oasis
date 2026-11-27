@@ -56,8 +56,9 @@ function Row({
   );
 }
 
-/** 这句话 @ 了的 AI 里，还在忙、没看到这句的 */
-function waitingFor(message: TextMessage, ais: GroupAi[]): GroupAi[] {
+/** 我说的这句话 @ 了的 AI 里，我和它的家还在忙、没看到这句的（别人的话在别人家里，各管各的） */
+function waitingFor(message: TextMessage, ais: GroupAi[], me: string): GroupAi[] {
+  if (message.authorId !== me) return [];
   const mentions = message.data.mentions ?? [];
   const everyone = mentions.some((m) => m.kind === 'all');
   const keys = new Set(mentions.flatMap((m) => (m.kind === 'ai' ? [m.key] : [])));
@@ -147,7 +148,7 @@ function UserMessage({ message, unseen }: { message: TextMessage; unseen: boolea
   const { group, me, owner, models, busy, act } = useRoom();
   const mine = message.authorId === me;
   const mentions = message.data.mentions ?? [];
-  const waiting = waitingFor(message, group.ais);
+  const waiting = waitingFor(message, group.ais, me);
   // 只发了文件、没写字，也没 @ 谁：不画空气泡
   const said = message.content.length > 0 || mentions.length > 0;
   // 对全体说的话（@ 了全体，或作为任务发布）：写明挑了谁先出来负责

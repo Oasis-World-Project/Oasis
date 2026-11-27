@@ -19,6 +19,7 @@ import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import {
   accountOf,
   inGroup,
+  onlyFor,
   roomOf,
   type Conversation,
   type ConversationRepo,
@@ -280,7 +281,7 @@ export function createTurns(deps: TurnDeps) {
         content: '',
         status,
         kind: 'text',
-        data: { runId, ...data },
+        data: { runId, ...data, ...onlyFor(conversation) },
         ...(error ? { error } : {}),
       });
     let route: ModelRoute;

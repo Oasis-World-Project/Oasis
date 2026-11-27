@@ -14,13 +14,16 @@ import { createGroupAssignRepo } from './repo/group-assign-repo.ts';
 import { createGroupFilesRepo } from './repo/group-files-repo.ts';
 import { createGroupRepo } from './repo/group-repo.ts';
 import { createGroupSeats } from './repo/group-seats.ts';
+import { createGroupSessions } from './repo/group-sessions.ts';
 import { createGroupTalk } from './repo/group-talk.ts';
 import { createLeases } from './repo/leases.ts';
+import { createConfirmations } from './service/confirmations.ts';
 import { createDmService } from './service/dm-service.ts';
 import { createFriendService } from './service/friend-service.ts';
 import { createGroupAssign } from './service/group-assign.ts';
 import { createGroupBrief } from './service/group-brief.ts';
 import { createGroupFiles } from './service/group-files.ts';
+import { createGroupHomes } from './service/group-homes.ts';
 import { createGroupService } from './service/group-service.ts';
 import { createGroupTasks } from './service/group-tasks.ts';
 import { createGroupSpeak } from './service/group-speak.ts';
@@ -120,11 +123,13 @@ await startService({
       speak,
       logger,
     });
+    const sessions = createGroupSessions(resources.postgres.pool);
     registerGroupRoutes(
       app,
       createGroupService({
         repo: groupRepo,
         seats,
+        sessions,
         store: repo,
         turns,
         agent,
@@ -142,6 +147,13 @@ await startService({
         }),
         purge,
         vault,
+        logger,
+      }),
+      createGroupHomes({
+        repo: groupRepo,
+        sessions,
+        store: repo,
+        confirmations: createConfirmations({ repo, modelGateway }),
         logger,
       }),
       config.GROUP_STREAMS_PER_USER,

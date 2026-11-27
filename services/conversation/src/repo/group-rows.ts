@@ -1,4 +1,4 @@
-// 群的几种行，和几处都要用的查询：群、席位（群里的一个 AI）、云端任务的会话、消息。
+// 群的几种行，和几处都要用的查询：群、席位（群里的一个 AI）、云端任务的会话、成员和 AI 的家、消息。
 import type pg from 'pg';
 import type { GroupMessage } from '@oasis/contracts/group';
 import type { Permissions, Workplace } from '@oasis/contracts/harness';
@@ -68,20 +68,29 @@ export async function seatsOf(db: pg.Pool | pg.PoolClient, groupId: string, all 
   return all ? rows : rows.filter((seat) => !seat.options.removedAt);
 }
 
-/** 挂在一个房间（群、和 AI 的私聊）下面的会话：席位和云端任务各一行，按建的先后 */
+/** 挂在一个房间下面的会话的几种：AI 的席位、云端任务、一个成员和一个 AI 的家 */
+export const SESSION_KINDS = "('seat','task','home')";
+
+/** 挂在一个房间（群、和 AI 的私聊）下面的会话：席位、云端任务、成员的家各一行，按建的先后 */
 export async function sessionsOf(db: pg.Pool | pg.PoolClient, roomId: string) {
-  const { rows } = await db.query<SeatRow & { kind: 'seat' | 'task' }>(
-    `select kind,${SEAT_COLUMNS} from conversations where parent_id=$1 and kind in ('seat','task') order by created_at,id`,
+  const { rows } = await db.query<
+    SeatRow & { kind: 'seat' | 'task' | 'home'; options: SeatRow['options'] & { member?: string } }
+  >(
+    `select kind,${SEAT_COLUMNS} from conversations where parent_id=$1 and kind in ${SESSION_KINDS} order by created_at,id`,
     [roomId],
   );
   return rows;
 }
 
-/** 这个房间里正在云端做的任务，按 AI 分（每个任务有自己的会话） */
-export async function runningTasks(db: pg.Pool | pg.PoolClient, roomId: string) {
+/**
+ * 这个房间里各个 AI 在别的会话里正在做的每一轮，按 AI 分：云端任务、它自己接话（席位）、别的成员的家里。
+ * viewer 自己的家不算（那是快照里 runId 那一轮）。
+ */
+export async function runningTasks(db: pg.Pool | pg.PoolClient, roomId: string, viewer: string) {
   const { rows } = await db.query<{ model_key: string; turn: Turn }>(
-    "select model_key,turn from conversations where parent_id=$1 and kind='task' and turn is not null order by created_at,id",
-    [roomId],
+    `select model_key,turn from conversations where parent_id=$1 and kind in ${SESSION_KINDS} and turn is not null
+        and not (kind='home' and options->>'member'=$2) order by created_at,id`,
+    [roomId, viewer],
   );
   return (key: string) =>
     rows
@@ -105,8 +114,26 @@ export const nameOf = (row: MessageRow, names: Map<string, string>) =>
       ? row.data.displayName
       : '成员');
 
-/** 库里的一行消息 → 给网页的群消息 */
-export const toMessage = (row: MessageRow, names: Map<string, string>): GroupMessage =>
+/**
+ * 一个成员的家里做的那一轮（data.only 是他）：别人读到的只有它说的话，步骤、待办不给——
+ * 在他电脑上干的过程只给他看
+ */
+function dataFor(row: MessageRow, viewer: string | undefined): Record<string, unknown> {
+  const { only, ...data } = row.data;
+  if (typeof only !== 'string' || only === viewer || !Array.isArray(data.parts)) return data;
+  const { todos: _todos, ...shown } = data;
+  return {
+    ...shown,
+    parts: (data.parts as { type: string }[]).filter((part) => part.type === 'text'),
+  };
+}
+
+/** 库里的一行消息 → 给网页的群消息（viewer：谁在看） */
+export const toMessage = (
+  row: MessageRow,
+  names: Map<string, string>,
+  viewer?: string,
+): GroupMessage =>
   ({
     id: row.id,
     seq: Number(row.seq),
@@ -119,7 +146,7 @@ export const toMessage = (row: MessageRow, names: Map<string, string>): GroupMes
     createdAt: row.created_at.toISOString(),
     // data 按 kind 存的就是对应的内容（写入时已经是契约里的形状）
     kind: row.kind,
-    data: row.data,
+    data: dataFor(row, viewer),
   }) as GroupMessage;
 
 /** 成员在群里叫什么：设了群昵称用群昵称，没设用账号的名字 */

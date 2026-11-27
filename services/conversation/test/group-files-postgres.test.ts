@@ -7,6 +7,7 @@ import { createConversationRepo } from '../src/repo/conversation-repo.ts';
 import { createFriendRepo } from '../src/repo/friend-repo.ts';
 import { createGroupRepo } from '../src/repo/group-repo.ts';
 import { createGroupSeats } from '../src/repo/group-seats.ts';
+import { createGroupSessions } from '../src/repo/group-sessions.ts';
 import { createFriendService, type FriendService } from '../src/service/friend-service.ts';
 import type { GroupFiles } from '../src/service/group-files.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
@@ -66,6 +67,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群文件', () => {
     groups = createGroupService({
       repo: createGroupRepo(pool, { members: 5, groups: 20, messagesPerMinute: 60, ais: 2 }),
       seats: createGroupSeats(pool),
+      sessions: createGroupSessions(pool),
       store,
       turns,
       agent,
@@ -124,8 +126,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群文件', () => {
     uploadNames.set(id, name);
     return id;
   };
-  const busy = async (id: string, key: string) =>
-    (await groups.get(owner, id)).ais.find((item) => item.key === key)!.runId;
+  /** 这个 AI 正在做的一轮：群主和它的家里的，或它在别处（别的成员的家、云端任务）做的 */
+  const busy = async (id: string, key: string) => {
+    const ai = (await groups.get(owner, id)).ais.find((item) => item.key === key)!;
+    return ai.runId ?? ai.tasks[0]?.runId ?? null;
+  };
   /** 让这一轮说一句、交出这些文件、做完 */
   async function finish(id: string, key: string, outputs: Record<string, string>, steps = false) {
     const runId = (await busy(id, key))!;

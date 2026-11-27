@@ -6,7 +6,6 @@ import { useMutation } from '@tanstack/react-query';
 import { Coins, ShieldAlert } from 'lucide-react';
 import { useState } from 'react';
 import { ApiError } from '../api/client.ts';
-import { confirmTurn } from '../api/queries.ts';
 
 const DECISIONS: { decision: ConfirmDecision; label: string }[] = [
   { decision: 'once', label: '允许一次' },
@@ -25,12 +24,13 @@ function stepOf(messages: MessageBody[], callId: string | null) {
 }
 
 export function ConfirmationCards({
-  conversationId,
+  decide: press,
   cards,
   messages,
   onDecided,
 }: {
-  conversationId: string;
+  /** 点一张卡：和 AI 的私聊、群里各有各的接口 */
+  decide: (id: string, decision: ConfirmDecision) => Promise<Confirmation>;
   cards: Confirmation[];
   messages: MessageBody[];
   /** 点完了：调用方重新读一遍这一轮的状态（「以后都允许」还改了这段私聊的权限） */
@@ -43,7 +43,7 @@ export function ConfirmationCards({
   });
   const decide = useMutation({
     mutationFn: ({ id, decision }: { id: string; decision: ConfirmDecision }) =>
-      confirmTurn(conversationId, id, decision),
+      press(id, decision),
     onSuccess: (decided, { decision }) =>
       setGone((old) => ({
         ids: [...old.ids, decided.id],

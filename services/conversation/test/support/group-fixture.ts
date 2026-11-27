@@ -11,6 +11,7 @@ import { createGroupAssignRepo } from '../../src/repo/group-assign-repo.ts';
 import { createGroupFilesRepo } from '../../src/repo/group-files-repo.ts';
 import { createGroupRepo } from '../../src/repo/group-repo.ts';
 import { createGroupSeats } from '../../src/repo/group-seats.ts';
+import { createGroupSessions } from '../../src/repo/group-sessions.ts';
 import { createGroupAssign } from '../../src/service/group-assign.ts';
 import { createGroupFiles } from '../../src/service/group-files.ts';
 import { createGroupService } from '../../src/service/group-service.ts';
@@ -133,6 +134,7 @@ export const humanGroups = (pool: pg.Pool, messagesPerMinute: number) =>
   createGroupService({
     repo: createGroupRepo(pool, { members: 3, groups: 20, messagesPerMinute, ais: 8 }),
     seats: createGroupSeats(pool),
+    sessions: createGroupSessions(pool),
     store: createConversationRepo(pool),
     turns: { onSeatIdle: () => undefined } as unknown as Turns,
     agent: {} as ServiceClient,

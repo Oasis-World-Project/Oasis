@@ -284,16 +284,21 @@ export const newTopic = (conversationId: string) =>
 export const saveSetup = (conversationId: string, body: SetupBody) =>
   api(`${conversationPath(conversationId)}/setup`, SetupResult, { method: 'PUT', body });
 
-/** 点确认卡：允许一次 / 以后都允许 / 拒绝 */
+/** 改我在这个群的家：在哪干活、动手前问不问（各人各管各的），下一轮起生效 */
+export const saveGroupHome = (id: string, body: SetupBody) =>
+  api(`${groupPath(id)}/home`, GroupSnapshot, { method: 'PUT', body });
+
+/** 点确认卡：允许一次 / 以后都允许 / 拒绝。room 是私聊或群；群里点的是我叫的那一轮在等我的 */
 export const confirmTurn = (
-  conversationId: string,
+  room: { id: string; kind: GroupSnapshot['kind'] },
   confirmationId: string,
   decision: ConfirmDecision,
 ) =>
-  api(`${conversationPath(conversationId)}/confirmations/${confirmationId}`, Confirmation, {
-    method: 'POST',
-    body: { decision },
-  });
+  api(
+    `${room.kind === 'dm' ? conversationPath(room.id) : groupPath(room.id)}/confirmations/${confirmationId}`,
+    Confirmation,
+    { method: 'POST', body: { decision } },
+  );
 
 // ---- 画布----
 /** 私聊里的任务和自己当群主的群里的任务（任务卡）：画布按任务分框；有任务在做时每 3 秒刷新 */

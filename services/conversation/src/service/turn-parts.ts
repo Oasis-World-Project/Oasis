@@ -12,6 +12,7 @@ import { ToolList, type ToolEntry } from '@oasis/contracts/model-gateway';
 import { HttpError, type Logger, type ServiceClient } from '@oasis/service-kit';
 import { z } from 'zod';
 import {
+  onlyFor,
   roomOf,
   type Conversation,
   type ConversationRepo,
@@ -242,7 +243,12 @@ async function afterInterjection(
     content: '',
     status: 'streaming',
     kind: 'text',
-    data: { runId, parts: running, ...(before.todos ? { todos: before.todos } : {}) },
+    data: {
+      runId,
+      parts: running,
+      ...(before.todos ? { todos: before.todos } : {}),
+      ...onlyFor(conversation),
+    },
   });
   return segment.id;
 }

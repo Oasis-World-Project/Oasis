@@ -6,6 +6,7 @@
 import type { Mention } from '@oasis/contracts/conversation';
 import { ArrowUp, AtSign, Plus, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { confirmTurn, saveGroupHome, saveSetup } from '../api/queries.ts';
 import { PendingFiles } from '../chat/Attachments.tsx';
 import { ConfirmationCards } from '../chat/ConfirmationCards.tsx';
 import { badgeOf, baseName } from '../chat/files.ts';
@@ -34,7 +35,10 @@ export function addMention(list: Mention[], mention: Mention): Mention[] {
   return [...list, mention];
 }
 
-/** 和 AI 的私聊，输入框上面：等你点的确认卡、排着队的话（拿回来改的放回输入框） */
+/**
+ * 输入框上面：我叫的那一轮在等我点的确认卡（和 AI 的私聊、群里都有）；和 AI 的私聊里还有排着队的话
+ * （拿回来改的放回输入框）
+ */
 function DmQueue({ onEdit }: { onEdit: (text: string) => void }) {
   const room = useRoom();
   const { group } = room;
@@ -46,12 +50,12 @@ function DmQueue({ onEdit }: { onEdit: (text: string) => void }) {
   return (
     <div className="mb-2 flex flex-col gap-2">
       <ConfirmationCards
-        conversationId={group.id}
+        decide={(id, decision) => confirmTurn(group, id, decision)}
         cards={group.confirmations}
         messages={group.messages}
         onDecided={() => void room.refresh()}
       />
-      <QueuedMessages messages={queued} onEdit={onEdit} />
+      {group.kind === 'dm' && <QueuedMessages messages={queued} onEdit={onEdit} />}
     </div>
   );
 }
@@ -125,10 +129,18 @@ export function RoomComposer({
     (scene === 'dm'
       ? hasText && !(turnActive && hasFiles && !task)
       : hasText || attachments.ids.length > 0 || refs.length > 0);
-  const home: Home | undefined =
-    scene === 'dm' && group.home
-      ? { id: group.id, setup: group.home, onSaved: () => void room.refresh() }
-      : undefined;
+  // 我在这里叫 AI 干活的地方：私聊是这段私聊的，群里是我在这个群的家（各人各管各的）
+  const home: Home | undefined = group.home
+    ? {
+        id: group.id,
+        setup: group.home,
+        save: (next) =>
+          scene === 'dm'
+            ? saveSetup(group.id, next)
+            : room.act(() => saveGroupHome(group.id, next)),
+        onSaved: () => void room.refresh(),
+      }
+    : undefined;
 
   async function send() {
     if (!canSend) return;
@@ -180,7 +192,7 @@ export function RoomComposer({
     <footer className="relative flex flex-col px-[18px] pb-[18px] pt-1">
       <VaultEmpty />
       {scene === 'group' && <BusyLine />}
-      {scene === 'dm' && (
+      {scene !== 'direct' && (
         <DmQueue
           onEdit={(text) => {
             setDraft((current) => (current.trim() ? `${text}\n${current}` : text));
@@ -328,14 +340,14 @@ export function RoomComposer({
               <AtSign size={19} strokeWidth={1.8} aria-hidden="true" />
             </button>
           )}
-          {home && ai && (
+          {home && (
             <>
               <WebToggle home={home} />
               <HomeBar
                 home={home}
-                name={aiLook(room.models, ai.key, group.title).name}
-                fresh={group.messages.length === 0 && !turnActive}
-                turnActive={turnActive}
+                name={ai ? aiLook(room.models, ai.key, group.title).name : group.title}
+                fresh={ai ? group.messages.length === 0 && !turnActive : group.homeUnset === true}
+                turnActive={ai ? turnActive : group.ais.some((item) => item.runId)}
               />
             </>
           )}

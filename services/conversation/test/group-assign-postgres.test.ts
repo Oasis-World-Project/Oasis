@@ -8,6 +8,7 @@ import type { AssignEditBody } from '@oasis/contracts/group';
 import { createConversationRepo } from '../src/repo/conversation-repo.ts';
 import { createGroupRepo } from '../src/repo/group-repo.ts';
 import { createGroupSeats } from '../src/repo/group-seats.ts';
+import { createGroupSessions } from '../src/repo/group-sessions.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
@@ -45,6 +46,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的分工', () => {
     groups = createGroupService({
       repo: createGroupRepo(pool, { members: 5, groups: 20, messagesPerMinute: 60, ais: 3 }),
       seats: createGroupSeats(pool),
+      sessions: createGroupSessions(pool),
       store,
       turns,
       agent,

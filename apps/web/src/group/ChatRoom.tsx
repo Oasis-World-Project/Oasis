@@ -85,7 +85,8 @@ export function ChatRoom({
   /** 重新读一遍；私聊的列表、额度跟着变（发了话、开了新话题、换了地方） */
   const { refresh: reload } = state;
   const refresh = useCallback(async () => {
-    await reload();
+    // 读不回来不要紧：推送还连着，下一份照样会到
+    await reload().catch(() => undefined);
     void queryClient.invalidateQueries({ queryKey: ['dms'] });
     void queryClient.invalidateQueries({ queryKey: ['wallet'] });
   }, [reload, queryClient]);

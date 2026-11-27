@@ -15,7 +15,9 @@ import {
   inFlux,
   VaultDepositBody,
 } from '@oasis/contracts/group';
+import { ConfirmBody, SetupBody } from '@oasis/contracts/conversation';
 import { HttpError, parseWith, requireUserId, type ServiceApp } from '@oasis/service-kit';
+import type { GroupHomes } from '../service/group-homes.ts';
 import type { GroupService } from '../service/group-service.ts';
 
 const Id = z.object({ id: z.uuid() });
@@ -33,6 +35,8 @@ const Cursor = z
 export function registerGroupRoutes(
   app: ServiceApp,
   groups: GroupService,
+  /** 各人在群里的家、等他点的确认卡 */
+  homes: GroupHomes,
   streamLimit: number,
   /** 每个群现在有几条推送连着：有人开着群，「积极参与」的 AI 才会自己起话头 */
   watching = new Map<string, number>(),
@@ -118,12 +122,30 @@ export function registerGroupRoutes(
   );
   app.delete('/v1/groups/:id/members/:userId', async (request, reply) => {
     const params = parseWith(Id.extend({ userId: z.uuid() }), request.params);
-    await groups.remove(requireUserId(request), params.id, params.userId);
+    await groups.remove(requireUserId(request), params.id, params.userId, request.id);
     return reply.code(204).send();
   });
   app.delete('/v1/groups/:id', async (request, reply) => {
     await groups.destroy(requireUserId(request), parseWith(Id, request.params).id, request.id);
     return reply.code(204).send();
+  });
+  /** 改我在这个群的家：在哪干活、动手前问不问 */
+  app.put('/v1/groups/:id/home', async (request) => {
+    const userId = requireUserId(request);
+    const { id } = parseWith(Id, request.params);
+    await homes.setHome(userId, id, parseWith(SetupBody, request.body));
+    return groups.get(userId, id);
+  });
+  /** 点确认卡：我叫的那一轮在等我点的 */
+  app.post('/v1/groups/:id/confirmations/:confirmationId', async (request) => {
+    const params = parseWith(Id.extend({ confirmationId: z.uuid() }), request.params);
+    return homes.confirm({
+      userId: requireUserId(request),
+      groupId: params.id,
+      confirmationId: params.confirmationId,
+      decision: parseWith(ConfirmBody, request.body).decision,
+      requestId: request.id,
+    });
   });
   app.get('/v1/groups/:id/vault', async (request) =>
     groups.vault(requireUserId(request), parseWith(Id, request.params).id),

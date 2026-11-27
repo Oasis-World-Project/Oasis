@@ -4,7 +4,7 @@ import type { AssignEditBody } from '@oasis/contracts/group';
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { editAssign, stopRun } from '../../api/queries.ts';
+import { confirmTurn, editAssign, stopRun } from '../../api/queries.ts';
 import { ConfirmationCards } from '../../chat/ConfirmationCards.tsx';
 import { ProcessBody } from '../../chat/Process.tsx';
 import { elapsedText, useNow } from '../../chat/task-status.ts';
@@ -214,10 +214,12 @@ export function TaskDialog({
             <X size={16} aria-hidden="true" />
           </button>
         </header>
-        {task.live && group.confirmations.length > 0 ? (
-          // 和 AI 的私聊：等你点的确认卡就在这个进行中的任务里点
+        {task.live &&
+        group.confirmations.length > 0 &&
+        (group.kind === 'dm' || ai?.runId === task.runId) ? (
+          // 我叫的这一轮在等我点的确认卡：就在这个进行中的任务里点
           <ConfirmationCards
-            conversationId={group.id}
+            decide={(id, decision) => confirmTurn(group, id, decision)}
             cards={group.confirmations}
             messages={group.messages}
             onDecided={() => void room.refresh()}

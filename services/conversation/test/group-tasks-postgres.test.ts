@@ -8,6 +8,7 @@ import type { TaskCard } from '@oasis/contracts/conversation';
 import { createConversationRepo } from '../src/repo/conversation-repo.ts';
 import { createGroupRepo } from '../src/repo/group-repo.ts';
 import { createGroupSeats } from '../src/repo/group-seats.ts';
+import { createGroupSessions } from '../src/repo/group-sessions.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
@@ -50,6 +51,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的云端任务', () => {
     groups = createGroupService({
       repo: createGroupRepo(pool, { members: 5, groups: 20, messagesPerMinute: 60, ais: 2 }),
       seats: createGroupSeats(pool),
+      sessions: createGroupSessions(pool),
       store,
       turns,
       agent,
@@ -147,11 +149,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的云端任务', () => {
       runId: null,
       tasks: [{ runId: start.runId, callers: [member] }],
     });
-    // 它做任务的同时 @ 它：席位照常开一轮（两份会话互不挡），这句话席位只听一次
+    // 它做任务的同时 @ 它：在叫它的人和它的家里照常开一轮（两份会话互不挡）
     await say(owner, id, '顺便想个口号', { at: ['claude'] });
     expect(fake.starts).toHaveLength(2);
     const seatRun = String(fake.starts[1]!.runId);
-    expect(await kindOf(fake.starts[1]!.conversationId)).toBe('seat');
+    expect(await kindOf(fake.starts[1]!.conversationId)).toBe('home');
     expect(String(fake.starts[1]!.prompt)).not.toContain('轮到你了：林夏');
     expect(await ai(id)).toMatchObject({ runId: seatRun, tasks: [{ runId: start.runId }] });
     await finish(seatRun);
@@ -189,7 +191,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的云端任务', () => {
     expect(await cards(id)).toMatchObject([
       { status: 'done', revision: 1, runs: [start.runId, again.runId], seat: taskId },
     ]);
-    // 之后 @ 它：席位听得到那句让它改的话，但不当成叫它（叫它的只有这一句的人）
+    // 之后 @ 它：他和它的家听得到那句让它改的话，但不当成叫它（叫它的只有这一句的人）
     await say(owner, id, '口号定了吗', { at: ['claude'] });
     const asked = String(fake.starts[3]!.prompt);
     expect(asked).toContain('标题再大一点');

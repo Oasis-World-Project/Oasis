@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createConversationRepo } from '../src/repo/conversation-repo.ts';
 import { createGroupRepo } from '../src/repo/group-repo.ts';
 import { createGroupSeats } from '../src/repo/group-seats.ts';
+import { createGroupSessions } from '../src/repo/group-sessions.ts';
 import { createGroupTalk } from '../src/repo/group-talk.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createGroupSpeak, type GroupSpeak } from '../src/service/group-speak.ts';
@@ -74,6 +75,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('没人 @ 时谁接话', () => {
     groups = createGroupService({
       repo: createGroupRepo(pool, { members: 5, groups: 20, messagesPerMinute: 30, ais: 2 }),
       seats,
+      sessions: createGroupSessions(pool),
       store,
       turns,
       agent,

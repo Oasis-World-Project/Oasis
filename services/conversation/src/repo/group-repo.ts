@@ -21,6 +21,7 @@ import {
   type MessageRow,
   type SeatRow,
 } from './group-rows.ts';
+import { viewerHomes } from './group-sessions.ts';
 import { inTransaction } from './tx.ts';
 
 type Limits = { members: number; groups: number; messagesPerMinute: number; ais: number };
@@ -99,6 +100,8 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
   async function snapshot(
     db: pg.PoolClient,
     row: GroupRow,
+    /** 谁在看：群里每个人看到的「我和这个 AI 的那一轮」、我的家、等我点的确认卡各不一样 */
+    viewer: string,
     cursor?: Cursor,
     watch: string[] = [],
   ): Promise<GroupSnapshot> {
@@ -150,7 +153,11 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
       )
     ).rows;
     const options = GroupOptions.parse(row.options);
-    const tasks = await runningTasks(db, row.id);
+    const tasks = await runningTasks(db, row.id, viewer);
+    // 群里：我和每个 AI 的家（我 @ 它时在那做），和我在这个群的家定在哪
+    const my = dm ? undefined : await viewerHomes(db, row.id, viewer);
+    const mine = (seat: SeatRow) =>
+      my ? my.homes.find((home) => home.model_key === seat.model_key) : seat;
     return {
       id: row.id,
       kind: row.kind,
@@ -170,20 +177,25 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
         avatarVersion: 0,
         joinedAt: member.joinedAt.toISOString(),
       })),
-      ais: seats.map((seat) => ({
-        key: seat.model_key,
-        role: seat.options.role ?? '',
-        runId: seat.turn?.runId ?? null,
-        startedAt: seat.turn?.startedAt ?? null,
-        callers: seat.turn?.callers ?? (dm && seat.turn ? [row.owner_id] : []),
-        heardSeq: Number(seat.heard_seq),
-        tasks: tasks(seat.model_key),
-      })),
-      messages: messages.map((message) => toMessage(message, names)),
-      live: live.map((message) => toMessage(message, names)),
+      ais: seats.map((seat) => {
+        const own = mine(seat);
+        return {
+          key: seat.model_key,
+          role: seat.options.role ?? '',
+          runId: own?.turn?.runId ?? null,
+          startedAt: own?.turn?.startedAt ?? null,
+          callers: own?.turn?.callers ?? (own?.turn ? [viewer] : []),
+          heardSeq: Number(own?.heard_seq ?? 0),
+          tasks: tasks(seat.model_key),
+        };
+      }),
+      messages: messages.map((message) => toMessage(message, names, viewer)),
+      live: live.map((message) => toMessage(message, names, viewer)),
       gone: watch.filter((id) => !live.some((message) => message.id === id)),
       filesRev: Number(row.options.filesRev ?? 0),
-      confirmations: dm ? (row.turn?.confirmations ?? []) : [],
+      confirmations: my
+        ? my.homes.flatMap((home) => home.turn?.confirmations ?? [])
+        : (row.turn?.confirmations ?? []),
       ...(dm
         ? {
             home: {
@@ -192,7 +204,9 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
                 row.permissions ?? defaultPermissions(row.workplace ?? { kind: 'cloud' }),
             },
           }
-        : {}),
+        : row.kind === 'group' && my?.home
+          ? { home: my.home, homeUnset: my.homeUnset }
+          : {}),
     };
   }
   return {
@@ -255,11 +269,13 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
             "insert into conversations(kind,owner_id,model_key,title,parent_id,created_at) values('seat',$1,$2,$3,$4,clock_timestamp())",
             [userId, ai.key, ai.name, row.id],
           );
-        return snapshot(db, row);
+        return snapshot(db, row, userId);
       });
     },
     get(userId: string, id: string, cursor?: Cursor, watch?: string[]) {
-      return transaction(async (db) => snapshot(db, await readable(db, id, userId), cursor, watch));
+      return transaction(async (db) =>
+        snapshot(db, await readable(db, id, userId), userId, cursor, watch),
+      );
     },
     /** 群主把一个好友直接拉进群（不用对方同意）；已经在群里就什么都不变 */
     addMember(userId: string, id: string, target: string, name: string) {
@@ -271,13 +287,13 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
             [id],
           )
         ).rows;
-        if (members.some((member) => member.user_id === target)) return snapshot(db, row);
+        if (members.some((member) => member.user_id === target)) return snapshot(db, row, userId);
         if (!(await areFriends(db, userId, target)))
           throw new HttpError(403, 'not_friends', '只能拉自己的好友进群');
         if (members.length >= limits.members)
           throw new HttpError(409, 'group_full', '群成员已达上限');
         await enter(db, id, target, name);
-        return snapshot(db, row);
+        return snapshot(db, row, userId);
       });
     },
     /** 改自己在这个群里的昵称；空的就是不设，显示账号的名字 */
@@ -288,7 +304,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
           'update group_members set nickname=$3 where conversation_id=$1 and user_id=$2',
           [id, userId, nickname || null],
         );
-        return snapshot(db, row);
+        return snapshot(db, row, userId);
       });
     },
     /** 账号改了名字：他在各个群、各个私聊里记着的名字跟着改 */
@@ -316,7 +332,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
         const row = await ownedByOwner(db, id, userId, '改群的设置');
         const options = { ...row.options, ...patch };
         await db.query('update conversations set options=$2 where id=$1', [id, options]);
-        return snapshot(db, { ...row, options });
+        return snapshot(db, { ...row, options }, userId);
       });
     },
     /** 群主叫一个 AI 进群：给它一个席位；之前被移出过的回来（它不记得之前的事） */
@@ -324,7 +340,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
       return transaction(async (db) => {
         const row = await ownedByOwner(db, id, userId, '叫 AI 进群');
         const seats = await seatsOf(db, id);
-        if (seats.some((seat) => seat.model_key === key)) return snapshot(db, row);
+        if (seats.some((seat) => seat.model_key === key)) return snapshot(db, row, userId);
         if (seats.length >= limits.ais)
           throw new HttpError(409, 'group_ai_limit', `一个群最多 ${limits.ais} 个 AI`);
         await db.query(
@@ -333,7 +349,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
            do update set title=excluded.title, options=conversations.options - 'removedAt', heard_seq=0, last_run_id=null, created_at=excluded.created_at`,
           [row.owner_id, key, name, id],
         );
-        return snapshot(db, row);
+        return snapshot(db, row, userId);
       });
     },
     /**
@@ -362,7 +378,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
           "update conversations set options=options || jsonb_build_object('role', $2::text) where id=$1",
           [seat.id, role],
         );
-        return snapshot(db, row);
+        return snapshot(db, row, userId);
       });
     },
     /**
@@ -374,16 +390,6 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
         await ownedByOwner(db, id, userId, '解散群');
         return sessionsOf(db, id);
       });
-    },
-    /** 这个 AI 在群里做过的云端任务的会话（把它移出群时清掉） */
-    async tasksOf(id: string, key: string) {
-      return (await sessionsOf(pool, id)).filter(
-        (row) => row.kind === 'task' && row.model_key === key,
-      );
-    },
-    /** 删掉一个云端任务的会话（它在别的服务里的东西已经清了） */
-    async dropTask(taskId: string) {
-      await pool.query("delete from conversations where id=$1 and kind='task'", [taskId]);
     },
     destroy(userId: string, id: string) {
       return transaction(async (db) => {
@@ -418,7 +424,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
         if (previous) {
           if (previous.content !== content)
             throw new HttpError(409, 'message_conflict', '同一发送请求的内容不一致');
-          return { snapshot: await snapshot(db, row), seq: undefined };
+          return { snapshot: await snapshot(db, row, userId), seq: undefined };
         }
         const count = (
           await db.query(
@@ -469,7 +475,7 @@ export function createGroupRepo(pool: pg.Pool, limits: Limits) {
           )
         ).rows[0]!;
         await db.query('update conversations set last_message_at=now() where id=$1', [id]);
-        return { snapshot: await snapshot(db, row), seq: Number(inserted.seq) };
+        return { snapshot: await snapshot(db, row, userId), seq: Number(inserted.seq) };
       });
     },
   };

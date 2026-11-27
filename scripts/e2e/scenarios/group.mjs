@@ -1,7 +1,8 @@
 // 回归场景（docs/engineering/回归测试.md）：好友和群里的 AI。按账号 ID 加好友、对方同意；好友之间私聊；
 // 群主建群时直接把好友拉进来。@ 谁谁回，回之前先听它没听过的群聊；@ 全体只挑一个先出来负责，
 // 它发分工单把一项交给另一个 AI，那个 AI 做完交了，再轮到它收口；
-// 它忙着时 @ 它的话先等着，「现在告诉它」作为插话送进正在做的一轮；群里的 AI 花群的金库：空着时不开工，
+// 谁 @ 它就在谁和它的家里做（各人各管各的）；我和它的家忙着时我 @ 它的话先等着，「现在告诉它」作为插话
+// 送进正在做的一轮；群里的 AI 花群的金库：空着时不开工，
 // 成员从自己的钱包存进去，花的记在叫它的人头上，解散时剩下的按各人存入的比例退回；
 // 群文件：人发的文件和 AI 交的文件都在里面，别的 AI 开一轮时拿到、改了就是新版本；好友私聊里也能发文件。
 // 解散群，席位的会话、工作目录、成果、发过的文件一起清掉；删好友，两人的私聊一起删。
@@ -193,14 +194,16 @@ export const group = {
     });
     const groupId = created.id;
     t.log(`群 ${groupId}（AI：${first}、${second}）`);
-    /** 挂在群下面的会话：每个 AI 的席位，和每个云端任务（分工单的一项）自己的 */
+    /** 挂在群下面的会话：AI 的席位、云端任务（分工单的一项）的；homeOf：一个人和一个 AI 的家（他 @ 它时在那做） */
     const rowsUnder = () =>
       query(
         'conversation',
-        `select id, kind, model_key from conversations where parent_id = ${literal(groupId)}`,
+        `select id, kind, model_key, options->>'member' as member from conversations where parent_id = ${literal(groupId)}`,
       );
-    const seatOf = (key) =>
-      rowsUnder().find((row) => row.kind === 'seat' && row.model_key === key)?.id;
+    const homeOf = (key, user) =>
+      rowsUnder().find(
+        (row) => row.kind === 'home' && row.model_key === key && row.member === user.userId,
+      )?.id;
     let destroyed = false;
     try {
       t.check(
@@ -279,11 +282,11 @@ export const group = {
           t.provider.of('group', mark).findLast((c) => c.kind === 'agent' && c.model)?.says ?? 0,
       );
       t.check(
-        sessions.join() === '2,1,3',
-        `第一个 AI 应一直接着自己在群里的会话（2 句、3 句），第二个是第一次（1 句）：${sessions.join()}`,
+        sessions.join() === '1,1,2',
+        `群主 @ 全体是他和第一个 AI 的家里的第一句（群员 @ 它在群员的家里），被派的那一项是新会话的第一句，收口回到发单的那份会话（第 2 句）：${sessions.join()}`,
       );
 
-      // ---- 它忙着时 @ 它：这句先等着；「现在告诉它」作为插话送进正在做的一轮 ----
+      // ---- 我和它的家忙着时我再 @ 它：这句先等着；「现在告诉它」作为插话送进正在做的一轮 ----
       await say(owner, groupId, `写一句活动标语 ${marker('group', 3)}`, [
         { kind: 'ai', key: first },
       ]);
@@ -292,7 +295,7 @@ export const group = {
         '群里的 AI 开始跑命令',
       );
       await sleep(2_000);
-      const sent = await say(member, groupId, `改成冬日的 ${marker('group', 4)}`, [
+      const sent = await say(owner, groupId, `改成冬日的 ${marker('group', 4)}`, [
         { kind: 'ai', key: first },
       ]);
       const waiting = sent.messages.findLast((m) => m.role === 'user');
@@ -301,13 +304,14 @@ export const group = {
         Boolean(busy?.runId) && busy.heardSeq < (waiting?.seq ?? 0),
         `它忙着时 @ 它的话应先等着：在忙 ${Boolean(busy?.runId)}，听到第 ${busy?.heardSeq} 条，这句是第 ${waiting?.seq} 条`,
       );
-      await member.api.post(`${base}/${groupId}/messages/${waiting.id}/steer`, { key: first });
+      await owner.api.post(`${base}/${groupId}/messages/${waiting.id}/steer`, { key: first });
       now = await idle(owner, groupId, '插话后做完');
-      const seatId = seatOf(first);
+      const seatId = homeOf(first, owner);
       const runs = runsOf(seatId);
+      const theirs = homeOf(first, member);
       t.check(
-        runs.length === 4 && runs.every((run) => run.status === 'succeeded'),
-        `插话应在同一轮里做完（这个席位一共 4 轮）：${JSON.stringify(runs.map((run) => run.status))}`,
+        runs.length === 3 && runs.every((run) => run.status === 'succeeded') && theirs !== seatId,
+        `插话应在同一轮里做完（群主和它的家里 3 轮：@ 全体、收口、写标语；群员 @ 它在群员的家 ${theirs}）：${JSON.stringify(runs.map((run) => run.status))}`,
       );
       t.check(
         t.provider.of('group', 4).some((c) => c.action === 'bash:0'),

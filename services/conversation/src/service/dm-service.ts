@@ -25,6 +25,7 @@ import {
   type ConversationRepo,
   type Message,
 } from '../repo/conversation-repo.ts';
+import { createConfirmations } from './confirmations.ts';
 import { createDmCloud } from './dm-cloud.ts';
 import type { Purge } from './purge.ts';
 import type { Turns } from './turns.ts';
@@ -99,6 +100,7 @@ export function createDmService(deps: {
 }) {
   const { repo, turns } = deps;
   const cloud = createDmCloud({ repo, turns });
+  const confirmations = createConfirmations(deps);
 
   async function owned(conversationId: string, ownerId: string): Promise<Conversation> {
     const conversation = await repo.findOwned(conversationId, ownerId);
@@ -398,39 +400,16 @@ export function createDmService(deps: {
       requestId: string;
     }): Promise<Confirmation> {
       const conversation = await owned(input.conversationId, input.ownerId);
-      const turn = conversation.turn;
-      if (!turn) throw new HttpError(409, 'turn_not_active', '这一轮已经结束，不用再确认了');
-      const decided = await deps.modelGateway.json(
-        'POST',
-        `/internal/v1/confirmations/${input.confirmationId}/decide`,
-        {
-          body: { runId: turn.runId, decision: input.decision },
-          requestId: input.requestId,
-          schema: Confirmation,
-        },
-      );
-      const always = input.decision === 'always' && decided.status === 'allowed';
-      await withMessageLock(conversation.id, async (store) => {
-        const latest = await store.find(conversation.id);
-        if (!latest) return;
-        if (always) {
-          const { workplace, permissions } = setupOf(latest);
-          await store.saveSetup(latest.id, {
-            workplace,
-            permissions: {
-              ...permissions,
-              always: [...new Set([...(permissions.always ?? []), decided.kind])],
-            },
-          });
-        }
-        // 点过的卡马上收起，不等下一次看进度
-        if (latest.turn?.runId !== turn.runId) return;
-        const left = (latest.turn.confirmations ?? []).filter(
-          (card) => card.id !== decided.id && !(always && card.kind === decided.kind),
-        );
-        await store.updateTurn(latest.id, turn.runId, { confirmations: left });
+      return confirmations.decide(conversation, input, async (store, kind) => {
+        const { workplace, permissions } = setupOf((await store.find(conversation.id))!);
+        await store.saveSetup(conversation.id, {
+          workplace,
+          permissions: {
+            ...permissions,
+            always: [...new Set([...(permissions.always ?? []), kind])],
+          },
+        });
       });
-      return decided;
     },
 
     /**

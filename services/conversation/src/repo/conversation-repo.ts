@@ -13,9 +13,14 @@ export type Message = typeof messages.$inferSelect;
 /** 这个会话的消息写在哪：私聊是它自己；群里的席位写进它所在的群 */
 export const roomOf = (conversation: Pick<Conversation, 'id' | 'parentId'>) =>
   conversation.parentId ?? conversation.id;
-/** 这份会话是不是群里的（席位，或群里的云端任务）：花群的金库、话是说给全群的 */
+/** 这份会话是不是群里的（席位、群里的云端任务、成员和 AI 的家）：花群的金库、话是说给全群的 */
 export const inGroup = (conversation: Pick<Conversation, 'kind' | 'options'>) =>
   conversation.kind === 'seat' || conversation.options.room === 'group';
+/** 一个成员的家里做的一轮：AI 的消息上记着是他的（过程只给他看） */
+export const onlyFor = (conversation: Pick<Conversation, 'kind' | 'options'>) =>
+  conversation.kind === 'home' && typeof conversation.options.member === 'string'
+    ? { only: conversation.options.member }
+    : {};
 /** 这个会话花哪个账户的钱：私聊（连它派到云端的任务）花主人自己的；群里的花群的金库（账户号就是群的 ID） */
 export const accountOf = (
   conversation: Pick<Conversation, 'kind' | 'options' | 'ownerId' | 'parentId'>,

@@ -50,7 +50,7 @@ export function createGroupTasks(deps: {
       const seat = await seats.seat(groupId, key);
       const group = seat && (await store.find(groupId));
       if (!seat || !group) return;
-      const hearing = await seats.hearing(seat.id, HEARING_LIMIT);
+      const hearing = await seats.hearing(seat.id, HEARING_LIMIT, true);
       const last = hearing?.heard.at(-1);
       const brief = hearing && seatBrief(key, hearing.roster, hearing.heard, hearing.skipped);
       if (!last || !brief) return;

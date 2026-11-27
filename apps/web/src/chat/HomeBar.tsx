@@ -1,4 +1,4 @@
-// 输入框里那一段：这段私聊在哪干活、动手前问不问。在哪干活是固定的——桌面版里是这段对话的文件夹（没选过就在「文档\Oasis」
+// 输入框里那一段：我在这段对话里叫 AI 干活的地方（和 AI 的私聊是这段私聊的；群里是我在这个群的家，各人各管各的）、动手前问不问。在哪干活是固定的——桌面版里是这段对话的文件夹（没选过就在「文档\Oasis」
 // 下按对话名建一个），网页上是云端——这里只是写明；点开能看到完整路径、这台电脑连没连上，桌面版里也能
 // 换个文件夹（AI 的记忆在原来那边，换了从新话题开始）。
 // 手动 / 自动只在你的电脑上分：手动是出文件夹的事、花钱的工具先问你，自动是什么都不问；下一轮起生效。
@@ -9,7 +9,6 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Cloud, Laptop } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client.ts';
-import { saveSetup } from '../api/queries.ts';
 import { desktop } from '../desktop/sync.ts';
 
 const MODES: { value: Permissions['mode']; label: string; hint: string }[] = [
@@ -28,11 +27,13 @@ const folderName = (folder: string) => folder.split(/[\\/]/).filter(Boolean).at(
 export const placeLabel = (home: SetupBody) =>
   home.workplace.kind === 'device' ? `我的电脑 · ${folderName(home.workplace.folder)}` : '云端';
 
-/** 这段私聊和它的家 */
+/** 一段对话（和 AI 的私聊，或一个群）和我在这里的家 */
 export interface Home {
-  /** 私聊的 ID */
+  /** 私聊或群的 ID */
   id: string;
   setup: SetupBody;
+  /** 存下新的设置（私聊存在这段私聊上，群里存成我在这个群的家） */
+  save: (next: SetupBody) => Promise<unknown>;
   /** 存好以后：调用方重新读一遍（换了地方时聊天里多一条分隔） */
   onSaved: () => void;
 }
@@ -56,18 +57,15 @@ export function HomeBar({
   turnActive,
 }: {
   home: Home;
-  /** 对话名（AI 的名字）：没选过文件夹时按它建一个 */
+  /** 对话名（私聊是 AI 的名字，群是群名）：没选过文件夹时按它建一个 */
   name: string;
-  /** 这段对话还没说过话、也没在做：桌面版里可以自动认领一个文件夹 */
+  /** 这段对话还没说过话、也没在做（群里：我还没定过家在哪）：桌面版里可以自动认领一个文件夹 */
   fresh: boolean;
   turnActive: boolean;
 }) {
   const bridge = desktop();
   const { id, setup, onSaved } = home;
-  const save = useMutation({
-    mutationFn: (next: SetupBody) => saveSetup(id, next),
-    onSuccess: onSaved,
-  });
+  const save = useMutation({ mutationFn: home.save, onSuccess: onSaved });
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const place = setup.workplace;

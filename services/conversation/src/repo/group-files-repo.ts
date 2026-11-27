@@ -251,9 +251,9 @@ export function createGroupFilesRepo(pool: pg.Pool) {
     },
     /**
      * 工作台「任务」页签要的消息：最近 limit 轮里动过手（有步骤）或带着问卷、任务单的 AI 的话，
-     * 和这些轮的任务卡，按先后。
+     * 和这些轮的任务卡，按先后。别人家里做的那几轮，viewer 读到的没有步骤。
      */
-    async work(groupId: string, limit: number) {
+    async work(groupId: string, limit: number, viewer: string) {
       const rows = (
         await pool.query<MessageRow>(
           `with runs as (
@@ -271,7 +271,7 @@ export function createGroupFilesRepo(pool: pg.Pool) {
       const names = new Map(
         (await seatsOf(pool, groupId, true)).map((seat) => [seat.model_key, seat.title] as const),
       );
-      return rows.map((row) => toMessage(row, names));
+      return rows.map((row) => toMessage(row, names, viewer));
     },
   };
 }

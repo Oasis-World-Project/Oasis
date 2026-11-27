@@ -1,6 +1,7 @@
 // 群：建群、成员（群主直接拉好友）、群里的 AI、发消息。两个好友的私聊读消息、发消息也走这里（它没有 AI）。
-// 群里的 AI 怎么接话：一句话进群后，@ 了谁谁的席位开一轮（@ 全体只挑一个先出来负责）；被 @ 的 AI 正忙，
-// 这句话就排着，它这一轮做完接着开下一轮，也可以「现在告诉它」作为插话送进去。作为任务发布的、让 AI 改
+// 群里的 AI 怎么接话：一句话进群后，@ 了谁，谁就在说这句话的人和它的家里开一轮（各人各管各的，
+// group-sessions.ts；@ 全体只挑一个先出来负责）；他和它的家正忙，这句话就排着，这一轮做完接着开下一轮，
+// 也可以「现在告诉它」作为插话送进去。作为任务发布的、让 AI 改
 // 一个任务的，交给云端任务自己的会话（group-tasks.ts）。交给 AI 的是群里它没听过的话（group-hearing.ts）。
 // 群里 AI 花的钱从群的金库出。
 import { randomUUID } from 'node:crypto';
@@ -15,6 +16,7 @@ import {
 } from '../repo/conversation-repo.ts';
 import type { GroupRepo } from '../repo/group-repo.ts';
 import type { GroupSeats } from '../repo/group-seats.ts';
+import type { GroupSessions } from '../repo/group-sessions.ts';
 import { toAttachment, type GroupFiles } from './group-files.ts';
 import { calls, hearingText, seatBrief } from './group-hearing.ts';
 import type { Profiles } from './profiles.ts';
@@ -31,6 +33,8 @@ const NO_MESSAGES = { after: Number.MAX_SAFE_INTEGER };
 export function createGroupService(deps: {
   repo: GroupRepo;
   seats: GroupSeats;
+  /** 成员和 AI 的家、云端任务那几行 */
+  sessions: GroupSessions;
   store: ConversationRepo;
   turns: Turns;
   agent: ServiceClient;
@@ -115,11 +119,11 @@ export function createGroupService(deps: {
   }
 
   /**
-   * 席位有空时：群里有它没听过的、叫它的话就开一轮（调用方拿着这个席位的 message 锁）。
-   * 先记下听到哪了再开：开不成也不重来，原因写在群里它的那条消息上。
+   * 一个成员和一个 AI 的家有空时：群里有它没听过的、这个成员叫它的话就开一轮（调用方拿着这个家的
+   * message 锁）。先记下听到哪了再开：开不成也不重来，原因写在群里它的那条消息上。
    */
   async function next(locked: ConversationRepo, seat: Conversation, requestId: string) {
-    if (seat.kind !== 'seat' || seat.turn || seat.options.removedAt) return;
+    if (seat.kind !== 'home' || seat.turn) return;
     const hearing = await seats.hearing(seat.id, HEARING_LIMIT);
     const last = hearing?.heard.at(-1);
     const brief =
@@ -134,32 +138,43 @@ export function createGroupService(deps: {
   }
   turns.onSeatIdle(async (locked, seat, turn) => {
     await deps.assign?.settled(seat, turn.runId, turn.callers ?? []);
-    if (seat.kind === 'seat') await next(locked, seat, `seat:${turn.runId}`);
-    // 一个云端任务做完了：别的 AI 可能想接话
+    if (seat.kind === 'home') await next(locked, seat, `seat:${turn.runId}`);
+    // 它自己接的话说完了、一个云端任务做完了：别的 AI 可能想接话
     else if (seat.parentId) deps.speak.nudge(seat.parentId);
     if (seat.parentId) deps.assign?.schedule(seat.parentId);
   });
 
   /**
-   * 一句话进群后：被 @ 的 AI（和对全体说的话挑中先出来的那个）里有空的各开一轮；忙着的不动，
-   * 它做完这一轮自己接着开。作为任务发布的：每个 AI 各开一个云端任务，不占它的席位
+   * 一句话进群后：被 @ 的 AI（和对全体说的话挑中先出来的那个）各在说话的人和它的家里开一轮；
+   * 那个家正忙就不动，它做完这一轮自己接着开。作为任务发布的：每个 AI 各开一个云端任务
    */
-  async function dispatch(groupId: string, keys: Set<string>, requestId: string, task: boolean) {
+  async function dispatch(
+    group: { id: string; ownerId: string },
+    userId: string,
+    keys: Set<string>,
+    requestId: string,
+    task: boolean,
+  ) {
     if (!keys.size) return;
     if (task) {
-      await Promise.all([...keys].map((key) => deps.tasks.publish(groupId, key, requestId)));
+      await Promise.all([...keys].map((key) => deps.tasks.publish(group.id, key, requestId)));
       return;
     }
-    const targets = (await seats.list(groupId)).filter((seat) => keys.has(seat.model_key));
+    const targets = (await seats.list(group.id)).filter((seat) => keys.has(seat.model_key));
     await Promise.all(
-      targets.map((target) =>
-        withMessageLock(store, target.id, async (locked) => {
-          const seat = await locked.find(target.id);
-          if (seat) await next(locked, seat, requestId);
-        }).catch((err: unknown) =>
-          deps.logger.warn({ err, groupId, seatId: target.id }, '没能给这个 AI 开一轮'),
+      targets
+        .map(async (target) => {
+          const homeId = await deps.sessions.home(group, target.model_key, userId, target.title);
+          await withMessageLock(store, homeId, async (locked) => {
+            const home = await locked.find(homeId);
+            if (home) await next(locked, home, requestId);
+          });
+        })
+        .map((opening) =>
+          opening.catch((err: unknown) =>
+            deps.logger.warn({ err, groupId: group.id }, '没能给这个 AI 开一轮'),
+          ),
         ),
-      ),
     );
   }
 
@@ -187,7 +202,14 @@ export function createGroupService(deps: {
   return {
     list: repo.list,
     get: async (...args: Parameters<GroupRepo['get']>) => seen(await repo.get(...args)),
-    remove: repo.remove,
+    /** 移除成员、自己退出：他和各个 AI 的家一起清掉（正在做的取消，交过的文件还是群的） */
+    async remove(userId: string, id: string, target: string, requestId: string) {
+      await repo.remove(userId, id, target);
+      for (const home of await deps.sessions.ofMember(id, target)) {
+        await purgeSeat(home.id, target, requestId, true);
+        await deps.sessions.drop(home.id);
+      }
+    },
     setOptions: async (...args: Parameters<GroupRepo['setOptions']>) =>
       seen(await repo.setOptions(...args)),
     setRole: async (...args: Parameters<GroupRepo['setRole']>) => seen(await repo.setRole(...args)),
@@ -248,10 +270,10 @@ export function createGroupService(deps: {
     async removeAi(userId: string, id: string, key: string, requestId: string) {
       const seat = await repo.removeAi(userId, id, key);
       await purgeSeat(seat.id, userId, requestId, true);
-      // 它做过的云端任务：会话不留（任务卡和交的文件还在群里）
-      for (const task of await repo.tasksOf(id, key)) {
-        await purgeSeat(task.id, userId, requestId, true);
-        await repo.dropTask(task.id);
+      // 它做过的云端任务、各个成员和它的家：会话不留（任务卡和交的文件还在群里）
+      for (const session of await deps.sessions.ofAi(id, key)) {
+        await purgeSeat(session.id, userId, requestId, true);
+        await deps.sessions.drop(session.id);
       }
     },
 
@@ -337,7 +359,7 @@ export function createGroupService(deps: {
         }
       }
       // 没叫到哪个 AI：等群里安静一会儿，看有没有 AI 想接话
-      if (keys.size) await dispatch(id, keys, requestId, task);
+      if (keys.size) await dispatch(room, userId, keys, requestId, task);
       else if (!revise) deps.speak.nudge(id);
       return seen(await repo.get(userId, id, { after: sent.seq - 1 }));
     },
@@ -349,7 +371,8 @@ export function createGroupService(deps: {
     async steer(userId: string, id: string, messageId: string, key: string) {
       const group = await repo.get(userId, id, NO_MESSAGES);
       const message = await seats.messageSeq(id, messageId);
-      const target = await seats.seat(id, key);
+      // 送进说这句话的人和这个 AI 的家正在做的那一轮
+      const target = message && (await deps.sessions.homeOf(id, key, message.authorId));
       if (!message || !target)
         throw new HttpError(404, 'group_message_not_found', '没有这句话，或这个 AI 不在群里');
       if (message.authorId !== userId && group.ownerId !== userId)

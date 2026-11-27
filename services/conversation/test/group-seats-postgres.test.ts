@@ -8,6 +8,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createConversationRepo } from '../src/repo/conversation-repo.ts';
 import { createGroupRepo } from '../src/repo/group-repo.ts';
 import { createGroupSeats } from '../src/repo/group-seats.ts';
+import { createGroupSessions } from '../src/repo/group-sessions.ts';
+import { createConfirmations } from '../src/service/confirmations.ts';
+import { createGroupHomes, type GroupHomes } from '../src/service/group-homes.ts';
 import { createGroupService, type GroupService } from '../src/service/group-service.ts';
 import { createPurge } from '../src/service/purge.ts';
 import { createTurns, type Turns } from '../src/service/turns.ts';
@@ -19,7 +22,17 @@ import {
   groupFiles,
   groupTasks,
 } from './support/group-fixture.ts';
-import { client, event, fake, harnessUrl, othersUrl, until } from './support/turn-fixture.ts';
+import {
+  activity,
+  client,
+  confirmation,
+  decisions,
+  event,
+  fake,
+  harnessUrl,
+  othersUrl,
+  until,
+} from './support/turn-fixture.ts';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', () => {
   const schema = 'group_seats_test_' + randomUUID().replaceAll('-', '');
@@ -30,7 +43,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
   const owner = randomUUID(),
     member = randomUUID();
   const store = createConversationRepo(pool);
-  let turns: Turns, groups: GroupService;
+  let turns: Turns, groups: GroupService, homes: GroupHomes;
   const nudged: string[] = [];
   const vault = fakeVault();
   beforeAll(async () => {
@@ -56,9 +69,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
       spendMs: 20,
       funded: vault.funded,
     });
+    homes = createGroupHomes({
+      repo: createGroupRepo(pool, { members: 5, groups: 20, messagesPerMinute: 30, ais: 2 }),
+      sessions: createGroupSessions(pool),
+      store,
+      confirmations: createConfirmations({ repo: store, modelGateway }),
+      logger,
+    });
     groups = createGroupService({
       repo: createGroupRepo(pool, { members: 5, groups: 20, messagesPerMinute: 30, ais: 2 }),
       seats: createGroupSeats(pool),
+      sessions: createGroupSessions(pool),
       store,
       turns,
       agent,
@@ -108,8 +129,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
       randomUUID(),
       keys.map((key) => (key === 'all' ? { kind: 'all' as const } : { kind: 'ai' as const, key })),
     );
-  const ai = async (id: string, key: string) =>
-    (await groups.get(owner, id)).ais.find((item) => item.key === key)!;
+  /** who 看到的这个 AI：runId 是他和它的家正在做的那一轮，别处在做的在 tasks 里 */
+  const ai = async (id: string, key: string, who = owner) =>
+    (await groups.get(who, id)).ais.find((item) => item.key === key)!;
   /** 让这一轮说一句话、做完 */
   const finish = (runId: string, text: string) => {
     fake.events.set(runId, [event(0, 'assistant_text', { text })]);
@@ -128,9 +150,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     const sent = await say(owner, group.id, '预算按 60 人算', 'glm');
     expect(fake.starts).toHaveLength(1);
     const start = fake.starts[0]!;
-    // 花的是群的金库（账户号是群的 ID），记在叫它的人头上；这一轮属于席位自己的会话，不是群
+    // 花的是群的金库（账户号是群的 ID），记在叫它的人头上；这一轮在叫它的人和它的家里做（挂在群下面的一行）
     expect(start).toMatchObject({ payerId: group.id, actorId: owner, scene: 'group' });
-    expect(start.conversationId).not.toBe(group.id);
+    expect(await store.find(String(start.conversationId))).toMatchObject({
+      kind: 'home',
+      parentId: group.id,
+      options: { room: 'group', member: owner },
+    });
     expect(start.continueFrom).toBeUndefined();
     const prompt = String(start.prompt);
     expect(prompt).toContain('阿杰（群主）：先随便聊一句');
@@ -146,6 +172,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     });
     expect(await ai(group.id, 'glm')).toMatchObject({ runId: start.runId, callers: [owner] });
     expect((await ai(group.id, 'claude')).runId).toBeNull();
+    // 别的成员看到的：它在忙别人的事（不是他和它的那一轮）
+    expect(await ai(group.id, 'glm', member)).toMatchObject({
+      runId: null,
+      tasks: [{ runId: start.runId, callers: [owner] }],
+    });
     // 还在写的消息每次都在 live 里；写完后凭上次的名单再给一遍最新的样子
     const live = (await groups.get(member, group.id, { after: 999 })).live;
     expect(live.map((m) => m.authorId)).toEqual(['glm']);
@@ -173,10 +204,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     expect(String(start.prompt)).toContain(
       '轮到你了：林夏 @ 了全体 AI，判断下来你最对口，由你先出来负责（别的 AI 在等你说完）。',
     );
-    expect((await ai(group.id, 'claude')).callers).toEqual([member]);
+    expect((await ai(group.id, 'claude', member)).callers).toEqual([member]);
     // 先出来的说完了：另一个 AI 没有因为这句话开工；之后点名叫它，它听得到之前那句
     finish(String(start.runId), '我先来');
-    await until(async () => !(await ai(group.id, 'claude')).runId);
+    await until(async () => !(await ai(group.id, 'claude', member)).runId);
     expect(fake.starts).toHaveLength(1);
     await say(owner, group.id, '你也说说', 'glm');
     expect(fake.starts).toHaveLength(2);
@@ -186,49 +217,63 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     await expect(say(owner, group.id, '在吗', 'grok')).rejects.toMatchObject({ statusCode: 400 });
   });
 
-  it('忙着的 AI：@ 它的话排着，做完接着原会话开下一轮；「现在告诉它」作为插话送进去', async () => {
+  it('各人各管各的：别人叫它不用等我这一轮；我和它的家正忙时我 @ 它的话排着，做完接着原会话开下一轮；「现在告诉它」作为插话送进去', async () => {
     const group = await setup();
     await say(owner, group.id, '写活动流程', 'claude');
     const first = String(fake.starts[0]!.runId);
-    const queued = await say(member, group.id, '加一条抽奖', 'claude');
-    expect(fake.starts).toHaveLength(1);
-    const waiting = queued.messages.find((m) => m.content === '加一条抽奖')!;
-    // 它还没看到：听到的序号在这句之前
+    // 别的成员叫同一个 AI：在他和它的家里马上开一轮，不排队
+    await say(member, group.id, '加一条抽奖', 'claude');
+    expect(fake.starts).toHaveLength(2);
+    expect(fake.starts[1]).toMatchObject({ actorId: member });
+    expect(fake.starts[1]!.conversationId).not.toBe(fake.starts[0]!.conversationId);
+    expect(String(fake.starts[1]!.prompt)).toContain('轮到你了：林夏 @ 了你。');
+    // 我和它的家正忙：我再 @ 它的话排着，它还没看到（听到的序号在这句之前）
+    const queued = await say(owner, group.id, '顺便问下场地', 'claude');
+    expect(fake.starts).toHaveLength(2);
+    const waiting = queued.messages.find((m) => m.content === '顺便问下场地')!;
     expect((await ai(group.id, 'claude')).heardSeq).toBeLessThan(waiting.seq);
     // 别人的话只有群主能替他「现在告诉它」
-    const other = await say(owner, group.id, '顺便问下场地', 'claude');
-    const mine = other.messages.find((m) => m.content === '顺便问下场地')!;
-    await expect(groups.steer(member, group.id, mine.id, 'claude')).rejects.toMatchObject({
+    await expect(groups.steer(member, group.id, waiting.id, 'claude')).rejects.toMatchObject({
       statusCode: 403,
     });
-    await groups.steer(member, group.id, waiting.id, 'claude');
+    await groups.steer(owner, group.id, waiting.id, 'claude');
     expect(fake.interjections).toHaveLength(1);
     expect(fake.interjections[0]).toMatchObject({ runId: first });
-    expect(fake.interjections[0]!.text).toContain('林夏 @DeepSeek：加一条抽奖');
-    expect(fake.interjections[0]!.text).toContain('林夏 让你现在就看这句话。');
-    expect(fake.interjections[0]!.text).not.toContain('顺便问下场地');
+    expect(fake.interjections[0]!.text).toContain('阿杰（群主） @DeepSeek：顺便问下场地');
+    expect(fake.interjections[0]!.text).toContain('阿杰 让你现在就看这句话。');
     expect((await ai(group.id, 'claude')).heardSeq).toBe(waiting.seq);
-    await expect(groups.steer(member, group.id, waiting.id, 'claude')).rejects.toMatchObject({
+    await expect(groups.steer(owner, group.id, waiting.id, 'claude')).rejects.toMatchObject({
       code: 'already_heard',
     });
-    // 这一轮做完：还排着的那句接着开下一轮，接着原会话
-    finish(first, '流程写好了');
-    await until(() => fake.starts.length === 2);
-    const second = fake.starts[1]!;
-    expect(second.continueFrom).toBe(first);
-    expect(second.conversationId).toBe(fake.starts[0]!.conversationId);
-    expect(String(second.prompt)).toContain('阿杰（群主） @DeepSeek：顺便问下场地');
-    expect(String(second.prompt)).not.toContain('加一条抽奖');
-    finish(String(second.runId), '场地在天台');
-    await until(async () => !(await ai(group.id, 'claude')).runId);
+    // 再排一句；这一轮做完，排着的那句接着开下一轮，接着原会话（别人叫它的话只当背景，不算叫它）
+    await say(owner, group.id, '再加一个环节', 'claude');
     expect(fake.starts).toHaveLength(2);
+    finish(first, '流程写好了');
+    await until(() => fake.starts.length === 3);
+    const next = fake.starts[2]!;
+    expect(next.continueFrom).toBe(first);
+    expect(next.conversationId).toBe(fake.starts[0]!.conversationId);
+    expect(String(next.prompt)).toContain('阿杰（群主） @DeepSeek：再加一个环节');
+    expect(String(next.prompt)).toContain('轮到你了：阿杰 @ 了你。');
+    expect(String(next.prompt)).not.toContain('顺便问下场地');
+    finish(String(next.runId), '加好了');
+    finish(String(fake.starts[1]!.runId), '抽奖加了');
+    await until(async () => !(await ai(group.id, 'claude')).runId);
+    await until(async () => !(await ai(group.id, 'claude', member)).runId);
+    expect(fake.starts).toHaveLength(3);
   });
 
-  it('停下：群主和引来这一轮的人可以；移出 AI 清它的会话、留下成果；解散群全部清掉', async () => {
+  it('停下：群主和引来这一轮的人可以；移出 AI、成员退群清掉那些家、留下成果；解散群全部清掉', async () => {
     const group = await setup();
     await say(member, group.id, '做一张海报', 'claude');
     const runId = String(fake.starts[0]!.runId);
-    const seatId = String(fake.starts[0]!.conversationId);
+    // 这一轮在叫它的人（林夏）和它的家里；它的席位是另一行
+    const homeId = String(fake.starts[0]!.conversationId);
+    const { rows: seatRows } = await pool.query<{ id: string }>(
+      "select id from conversations where parent_id=$1 and kind='seat' and model_key='claude'",
+      [group.id],
+    );
+    const seatId = seatRows[0]!.id;
     await expect(groups.stopRun(randomUUID(), group.id, runId)).rejects.toMatchObject({
       statusCode: 404,
     });
@@ -251,24 +296,38 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     });
     await groups.removeAi(owner, group.id, 'claude', 'r');
     expect(fake.cancels).toEqual([runId]);
-    expect(fake.purged).toEqual([`harness:${seatId}`, `model-gateway:${seatId}`]);
+    // 席位、林夏和它的家都清掉（成果留着：不清画布）；家那一行不留
+    expect([...fake.purged].sort()).toEqual(
+      [seatId, homeId].flatMap((id) => [`harness:${id}`, `model-gateway:${id}`]).sort(),
+    );
+    expect(await store.find(homeId)).toBeUndefined();
     expect((await groups.get(owner, group.id)).ais.map((item) => item.key)).toEqual(['glm']);
     await expect(say(owner, group.id, '还在吗', 'claude')).rejects.toMatchObject({
       statusCode: 400,
     });
-    // 再叫回来：是同一个席位，但不记得之前的事（下一轮开新会话）
+    // 再叫回来：从头开始，不记得之前的事（新的家、新会话）
     await groups.addAi(owner, group.id, 'claude', 'r');
-    await until(async () => !(await store.find(seatId))?.turn);
     fake.starts.length = 0;
-    await say(owner, group.id, '重新做一张', 'claude');
-    expect(fake.starts[0]).toMatchObject({ conversationId: seatId });
+    await say(member, group.id, '重新做一张', 'claude');
+    const again = String(fake.starts[0]!.conversationId);
+    expect(again).not.toBe(homeId);
     expect(fake.starts[0]!.continueFrom).toBeUndefined();
+    // 成员退群（被移出）：他和各个 AI 的家清掉，正在做的取消
+    fake.purged.length = 0;
+    fake.cancels.length = 0;
+    await groups.remove(owner, group.id, member, 'r');
+    expect(fake.cancels).toEqual([fake.starts[0]!.runId]);
+    expect(fake.purged).toEqual([`harness:${again}`, `model-gateway:${again}`]);
+    expect(await store.find(again)).toBeUndefined();
+    await say(owner, group.id, '我来接着做', 'glm');
+    const mine = String(fake.starts.at(-1)!.conversationId);
     fake.purged.length = 0;
     await groups.destroy(owner, group.id, 'r');
     // 解散时金库里剩下的退回各人
     expect(vault.dissolved).toEqual([group.id]);
-    expect(fake.purged.filter((item) => item.startsWith('canvas:'))).toHaveLength(2);
-    expect(fake.purged).toContain(`canvas:${seatId}`);
+    // 两个席位、群主和 glm 的家：画布里的成果都清
+    expect(fake.purged.filter((item) => item.startsWith('canvas:'))).toHaveLength(3);
+    expect(fake.purged).toContain(`canvas:${mine}`);
     expect(
       (
         await pool.query('select count(*)::int n from conversations where id=$1 or parent_id=$1', [
@@ -300,5 +359,76 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('群里的 AI：席位和 @', ()
     await say(member, group.id, '再排一下流程', 'claude');
     // 花金库的钱，记在叫它的成员头上
     expect(fake.starts.at(-1)).toMatchObject({ payerId: group.id, actorId: member });
+  });
+
+  it('各人的家：在哪干活、权限按成员记，他叫 AI 的那一轮照它开；在他家里做的过程只给他看；确认卡他自己点', async () => {
+    const group = await setup();
+    // 没定过：云端
+    expect(await groups.get(member, group.id)).toMatchObject({
+      home: { workplace: { kind: 'cloud' }, permissions: { mode: 'auto' } },
+      homeUnset: true,
+    });
+    const workplace = { kind: 'device' as const, deviceId: 'device-0001', folder: 'D:\\活动' };
+    await homes.setHome(member, group.id, { workplace, permissions: { mode: 'manual' } });
+    expect(await groups.get(member, group.id)).toMatchObject({
+      home: { workplace, permissions: { mode: 'manual' } },
+      homeUnset: false,
+    });
+    expect((await groups.get(owner, group.id)).homeUnset).toBe(true);
+    await expect(
+      homes.setHome(randomUUID(), group.id, { workplace, permissions: { mode: 'auto' } }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    // 他叫 AI：在他的电脑上、照他的权限开一轮；群主叫同一个 AI 还是在云端
+    await say(member, group.id, '整理一下文件夹', 'claude');
+    const start = fake.starts[0]!;
+    const runId = String(start.runId);
+    expect(start).toMatchObject({ actorId: member, workplace, permissions: { mode: 'manual' } });
+    await say(owner, group.id, '看看预算', 'claude');
+    expect(fake.starts[1]).toMatchObject({ actorId: owner, workplace: { kind: 'cloud' } });
+    finish(String(fake.starts[1]!.runId), '看了');
+    // 过程只给他看：他读到步骤，别人读到的只有它说的话
+    fake.events.set(runId, [
+      event(0, 'tool_call', { callId: 's1', name: 'bash', label: '整理材料' }),
+      event(1, 'assistant_text', { text: '在整理' }),
+    ]);
+    const partsFor = async (who: string) => {
+      const found = (await groups.get(who, group.id, { after: 0 })).messages.find(
+        (m) => m.kind === 'text' && m.role === 'assistant' && m.data.runId === runId,
+      );
+      return found?.kind === 'text' ? (found.data.parts ?? []).map((part) => part.type) : [];
+    };
+    await until(async () => ((await partsFor(member)).includes('text') ? true : undefined));
+    expect(await partsFor(member)).toEqual(['step', 'text']);
+    expect(await partsFor(owner)).toEqual(['text']);
+    // 它在等他点确认卡：只在他那边；别人点不了；「以后都允许」记进他在这个群的家
+    const card = confirmation();
+    activity.confirmations = [card];
+    await until(async () =>
+      (await groups.get(member, group.id)).confirmations.length ? true : undefined,
+    );
+    expect((await groups.get(owner, group.id)).confirmations).toEqual([]);
+    const press = (userId: string) =>
+      homes.confirm({
+        userId,
+        groupId: group.id,
+        confirmationId: card.id,
+        decision: 'always',
+        requestId: 'r',
+      });
+    await expect(press(owner)).rejects.toMatchObject({ statusCode: 409 });
+    expect(await press(member)).toMatchObject({ id: card.id, status: 'allowed' });
+    expect(decisions).toEqual([{ id: card.id, runId, decision: 'always' }]);
+    const after = await groups.get(member, group.id);
+    expect(after.confirmations).toEqual([]);
+    expect(after.home?.permissions).toEqual({ mode: 'manual', always: ['command'] });
+    // 他叫的 AI 还在做：不能换地方
+    await expect(
+      homes.setHome(member, group.id, {
+        workplace: { kind: 'cloud' },
+        permissions: { mode: 'auto' },
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'turn_active' });
+    finish(runId, '整理好了');
+    await until(async () => !(await ai(group.id, 'claude', member)).runId);
   });
 });

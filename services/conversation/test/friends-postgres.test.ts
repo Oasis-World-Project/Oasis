@@ -97,7 +97,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('好友、好友之间的私聊�
       () => groups.get(c, id),
       () => groups.setOptions(a, id, { light: 'mint' }),
       () => groups.addMember(a, id, c, 'r'),
-      () => groups.remove(a, id, b),
+      () => groups.remove(a, id, b, 'r'),
       () => groups.setNickname(a, id, '小甲'),
       () => groups.destroy(a, id, 'r'),
     ])

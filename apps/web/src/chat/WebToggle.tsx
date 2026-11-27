@@ -1,14 +1,13 @@
 // 输入框里的联网搜索开关：亮着是开，AI 可以用「联网搜索」「读网页」这两个工具；关着时这两个工具不给它。
-// 记在这段私聊的设置里（和在哪干活、手动自动放一起），下一轮起生效，正在做的一轮不变。
+// 记在这段私聊的设置里（群里是我在这个群的家；和在哪干活、手动自动放一起），下一轮起生效，正在做的一轮不变。
 import { useMutation } from '@tanstack/react-query';
 import { Globe } from 'lucide-react';
-import { saveSetup } from '../api/queries.ts';
 import type { Home } from './HomeBar.tsx';
 
-export function WebToggle({ home: { id, setup, onSaved } }: { home: Home }) {
+export function WebToggle({ home: { setup, save, onSaved } }: { home: Home }) {
   const on = setup.permissions.web !== false;
   const toggle = useMutation({
-    mutationFn: () => saveSetup(id, { ...setup, permissions: { ...setup.permissions, web: !on } }),
+    mutationFn: () => save({ ...setup, permissions: { ...setup.permissions, web: !on } }),
     onSuccess: onSaved,
   });
   return (
